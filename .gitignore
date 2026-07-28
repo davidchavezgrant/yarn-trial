@@ -1,0 +1,10 @@
+node_modules/
+out/
+.env
+.playwright-mcp/
+.DS_Store
+docs/plans/
+CLAUDE.md
+tools/winrec
+*.bak
+docs/jasper-email-yarn-trial-brief.md
