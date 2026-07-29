@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { test } from "node:test";
-import { auditTaskPrompt, findScopeAmbiguities, observationBlocks, scopeWarnings, verify } from "./harness.js";
+import { auditTaskPrompt, findScopeAmbiguities, observationBlocks, pixelDelta, scopeWarnings, verify } from "./harness.js";
 import type { ObservationBundle } from "./harness.js";
 import type { AppMap } from "./types.js";
 
@@ -163,4 +164,26 @@ test("observationBlocks__KeepsTextIdentical__When__VisionDisabled", () => {
 	assert.equal(withVision.length, 2);
 	assert.equal(withVision[1].type, "image");
 	assert.deepEqual(without[0], withVision[0]);
+});
+
+// --- pixelDelta: the cheap half of visual verification. Rendered content is absent from
+// the AX haystack verify() greps, so this is the only signal that a canvas repainted.
+// Fixtures are real run screenshots, not synthetic images.
+
+const SHOT_A = `${process.cwd()}/out/blind-lib.png`;
+const SHOT_B = `${process.cwd()}/out/agent-final.png`;
+
+test("pixelDelta__ReturnsZero__When__ComparedWithItself", { skip: !fs.existsSync(SHOT_A) }, () => {
+	assert.equal(pixelDelta(SHOT_A, SHOT_A), 0);
+});
+
+test("pixelDelta__ReturnsNonZero__When__ScreensDiffer", { skip: !fs.existsSync(SHOT_A) || !fs.existsSync(SHOT_B) }, () => {
+	const d = pixelDelta(SHOT_A, SHOT_B);
+	// Same-size frames of different surfaces; if sizes differ the diff is undefined, which
+	// is also a valid answer — assert only that it never reports "identical".
+	if (d !== undefined) assert.ok(d > 0.01, `expected a visible difference, got ${d}`);
+});
+
+test("pixelDelta__ReturnsUndefined__When__FileMissing", () => {
+	assert.equal(pixelDelta(SHOT_A, `${process.cwd()}/out/does-not-exist.png`), undefined);
 });

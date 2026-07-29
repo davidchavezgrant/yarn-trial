@@ -27,6 +27,12 @@ export interface StepRecord {
 	verified: boolean;
 	verificationNote: string;
 	screenshotFile?: string;
+	/**
+	 * Fraction of pixels (0..1) that changed vs the previous observation. Advisory: rendered
+	 * content is absent from the AX text channel verify() greps, so this is the only signal
+	 * that a canvas/preview did or did not repaint. Undefined when the diff could not run.
+	 */
+	pixelDelta?: number;
 	modelReasoning?: string;
 }
 

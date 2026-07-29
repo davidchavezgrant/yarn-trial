@@ -326,6 +326,134 @@ export function loadAppMapGraph(app: string): AppMap | undefined {
 	}
 }
 
+/**
+ * Fraction of pixels that differ between two screenshots, 0..1, or undefined if the
+ * comparison could not be made (missing file, size mismatch, no python/PIL).
+ *
+ * Why this exists: verify() greps AX labels and values, and rendered content is not in
+ * that channel — measured on Yarn, the Library shows ~12 video thumbnails while the AX
+ * tree reports one 20x20 image among 377 elements. So "the preview never re-rendered" is
+ * invisible to text verification. This is the cheap, deterministic half of the fix: no
+ * model call, just "did the pixels move".
+ *
+ * Deliberately a signal, not a gate — it is recorded per step and never fails a run on its
+ * own. Legitimate actions can change nothing visible (a wait, an off-screen scroll), and
+ * animation/carets can change pixels when nothing meaningful happened, so a threshold here
+ * would produce confident wrong verdicts in both directions.
+ */
+export function pixelDelta(beforePath: string, afterPath: string): number | undefined {
+	if (!fs.existsSync(beforePath) || !fs.existsSync(afterPath)) return undefined;
+
+	const script = `
+import sys
+from PIL import Image, ImageChops
+a = Image.open(sys.argv[1]).convert("RGB")
+b = Image.open(sys.argv[2]).convert("RGB")
+if a.size != b.size:
+    print("SIZE_MISMATCH"); sys.exit(0)
+# Downscale before diffing: 8x fewer pixels, and it suppresses single-pixel AA noise
+# that would otherwise register as change on a static screen.
+w, h = max(1, a.width // 8), max(1, a.height // 8)
+a = a.resize((w, h)); b = b.resize((w, h))
+diff = ImageChops.difference(a, b).convert("L")
+changed = sum(1 for p in diff.getdata() if p > 12)
+print(changed / float(w * h))
+`;
+	try {
+		const out = execFileSync("python3", ["-c", script, beforePath, afterPath], { encoding: "utf8" }).trim();
+		if (out === "SIZE_MISMATCH") return undefined;
+		const v = Number(out);
+
+		return Number.isFinite(v) ? v : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+export interface VisualVerdict {
+	verdict: "PASS" | "FAIL" | "UNPROVEN";
+	scope: string;
+	why: string;
+}
+
+/**
+ * Independent visual check of the FINAL state, used only at the done boundary.
+ *
+ * This is a SEPARATE model call from the acting agent, deliberately: this whole harness's
+ * verification layer was rebuilt because a model was grading its own work, and a judge that
+ * shares the actor's context inherits its rationalisations. The judge sees the goal and one
+ * screenshot — not the action history, not the actor's summary.
+ *
+ * It exists because substring evidence proves *a* control reads the target value, never that
+ * it is the *intended* control. Measured on the two real scope screenshots (both showing
+ * Cursor Style = Pointer-first, one brand-wide and one per-draft): the judge passed the brand
+ * frame and failed the per-draft one, citing the missing Brand Kit surface — the exact
+ * failure that shipped four times under text-only checking.
+ *
+ * Advisory by default: its verdict is recorded and printed, and only blocks a success claim
+ * under VISUAL_JUDGE=block. A confident wrong FAIL would stall a correct run, and a confident
+ * wrong PASS is precisely the failure we are trying to remove, so it adds a gate rather than
+ * replacing the deterministic text check.
+ */
+export async function visualJudge(
+	client: Anthropic,
+	model: string,
+	goal: string,
+	screenshotB64: string,
+	claim?: string,
+): Promise<VisualVerdict | undefined> {
+	try {
+		const r = await client.messages.create({
+			model,
+			max_tokens: 700,
+			system:
+				"You are an independent verifier for a UI automation run. You did NOT perform the actions and " +
+				"have no stake in them succeeding; your job is to be hard to fool. You are given a goal and a " +
+				"screenshot of the FINAL state. Decide whether the screenshot proves the goal was achieved.\n\n" +
+				"Be strict about WHICH control shows the value. Many apps expose the same setting at more than " +
+				"one scope (an app/brand-wide default vs a per-document override). A screenshot showing the " +
+				"right value in the WRONG scope does NOT prove the goal.\n\n" +
+				"Use UNPROVEN when the frame simply does not show the relevant surface — that is different from " +
+				"FAIL, which means the frame shows the goal was NOT achieved.\n\n" +
+				"Judge the AGENT'S CLAIM, not merely the task wording. A task may be vaguely phrased " +
+				"(\"show me how to change X\"), but the agent states what it actually did; your job is to " +
+				"decide whether the frame supports THAT. In particular, if the agent claims it changed a " +
+				"global/brand-wide default, a frame showing only a per-document override panel is a FAIL — " +
+				"do not accept \"the control is visible here\" as proof that the claimed change was made.\n\n" +
+				"Reply exactly:\nVERDICT: PASS | FAIL | UNPROVEN\nSCOPE: which surface/scope the value is shown at\nWHY: one or two sentences",
+			messages: [
+				{
+					role: "user",
+					content: [
+						{
+						type: "text",
+						text: `Task given to the agent: ${goal}` + (claim ? `\n\nWhat the agent claims it did: ${claim}` : "") + "\n\nFinal-state screenshot follows.",
+					},
+						{ type: "image", source: { type: "base64", media_type: "image/png", data: screenshotB64 } },
+					],
+				},
+			],
+		});
+		const text = r.content
+			.filter((b): b is Anthropic.TextBlock => b.type === "text")
+			.map((b) => b.text)
+			.join("\n");
+		const verdict = /VERDICT:\s*(PASS|FAIL|UNPROVEN)/i.exec(text)?.[1]?.toUpperCase();
+		if (!verdict) return undefined;
+
+		return {
+			verdict: verdict as VisualVerdict["verdict"],
+			scope: /SCOPE:\s*(.+)/i.exec(text)?.[1]?.trim() ?? "",
+			why: /WHY:\s*([\s\S]+)/i.exec(text)?.[1]?.trim().slice(0, 400) ?? "",
+		};
+	} catch (err) {
+		// Never fail a run because the judge was unreachable; it is an added gate.
+		console.log(`visual judge unavailable: ${err instanceof Error ? err.message.slice(0, 120) : String(err)}`);
+
+		return undefined;
+	}
+}
+
 export interface VerifyResult {
 	verified: boolean;
 	note: string;

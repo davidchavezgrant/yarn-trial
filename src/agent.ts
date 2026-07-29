@@ -16,15 +16,18 @@ import {
 	observationBlocks,
 	observe,
 	OUT,
+	pixelDelta,
 	resetToHome,
 	scopeWarnings,
 	stageWindowForRecording,
 	TargetNotObservableError,
 	toActionRequest,
 	verify,
+	visualJudge,
 } from "./harness.js";
 import { DOM_ACT_TOOL, DOM_RULES, DomBackend, FIND_TOOL } from "./dom.js";
 import type { ActionRequest, Expectation, StepRecord } from "./types.js";
+import type { VisualVerdict } from "./harness.js";
 
 const MAX_STEPS = Number(process.env.AGENT_STEPS ?? 15);
 /** Free read-only page searches per run, beyond which a find costs an action. */
@@ -183,6 +186,10 @@ async function main(): Promise<void> {
 	// text-only (title + AX elements with frames); capture for recording/artifacts is
 	// unaffected. Measures what the image channel is worth in actions/tokens/correctness.
 	const vision = !argv.includes("--no-vision");
+	// off | advisory (default) | block. Advisory records the judge's verdict without letting
+	// it decide the run: it is a second opinion, and a wrong confident verdict in either
+	// direction is worse than no verdict until we have a measured error rate for it.
+	const judgeMode = process.env.VISUAL_JUDGE ?? "advisory";
 	const backendIdx = argv.indexOf("--backend");
 	const backendKind = backendIdx >= 0 ? (argv[backendIdx + 1] ?? "ax") : "ax";
 	const args = argv.filter(
@@ -457,6 +464,7 @@ async function main(): Promise<void> {
 				// grades it against a FRESH observation (state can have shifted since the
 				// last step — e.g. a toast expired or a save silently failed).
 				let finalCheck: { verified: boolean; note: string; evidence?: Expectation } | undefined;
+				let visual: VisualVerdict | undefined;
 				if (input.success) {
 					const checkable = input.evidence?.textIncludes?.length || input.evidence?.textExcludes?.length;
 					if (!checkable) {
@@ -480,11 +488,48 @@ async function main(): Promise<void> {
 
 					while (driverBusy) await new Promise((r) => setTimeout(r, 50));
 					driverBusy = true;
+					let finalShot = "";
 					try {
 						const finalObs = await doObserve("agent-final");
+						finalShot = finalObs.screenshotB64;
 						finalCheck = { ...verify(input.evidence!, finalObs.haystack), evidence: input.evidence };
 					} finally {
 						driverBusy = false;
+					}
+
+					// Independent visual check of the goal state — a SEPARATE model call that
+					// sees only the task and the final frame, never the action history or the
+					// actor's summary. Substring evidence proves *a* control reads the target
+					// value; it cannot prove that control is the intended one. Advisory unless
+					// VISUAL_JUDGE=block, because a confident wrong verdict either stalls a good
+					// run or waves through a bad one.
+					if (judgeMode !== "off" && finalShot) {
+						visual = await visualJudge(client, model, task, finalShot, input.summary);
+						if (visual) {
+							usage.modelCalls++;
+							console.log(`    visual judge: ${visual.verdict} — ${visual.why}`);
+							if (visual.scope) console.log(`      scope seen: ${visual.scope}`);
+						}
+					}
+
+					if (judgeMode === "block" && visual?.verdict === "FAIL") {
+						console.log("    -> done(success) BLOCKED by the visual judge");
+						messages.push({
+							role: "user",
+							content: [
+								{
+									type: "tool_result",
+									tool_use_id: toolUse.id,
+									is_error: true,
+									content:
+										`DONE NOT ACCEPTED — an independent visual check of the final screen says the goal was NOT achieved: ${visual.why}\n` +
+										`Surface it saw: ${visual.scope}\n` +
+										"Your text evidence passed, so a control does read the expected value — but possibly the wrong one " +
+										"(e.g. a per-document override rather than the global default). Diagnose and continue, or call done(success: false).",
+								},
+							],
+						});
+						continue;
 					}
 
 					if (!finalCheck.verified) {
@@ -515,9 +560,11 @@ async function main(): Promise<void> {
 				console.log(`\n=== DONE (${verdict}) after ${records.length} actions ===`);
 				console.log(input.summary);
 				const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
-				fs.writeFileSync(runLog, JSON.stringify({ task, app, backend: backendKind, vision, grounding: groundingMeta, hintedPrompt: audit.hinted, hintReasons: audit.reasons, homeReset, success: input.success, finalCheck, verifiedSteps: records.length - unverified, unverifiedSteps: unverified, expectationRejections, findCalls, summary: input.summary, elapsedSec, usage, ...(record ? { video: videoPath.replace(`${process.cwd()}/`, "") } : {}), steps: records }, null, 2));
+				fs.writeFileSync(runLog, JSON.stringify({ task, app, backend: backendKind, vision, grounding: groundingMeta, hintedPrompt: audit.hinted, hintReasons: audit.reasons, homeReset, success: input.success, finalCheck, visualCheck: visual, verifiedSteps: records.length - unverified, unverifiedSteps: unverified, expectationRejections, findCalls, summary: input.summary, elapsedSec, usage, ...(record ? { video: videoPath.replace(`${process.cwd()}/`, "") } : {}), steps: records }, null, 2));
 				console.log(`stats: ${records.length} actions, ${elapsedSec}s, ${usage.modelCalls} model calls, ${usage.outputTokens} output tokens, grounding=${groundingMeta.provenance}, vision=${vision}, hintedPrompt=${audit.hinted}, homeReset=${homeReset}`);
 				console.log(`verification: ${records.length - unverified}/${records.length} steps verified${expectationRejections ? `, ${expectationRejections} call(s) rejected for missing checks` : ""}${finalCheck ? `; final goal check: ${finalCheck.verified ? "PASSED" : "failed"} (${finalCheck.evidence?.textIncludes?.join(", ") ?? ""})` : ""}`);
+				if (visual && visual.verdict !== "PASS")
+					console.log(`NOTE: visual judge returned ${visual.verdict} — text evidence passed, but the final frame did not independently confirm the goal.`);
 				if (audit.hinted) console.log("NOTE: prompt contained method hints — NOT a clean autonomy result.");
 				console.log(`run log: ${runLog}`);
 				return;
@@ -572,6 +619,7 @@ async function main(): Promise<void> {
 			}
 
 			const prevHaystack = obs.haystack;
+			const prevShot = `${OUT}/agent-step-${step - 1}.png`;
 			while (driverBusy) await new Promise((r) => setTimeout(r, 50));
 			driverBusy = true;
 			try {
@@ -602,7 +650,11 @@ async function main(): Promise<void> {
 			const verdict = isError
 				? { verified: false, note: "action errored" }
 				: verify(input.expectation, obs.haystack, input.action.name === "wait" ? undefined : prevHaystack);
-			console.log(`    -> ${verdict.verified ? "✓ verified" : `✗ ${verdict.note}`}`);
+			// Advisory pixel signal: the AX text channel does not carry rendered content, so a
+			// canvas that failed to repaint is invisible to verify(). Recorded, never a gate.
+			const delta = pixelDelta(prevShot, `${OUT}/agent-step-${step}.png`);
+			const deltaNote = delta === undefined ? "" : ` [pixels ${(delta * 100).toFixed(1)}%${delta < 0.001 && !isError ? " — screen essentially unchanged" : ""}]`;
+			console.log(`    -> ${verdict.verified ? "✓ verified" : `✗ ${verdict.note}`}${deltaNote}`);
 
 			records.push({
 				index: step,
@@ -612,6 +664,7 @@ async function main(): Promise<void> {
 				verified: verdict.verified,
 				verificationNote: verdict.note,
 				screenshotFile: `agent-step-${step}.png`,
+				pixelDelta: delta,
 				modelReasoning: input.reasoning,
 			});
 
