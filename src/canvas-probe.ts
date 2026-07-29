@@ -229,11 +229,21 @@ print(sum(1 for p in data if p > 12) / float(len(data)))
 }
 
 /**
- * Pixels differing across the WHOLE frame. Used to check a restore, where a local crop lies:
- * an object returning to its origin and an indicator arriving there look identical up close,
- * and an edit that rippled across the canvas is invisible in any one crop.
+ * Pixels differing along the target's ROW — the horizontal strip the drag moves things in.
+ *
+ * Used to check a restore. Two instruments were tried first and both lie:
+ *
+ * - A local crop around the origin cannot distinguish "the object came back" from "an
+ *   indicator arrived there", and cannot see a ripple further along the row at all.
+ * - A whole-frame diff is swamped by content. This canvas has a live preview beside it, so
+ *   moving the playhead one second repaints a third of the window: the restore check read
+ *   569,597 changed pixels for a drag that moved one 5px mark. Any app with a preview, a
+ *   video, an animation, or a clock behaves the same way.
+ *
+ * A row-height strip is the narrowest thing that still sees the whole edit. Not app-specific:
+ * a drag along a row is what is being measured, so the row is the natural window.
  */
-function frameDelta(beforePath: string, afterPath: string): number | undefined {
+function rowDelta(beforePath: string, afterPath: string, y: number, half = 20): number | undefined {
 	const script = `
 import sys
 from PIL import Image, ImageChops
@@ -241,10 +251,14 @@ a = Image.open(sys.argv[1]).convert("RGB")
 b = Image.open(sys.argv[2]).convert("RGB")
 if a.size != b.size:
     print("-1"); sys.exit(0)
-print(sum(1 for p in ImageChops.difference(a, b).convert("L").getdata() if p > 12))
+y, h = int(sys.argv[3]), int(sys.argv[4])
+box = (0, max(0, y - h), a.width, min(a.height, y + h))
+print(sum(1 for p in ImageChops.difference(a.crop(box), b.crop(box)).convert("L").getdata() if p > 12))
 `;
 	try {
-		const v = Number(execFileSync("python3", ["-c", script, beforePath, afterPath], { encoding: "utf8" }).trim());
+		const v = Number(
+			execFileSync("python3", ["-c", script, beforePath, afterPath, String(y), String(half)], { encoding: "utf8" }).trim(),
+		);
 
 		return Number.isFinite(v) && v >= 0 ? v : undefined;
 	} catch {
@@ -642,10 +656,11 @@ async function main(): Promise<void> {
 				await new Promise((r) => setTimeout(r, 1000));
 			}
 			const restored = await snap("canvas-probe-restored");
-			const back = frameDelta(real.pre.shot, restored.shot);
-			const moved_ = frameDelta(real.pre.shot, real.post.shot);
+			const back = rowDelta(real.pre.shot, restored.shot, y);
+			const moved_ = rowDelta(real.pre.shot, real.post.shot, y);
 			console.log(
-				`restore: ${back} px differ from the pre-drag frame (the drag itself changed ${moved_}).` +
+				`restore: ${back} px differ from the pre-drag frame along the target's row ` +
+					`(the drag itself changed ${moved_}).` +
 					(back !== undefined && moved_ !== undefined && back < moved_ / 4
 						? " Document restored."
 						: " NOT RESTORED — undo it by hand before the next run."),
