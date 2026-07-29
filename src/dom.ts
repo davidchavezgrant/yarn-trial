@@ -215,6 +215,9 @@ export class DomBackend {
 			screenshotB64: fs.readFileSync(shotPath).toString("base64"),
 			title: snap.title,
 			appContent: snap.refs.length,
+			// The CDP path reads the DOM directly, so the axdom sidecar has nothing to add.
+			domEnriched: 0,
+			domUnavailable: "not applicable — DOM backend already reads the DOM over CDP",
 		};
 	}
 

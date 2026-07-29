@@ -1,0 +1,180 @@
+{
+  "task": "show me how to change the cursor type",
+  "app": "Yarn",
+  "backend": "ax",
+  "vision": true,
+  "grounding": {
+    "provenance": "explore",
+    "path": "docs/appmaps/yarn.md",
+    "sha256": "898dab217917",
+    "graph": {
+      "nodes": 51,
+      "edges": 11,
+      "scopeAmbiguities": [
+        "agent-effort",
+        "auto-hide-cursor",
+        "cursor-clicks-sound",
+        "cursor-scale",
+        "cursor-style",
+        "default-zoom-level",
+        "default-zoom-type",
+        "entrance-exit-animation",
+        "keyboard-presses-sound",
+        "motion-blur",
+        "screen-window-padding",
+        "shadow-blur",
+        "shadow-opacity",
+        "shadow-spread",
+        "shadow-x-offset",
+        "shadow-y-offset",
+        "text-cursor"
+      ]
+    }
+  },
+  "hintedPrompt": false,
+  "hintReasons": [],
+  "homeReset": "reset",
+  "domEnrichment": {
+    "frames": 278
+  },
+  "success": true,
+  "finalCheck": {
+    "verified": true,
+    "note": "expectation met",
+    "evidence": {
+      "description": "Brand Kit → Screen Clips shows Cursor Style = Arrow-first (was Pointer-first), and no unsaved-changes buttons remain",
+      "textIncludes": [
+        "Screen Clip Settings",
+        "Cursor Style",
+        "Arrow-first"
+      ],
+      "textExcludes": [
+        "Pointer-first",
+        "Save Changes"
+      ]
+    }
+  },
+  "visualCheck": {
+    "verdict": "PASS",
+    "scope": "Brand Kit (Default Brand) → Screen Clips → Cursor section, i.e. the brand-wide default, matching the agent's claimed scope.",
+    "why": "The frame shows the brand-level Screen Clip Settings page with Cursor Style set to \"Arrow-first\" and no pending Save Changes/Cancel bar, consistent with a persisted brand-wide change rather than a per-project override."
+  },
+  "verifiedSteps": 3,
+  "unverifiedSteps": 1,
+  "expectationRejections": 0,
+  "findCalls": 0,
+  "summary": "Changed the cursor type in Yarn. Route chosen: sidebar → Brand Kit → Screen Clips (the brand-wide default), because the request was phrased generally (\"the cursor type\") rather than about a specific project/recording — so the new value applies to all future screen clips using the Default Brand. I opened the Cursor Style combobox (options: Arrow-first / Pointer-first / Original), picked \"Arrow-first\" (an unspecified value, so I chose a different one from the previous \"Pointer-first\"), then clicked \"Save Changes\". The page now shows Cursor Style = Arrow-first with the Save Changes / Cancel pair gone, confirming the change persisted. Note the per-project override (Project actions ⋯ → Screen Clip Settings…) is a separate store and was left untouched.",
+  "elapsedSec": 58,
+  "usage": {
+    "inputTokens": 10,
+    "outputTokens": 1497,
+    "cacheReadTokens": 180530,
+    "modelCalls": 6
+  },
+  "steps": [
+    {
+      "index": 1,
+      "timestamp": "2026-07-29T21:22:20.683Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 67507,
+          "window_id": 24047,
+          "element_index": 48
+        }
+      },
+      "expectation": {
+        "description": "Brand Kit page opens with nav column",
+        "textIncludes": [
+          "Screen Clips",
+          "Brand Overview"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-1.png",
+      "pixelDelta": 0.4571892393320965,
+      "modelReasoning": "Open Brand Kit to reach Screen Clips settings."
+    },
+    {
+      "index": 2,
+      "timestamp": "2026-07-29T21:22:29.049Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 67507,
+          "window_id": 24047,
+          "element_index": 100
+        }
+      },
+      "expectation": {
+        "description": "Cursor Style dropdown opens showing options",
+        "textExcludes": [
+          "Cursor Scale"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "expected absent but found: Cursor Scale",
+      "screenshotFile": "agent-step-2.png",
+      "pixelDelta": 0.0020408163265306124,
+      "modelReasoning": "Open the Cursor Style combobox to pick a different cursor type."
+    },
+    {
+      "index": 3,
+      "timestamp": "2026-07-29T21:22:37.350Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 67507,
+          "window_id": 24047,
+          "element_index": 110
+        }
+      },
+      "expectation": {
+        "description": "Cursor Style now reads Arrow-first",
+        "textIncludes": [
+          "Arrow-first",
+          "Cursor Scale"
+        ],
+        "textExcludes": [
+          "Pointer-first"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-3.png",
+      "pixelDelta": 0.00510204081632653,
+      "modelReasoning": "Select the Arrow-first cursor style to change the cursor type."
+    },
+    {
+      "index": 4,
+      "timestamp": "2026-07-29T21:22:45.156Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 67507,
+          "window_id": 24047,
+          "element_index": 88
+        }
+      },
+      "expectation": {
+        "description": "Change saved; Save Changes/Cancel buttons disappear and Cursor Style stays Arrow-first",
+        "textIncludes": [
+          "Arrow-first"
+        ],
+        "textExcludes": [
+          "Save Changes"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-4.png",
+      "pixelDelta": 0.0030148423005565863,
+      "modelReasoning": "Persist the brand-wide cursor style change."
+    }
+  ]
+}

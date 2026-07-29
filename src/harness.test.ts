@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { auditTaskPrompt, findScopeAmbiguities, observationBlocks, pixelDelta, scopeWarnings, verify } from "./harness.js";
 import type { ObservationBundle } from "./harness.js";
 import type { AppMap } from "./types.js";
+import { EMPTY, bestClass, descriptorFor, lookup } from "./axdom.js";
 
 // Fixtures are synthetic, describing the CLASS of prompt rather than any specific
 // historical run, so the tests stay meaningful as tasks change.
@@ -132,9 +133,42 @@ test("findScopeAmbiguities__ReturnsEmpty__When__NoControlsCarrySettingKeys", () 
 test("scopeWarnings__NamesBothScopes__When__AmbiguityExists", () => {
 	const w = scopeWarnings(yarnish);
 	assert.match(w, /cursor-style/);
-	assert.match(w, /brand-kit\/screen-clips\/cursor-style \(brand scope\)/);
-	assert.match(w, /editor\/screen-clip-settings\/cursor-style \(document scope\)/);
+	// Entries name the SURFACE holding the control, since grouping keys on surface pairs.
+	assert.match(w, /brand scope — brand-kit\/screen-clips/);
+	assert.match(w, /document scope — editor\/screen-clip-settings/);
 	assert.match(w, /SEPARATE stores/);
+});
+
+test("scopeWarnings__PresentsBothWithoutPickingOne__When__AmbiguityExists", () => {
+	// The harness surfaces the options and the agent decides from task context; baking a
+	// "always prefer the broadest scope" rule in here would make the wrong call whenever a
+	// task is genuinely about one document.
+	const w = scopeWarnings(yarnish);
+	assert.match(w, /Both routes are given because either can be correct/);
+	assert.match(w, /SAY WHICH YOU CHOSE AND WHY/);
+	assert.equal(/prefer the broadest/.test(w), false);
+});
+
+test("scopeWarnings__GroupsBySurfacePair__When__ManySettingsShareTwoPanels", () => {
+	// Yarn has 16 settings split across the same brand-vs-document panel pair. Listing each
+	// separately repeated one pair of routes 15 times and produced a warning nearly twice the
+	// size of the appmap it annotates, so entries group by surface pair.
+	const many: AppMap = {
+		...yarnish,
+		nodes: [
+			...yarnish.nodes,
+			{ id: "brand-kit/screen-clips/shadow-blur", title: "Shadow Blur", kind: "control", scope: "brand", settingKey: "shadow-blur" },
+			{ id: "editor/screen-clip-settings/shadow-blur", title: "Shadow Blur", kind: "control", scope: "document", settingKey: "shadow-blur" },
+		],
+	};
+	const w = scopeWarnings(many);
+	assert.equal(w.match(/These settings exist at/g)?.length, 1, "both settings share one grouped entry");
+	assert.match(w, /cursor-style, shadow-blur/);
+});
+
+test("scopeWarnings__IncludesNavigationRoute__When__EdgesRecorded", () => {
+	// A scope choice is only actionable if the agent can reach the one it picks.
+	assert.match(scopeWarnings(yarnish), /route: click "Brand Kit"/);
 });
 
 test("scopeWarnings__ReturnsEmpty__When__NoAmbiguities", () => {
@@ -150,6 +184,7 @@ const bundle: ObservationBundle = {
 	screenshotB64: "aGk=",
 	title: "Settings",
 	appContent: 1,
+	domEnriched: 0,
 };
 
 test("observationBlocks__OmitsImageBlock__When__VisionDisabled", () => {
@@ -186,4 +221,53 @@ test("pixelDelta__ReturnsNonZero__When__ScreensDiffer", { skip: !fs.existsSync(S
 
 test("pixelDelta__ReturnsUndefined__When__FileMissing", () => {
 	assert.equal(pixelDelta(SHOT_A, `${process.cwd()}/out/does-not-exist.png`), undefined);
+});
+
+// axdom: the DOM-attribute enrichment that recovers what the AX projection drops.
+// These are the pure formatting decisions — the sidecar walk itself needs a live app.
+
+test("bestClass__DropsFrameworkChrome__When__OnlyGenericTokensPresent", () => {
+	assert.equal(bestClass("RootView"), "");
+	assert.equal(bestClass("ClientView View"), "");
+});
+
+test("bestClass__PicksMostSpecificToken__When__BemChainPresent", () => {
+	assert.equal(bestClass("icon icon--name--chevronDown"), "icon--name--chevronDown");
+	assert.equal(
+		bestClass("app libraryPage-sideMenu-personalTab-orgBadgeBtn"),
+		"libraryPage-sideMenu-personalTab-orgBadgeBtn",
+	);
+});
+
+test("descriptorFor__NamesAnonymousControl__When__DomClassPresent", () => {
+	const d = descriptorFor({ x: 0, y: 0, w: 10, h: 10, role: "AXButton", domClass: "ag-editor-toolbar-playBtn" });
+	assert.equal(d, ".ag-editor-toolbar-playBtn");
+});
+
+test("descriptorFor__OmitsId__When__IdIsFrameworkGenerated", () => {
+	// Radix/MUI mint these per render: identical across siblings, unstable across renders.
+	const d = descriptorFor({ x: 0, y: 0, w: 10, h: 10, role: "AXPopUpButton", domId: "radix-_r_sj_", domClass: "sceneHeader-dropdownBtn" });
+	assert.equal(d, ".sceneHeader-dropdownBtn");
+	assert.ok(!d.includes("radix"));
+});
+
+test("descriptorFor__KeepsId__When__IdIsAuthored", () => {
+	const d = descriptorFor({ x: 0, y: 0, w: 10, h: 10, role: "AXGroup", domId: "settings-panel" });
+	assert.equal(d, "#settings-panel");
+});
+
+test("descriptorFor__DropsChromiumImagePlaceholder__When__NoRealDescription", () => {
+	const d = descriptorFor({
+		x: 0, y: 0, w: 10, h: 10, role: "AXImage",
+		description: "To get missing image descriptions, open the context menu.",
+	});
+	assert.equal(d, "");
+});
+
+test("descriptorFor__ReturnsEmpty__When__NothingUseful", () => {
+	assert.equal(descriptorFor({ x: 0, y: 0, w: 10, h: 10, role: "AXGroup" }), "");
+});
+
+test("lookup__ReturnsEmpty__When__ElementHasNoFrame", () => {
+	assert.equal(lookup(EMPTY, undefined), "");
 });

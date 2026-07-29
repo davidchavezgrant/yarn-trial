@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import * as axdom from "./axdom.js";
 import { Driver } from "./driver.js";
 import type { ActionRequest, AppMap, Expectation, ScopeAmbiguity, SurfaceScope } from "./types.js";
 
@@ -18,6 +19,10 @@ export interface ObservationBundle {
 	title: string;
 	/** Count of non-menu-bar AX elements. 0 means the app is not addressable right now. */
 	appContent: number;
+	/** Frames for which the axdom sidecar supplied DOM id/class/tooltip. 0 = no enrichment. */
+	domEnriched: number;
+	/** Set when enrichment could not run (sidecar unbuilt, disabled, native app). */
+	domUnavailable?: string;
 }
 
 export function appSlug(app: string): string {
@@ -89,20 +94,55 @@ export async function observe(driver: Driver, win: WindowRef, shotName: string):
 	const structured = JSON.parse(state.structuredJson ?? "{}");
 	const elements: any[] = structured.elements ?? [];
 
+	// Recover what the driver's role/label/value projection drops (see src/axdom.ts):
+	// DOM id/class, tooltip, placeholder. Best-effort — degrades to the bare AX view.
+	const dom = axdom.collect(win.pid);
+
+	// The driver reports parent_index but we render a flat list, so "the Save button in
+	// the Cursor section" is unrecoverable. Name each element's nearest *named* ancestor
+	// so containment survives flattening without printing an indented tree.
+	const byIndex = new Map<number, any>(elements.map((e) => [e.element_index, e]));
+	const ancestorOf = (e: any): string => {
+		let cur = e, hops = 0;
+		while (cur?.parent_index !== undefined && hops++ < 12) {
+			cur = byIndex.get(cur.parent_index);
+			const name = (cur?.label ?? "").toString().replace(/\s+/g, " ");
+			if (name && cur.role !== "AXWindow" && cur.role !== "AXWebArea") return name.slice(0, 40);
+		}
+
+		return "";
+	};
+
+	// Chromium labels every undescribed image with this; it names no control and is pure
+	// tokens. Dropping it also lets the DOM class become the element's only name, which is
+	// the useful one (`.icon--name--chevronDown`).
+	const CHROMIUM_IMAGE_PLACEHOLDER = "To get missing image descriptions";
+
 	const lines: string[] = [];
 	const haystackParts: string[] = [];
 	for (const e of elements) {
-		const label = (e.label ?? "").toString().replace(/\s+/g, " ");
+		let label = (e.label ?? "").toString().replace(/\s+/g, " ");
+		if (label.startsWith(CHROMIUM_IMAGE_PLACEHOLDER)) label = "";
 		const value = (e.value ?? "").toString().replace(/\s+/g, " ");
 		if (label) haystackParts.push(label);
 		if (value) haystackParts.push(value);
+		const descriptor = axdom.lookup(dom, e.frame);
 		const interesting =
-			label || value ||
+			label || value || descriptor ||
 			["AXButton", "AXTextField", "AXPopUpButton", "AXMenuItem", "AXCheckBox", "AXRadioButton", "AXComboBox", "AXLink"].includes(e.role);
 		if (!interesting) continue;
 		const f = e.frame ? ` @(${e.frame.x},${e.frame.y} ${e.frame.w}x${e.frame.h})` : "";
 		const val = value && value !== label ? ` value="${value.slice(0, 80)}"` : "";
-		lines.push(`[${e.element_index}] ${e.role} "${label.slice(0, 80)}"${val}${f}${e.selected ? " SELECTED" : ""}${e.enabled === false ? " DISABLED" : ""}`);
+		// The DOM descriptor is the only naming an unlabeled control has, so it goes in
+		// the haystack too — verification can then check for it like any other evidence.
+		if (descriptor && !label) haystackParts.push(descriptor);
+		const dsc = descriptor ? ` ${descriptor}` : "";
+		// An icon inside a button repeats the button's name; the containment only informs
+		// when it names a DIFFERENT surface than the element's own label. Compare on the
+		// truncated forms actually rendered, or near-duplicates slip through.
+		const parent = ancestorOf(e);
+		const inWhat = parent && !label.slice(0, 40).startsWith(parent) ? ` in="${parent}"` : "";
+		lines.push(`[${e.element_index}] ${e.role} "${label.slice(0, 80)}"${val}${dsc}${inWhat}${f}${e.selected ? " SELECTED" : ""}${e.enabled === false ? " DISABLED" : ""}`);
 	}
 
 	const title = structured.window?.title ?? "";
@@ -117,6 +157,8 @@ export async function observe(driver: Driver, win: WindowRef, shotName: string):
 		screenshotB64: fs.readFileSync(shotPath).toString("base64"),
 		title,
 		appContent: elements.filter(isAppContent).length,
+		domEnriched: dom.byFrame.size,
+		domUnavailable: dom.unavailable,
 	};
 }
 
@@ -223,12 +265,19 @@ const app = "${app.replace(/"/g, '\\"')}";
 const se = Application("System Events");
 const procs = se.processes.whose({name: app});
 if (procs.length === 0) throw new Error("process not found");
-const win = procs[0].windows[0];
+const proc = procs[0];
+
+// A natively-fullscreen window is reported by System Events as NO windows at all
+// (windows.length === 0, and windows[0] throws "Invalid index"), so the absence of
+// windows is itself the fullscreen signal — check it before touching windows[0].
+if (proc.windows.length === 0) JSON.stringify({action: "left-fullscreen", reason: "no windows listed (native fullscreen)"});
+else {
+const win = proc.windows[0];
 
 // A fullscreen window already fills its display; touching position would demote it.
 let fullscreen = false;
 try { fullscreen = win.attributes["AXFullScreen"].value(); } catch (e) {}
-if (fullscreen) JSON.stringify({action: "left-fullscreen"});
+if (fullscreen) JSON.stringify({action: "left-fullscreen", reason: "AXFullScreen attribute"});
 else {
   const p = win.position(), s = win.size();
   const cx = p[0] + s[0] / 2, cy = p[1] + s[1] / 2;
@@ -257,18 +306,25 @@ else {
   win.size = [best.w, best.h];
   JSON.stringify({action: "filled", scale: bestScale, frame: best});
 }
+}
 `;
 	try {
 		const out = execFileSync("osascript", ["-l", "JavaScript", "-e", script], { encoding: "utf8" }).trim();
 		const r = JSON.parse(out);
 		if (r.action === "left-fullscreen")
-			return { staged: true, detail: "window is native-fullscreen — left as is" };
+			return { staged: true, detail: `window is native-fullscreen — left as is (${r.reason})` };
 
 		const lowDpi = r.scale < 2 ? " (1x display — check frames if the video looks off)" : "";
 
 		return { staged: true, detail: `filled its current display @ ${r.frame.w}x${r.frame.h}${lowDpi}` };
-	} catch (err) {
-		return { staged: false, detail: err instanceof Error ? err.message.split("\n")[0] : String(err) };
+	} catch (err: any) {
+		// osascript writes the useful diagnostic to stderr; err.message is just the echoed
+		// command, which reported "Command failed: osascript -l JavaScript -e" and hid the
+		// actual cause ("Invalid index" from windows[0] on a fullscreen app).
+		const stderr = typeof err?.stderr === "string" ? err.stderr.trim() : "";
+		const detail = stderr || (err instanceof Error ? err.message.split("\n")[0] : String(err));
+
+		return { staged: false, detail: detail.split("\n")[0].slice(0, 200) };
 	}
 }
 
@@ -304,13 +360,68 @@ export function scopeWarnings(map: AppMap): string {
 	const ambiguities = findScopeAmbiguities(map);
 	if (ambiguities.length === 0) return "";
 
-	const lines = ambiguities.map((a) => {
-		const where = a.nodes.map((n) => `${n.id} (${n.scope} scope)`).join(" vs ");
+	// Route to each option, so "both paths" is actionable rather than a label. Edges are
+	// keyed by node id; a control's route is the path to its parent surface.
+	const routeTo = (nodeId: string): string => {
+		const surface = map.nodes.find((n) => n.id === nodeId)?.kind === "control"
+			? nodeId.split("/").slice(0, -1).join("/")
+			: nodeId;
+		const hops: string[] = [];
+		let cursor = surface;
+		// Walk parents until root; bounded by node count so a cyclic graph cannot hang us.
+		for (let i = 0; i <= map.nodes.length; i++) {
+			const edge = map.edges.find((e) => e.to === cursor);
+			if (!edge) break;
+			hops.unshift(edge.action);
+			if (edge.from === "root") break;
+			cursor = edge.from;
+		}
 
-		return `- "${a.settingKey}" can be changed in more than one place: ${where}. These are SEPARATE stores — changing one does not change the other. If the task does not say which scope it means, prefer the broadest (app/workspace/brand) default rather than a single document's override, and say in your summary which scope you changed.`;
+		return hops.length ? hops.join(" → ") : "(route not recorded)";
+	};
+
+	// Group by the SURFACES involved, not per setting. Yarn has 15 settings split across the
+	// same brand-vs-document pair of panels; listing each separately made the warning 10.8k
+	// chars — nearly twice the appmap it is supposed to annotate — by repeating one pair of
+	// routes fifteen times. One entry per surface pair, with the settings it covers.
+	const groups = new Map<string, { nodes: Array<{ id: string; scope: SurfaceScope }>; settings: string[] }>();
+	for (const a of ambiguities) {
+		const surfaceOf = (id: string) =>
+			map.nodes.find((n) => n.id === id)?.kind === "control" ? id.split("/").slice(0, -1).join("/") : id;
+		const pair = a.nodes
+			.map((n) => `${n.scope}:${surfaceOf(n.id)}`)
+			.sort()
+			.join(" | ");
+		const g = groups.get(pair) ?? {
+			nodes: a.nodes.map((n) => ({ id: surfaceOf(n.id), scope: n.scope })),
+			settings: [],
+		};
+		g.settings.push(a.settingKey);
+		groups.set(pair, g);
+	}
+
+	const lines = [...groups.values()].map((g) => {
+		const options = g.nodes
+			.map((n) => `    · ${n.scope} scope — ${n.id}\n      route: ${routeTo(n.id)}`)
+			.join("\n");
+
+		return (
+			`- These settings exist at ${g.nodes.length} scopes — SEPARATE stores, changing one does NOT change the other:\n` +
+			`  ${g.settings.join(", ")}\n${options}`
+		);
 	});
 
-	return `\n\n# Ambiguous settings in this app (from the structured appmap — read carefully)\n${lines.join("\n")}`;
+	return (
+		`\n\n# Settings that exist at more than one scope (from the structured appmap)\n` +
+		`${lines.join("\n")}\n\n` +
+		"Both routes are given because either can be correct — it depends on what the task is for. " +
+		"Read the task and decide: a request about defaults, brand settings, or 'how it should always " +
+		"look' points at the broad scope; a request about this document/project/recording points at the " +
+		"override. If the task is genuinely ambiguous, pick the one you can best justify and SAY WHICH " +
+		"YOU CHOSE AND WHY in your summary — an unstated choice is the actual failure, because a reader " +
+		"cannot tell a deliberate decision from an accident. When it is cheap and non-destructive to do " +
+		"so, you may set both and say so."
+	);
 }
 
 export function loadAppMapGraph(app: string): AppMap | undefined {

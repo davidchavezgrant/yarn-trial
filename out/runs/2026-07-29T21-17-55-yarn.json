@@ -1,0 +1,276 @@
+{
+  "task": "show me how to change the cursor type for just this one project, without affecting other projects",
+  "app": "Yarn",
+  "backend": "ax",
+  "vision": true,
+  "grounding": {
+    "provenance": "explore",
+    "path": "docs/appmaps/yarn.md",
+    "sha256": "898dab217917",
+    "graph": {
+      "nodes": 51,
+      "edges": 11,
+      "scopeAmbiguities": [
+        "agent-effort",
+        "auto-hide-cursor",
+        "cursor-clicks-sound",
+        "cursor-scale",
+        "cursor-style",
+        "default-zoom-level",
+        "default-zoom-type",
+        "entrance-exit-animation",
+        "keyboard-presses-sound",
+        "motion-blur",
+        "screen-window-padding",
+        "shadow-blur",
+        "shadow-opacity",
+        "shadow-spread",
+        "shadow-x-offset",
+        "shadow-y-offset",
+        "text-cursor"
+      ]
+    }
+  },
+  "hintedPrompt": false,
+  "hintReasons": [],
+  "homeReset": "reset",
+  "success": true,
+  "finalCheck": {
+    "verified": true,
+    "note": "expectation met",
+    "evidence": {
+      "description": "Project-scoped Screen Recording Settings popover for 'YT Long - How to buy wholesale for your store' shows Cursor Style = Pointer-first (previously Arrow-first)",
+      "textIncludes": [
+        "Screen Recording Settings",
+        "Cursor Style",
+        "Pointer-first",
+        "YT Long - How to buy wholesale for your store"
+      ],
+      "textExcludes": [
+        "Arrow-first"
+      ]
+    }
+  },
+  "visualCheck": {
+    "verdict": "PASS",
+    "scope": "Per-project \"Screen Recording Settings\" popover opened inside the draft \"YT Long - How to buy wholesale for your store\" (document-scope override), not Brand Kit → Screen Clips.",
+    "why": "The frame shows the project-level Screen Recording Settings panel with Cursor Style set to \"Pointer-first\", matching the agent's claim of a per-project override; the brand-wide Brand Kit surface is not open and thus untouched."
+  },
+  "verifiedSteps": 7,
+  "unverifiedSteps": 1,
+  "expectationRejections": 0,
+  "findCalls": 0,
+  "summary": "I changed the cursor type for just one project, using the DOCUMENT-scope override rather than the brand default — because the task explicitly says \\\"just this one project, without affecting other projects\\\", and Brand Kit → Screen Clips would have changed the default for every project on the brand.\\n\\nSteps performed: opened the draft \\\"YT Long - How to buy wholesale for your store\\\" from the sidebar → clicked the Project actions (⋯) button next to the voice picker → chose \\\"Screen Clip Settings…\\\" (the per-project \\\"Screen Recording Settings\\\" popover) → opened the Cursor Style combobox (was \\\"Arrow-first\\\") → selected \\\"Pointer-first\\\" (my chosen value, since the task didn't name one) → clicked Done to commit.\\n\\nVerified by reopening Project actions ⋯ → Screen Clip Settings…: the popover now reads Cursor Style = Pointer-first, with no trace of Arrow-first, confirming the value was saved on this project only. The brand-wide Brand Kit → Screen Clips setting was deliberately left untouched.",
+  "elapsedSec": 118,
+  "usage": {
+    "inputTokens": 18,
+    "outputTokens": 2314,
+    "cacheReadTokens": 523421,
+    "modelCalls": 10
+  },
+  "video": "out/recording/2026-07-29T21-17-55-yarn/window.mp4",
+  "steps": [
+    {
+      "index": 1,
+      "timestamp": "2026-07-29T21:18:15.540Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 67507,
+          "window_id": 24047,
+          "element_index": 30
+        }
+      },
+      "expectation": {
+        "description": "Project editor opens",
+        "textIncludes": [
+          "Publish",
+          "Export"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-1.png",
+      "pixelDelta": 0.6713358070500928,
+      "modelReasoning": "Open the project so I can access its per-project Screen Clip Settings."
+    },
+    {
+      "index": 2,
+      "timestamp": "2026-07-29T21:18:23.791Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 67507,
+          "window_id": 24047,
+          "element_index": 64
+        }
+      },
+      "expectation": {
+        "description": "Project actions menu opens with Screen Clip Settings item",
+        "textIncludes": [
+          "Screen Clip Settings"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-2.png",
+      "pixelDelta": 0.017857142857142856,
+      "modelReasoning": "Open the project actions menu to reach Screen Clip Settings…"
+    },
+    {
+      "index": 3,
+      "timestamp": "2026-07-29T21:18:32.963Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 67507,
+          "window_id": 24047,
+          "element_index": 333
+        }
+      },
+      "expectation": {
+        "description": "Screen Recording Settings popover opens",
+        "textIncludes": [
+          "Screen Recording Settings",
+          "Cursor Style"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-3.png",
+      "pixelDelta": 0.16665120593692023,
+      "modelReasoning": "Open the per-project Screen Clip Settings popover."
+    },
+    {
+      "index": 4,
+      "timestamp": "2026-07-29T21:18:43.674Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 67507,
+          "window_id": 24047,
+          "element_index": 342
+        }
+      },
+      "expectation": {
+        "description": "Cursor Style dropdown opens (tree may collapse to menu bar only)",
+        "textExcludes": [
+          "Cursor Scale"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "expected absent but found: Cursor Scale",
+      "screenshotFile": "agent-step-4.png",
+      "pixelDelta": 0,
+      "modelReasoning": "Open the Cursor Style combobox to pick a different cursor type."
+    },
+    {
+      "index": 5,
+      "timestamp": "2026-07-29T21:18:53.499Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 67507,
+          "window_id": 24047,
+          "element_index": 82
+        }
+      },
+      "expectation": {
+        "description": "Cursor Style combobox now reads Pointer-first",
+        "textIncludes": [
+          "Pointer-first",
+          "Done"
+        ],
+        "textExcludes": [
+          "Arrow-first"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-5.png",
+      "pixelDelta": 0.00009276437847866419,
+      "modelReasoning": "Choose Pointer-first as the new cursor type for this project only."
+    },
+    {
+      "index": 6,
+      "timestamp": "2026-07-29T21:19:06.982Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 67507,
+          "window_id": 24047,
+          "element_index": 403
+        }
+      },
+      "expectation": {
+        "description": "Popover closes; editor visible again",
+        "textExcludes": [
+          "Screen Recording Settings"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-6.png",
+      "pixelDelta": 0.14902597402597403,
+      "modelReasoning": "Commit the per-project change with the Done button."
+    },
+    {
+      "index": 7,
+      "timestamp": "2026-07-29T21:19:19.418Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 67507,
+          "window_id": 24047,
+          "element_index": 64
+        }
+      },
+      "expectation": {
+        "description": "Project actions menu reopens",
+        "textIncludes": [
+          "Screen Clip Settings..."
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-7.png",
+      "pixelDelta": 0.017625231910946195,
+      "modelReasoning": "Reopen the menu to verify the saved per-project cursor style."
+    },
+    {
+      "index": 8,
+      "timestamp": "2026-07-29T21:19:29.585Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 67507,
+          "window_id": 24047,
+          "element_index": 333
+        }
+      },
+      "expectation": {
+        "description": "Popover reopens showing Cursor Style = Pointer-first",
+        "textIncludes": [
+          "Screen Recording Settings",
+          "Pointer-first"
+        ],
+        "textExcludes": [
+          "Arrow-first"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-8.png",
+      "pixelDelta": 0.16665120593692023,
+      "modelReasoning": "Reopen the per-project settings popover to verify the saved value persisted."
+    }
+  ]
+}

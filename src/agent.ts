@@ -239,6 +239,9 @@ async function main(): Promise<void> {
 	const runLog = `${OUT}/runs/${stamp}-${appSlug(app)}.json`;
 	let driverBusy = false;
 	let homeReset: string = noReset ? "skipped" : "pending";
+	// Whether the axdom sidecar supplied DOM id/class this run. Recorded so a run's
+	// element quality is legible from its log rather than inferred.
+	let domEnrichment: { frames: number; unavailable?: string } = { frames: 0, unavailable: "not observed" };
 	let expectationRejections = 0;
 	let findCalls = 0;
 	let malformedStreak = 0;
@@ -359,6 +362,8 @@ async function main(): Promise<void> {
 
 		let blindStreak = 0;
 		let obs = await doObserve("agent-step-0");
+		domEnrichment = { frames: obs.domEnriched, unavailable: obs.domUnavailable };
+		console.log(`dom enrichment: ${obs.domEnriched} frames${obs.domUnavailable ? ` (${obs.domUnavailable})` : ""}`);
 		const messages: Anthropic.MessageParam[] = [
 			{
 				role: "user",
@@ -560,7 +565,7 @@ async function main(): Promise<void> {
 				console.log(`\n=== DONE (${verdict}) after ${records.length} actions ===`);
 				console.log(input.summary);
 				const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
-				fs.writeFileSync(runLog, JSON.stringify({ task, app, backend: backendKind, vision, grounding: groundingMeta, hintedPrompt: audit.hinted, hintReasons: audit.reasons, homeReset, success: input.success, finalCheck, visualCheck: visual, verifiedSteps: records.length - unverified, unverifiedSteps: unverified, expectationRejections, findCalls, summary: input.summary, elapsedSec, usage, ...(record ? { video: videoPath.replace(`${process.cwd()}/`, "") } : {}), steps: records }, null, 2));
+				fs.writeFileSync(runLog, JSON.stringify({ task, app, backend: backendKind, vision, grounding: groundingMeta, hintedPrompt: audit.hinted, hintReasons: audit.reasons, homeReset, domEnrichment, success: input.success, finalCheck, visualCheck: visual, verifiedSteps: records.length - unverified, unverifiedSteps: unverified, expectationRejections, findCalls, summary: input.summary, elapsedSec, usage, ...(record ? { video: videoPath.replace(`${process.cwd()}/`, "") } : {}), steps: records }, null, 2));
 				console.log(`stats: ${records.length} actions, ${elapsedSec}s, ${usage.modelCalls} model calls, ${usage.outputTokens} output tokens, grounding=${groundingMeta.provenance}, vision=${vision}, hintedPrompt=${audit.hinted}, homeReset=${homeReset}`);
 				console.log(`verification: ${records.length - unverified}/${records.length} steps verified${expectationRejections ? `, ${expectationRejections} call(s) rejected for missing checks` : ""}${finalCheck ? `; final goal check: ${finalCheck.verified ? "PASSED" : "failed"} (${finalCheck.evidence?.textIncludes?.join(", ") ?? ""})` : ""}`);
 				if (visual && visual.verdict !== "PASS")
@@ -688,7 +693,7 @@ async function main(): Promise<void> {
 		}
 
 		console.log(`\n=== step limit (${MAX_STEPS}) reached without done ===`);
-		fs.writeFileSync(runLog, JSON.stringify({ task, app, backend: backendKind, vision, grounding: groundingMeta, hintedPrompt: audit.hinted, hintReasons: audit.reasons, homeReset, success: false, expectationRejections, findCalls, summary: "step limit reached", elapsedSec: Math.round((Date.now() - startedAt) / 1000), usage, steps: records }, null, 2));
+		fs.writeFileSync(runLog, JSON.stringify({ task, app, backend: backendKind, vision, grounding: groundingMeta, hintedPrompt: audit.hinted, hintReasons: audit.reasons, homeReset, domEnrichment, success: false, expectationRejections, findCalls, summary: "step limit reached", elapsedSec: Math.round((Date.now() - startedAt) / 1000), usage, steps: records }, null, 2));
 		console.log(`run log: ${runLog}`);
 	} finally {
 		if (record) {
