@@ -492,6 +492,48 @@ the product. Two ways to close it, in increasing cost:
 Not built. Flagged because "we verify our results" currently means "we grep the accessibility
 labels", and that sentence should not be quoted without the qualifier.
 
+### Probe: can a visual judge verify the DESIRED state, not merely a change?
+
+Tested rather than assumed, using the two real screenshots from the scope investigation —
+both show a Cursor Style control reading "Pointer-first", one at brand scope, one at
+per-draft. That is the case our text verification cannot distinguish, and the case that
+actually shipped a wrong result four times.
+
+A separate model call (independent verifier prompt: no stake in success, told to be strict
+about which scope shows the value, asked for PASS/FAIL/UNPROVEN + scope + reason):
+
+| Input | Goal given | Verdict | Judge's reasoning |
+|---|---|---|---|
+| brand-scope frame | change the **brand-wide default** to Pointer-first | **PASS** | identified "Default Brand Brand Kit → Screen Clips", correct scope |
+| per-draft frame | change the **brand-wide default** to Pointer-first | **FAIL** | "only in the draft's Screen Recording Settings panel… no Brand Kit screen is shown to prove the default was changed" |
+| brand-scope frame | change it to **Original** (false claim) | **FAIL** | reads Pointer-first, not Original |
+| brand-scope frame | set the **narration voice** to Cassidy (unrelated) | **UNPROVEN** | no voice control visible |
+
+So yes — approach 2 verifies the *desired* state, not just that something changed, and it
+closed the specific hole substring matching left open. It also distinguishes "wrong" (FAIL)
+from "can't tell from this frame" (UNPROVEN), which matters: those need different responses,
+and text verification collapses both into a bare false.
+
+Why it works here is worth naming: the screenshot contains the *scope context* — breadcrumb,
+panel title, surrounding chrome — that the AX haystack flattens away. The judge is reading
+"Default Brand Brand Kit" next to the control, which is exactly the evidence a substring
+check over labels discards.
+
+Caveats before this becomes a load-bearing claim:
+- **n=4, one setting, one app**, and the two "hard" frames differ obviously once you know to
+  look. Not a measured false-positive/false-negative rate.
+- **It must be a separate call from the acting agent.** The whole audit began with a model
+  grading its own work; a judge sharing the actor's context inherits its rationalisations.
+- **A judge can be wrong too**, and its failure mode is more expensive than a substring
+  miss: a confident PASS on a wrong state is exactly what we were trying to eliminate. It
+  should ADD a gate, never replace the deterministic text check.
+- Costs a model call per verification (and vision input) — fine for `done` evidence,
+  probably not for all 4-13 per-step checks.
+
+Recommended shape, not yet built: keep strict text verification per step; add pixel-diff as a
+cheap "did anything render" gate; add the visual judge at the `done` boundary only, where one
+extra call per run buys goal-level proof and the scope check we currently lack.
+
 ## Harness bugs found (all fixed today)
 
 1. **`set_value` sent `text` where the driver expects `value`** — every direct field write
