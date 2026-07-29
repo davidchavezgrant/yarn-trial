@@ -15,6 +15,7 @@ import {
 	observe,
 	OUT,
 	resetToHome,
+	stageWindowForRecording,
 	TargetNotObservableError,
 	toActionRequest,
 	verify,
@@ -262,17 +263,12 @@ async function main(): Promise<void> {
 		console.log(`task: ${task}\n`);
 
 		if (record) {
-			// The driver's window snapshots composite incorrectly for windows on 1x
-			// (non-retina) displays — stage the window onto the main display first.
 			try {
-				// Top-left placement also keeps the window over the macOS capture-indicator
-				// pill, whose window otherwise gets unioned into the driver's snapshots.
-				execSync(
-					`osascript -e 'tell application "System Events" to tell process "${app}" to set position of (first window whose name contains "${app}") to {0, 38}'`,
-				);
+				const stage = stageWindowForRecording(app);
+				console.log(`recording stage: ${stage.detail}`);
 				await new Promise((r) => setTimeout(r, 1500));
 			} catch {
-				console.log("could not stage window onto main display; recording may be degraded");
+				console.log("could not stage window for recording; recording may be degraded");
 			}
 			fs.mkdirSync(framesDir, { recursive: true });
 			await driver.act({ kind: "tool", name: "start_recording", args: { output_dir: `${recordingDir}/trajectory` } });

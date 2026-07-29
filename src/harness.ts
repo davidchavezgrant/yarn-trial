@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { Driver } from "./driver.js";
 import type { ActionRequest, Expectation } from "./types.js";
@@ -168,6 +169,86 @@ export async function resetToHome(
 	await new Promise((r) => setTimeout(r, 1200));
 
 	return { result: "reset", detail: `clicked "${home.label}" → ${home.description}` };
+}
+
+/**
+ * Fill the window to the display it is ALREADY on, for recording.
+ *
+ * The previous staging set an absolute position of {0, 38} — the MAIN display's top-left
+ * in global coordinates — so it dragged the window off whatever monitor it was on, and,
+ * because macOS demotes a fullscreen window the moment its position is set, it also
+ * kicked the app out of fullscreen. Both were visible in a recorded run.
+ *
+ * Now: find the screen containing the window's centre and size the window to that
+ * screen's visibleFrame (already excludes menu bar and Dock). Native fullscreen is left
+ * untouched — it is already the frame we want, and demoting it is the bug above.
+ *
+ * NOTE on 1x displays: the old code justified relocation with "the driver composites
+ * window snapshots incorrectly on 1x displays". Measured 2026-07-29 against Yarn
+ * fullscreen on a 1920x1080 1x panel, the capture came back clean (1568x882, no bands,
+ * no offset), so that claim does not hold generally and does not justify moving a user's
+ * window between monitors. We warn instead; assembleVideo's size-majority and
+ * black-band gates already drop malformed frames if it does happen.
+ */
+export interface StageResult {
+	staged: boolean;
+	detail: string;
+}
+
+export function stageWindowForRecording(app: string): StageResult {
+	const script = `
+ObjC.import("AppKit");
+const app = "${app.replace(/"/g, '\\"')}";
+const se = Application("System Events");
+const procs = se.processes.whose({name: app});
+if (procs.length === 0) throw new Error("process not found");
+const win = procs[0].windows[0];
+
+// A fullscreen window already fills its display; touching position would demote it.
+let fullscreen = false;
+try { fullscreen = win.attributes["AXFullScreen"].value(); } catch (e) {}
+if (fullscreen) JSON.stringify({action: "left-fullscreen"});
+else {
+  const p = win.position(), s = win.size();
+  const cx = p[0] + s[0] / 2, cy = p[1] + s[1] / 2;
+  const screens = $.NSScreen.screens;
+
+  // AppKit y-axis is bottom-up with origin on the main screen; AX is top-down. Convert
+  // via the main screen's height so "which screen holds this window" is computed in one
+  // coordinate space.
+  const mainH = screens.objectAtIndex(0).frame.size.height;
+  let best = null, bestScale = 2;
+  for (let i = 0; i < screens.count; i++) {
+    const sc = screens.objectAtIndex(i), f = sc.frame, v = sc.visibleFrame;
+    const axTop = mainH - (f.origin.y + f.size.height);
+    if (cx >= f.origin.x && cx < f.origin.x + f.size.width && cy >= axTop && cy < axTop + f.size.height) {
+      best = {x: v.origin.x, y: mainH - (v.origin.y + v.size.height), w: v.size.width, h: v.size.height};
+      bestScale = sc.backingScaleFactor;
+    }
+  }
+  if (!best) {
+    const v = screens.objectAtIndex(0).visibleFrame;
+    best = {x: v.origin.x, y: mainH - (v.origin.y + v.size.height), w: v.size.width, h: v.size.height};
+    bestScale = screens.objectAtIndex(0).backingScaleFactor;
+  }
+
+  win.position = [best.x, best.y];
+  win.size = [best.w, best.h];
+  JSON.stringify({action: "filled", scale: bestScale, frame: best});
+}
+`;
+	try {
+		const out = execFileSync("osascript", ["-l", "JavaScript", "-e", script], { encoding: "utf8" }).trim();
+		const r = JSON.parse(out);
+		if (r.action === "left-fullscreen")
+			return { staged: true, detail: "window is native-fullscreen — left as is" };
+
+		const lowDpi = r.scale < 2 ? " (1x display — check frames if the video looks off)" : "";
+
+		return { staged: true, detail: `filled its current display @ ${r.frame.w}x${r.frame.h}${lowDpi}` };
+	} catch (err) {
+		return { staged: false, detail: err instanceof Error ? err.message.split("\n")[0] : String(err) };
+	}
 }
 
 export interface VerifyResult {
