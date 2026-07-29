@@ -1,0 +1,97 @@
+{
+  "task": "show me how to change the cursor type",
+  "app": "Yarn",
+  "backend": "ax",
+  "vision": false,
+  "grounding": {
+    "provenance": "explore",
+    "path": "docs/appmaps/yarn.md",
+    "sha256": "898dab217917",
+    "graph": {
+      "nodes": 51,
+      "edges": 11,
+      "scopeAmbiguities": [
+        "agent-effort",
+        "auto-hide-cursor",
+        "cursor-clicks-sound",
+        "cursor-scale",
+        "cursor-style",
+        "default-zoom-level",
+        "default-zoom-type",
+        "entrance-exit-animation",
+        "keyboard-presses-sound",
+        "motion-blur",
+        "screen-window-padding",
+        "shadow-blur",
+        "shadow-opacity",
+        "shadow-spread",
+        "shadow-x-offset",
+        "shadow-y-offset",
+        "text-cursor"
+      ]
+    }
+  },
+  "hintedPrompt": false,
+  "hintReasons": [],
+  "homeReset": "failed",
+  "success": true,
+  "finalCheck": {
+    "verified": true,
+    "note": "expectation met",
+    "evidence": {
+      "description": "Brand Kit → Screen Clips page is open showing the Cursor Style control at its original value, and the dropdown is closed (no option rows), proving nothing was changed.",
+      "textIncludes": [
+        "Screen Clip Settings",
+        "Cursor Style",
+        "Pointer-first",
+        "Screen Clips"
+      ],
+      "textExcludes": [
+        "Arrow-first"
+      ]
+    }
+  },
+  "verifiedSteps": 1,
+  "unverifiedSteps": 0,
+  "expectationRejections": 0,
+  "findCalls": 0,
+  "summary": "The request was instructional and gave no target value, so I made no setting change (Cursor Style remains 'Pointer-first'). I navigated to / left the app on Brand Kit → Screen Clips ('Screen Clip Settings'), where the brand-scope Cursor Style combobox lives, closed the accidentally-open dropdown, and explained the steps for both scopes: brand-wide (Brand Kit → Screen Clips → Cursor Style → Arrow-first / Pointer-first / Original) and per-project (Project actions ⋯ → Screen Clip Settings… → Cursor Style → Done).",
+  "elapsedSec": 39,
+  "usage": {
+    "inputTokens": 4,
+    "outputTokens": 1821,
+    "cacheReadTokens": 13212,
+    "modelCalls": 2
+  },
+  "steps": [
+    {
+      "index": 1,
+      "timestamp": "2026-07-29T20:56:22.037Z",
+      "action": {
+        "kind": "tool",
+        "name": "press_key",
+        "args": {
+          "pid": 67507,
+          "window_id": 24047,
+          "key": "escape",
+          "delivery_mode": "foreground"
+        }
+      },
+      "expectation": {
+        "description": "The open Cursor Style dropdown closes; option rows disappear while the combobox stays on its current value.",
+        "textIncludes": [
+          "Cursor Style",
+          "Pointer-first"
+        ],
+        "textExcludes": [
+          "Arrow-first",
+          "Original"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-1.png",
+      "modelReasoning": "The Cursor Style dropdown is open; close it so no value is accidentally changed, since the task only asks how to change it, not what to change it to."
+    }
+  ]
+}

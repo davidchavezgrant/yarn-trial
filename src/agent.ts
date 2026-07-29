@@ -183,7 +183,9 @@ async function main(): Promise<void> {
 			(backendIdx < 0 || (i !== backendIdx && i !== backendIdx + 1)),
 	);
 	const task = args[0];
-	const app = args[1] ?? "Notion Calendar";
+	// Yarn is the canonical target for all runs (set by David, 2026-07-29); Notion
+	// Calendar remains available by passing it explicitly.
+	const app = args[1] ?? "Yarn";
 	if (!task || !["ax", "dom"].includes(backendKind)) {
 		console.error('usage: tsx src/agent.ts "<task>" ["App Name"] [--record] [--backend ax|dom] [--no-vision]');
 		console.error("--backend dom drives an Electron/browser target over CDP; launch it with --remote-debugging-port first.");
@@ -293,6 +295,11 @@ async function main(): Promise<void> {
 			console.log(`home reset: ${reset.result} — ${reset.detail}`);
 			if (reset.result === "none")
 				console.log(`  (add "${appSlug(app)}" to APP_HOME in src/harness.ts to make runs comparable)`);
+			// A failed reset means this run starts wherever the last one stopped, inheriting
+			// its navigation. That is not a comparable measurement, and it is invisible in
+			// the summary line unless said plainly here.
+			if (reset.result === "failed")
+				console.log("  WARNING: start state is whatever the previous run left behind — NOT comparable for A/B measurement.");
 		}
 		console.log(`task: ${task}\n`);
 

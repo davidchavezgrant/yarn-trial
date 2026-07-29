@@ -1,0 +1,114 @@
+{
+  "task": "show me how to change the cursor type",
+  "app": "Yarn",
+  "backend": "ax",
+  "vision": false,
+  "grounding": {
+    "provenance": "explore",
+    "path": "docs/appmaps/yarn.md",
+    "sha256": "898dab217917",
+    "graph": {
+      "nodes": 51,
+      "edges": 11,
+      "scopeAmbiguities": [
+        "agent-effort",
+        "auto-hide-cursor",
+        "cursor-clicks-sound",
+        "cursor-scale",
+        "cursor-style",
+        "default-zoom-level",
+        "default-zoom-type",
+        "entrance-exit-animation",
+        "keyboard-presses-sound",
+        "motion-blur",
+        "screen-window-padding",
+        "shadow-blur",
+        "shadow-opacity",
+        "shadow-spread",
+        "shadow-x-offset",
+        "shadow-y-offset",
+        "text-cursor"
+      ]
+    }
+  },
+  "hintedPrompt": false,
+  "hintReasons": [],
+  "homeReset": "reset",
+  "success": true,
+  "finalCheck": {
+    "verified": true,
+    "note": "expectation met",
+    "evidence": {
+      "description": "Brand Kit → Screen Clips page (\"Screen Clip Settings\") is open with the Cursor Style combobox expanded, showing the three cursor-type options; the current value is still Pointer-first (unchanged).",
+      "textIncludes": [
+        "Screen Clip Settings",
+        "Cursor Style",
+        "Arrow-first",
+        "Pointer-first",
+        "Original"
+      ]
+    }
+  },
+  "verifiedSteps": 1,
+  "unverifiedSteps": 1,
+  "expectationRejections": 0,
+  "findCalls": 0,
+  "summary": "Here's how to change the cursor type (Cursor Style) in Yarn:\\n\\n1. In the left sidebar, click **Brand Kit**.\\n2. In the Brand Kit nav column, choose **Screen Clips** — this opens the brand-wide **Screen Clip Settings** page (currently \\\"Default Brand\\\").\\n3. In the **Cursor** section, click the **Cursor Style** dropdown (currently set to *Pointer-first*).\\n4. Pick one of the three options now showing: **Arrow-first**, **Pointer-first**, or **Original**. The choice applies immediately.\\n\\nI navigated there and opened the dropdown so you can see the options, but I did NOT change the value — it's still *Pointer-first*. Press Escape to dismiss the list.\\n\\nScope note: this is the **brand-wide default** (Brand Kit → Screen Clips), which affects all projects using this brand. If you only want it for one video, open that project → **Project actions (⋯)** next to the voice picker → **Screen Clip Settings…** → change Cursor Style there → **Done**; that per-project override is stored separately and won't affect the brand default. Nearby cursor controls on the same page: Auto-Hide Cursor, Text Cursor (I-beam), and Cursor Scale.",
+  "elapsedSec": 52,
+  "usage": {
+    "inputTokens": 6,
+    "outputTokens": 2227,
+    "cacheReadTokens": 42800,
+    "modelCalls": 3
+  },
+  "steps": [
+    {
+      "index": 1,
+      "timestamp": "2026-07-29T20:58:15.095Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 67507,
+          "window_id": 24047,
+          "element_index": 48
+        }
+      },
+      "expectation": {
+        "description": "Brand Kit page opens with nav items",
+        "textIncludes": [
+          "Screen Clips",
+          "Brand Overview"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-1.png",
+      "modelReasoning": "Cursor Style (cursor type) lives in Brand Kit → Screen Clips as the brand-wide default."
+    },
+    {
+      "index": 2,
+      "timestamp": "2026-07-29T20:58:31.923Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 67507,
+          "window_id": 24047,
+          "element_index": 100
+        }
+      },
+      "expectation": {
+        "description": "Cursor Style dropdown opens; accessibility tree collapses to menu-bar items only while the web dropdown is open",
+        "textExcludes": [
+          "Screen Clip Settings",
+          "Cursor Scale"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "expected absent but found: Screen Clip Settings, Cursor Scale",
+      "screenshotFile": "agent-step-2.png",
+      "modelReasoning": "Open the Cursor Style combobox to display the available cursor types (Arrow-first / Pointer-first / Original) as part of showing how."
+    }
+  ]
+}

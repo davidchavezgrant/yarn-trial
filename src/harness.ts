@@ -154,9 +154,27 @@ export async function resetToHome(
 	const home = APP_HOME[appSlug(app)];
 	if (!home) return { result: "none", detail: `no home state declared for "${app}"` };
 
-	const obs = await observe(driver, win, "home-reset-probe");
-	const line = obs.elementsText.split("\n").find((l) => l.includes(`"${home.label}"`));
-	if (!line) return { result: "failed", detail: `home control "${home.label}" not present` };
+	// An overlay left open by the previous run hides the sidebar: Yarn's dropdowns overlay
+	// the page and sidebar elements vanish from the AX tree entirely, so the home control
+	// is simply not there. That surfaced as homeReset "failed" and a run that silently
+	// started wherever the last one stopped — the exact non-comparability the reset exists
+	// to prevent. Escape first, then retry once.
+	let obs = await observe(driver, win, "home-reset-probe");
+	let line = obs.elementsText.split("\n").find((l) => l.includes(`"${home.label}"`));
+	let dismissed = false;
+	if (!line) {
+		await driver.act({
+			kind: "tool",
+			name: "press_key",
+			args: { pid: win.pid, window_id: win.windowId, key: "escape", delivery_mode: "foreground" },
+		});
+		await new Promise((r) => setTimeout(r, 900));
+		obs = await observe(driver, win, "home-reset-probe");
+		line = obs.elementsText.split("\n").find((l) => l.includes(`"${home.label}"`));
+		dismissed = true;
+	}
+	if (!line)
+		return { result: "failed", detail: `home control "${home.label}" not present, even after escape` };
 
 	const index = Number(line.match(/^\[(\d+)\]/)?.[1]);
 	if (!Number.isFinite(index)) return { result: "failed", detail: `could not parse index from: ${line}` };
@@ -168,7 +186,10 @@ export async function resetToHome(
 	});
 	await new Promise((r) => setTimeout(r, 1200));
 
-	return { result: "reset", detail: `clicked "${home.label}" → ${home.description}` };
+	return {
+		result: "reset",
+		detail: `${dismissed ? "escaped a leftover overlay, then " : ""}clicked "${home.label}" → ${home.description}`,
+	};
 }
 
 /**

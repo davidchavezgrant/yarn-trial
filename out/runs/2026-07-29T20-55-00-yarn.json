@@ -1,0 +1,114 @@
+{
+  "task": "show me how to change the cursor type",
+  "app": "Yarn",
+  "backend": "ax",
+  "vision": true,
+  "grounding": {
+    "provenance": "explore",
+    "path": "docs/appmaps/yarn.md",
+    "sha256": "898dab217917",
+    "graph": {
+      "nodes": 51,
+      "edges": 11,
+      "scopeAmbiguities": [
+        "agent-effort",
+        "auto-hide-cursor",
+        "cursor-clicks-sound",
+        "cursor-scale",
+        "cursor-style",
+        "default-zoom-level",
+        "default-zoom-type",
+        "entrance-exit-animation",
+        "keyboard-presses-sound",
+        "motion-blur",
+        "screen-window-padding",
+        "shadow-blur",
+        "shadow-opacity",
+        "shadow-spread",
+        "shadow-x-offset",
+        "shadow-y-offset",
+        "text-cursor"
+      ]
+    }
+  },
+  "hintedPrompt": false,
+  "hintReasons": [],
+  "homeReset": "reset",
+  "success": true,
+  "finalCheck": {
+    "verified": true,
+    "note": "expectation met",
+    "evidence": {
+      "description": "Brand Kit → Screen Clips page open with the Cursor Style dropdown expanded showing the three cursor type choices",
+      "textIncludes": [
+        "Screen Clip Settings",
+        "Cursor Style",
+        "Arrow-first",
+        "Pointer-first",
+        "Original"
+      ]
+    }
+  },
+  "verifiedSteps": 1,
+  "unverifiedSteps": 1,
+  "expectationRejections": 0,
+  "findCalls": 0,
+  "summary": "Here's how to change the cursor type (cursor style) in Yarn, at the brand-wide default scope:\\n1. In the left sidebar, click **Brand Kit** (bottom).\\n2. In the Brand Kit nav, select **Screen Clips** — the page titled \"Screen Clip Settings\" opens.\\n3. Under the **Cursor** section, click the **Cursor Style** dropdown (currently \"Pointer-first\"). It is now open showing the three options: **Arrow-first**, **Pointer-first**, **Original** — click the one you want and it applies immediately.\\n\\nI navigated there and opened the dropdown to show the choices, but did NOT change the value (still Pointer-first). Note: this is the brand default (Default Brand). To change it for a single project only, open that project → **Project actions ⋯** → **Screen Clip Settings…** → Cursor Style → **Done**; that's a separate store from the brand default.",
+  "elapsedSec": 55,
+  "usage": {
+    "inputTokens": 6,
+    "outputTokens": 1900,
+    "cacheReadTokens": 48116,
+    "modelCalls": 3
+  },
+  "steps": [
+    {
+      "index": 1,
+      "timestamp": "2026-07-29T20:55:19.886Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 67507,
+          "window_id": 24047,
+          "element_index": 48
+        }
+      },
+      "expectation": {
+        "description": "Brand Kit pane opens",
+        "textIncludes": [
+          "Brand Overview",
+          "Screen Clips"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-1.png",
+      "modelReasoning": "Cursor style default lives in Brand Kit → Screen Clips (brand scope)."
+    },
+    {
+      "index": 2,
+      "timestamp": "2026-07-29T20:55:39.883Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 67507,
+          "window_id": 24047,
+          "element_index": 100
+        }
+      },
+      "expectation": {
+        "description": "Cursor Style dropdown opens, collapsing the AX tree to menu bar only",
+        "textExcludes": [
+          "Screen Clip Settings",
+          "Shadow Opacity"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "expected absent but found: Screen Clip Settings, Shadow Opacity",
+      "screenshotFile": "agent-step-2.png",
+      "modelReasoning": "Open the Cursor Style combobox to reveal the cursor type options (Arrow-first / Pointer-first / Original)."
+    }
+  ]
+}

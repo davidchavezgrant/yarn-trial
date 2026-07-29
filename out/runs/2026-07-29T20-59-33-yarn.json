@@ -1,0 +1,89 @@
+{
+  "task": "show me how to change the cursor type",
+  "app": "Yarn",
+  "backend": "ax",
+  "vision": false,
+  "grounding": {
+    "provenance": "explore",
+    "path": "docs/appmaps/yarn.md",
+    "sha256": "898dab217917",
+    "graph": {
+      "nodes": 51,
+      "edges": 11,
+      "scopeAmbiguities": [
+        "agent-effort",
+        "auto-hide-cursor",
+        "cursor-clicks-sound",
+        "cursor-scale",
+        "cursor-style",
+        "default-zoom-level",
+        "default-zoom-type",
+        "entrance-exit-animation",
+        "keyboard-presses-sound",
+        "motion-blur",
+        "screen-window-padding",
+        "shadow-blur",
+        "shadow-opacity",
+        "shadow-spread",
+        "shadow-x-offset",
+        "shadow-y-offset",
+        "text-cursor"
+      ]
+    }
+  },
+  "hintedPrompt": false,
+  "hintReasons": [],
+  "homeReset": "reset",
+  "success": true,
+  "finalCheck": {
+    "verified": true,
+    "note": "expectation met",
+    "evidence": {
+      "description": "Brand Kit → Screen Clips page is open with the Cursor Style control visible and unchanged",
+      "textIncludes": [
+        "Screen Clip Settings",
+        "Cursor Style",
+        "Pointer-first",
+        "Screen Clips"
+      ]
+    }
+  },
+  "verifiedSteps": 1,
+  "unverifiedSteps": 0,
+  "expectationRejections": 0,
+  "findCalls": 0,
+  "summary": "Navigated to where the cursor type (Cursor Style) is set, without altering any value since you only asked to be shown how.\\n\\nSteps (brand-wide default, the broadest scope):\\n1. In the left sidebar, click \\\"Brand Kit\\\" (bottom of the sidebar).\\n2. In the Brand Kit nav column, choose \\\"Screen Clips\\\" — the pane titled \\\"Screen Clip Settings\\\" opens (it's currently showing).\\n3. Under the \\\"Cursor\\\" section, click the \\\"Cursor Style\\\" combobox (currently \\\"Pointer-first\\\").\\n4. Pick the style you want from the dropdown: \\\"Arrow-first\\\", \\\"Pointer-first\\\", or \\\"Original\\\". It applies immediately.\\n\\nNearby related cursor controls on the same page: Auto-Hide Cursor (Auto Hide / Off), Text Cursor (Hide / Show), and Cursor Scale (currently 1.60).\\n\\nNote on scope: this Brand Kit page sets the default for the brand. To change the cursor style for just one project instead, open that project, click the \\\"Project actions\\\" ⋯ button next to the voice picker, choose \\\"Screen Clip Settings…\\\", change Cursor Style there, and click Done — that override is stored separately from the brand default. I left everything as-is (Cursor Style still \\\"Pointer-first\\\").",
+  "elapsedSec": 37,
+  "usage": {
+    "inputTokens": 4,
+    "outputTokens": 1458,
+    "cacheReadTokens": 17507,
+    "modelCalls": 2
+  },
+  "steps": [
+    {
+      "index": 1,
+      "timestamp": "2026-07-29T20:59:56.540Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 67507,
+          "window_id": 24047,
+          "element_index": 48
+        }
+      },
+      "expectation": {
+        "description": "Brand Kit pane opens with nav items",
+        "textIncludes": [
+          "Screen Clips",
+          "Brand Overview"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-1.png",
+      "modelReasoning": "Cursor Style (cursor type) lives in Brand Kit → Screen Clips, the brand-wide default."
+    }
+  ]
+}

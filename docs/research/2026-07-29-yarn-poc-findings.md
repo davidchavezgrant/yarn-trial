@@ -376,6 +376,50 @@ default, not a single project's override." (`out/runs/2026-07-29T20-46-15-yarn.j
 Caveat: this is one task, before/after, not a controlled A/B — it shows the warning reaches
 the model and changes its stated reasoning, not a measured error-rate reduction.
 
+## Does the screenshot earn its place? — vision A/B (canonical task)
+
+`--no-vision` drops the screenshot from the observation; the text block is byte-identical
+across arms, so the flag isolates one variable. Canonical prompt ("show me how to change the
+cursor type"), Yarn, explore-grounding, home reset verified on every run, arms interleaved so
+app-state drift hits both equally.
+
+| Arm | n | Actions | Wall clock | Output tokens | Input tokens/call | Success |
+|---|---|---|---|---|---|---|
+| vision ON | 3 | 2.0 | 50s | 1,793 | ~16,000 | 3/3 |
+| vision OFF | 2 | 1.5 | 45s | 1,842 | ~14,300 | 2/2 |
+
+**The screenshot is not carrying this task.** Every run succeeded with a machine-checked goal
+check either way, and the no-vision arm was no slower and used no more actions. The image
+costs ~1,700 input tokens per model call (~11%) and buys nothing measurable here.
+
+Why that is plausible rather than surprising: on the AX backend every element already carries
+a role, label, value and frame, and *every verification check runs against text*. The
+screenshot is redundant with the channel the harness actually grades.
+
+Scope of the claim — deliberately narrow:
+- One task, one app, n=2–3. This is a smoke test, not an established result.
+- The task is navigational ("show me where"). Nothing here speaks to tasks needing spatial
+  reasoning (drag targets, canvas work, "click the red one"), reading rendered text the AX
+  tree omits, or diagnosing a visually-broken state.
+- AX backend only. The DOM backend's semantic_v2 budget drops nodes, so the screenshot may
+  matter more there — untested.
+
+Worth re-testing before turning vision off by default, but the direction is clear enough that
+`--no-vision` is a reasonable cost lever for navigational tasks in a throughput pipeline.
+
+### Home reset was silently failing (found by this A/B)
+
+The first attempted pair was void: the vision-OFF run logged `homeReset: failed` and finished
+in 1 action because it *started on the settings page the previous run left open*. Cause: the
+prior run left the Cursor Style dropdown open, and Yarn's dropdowns overlay the page such
+that sidebar elements vanish from the AX tree entirely — so `resetToHome` could not find
+"Library" and gave up.
+
+That is the exact non-comparability the reset exists to prevent, and it was only visible in a
+field of the run log. Fixed: `resetToHome` now presses escape and retries once when the home
+control is missing (3 of the 4 valid runs above needed it), and the agent prints an explicit
+NOT-comparable warning when a reset fails.
+
 ## Harness bugs found (all fixed today)
 
 1. **`set_value` sent `text` where the driver expects `value`** — every direct field write

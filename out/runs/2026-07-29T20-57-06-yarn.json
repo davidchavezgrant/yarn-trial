@@ -1,0 +1,114 @@
+{
+  "task": "show me how to change the cursor type",
+  "app": "Yarn",
+  "backend": "ax",
+  "vision": true,
+  "grounding": {
+    "provenance": "explore",
+    "path": "docs/appmaps/yarn.md",
+    "sha256": "898dab217917",
+    "graph": {
+      "nodes": 51,
+      "edges": 11,
+      "scopeAmbiguities": [
+        "agent-effort",
+        "auto-hide-cursor",
+        "cursor-clicks-sound",
+        "cursor-scale",
+        "cursor-style",
+        "default-zoom-level",
+        "default-zoom-type",
+        "entrance-exit-animation",
+        "keyboard-presses-sound",
+        "motion-blur",
+        "screen-window-padding",
+        "shadow-blur",
+        "shadow-opacity",
+        "shadow-spread",
+        "shadow-x-offset",
+        "shadow-y-offset",
+        "text-cursor"
+      ]
+    }
+  },
+  "hintedPrompt": false,
+  "hintReasons": [],
+  "homeReset": "reset",
+  "success": true,
+  "finalCheck": {
+    "verified": true,
+    "note": "expectation met",
+    "evidence": {
+      "description": "Brand-wide Screen Clip Settings page is open with the Cursor Style dropdown expanded, listing the selectable cursor types",
+      "textIncludes": [
+        "Screen Clip Settings",
+        "Cursor Style",
+        "Arrow-first",
+        "Pointer-first",
+        "Original"
+      ]
+    }
+  },
+  "verifiedSteps": 1,
+  "unverifiedSteps": 1,
+  "expectationRejections": 0,
+  "findCalls": 0,
+  "summary": "Here's how to change the cursor type in Yarn (brand-wide default — the broadest scope):\\n\\n1. In the left sidebar (bottom), click **Brand Kit**.\\n2. In the Brand Kit nav column, choose **Screen Clips** — this opens the **Screen Clip Settings** page for \\\"Default Brand\\\".\\n3. In the **Cursor** section, click the **Cursor Style** dropdown (currently set to *Pointer-first*).\\n4. Pick the cursor type you want: **Arrow-first**, **Pointer-first**, or **Original**. The choice applies immediately — no save button.\\n\\nRelated cursor controls on the same page: Auto-Hide Cursor (Auto Hide / Off), Text Cursor (Hide / Show) and Cursor Scale.\\n\\nI left the dropdown open showing the three options rather than changing the value, since no specific cursor type was requested. Note the scope: this is the brand default. To change it for a single project only, open that project → **Project actions (⋯)** next to the voice picker → **Screen Clip Settings…** → set Cursor Style there → **Done**; that override is stored separately from the brand default.",
+  "elapsedSec": 47,
+  "usage": {
+    "inputTokens": 6,
+    "outputTokens": 1598,
+    "cacheReadTokens": 48015,
+    "modelCalls": 3
+  },
+  "steps": [
+    {
+      "index": 1,
+      "timestamp": "2026-07-29T20:57:26.801Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 67507,
+          "window_id": 24047,
+          "element_index": 48
+        }
+      },
+      "expectation": {
+        "description": "Brand Kit page opens with nav items",
+        "textIncludes": [
+          "Brand Overview",
+          "Screen Clips"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-1.png",
+      "modelReasoning": "Brand Kit contains the brand-wide Screen Clips settings including Cursor Style."
+    },
+    {
+      "index": 2,
+      "timestamp": "2026-07-29T20:57:38.370Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 67507,
+          "window_id": 24047,
+          "element_index": 100
+        }
+      },
+      "expectation": {
+        "description": "Cursor Style dropdown opens; AX tree collapses to menu-bar items only, so page controls disappear",
+        "textExcludes": [
+          "Shadow Y Offset",
+          "Default Zoom Level"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "expected absent but found: Shadow Y Offset, Default Zoom Level",
+      "screenshotFile": "agent-step-2.png",
+      "modelReasoning": "Opening the Cursor Style combobox demonstrates where and how the cursor type is chosen."
+    }
+  ]
+}
