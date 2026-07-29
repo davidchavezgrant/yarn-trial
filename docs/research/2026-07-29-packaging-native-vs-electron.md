@@ -84,7 +84,74 @@ This is the single largest chunk of genuinely new code, and it is well-understoo
 - **The docs and measurement discipline are in this repo.** All the correction notes,
   provenance rules and A/B artifacts assume this codebase.
 
+## Electron changes the answer (David, 2026-07-29)
+
+The framing above compares "Node CLI" against "native Swift" and misses the option that
+matters: **Yarn proper is an Electron app**, so an Electron host is not a compromise between
+the two — it is the actual deployment target. Checking the driver package settles it.
+
+`@trycua/cua-driver` ships a **dedicated `/electron` entry point** and documents Electron
+integration explicitly. This is first-party support, not a workaround:
+
+- `requestMacOSPermissions()` / `hasRequiredMacOSPermissions()` / `openMacOSScreenRecordingSettings()`,
+  callable from the Electron main process after `app.whenReady()`.
+- Critically on permissions: *"These functions run in the importing host process, so macOS
+  attributes their requests to the host rather than to the npm package or child driver."*
+  That is precisely the attribution problem that makes our terminal-granted permissions
+  awkward today.
+- The package ships a **copy-mode build of the `@ubjs/node` N-API runtime** specifically
+  because "upstream returns Rust-owned memory through external ArrayBuffers, which Electron
+  20+ intentionally reject because of V8's memory cage." Someone already hit that wall and
+  fixed it upstream — we would not.
+- `EmbeddedCuaDriverHost` (the `/embedded` subpath) manages the daemon lifecycle in-process:
+  concurrency-safe `start()`, idempotent `stop()`, generation-tracked connections, and a
+  parent-liveness pipe so the daemon cannot outlive a host crash.
+
+Two operational notes from the README that we would otherwise have discovered the hard way:
+the app **must spawn the daemon from the process owning the grants** (going through a
+terminal, `open`, or `NSWorkspace` breaks the responsibility chain — which is exactly what
+our current setup does), and the `cua-driver` executable must ship **outside ASAR** with its
+executable bit preserved, signed before the enclosing app is signed and notarized.
+
+### Code cost: the lowest of the three options
+
+| Option | New code | Reused |
+|---|---|---|
+| **Electron shell** | **~200–250 lines** | *All* of `agent.ts`, `harness.ts`, `driver.ts`, `types.ts`, `explore.ts` — unchanged |
+| SwiftUI shell | ~250–300 | Engine reused, but via subprocess |
+| Full native port | ~1,800–2,200 | Nothing |
+
+The Electron figure is the smallest *and* the least risky, because it is the only one where
+the agent engine is imported rather than ported or shelled out to. Concretely: a `main.ts`
+(BrowserWindow, permission gate, IPC — ~120 lines) and a renderer that is largely our
+existing `PAGE` markup with `ipcRenderer.on('line')` in place of `EventSource` (~100 lines).
+`ui.ts`'s HTTP server, SSE plumbing and `/apps` endpoint all disappear; app enumeration
+becomes `systemPreferences` + a directory scan we already have.
+
+### What it buys over the web UI
+
+- **Permissions attributed to one signed app**, not to whichever terminal ran `npm` —
+  and this is the supported path, not a hack.
+- **Signed bundle** ⇒ ScreenCaptureKit delivers frames (LIMITATIONS §3), so real 30–60fps
+  window capture instead of ~4fps snapshots + ffmpeg. Same win as the Swift option.
+- **It is the environment the feature actually ships into.** Anything we learn about
+  permissions, daemon lifecycle, or capture transfers directly to Yarn's app instead of
+  being re-learned.
+- Distribution is a `.app` rather than "install Node, clone a repo".
+
+### What it does not fix
+
+Electron is a packaging decision, not a capability one. The AX flakiness (§10), the
+wrong-scope verification gap (§8), and native-AppKit generalization are all untouched. It
+also adds a build/packaging step (electron-builder, signing, notarization) that the current
+`npm run ui` does not have.
+
 ## Recommendation
+
+**Superseded by the Electron section above.** The reasoning below still holds for *Swift*
+specifically — it remains the wrong investment right now. Electron is the cheaper and more
+faithful option whenever a packaged UI is wanted, because it is both the smallest diff and
+the actual deployment target.
 
 **Not yet, and the reason is scope rather than difficulty.** The current frontier is
 reliability and generalization (native AppKit targets, ~1-in-3 AX aborts). A port advances
