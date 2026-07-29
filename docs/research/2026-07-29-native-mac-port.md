@@ -99,6 +99,48 @@ Two thresholds that would flip it:
 
 Cheap middle path if a native feel is wanted sooner: keep the TypeScript engine and put a
 thin SwiftUI front end over it, launching runs as subprocesses and reading the same
-`out/runs/*.json` the web UI already streams. An afternoon, no engine rewrite, and it makes
-the recording question answerable independently (a signed Swift wrapper can own capture even
-while Node owns the loop).
+`out/runs/*.json` the web UI already streams. No engine rewrite, and it makes the recording
+question answerable independently (a signed Swift wrapper can own capture even while Node
+owns the loop).
+
+## How much code, exactly
+
+Today's `src/ui.ts` is 376 lines:
+
+| Part | Lines |
+|---|---|
+| Server logic (app list, spawn, SSE, hygiene gate) | 197 |
+| Inline HTML + CSS | 64 |
+| Browser JS (search filter, hint mirror, log rendering) | 115 |
+
+### Option A — SwiftUI shell over the existing engine: **~250–300 lines**
+
+*Smaller than what it replaces*, because most of `ui.ts` exists to bridge a browser to a
+process, and that bridge disappears when the UI **is** the process. Both load-bearing pieces
+verified compiling and running today under plain `swiftc`, no Xcode project:
+
+```swift
+NSWorkspace.shared.runningApplications        // 13 apps WITH icons, one expression
+    .filter { $0.activationPolicy == .regular }
+Process() + Pipe()                            // subprocess + stdout streaming
+```
+
+| Piece | Lines | Note |
+|---|---|---|
+| App list + search | ~40 | `NSWorkspace` replaces the `/Applications` scan; `.searchable` replaces the filter JS |
+| Run launch + live stdout | ~60 | `Process` + `FileHandle.readabilityHandler` replaces spawn + SSE + EventSource |
+| Log view with colour rules | ~70 | The one place SwiftUI is wordier than HTML |
+| Prompt-hygiene mirror | ~30 | Port the `auditTaskPrompt` regexes, or shell out to the real one |
+| Concurrency guard, chrome, state | ~60 | `@State` replaces the server-side `current` singleton |
+
+**Deleted outright**: the HTTP server, SSE plumbing, the `/apps` JSON endpoint, the
+duplicated browser-vs-server hygiene check, and `osascript` for app enumeration.
+
+### Option B — full native port: **~1,800–2,200 lines**
+
+`driver.ts` (120) + `types.ts` (92) + `harness.ts` (762) + `agent.ts` (723) + the ~250–300
+above, minus `axdom.swift` (120 — becomes an in-process call), plus ~200–300 for a
+hand-rolled Anthropic client. 2–4 days.
+
+Not counted in either: `explore.ts` (315) and the probes. Exploration can stay a CLI — it
+runs once per app and nobody watches it.
