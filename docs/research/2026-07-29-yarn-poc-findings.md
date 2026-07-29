@@ -444,6 +444,54 @@ Verified (`out/runs/2026-07-29T21-0*.json`):
 | show me how to change the cursor type (×2) | 4 actions; picks a value, saves, confirms the Save affordance is gone, stays at brand scope |
 | show me how to delete a draft | stops with Project actions open on Delete, never clicks; 12 drafts before, 12 after |
 
+## Where vision belongs: the AX text channel is blind to rendered content
+
+Measured on Yarn's Library, 2026-07-29. The grid shows ~12 draft cards, several with real
+rendered video thumbnails (a person on camera, a slide reading "Understanding payment terms",
+an overlay reading "AI Outbound Sequences"). What the AX tree reports:
+
+| | Count |
+|---|---|
+| Addressable elements | 377 |
+| **AXImage elements** | **1** — a 20×20 sidebar icon, labelled "To get missing image descriptions, open the context menu." |
+| AXTextField (card titles) | 51 |
+
+So the *chrome* is richly described and the *content* is absent. The editor's video preview
+canvas — the surface Yarn's product exists to produce — does not appear in the tree at all.
+`verify()` matches substrings over AX labels and values (a ~8k-char haystack), so anything
+that is neither a label nor a value is invisible to verification by construction.
+
+This splits the vision question by phase, and the answers differ:
+
+**Mapping (exploration): keep vision, and it gets more important, not less.** The appmap is
+built once and reused by every subsequent run, so an error there is systematic rather than
+per-run — the wrong-scope bug is precisely that failure mode. As targets move toward
+canvas/timeline/preview surfaces, the AX tree stops describing the thing being mapped, and
+the screenshot is the only channel that sees it. Exploration also runs ~5 minutes once per
+app, so its token cost is irrelevant. (Exploration currently always uses vision; there is no
+`--no-vision` for it, which is the right default.)
+
+**Task execution: vision is optional for navigational work.** Measured above — no measurable
+benefit on the cursor task, ~11% input-token cost. That result is specific to tasks whose
+targets are labelled controls.
+
+**Verification: text-only is a real gap, and vision is the natural fix — but not yet.** Today
+a check can prove a control *reads* "Pointer-first"; it cannot prove the preview re-rendered,
+that a video actually plays, that a scene shows the right frame, or that the UI is not
+visually broken. For Yarn — whose deliverable is rendered video — that gap sits directly over
+the product. Two ways to close it, in increasing cost:
+
+1. **Pixel-diff assertions** (cheap, deterministic): assert a region changed//did not change
+   between observations. Catches "nothing re-rendered" without a model call. We already store
+   per-step screenshots, so the data is there.
+2. **Model-graded visual evidence** (expensive, flexible): pass before/after screenshots to a
+   judge asking whether the claimed change is visible. Costs a model call per check and
+   reintroduces a self-grading risk — it must be a *separate* call from the acting agent, or
+   it is the same model marking its own homework, which is the failure this audit began with.
+
+Not built. Flagged because "we verify our results" currently means "we grep the accessibility
+labels", and that sentence should not be quoted without the qualifier.
+
 ## Harness bugs found (all fixed today)
 
 1. **`set_value` sent `text` where the driver expects `value`** — every direct field write
