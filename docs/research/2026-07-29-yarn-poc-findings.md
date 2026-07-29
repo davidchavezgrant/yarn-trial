@@ -594,6 +594,32 @@ every Yarn run. Absence of windows is now itself the fullscreen signal. The erro
 reported the echoed command rather than osascript's stderr, hiding the cause behind "Command
 failed: osascript -l JavaScript -e" — it now surfaces the real message.
 
+### Overlay: measured, the banner is up 40% of a run
+
+The always-on-top "agent driving this Mac" banner now hides while the model thinks and
+reappears around each actuation (steps, home reset, final observation). Sampled during a
+live 4-action Yarn run by polling the pause-file handshake ~3x/sec:
+
+| banner | at | for |
+|---|---|---|
+| SHOWN | 0.0s | 9.4s (startup + countdown) |
+| hidden | 9.7s | 9.6s |
+| SHOWN | 19.7s | 2.1s |
+| hidden | 22.1s | 5.6s |
+| SHOWN | 28.0s | 2.4s |
+| … | | 12 toggles total |
+
+**26s shown / 39s hidden — up 40% of the run.** The pattern matches the loop exactly:
+~2.4s per action (click, settle, re-observe), 4–9s hidden per model call. That is the
+point: a bar up for the whole run trains the operator to ignore it, and the majority of a
+run is thinking time during which the machine is safe to touch.
+
+A note on measuring this: the obvious probe — asking System Events for the overlay
+process's windows — reports zero, because an NSPanel built by a JXA script is not exposed
+that way. The first sampler therefore reported "banner up 0% of the run", which looked
+like a broken feature rather than a broken instrument. Sampling the pause-file handshake
+directly is what produced the table above.
+
 ## Harness bugs found (all fixed today)
 
 1. **`set_value` sent `text` where the driver expects `value`** — every direct field write
