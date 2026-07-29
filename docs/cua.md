@@ -149,19 +149,40 @@ read/act on the **DOM directly**, bypassing the AX layer. Two surfaces:
 
 ### Limits found (the honest part)
 
-- **Node budget truncates busy pages.** semantic_v2 caps at ~300 nodes; Notion
-  Calendar's week view exposes ~650–750 AX elements, so unnamed/low-ranked elements
-  (e.g. the timezone gutter label) get omitted (`omitted.page_occluded`, `offscreen`,
-  …). A full agent run over the DOM backend (11/15 steps harness-verified, palette +
-  keyboard flows all working) failed the canonical timezone task precisely because the
-  gutter label never appeared as a ref — the AX backend wins that task. Mitigations to
-  explore: `scope_ref` subtree reads, `continuation` paging, `query` as a model tool.
+- **Node budget truncates busy pages, and is NOT configurable.** semantic_v2 caps each
+  snapshot at 300 nodes; Notion Calendar's week view reports `total_nodes: 1176`.
+  Confirmed against the driver binary: `node_budget` appears only as an OUTPUT field
+  (beside `selected_nodes`/`total_nodes`), snapshot inputs accept no limit parameter,
+  and `set_config` takes only `max_image_dimension` + the `experimental_pip` keys.
+- **Paging solves it.** `snapshot.continuation` is an opaque token; passing it back
+  returns the next 300 ranked nodes in the SAME ref namespace, so pages merge into one
+  addressable set. Measured on the week view: 4 pages, 1176/1176 nodes,
+  `omitted.budget` driven to 0, ~2.0s total vs ~1.9s for a single page — the first
+  snapshot dominates, so exhaustive paging is nearly free in wall-clock (it costs
+  context, not time). Implemented as `DomBackend.snapshotPaged`; exploration runs
+  exhaustive, the agent loop runs one page + `find` on demand.
+- Exhausting the chain is NOT the same as seeing everything: `omitted.budget` is what
+  paging recovers, while `css_hidden`/`offscreen`/`page_occluded` (270 nodes here) stay
+  withheld regardless. `PagedSnapshot.unreachable` reports that separately.
+- **The real blocker was capability enforcement, not truncation.** The timezone gutter
+  label was in page 1 all along. `browser_pointer`/`browser_click` refuse any ref that
+  does not DECLARE the capability (`semantic ref p3:0 does not declare the pointer
+  action`) — and Notion Calendar's gutter label and every context-menu row are bare
+  `statictext` advertising nothing, though they handle clicks perfectly. Both tools
+  accept **x/y coordinates instead of a ref**, which skips the check ("browser_click
+  needs a ref or x/y coordinates"). That is the only way to reach these elements.
+- Coordinates come from the AX tree (semantic refs carry no geometry; `query_dom`
+  returned 0 elements on this Electron target). AX frames are SCREEN-space and
+  browser_pointer wants VIEWPORT-space: the delta is exactly the window origin from
+  `list_windows` bounds. Measured — EDT label at AX (295,129), DOM (285,95.5), window
+  at (0,33). `DomBackend.axCentre` does the conversion and the fallback is automatic.
 - Occlusion affects ranking: snapshots prioritize visible content, and an occluded
   window pushes hundreds of nodes into `page_occluded` omission.
-- Verdict: **DOM and AX are complements, not substitutes** — semantic-first surfaces
-  (palette, dialogs, fields) are stronger over DOM; dense custom canvases still need
-  AX/vision. This is the backend-per-target-class architecture (`--backend dom|ax` on
-  the agent).
+- Verdict: **DOM and AX compose rather than compete.** The DOM path now completes the
+  canonical timezone task end-to-end (verified 2026-07-29, both directions), but it
+  does so by borrowing AX geometry for capability-refused elements and the AX key path
+  for OS-level keys. A "pure DOM" backend is not achievable against this app; a hybrid
+  one is, and it is strictly better than either alone.
 
 ## Patterns that work (harness-level)
 
@@ -183,9 +204,18 @@ read/act on the **DOM directly**, bypassing the AX layer. Two surfaces:
 
 ## Open questions
 
-- Can the DOM backend's truncation be beaten with `scope_ref` subtree reads,
-  `continuation` paging, or exposing `query` to the model as its own tool? (The
-  timezone task would likely pass with any of these.)
-- Is the semantic_v2 node budget configurable (`set_config`)?
+- ~~Can the DOM backend's truncation be beaten by paging / `query` as a model tool?~~
+  ANSWERED: yes — `continuation` paging exhausts the tree and `find` (query as a tool)
+  reaches anything the ranker drops. But truncation was not what blocked the timezone
+  task; capability enforcement was. See "Limits found".
+- ~~Is the semantic_v2 node budget configurable?~~ ANSWERED: no. Output-only field.
+- Does `scope_ref` (subtree reads) beat paging for cost? Untested — with exhaustive
+  paging measured at ~2s, the motivation is context size, not latency.
+- Verification is the weak link, not actuation. Two DOM runs claimed success on the
+  timezone task with `textIncludes ['GMT+2']` while the app sat in travel mode showing
+  GMT+2 *beside* an unchanged EDT. The harness now pushes state-REPLACEMENT goals to
+  pair includes with `textExcludes` on the old value, but nothing enforces it — a
+  presence-only check still passes. Worth a structural fix (e.g. require textExcludes
+  when the task reads as a change) rather than prompt guidance alone.
 - Does grounding + the agent loop transfer to a second app unchanged? (Untested.)
 - Is there a driver-native way to get window-scoped *video* (vs our snapshot polling)?

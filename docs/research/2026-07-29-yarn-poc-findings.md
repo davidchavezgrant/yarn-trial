@@ -354,6 +354,28 @@ per-draft scope — consistent, but one task on one app. The obvious next test i
 known-unambiguous target (only one place it can live) to separate "grounding fixes scope
 errors" from "grounding fixes search".
 
+### Follow-up: appmaps are now stored as prose AND a graph
+
+Prose could not express "this control exists at two scopes", so exploration now emits both
+`docs/appmaps/<app>.md` (prompt input) and `docs/appmaps/<app>.json` (a node/edge graph for
+code). Controls carry a `settingKey` naming the setting independent of where it is edited,
+plus a `scope`; two nodes sharing a settingKey across scopes are a detected ambiguity, and
+the harness appends an explicit warning to the prompt naming both candidates.
+
+Re-running exploration with this schema found the problem is **much wider than cursor style**:
+**14 Screen Clip settings** are dual-scope (brand default vs per-project override) — shadow,
+zoom, motion blur, sound effects, cursor scale, and more. The graph even recorded the
+evidence unaided: *"Observed Arrow-first while the brand default was Pointer-first - separate
+stores."*
+
+Behaviour change verified on the same task that previously failed silently: the agent now
+reasons "persist the **brand-wide** cursor style change" and reports "Scope changed: brand
+default, not a single project's override." (`out/runs/2026-07-29T20-46-15-yarn.json`,
+`…T20-47-33-yarn.json`; both probe changes reverted.)
+
+Caveat: this is one task, before/after, not a controlled A/B — it shows the warning reaches
+the model and changes its stated reasoning, not a measured error-rate reduction.
+
 ## Harness bugs found (all fixed today)
 
 1. **`set_value` sent `text` where the driver expects `value`** — every direct field write
