@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# One entry point for the demo agent. Everything else in this repo is a script you have to
+# remember the shape of; this is the thing you can hand to someone.
+#
+#   ./run                                   packaged app (Electron) — the deployment target
+#   ./run web                               zero-install browser UI on :4319
+#   ./run "show me how to change X"         headless: run a task against the default app
+#   ./run "<task>" "App Name" [--record]    ...against a named app, flags passed through
+#   ./run explore "App Name"                grounding pass -> docs/appmaps/
+#   ./run doctor                            check permissions, keys, deps before demoing
+#
+# Auth: reads .env / ../yarn/.env if present, else expects OPENROUTER_API_KEY or
+# ANTHROPIC_API_KEY already exported.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+# Keys live outside the repo (../yarn/.env is where David keeps the OpenRouter one).
+# `set -a` exports everything sourced so child processes inherit it.
+for env_file in .env ../yarn/.env; do
+	if [[ -f $env_file ]]; then
+		set -a
+		# shellcheck disable=SC1090
+		source "$env_file"
+		set +a
+		break
+	fi
+done
+
+have_key() { [[ -n ${OPENROUTER_API_KEY:-} || -n ${ANTHROPIC_API_KEY:-} ]]; }
+
+die() {
+	printf '\033[31m%s\033[0m\n' "$1" >&2
+	exit 1
+}
+
+# A run started while another is in flight kills BOTH: the second driver session shuts down
+# the shared daemon (LIMITATIONS §6). Cheaper to refuse here than to lose a 20-action run.
+assert_no_run_in_flight() {
+	if pgrep -f "tsx src/(agent|explore)\.ts" >/dev/null 2>&1; then
+		die "a run is already in flight — driver sessions are not concurrent-safe (LIMITATIONS §6).
+Wait for it, or: pkill -f 'tsx src/'"
+	fi
+}
+
+[[ -d node_modules ]] || { echo "installing dependencies…"; npm install --silent; }
+
+cmd=${1:-app}
+
+case $cmd in
+app | "")
+	have_key || die "no API key: export OPENROUTER_API_KEY or ANTHROPIC_API_KEY (or put it in .env)"
+	# Compile only when a source file is newer than the built entry point — a demo should
+	# not sit through tsc every launch.
+	if [[ ! -f dist-electron/electron/main.js ]] ||
+		[[ -n $(find src electron -name '*.ts' -newer dist-electron/electron/main.js -print -quit 2>/dev/null) ]]; then
+		echo "building…"
+		npx tsc -p tsconfig.electron.json
+	fi
+	exec npx electron dist-electron/electron/main.js
+	;;
+
+web)
+	have_key || die "no API key: export OPENROUTER_API_KEY or ANTHROPIC_API_KEY (or put it in .env)"
+	exec npm run --silent ui
+	;;
+
+explore)
+	have_key || die "no API key: export OPENROUTER_API_KEY or ANTHROPIC_API_KEY (or put it in .env)"
+	[[ $# -ge 2 ]] || die 'usage: ./run explore "App Name"'
+	assert_no_run_in_flight
+	shift
+	exec npx tsx src/explore.ts "$@"
+	;;
+
+doctor)
+	printf '\033[1mchecking demo prerequisites\033[0m\n'
+	ok() { printf '  \033[32m✓\033[0m %s\n' "$1"; }
+	no() { printf '  \033[31m✗\033[0m %s\n' "$1"; }
+
+	if have_key; then ok "API key present"; else no "no OPENROUTER_API_KEY / ANTHROPIC_API_KEY"; fi
+	[[ -d node_modules ]] && ok "node_modules installed" || no "run: npm install"
+	command -v ffmpeg >/dev/null && ok "ffmpeg (video assembly)" || no "ffmpeg missing — --record cannot assemble an mp4"
+	python3 -c 'import PIL' 2>/dev/null && ok "python3 + PIL (frame QC, pixel deltas)" || no "python3/PIL missing — pixel-delta verification degrades"
+	[[ -x native/axdom ]] && ok "axdom sidecar built (DOM enrichment)" || no "axdom not built — run: npm run build:native (optional)"
+
+	driver=/Applications/CuaDriver.app/Contents/MacOS/cua-driver
+	if [[ -x $driver ]]; then
+		ok "cua-driver installed"
+		# Read-only; never prompts. Reports `unknown` when no daemon is running, which is
+		# itself worth showing rather than hiding behind a bare pass/fail.
+		"$driver" permissions status 2>/dev/null | sed 's/^/    /' || true
+	else
+		no "cua-driver not found at $driver"
+	fi
+
+	shopt -s nullglob
+	maps=(docs/appmaps/*.md)
+	if ((${#maps[@]})); then
+		ok "grounded apps: $(basename -s .md "${maps[@]}" | tr '\n' ' ')"
+	else
+		no "no appmaps — run: ./run explore \"App Name\""
+	fi
+	;;
+
+-h | --help | help)
+	# Print the header comment, stopping at the first non-comment line rather than a fixed
+	# range, so editing the header cannot leak code into the help text.
+	sed -n '2,${/^#/!q; s/^# \{0,1\}//p;}' "$0"
+	;;
+
+*)
+	# Anything else is a task string: ./run "show me how to X" ["App"] [--record ...]
+	have_key || die "no API key: export OPENROUTER_API_KEY or ANTHROPIC_API_KEY (or put it in .env)"
+	assert_no_run_in_flight
+	exec npx tsx src/agent.ts "$@"
+	;;
+esac
