@@ -543,7 +543,11 @@ async function main(): Promise<void> {
 							usage.modelCalls++;
 							console.log(`    visual judge: ${visual.verdict} — ${visual.why}`);
 							if (visual.scope) console.log(`      scope seen: ${visual.scope}`);
+						} else {
+							console.log("    visual judge: NO VERDICT — this run has no independent visual check.");
 						}
+					} else if (judgeMode !== "off") {
+						console.log("    visual judge: skipped — no final screenshot was captured.");
 					}
 
 					if (judgeMode === "block" && visual?.verdict === "FAIL") {

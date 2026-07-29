@@ -676,7 +676,15 @@ export async function visualJudge(
 			.map((b) => b.text)
 			.join("\n");
 		const verdict = /VERDICT:\s*(PASS|FAIL|UNPROVEN)/i.exec(text)?.[1]?.toUpperCase();
-		if (!verdict) return undefined;
+		// Say so. A judge that returns nothing used to do it silently, which made a missing
+		// gate indistinguishable from a passing one in both the console and the run log —
+		// and it went missing on a canvas run, where it is the only check on whether the
+		// thing that moved was the thing we meant to move.
+		if (!verdict) {
+			console.log(`visual judge returned no parseable verdict: ${text.slice(0, 200).replace(/\s+/g, " ")}`);
+
+			return undefined;
+		}
 
 		return {
 			verdict: verdict as VisualVerdict["verdict"],
