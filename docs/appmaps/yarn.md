@@ -1,52 +1,65 @@
-<!-- provenance: explore | app: Yarn | date: 2026-07-29 | backend: ax | actions: 10 | findings: 7 | finds: 0 | operator-guidance: yes -->
+<!-- provenance: explore | app: Yarn | date: 2026-07-29 | backend: ax | actions: 15 | findings: 8 | finds: 0 | operator-guidance: yes | salvaged: session died before finish -->
 <!-- Written by src/explore.ts. DO NOT HAND-EDIT: edits make this a curated recipe, not exploration output — move such notes to docs/recipes/<app>.md instead. -->
+
+## What Yarn is
+Yarn is an Electron/web app for AI-assisted product-demo videos. The whole UI is one web area; almost everything lives inside it (no useful app menus — the "Yarn" menu bar has only About/Services/Hide/Quit, and there is **no Preferences / cmd+, window**).
 
 ## Layout
 
-Yarn is an Electron/web app in ONE window (1920×1080 logical; screenshot ≈1568×881 — use screenshot pixels for coordinate actions). It boots straight into the **project editor** for the draft "AutoTime"; there is no separate document-open step.
+**Left rail (always present, x≈0–172 in screenshot pixels)**
+- Workspace badge "David's Workspace" (top, ~(90,52)).
+- "Library" (~(57,77)), "Your Drafts" (~(69,100)).
+- Open-draft tabs, one per row (Untitled ×9, "YT Long …", "[Growth] …", **"AutoTime" ~(64,474)**, "UntitledProduct Lau…"), then "New draft".
+- Bottom: "Invite Members" ~(80,810), **"Brand Kit" ~(63,833)**, "Settings" ~(61,856).
+- Quirk: AXPress (element_index) on these rail rows often silently no-ops. A **pixel click** works; if a single pixel click doesn't take, a **double_click** does.
 
-**Left rail (always present, AX buttons):** workspace badge "David's Workspace", `Library`, `Your Drafts`, then a flat list of drafts (many `Untitled`, plus `AutoTime`, `UntitledProduct Launch Demo`, `YT Long …` etc.), `New draft`, and at the bottom `Invite Members`, `Brand Kit`, `Settings`. Clicking a draft name opens its editor; clicking `Brand Kit` replaces the editor with the brand page. Returning = click the draft name again.
+**Editor (opens when a draft tab is selected; the app launched on draft "AutoTime")**
+- Left column: title field "AutoTime", tabs **Agent | Script**, "Select voice" popup, "Project actions" (ellipsis) popup, then the Script/transcript (ProseMirror text areas, scene headers "Intro" 02:49 / "Releases" 00:33, "Edit Cut" skip markers). Bottom-left: agent chat composer ("Composer actions" +, "Effort: High", "Send").
+- Top bar right of centre: "Window" popup, "Add Zoom" button (becomes "Fixed | – Zoom + | ⇤ ⇥" controls when a zoom/clip is selected), stopwatch speed field ("1.00"), animation popup, sound-effects popup, **ellipsis popup (`.editor-topbar-btn--morePopover`, ~(1545,49)) → small popover with "Background / Add BG" and "Audio / Unmute"**.
+- Far top-right status bar: paint picker, captions, music ("ES_A A Winter to Remember – Trevor Kowalski"), "Publish" (globe), "Export".
+- Centre: **preview canvas** (drawn; see below).
+- Below canvas: transport row — play button, **current-time readout (e.g. "01:10:81") and total ("03:22:20")**, insert-bar buttons (overlay slide, media clip, text slide, record talk track, new comment), "Library" popup, "Timeline Zoom" popup.
+- Bottom: **timeline** (drawn; see below).
 
-**Editor surfaces (all in the same window):**
-- **Script/Agent panel** (left, x≈195–520): title field "AutoTime", tabs `Agent` / `Script`, `Select voice` popup, `Project actions` (ellipses) popup, scene headers ("Intro" 02:49, "Releases" 00:33) with per-scene ellipses, `Camera` webcam blocks with `Webcam actions`, and the transcript as editable ProseMirror text (every sentence is its own `AXTextArea`). Bottom of this panel is the Agent composer (`editor-agentChat-input-editor`, `Composer actions`, `Effort: High`, `Send`).
-- **Canvas / preview** (center, x≈545–1560, y≈84–655): fully DRAWN video frame (shows the recorded demo + burned-in caption text). Only AX child is the label `Previewing sync point` (`.ag-editor-canvas-syncPointPreviewOverlay-label`).
-- **Top bar** (y≈49): `Window` popup, `Add Zoom` button, duration field `1.00`, animation popup (`.editor-topbar-btn--animation--screenVideo`), sound-effects popup, ellipses "more" popup. When a screen/zoom clip is SELECTED this bar swaps to zoom controls: `Fixed` popup, `−  Zoom  +`, instant-zoom start/end buttons.
-- **Status bar** (top-right, y≈15): paint picker, captions button, music popup ("ES_A Winter to Remember – Trevor Kowalski"), `Publish`, `Export`.
-- **Playback toolbar** (y≈691): play button, current-time readout (e.g. `01:10:66`), total `03:22:20`, insert buttons (overlay slide / media clip / text slide / record talk-track / new comment), `Library` popup, `Timeline Zoom` popup.
-- **TIMELINE (drawn)** — see below.
-- **Brand Kit page** (rail → `Brand Kit`): "Default Brand / Brand Kit" with sub-nav `Brand Overview, Templates, Workflows, Colors, Type, Screen Clips, Motion, Layout, Misc`. Opens on **Screen Clip Settings** (brand-wide defaults).
+**Brand Kit** (left rail → "Brand Kit"): header "Default Brand  Brand Kit" + second-level tab list at x≈205–340: Brand Overview, Templates, Workflows, Colors, Type, **Screen Clips**, Motion, Layout, Misc. Remembers the last tab you were on. Visited: *Motion* (just a "Motion notes" markdown textarea, placeholder "Describe animation style, timing, easing preferences...") and *Screen Clips*.
 
-### The timeline (drawn region) — the important part
-Bounds: screenshot x≈545–1560, y≈710–881 (below the canvas, right of the Script panel). It is essentially opaque to accessibility: its AX children are junk labels ("Fixed Zoom", "Overlay", "Edit Skip", transcript strings, ruler numbers) and most have 1-pixel frames at parked coordinates, so **you must read the timeline from the screenshot and act by pixel**.
-Rows top→bottom:
-- **Time ruler**, y≈727: scene name at left ("Intro"), tick labels ("55", "1:00", "1:05", "1:10" …).
-- **Zoom lane**, y≈745–760: light "Fixed Zoom" clips with a magnifier glyph; a selected zoom clip is drawn blue (y≈783 band).
-- Empty lanes (overlay/media) y≈765–800.
-- **Screen-recording clip**, purple band y≈805–830, carrying small white dots = **sync points**; lighter blocks inside it are **Skip** segments (hover shows "Edit Skip" / "Adjust Skip start" / "Adjust Skip end").
-- **Transcript chip row**, y≈851: one chip per spoken sentence ("So now, we could just drag the sync point to line it up w…").
-- A vertical black **playhead** line spans all rows.
+**Brand Kit → Screen Clips = "Screen Clip Settings"** — brand-wide defaults, fully in the accessibility tree:
+- Cursor: Auto-Hide Cursor [Auto Hide | Off], Text Cursor [Hide | Show], Cursor Style combobox ("Arrow-first"), Cursor Scale slider (1.60).
+- Screen Display: Screen Window Padding slider (18.0), Shadow Opacity (72%), Shadow Blur (32), Shadow Spread (-18), Shadow X Offset text field (0), Shadow Y Offset text field (12).
+- Sound Effects: Cursor Clicks checkbox + combobox "Extra Soft"; Keyboard Presses checkbox + combobox "Set B" (with audio-preview button) + "Extra Soft".
+- Visual Effects: Entrance/Exit Animation popup ("Fade Up"), Motion Blur [Off|Low|Medium|High] (Medium), Default Zoom Type [Glide|Fixed] (Glide, "Glide follows the cursor, fixed is static."), Default Zoom Level slider (54%).
 
-Readout / verification: the ONLY textual echo of a timeline position is the toolbar clock left of the timeline — `01:14:60` → `01:17:56` → `01:12:50` → `01:04:44` → `01:10:66` in this session, format mm:ss:ff, next to total `03:22:20`. There is **no numeric readout of a sync point's own time anywhere**, and selecting a clip produces no inspector text — only the top bar changing to zoom controls.
+**Per-project "Screen Recording Settings" popover** (was open at app launch, anchored top-right of the editor, screenshot bounds ≈x1232–1560, y45–725, "Done" button ≈(1507,707)). It has the *identical* control list as Brand Kit → Screen Clips but different values (e.g. Screen Window Padding **10.3** vs brand **18.0**), so the two are separate stores. **Its contents are NOT in the accessibility tree at all** — read it from the screenshot and click by pixel. I could not confirm which button reopens it (the topbar ellipsis opens only Background/Audio); most likely candidates not verified: the topbar animation/sound-effect popups or a clip-selected panel.
+
+## Drawn (canvas-only) regions
+
+1. **Preview canvas** — screenshot bounds ≈x543–1560, y82–655. Draws the composited video: purple background, a nested "Animal Switcher Draft" app window, tiger/monkey/elephant tiles, a "Save" button, burned-in caption text, and an inner mini-player with its own time readout ("00:05:87 / 00:28:84") and mini-timeline. Text that reflects its state: the transport readout below it (`01:10:81 / 03:22:20`) and the overlay label **"Previewing sync point"** (`.ag-editor-canvas-syncPointPreviewOverlay-label`, ≈(893,772) in AX-frame terms / drawn near canvas bottom). I did not manipulate the canvas itself.
+
+2. **Timeline** — screenshot bounds ≈x543–1560, y710–880.
+   - y≈727: time ruler, "Intro" scene label at left, tick labels 1:00 / 1:05 / 1:10 / 1:15; **playhead = thin vertical line with a small square handle on the ruler**.
+   - y≈752: a thin search/scrub strip.
+   - y≈805–835: purple screen-clip track ("Animals"), with **white sync-point dots** drawn along it.
+   - y≈845–865: transcript/caption chunks ("monkey part of the script, …", "So now, we could just drag the sync point …", …).
+   - **Input that works: press-drag on the ruler at the playhead.** Verified: drag (1167,727)→(900,727) moved the playhead and the readout changed 01:10:71 → 01:04:91; dragging back restored ≈01:10:81. Plain clicks elsewhere mostly just scrub/deselect.
+   - **Verifiable in text: YES** — the transport current-time readout (element `.ag-editor-toolbar` static text, e.g. "01:10:81") is the readout for playhead position; total duration "03:22:20" sits beside it.
+   - **Undo for scrubbing**: drag the playhead back (it is view state, not a document edit). For real clip edits use Edit ▸ Undo / cmd+Z.
+
+3. **Timeline clip context menu** (drawn, not in AX tree): right-click the purple clip (e.g. pixel (800,818)) → menu with **"Add Skip… ⌘E", "Add Sync Point ⌘S", "Split clip ⇧⌘S", "Reset to original time", "Delete"**. Escape (foreground) closes it.
 
 ## How to
-- **Scrub / set the playhead:** click anywhere in the timeline (ruler at y≈727 is safest). Verify via the toolbar clock text. Clicking a clip body also scrubs *and* selects.
-- **Select a clip:** left-click it (e.g. purple band y≈817). Confirm by the top bar switching from `Add Zoom` to `Fixed` + `− Zoom +`.
-- **Deselect:** click an empty timeline lane (e.g. x≈1450, y≈772). Escape does NOT deselect.
-- **Clip context menu (drawn, not in AX):** right-click the purple clip. Items top→bottom at the click point: `Add Skip…  Cmd+E`, `Add Sync Point  Cmd+S`, `Split clip  Cmd+Shift+S`, `Reset to original time`, `Delete`. Read them off the screenshot and click by pixel; close with Escape (foreground).
-- **Add a sync point:** park the playhead, then Cmd+S (or right-click → "Add Sync Point").
-- **Move a sync point (re-time):** press-drag-release the dot horizontally, e.g. drag (1007,817) → (1070,817). Effect: the dot and every sync point/Skip to its right shift by the drag delta (re-timing pushes later content later). **Single clicks on a dot do nothing at all.**
-- **Undo a timeline edit:** cmd+z with delivery_mode "foreground" (restores dot/Skip positions exactly; does not restore the playhead).
-- **Edit script text:** click into the sentence `AXTextArea` in the Script panel (each sentence is a separate element) and type; editing the script desyncs the demo (that's what Auto-Time re-fixes).
-- **Reach brand defaults:** rail → `Brand Kit` → sub-tab `Screen Clips` ("Screen Clip Settings"). Return to the editor via rail → `AutoTime`.
+
+- **Open a draft / return to the editor**: pixel-click (or double-click) the draft name in the left rail, e.g. "AutoTime" at (64,474). Wait a beat — the editor renders blank for a moment while loading.
+- **Change brand-wide screen-recording defaults** (cursor style, shadows, click sounds, zoom defaults): left rail → pixel-click "Brand Kit" (63,833) → pixel-click "Screen Clips" (264,205) → operate the real AX controls (buttons/comboboxes/sliders/text fields). Changes here do NOT retro-change an individual project's overrides.
+- **Change the same settings for one project**: use the per-project "Screen Recording Settings" popover in the editor (pixel-only; "Done" at ≈(1507,707) closes it). Its values are independent of Brand Kit.
+- **Scrub the timeline**: drag from the playhead square on the ruler (y≈727) to the target x; confirm via the "hh:mm:ss" readout at ≈(624,691).
+- **Clip operations**: right-click the purple clip in the timeline, choose from the drawn menu; or use ⌘E (Add Skip), ⌘S (Add Sync Point), ⇧⌘S (Split clip) with the clip/playhead positioned.
+- **Editor top-bar extras**: ellipsis at ≈(1545,49) → "Background / Add BG", "Audio / Unmute".
 
 ## Dead ends & quirks
-- No app-level Preferences: the macOS menu bar has only Apple / Yarn (About, Services, Hide, Quit) / File (Close Window, Close All) / Edit (Undo, Redo, Cut/Copy/Paste, Substitutions, Speech, Writing Tools, AutoFill, Emoji) / View (Reload, Force Reload, Toggle Developer Tools, Actual Size, Zoom In/Out) / Window / Help. **cmd+, does nothing** — Settings is the in-app rail item.
-- The timeline, the canvas and all popover/context menus are drawn: expect no AX elements. The AX tree also contains hundreds of duplicate 1-pixel-wide text nodes parked at frame x -1514/-269 — ignore them; they are off-screen/clipped content, not real controls.
-- Frame coordinates printed beside elements are logical points offset by (-2181,+763); never feed them to click/drag. Screenshot pixels only.
-- A click on a sync-point dot is a no-op; only press-drag-release manipulates it. A drag also scrubs the playhead to the release x.
-- Escape closes the drawn context menu but leaves the clip selected (top bar stuck in zoom mode).
-- Navigating away to Brand Kit and back preserves the editor state but re-centres the timeline scroll on the playhead, so pixel positions of clips/dots change between visits — re-read the screenshot before each pixel action.
-- `Publish` and `Export` (status bar) are live outbound actions — do not press.
 
-## Scope warning
-Brand Kit → Screen Clips holds BRAND-WIDE defaults (Auto-Hide Cursor, Text Cursor, Cursor Style "Arrow-first", Cursor Scale 1.60, window padding/shadows, Sound Effects "Cursor Clicks: Extra Soft" / "Keyboard Presses: Set B / Extra Soft", Entrance/Exit Animation "Fade Up", Motion Blur Medium, Default Zoom Type Glide|Fixed, Default Zoom Level 54%). The editor top bar exposes the SAME settings for the current project/clip (animation popup — identical CSS class `.editor-topbar-btn--animation--screenVideo`, sound-effects popup, and the `Fixed` zoom-type popup on a selected clip). These are separate stores: changing the Brand Kit default will not alter this project's existing clip, and changing the clip will not alter the brand default. Pick the scope the task actually asks for.
+- **Left-rail "Settings" does nothing** in this build: AXPress, single pixel click and double-click all left the page unchanged. There is no app Settings/Preferences screen and no cmd+, — all screen-recording defaults live in Brand Kit → Screen Clips.
+- **No app-level Preferences window**; macOS menu bar offers only Reload/Force Reload/Dev Tools (View) and Close All (File). Edit ▸ Undo/Redo exist but were greyed out while focus was outside a text field.
+- AXPress on `.globalLeftTabRail-tab` and `.brandStudioPage-sideMenu-tab` buttons is unreliable → use pixel clicks.
+- The per-project Screen Recording Settings popover is invisible to accessibility; a single click on its "Cursor Style" value did not open a dropdown — expect to need precise pixel hits on the chevron, and drags for its sliders.
+- The transcript panel exposes hundreds of per-word AXStaticText elements; ignore them and address the containing `.ag-editor-transcriptPanel-transcriptChunk-contents` text areas.
+- The editor is *the* per-document surface; Brand Kit is the brand surface. Same setting names in both — always confirm which one the task means.
