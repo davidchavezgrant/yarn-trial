@@ -19,6 +19,17 @@ import { tmpdir } from "node:os";
  *
  * Cosmetic and best-effort: every failure path leaves the run untouched and unannounced,
  * which is worse for the human but never wrong for the task.
+ *
+ * HOW TO CHECK IT ACTUALLY SHOWS AND HIDES. Two instruments were tried and both lied.
+ * System Events does not enumerate NSPanels, so it reports zero panels whether or not one
+ * is on screen; screencapture-plus-pixel-sampling cannot tell this banner from another
+ * run's, since they land in the same place on the same display. The one that works is
+ * CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, ...) filtered by
+ * kCGWindowOwnerPID — it sees panels, and the pid tells concurrent runs apart. Two JXA
+ * traps in it: several kCGWindowList* constants are undefined (an undefined in the option
+ * mask makes it NaN and the result empty, so spell 1|16 numerically), and the CFArrayRef
+ * comes back unbridged, so .count is undefined until ObjC.castRefToObject(). Measured on
+ * a three-display Mac: 3 panels shown, 0 after setDriving(false), 3 again, 0 after stop().
  */
 
 /** Where the banner sits. Top edge is where a status bar is looked for. */
@@ -249,6 +260,36 @@ const MODE_RGB = "0.80,0.11,0.18";
 const MODES = { drive: MODE_RGB, explore: MODE_RGB, probe: MODE_RGB };
 
 /**
+ * Every key the JXA script reads, scraped from its own source.
+ *
+ * The parent builds the child's env by hand, and a key the script reads but the parent
+ * never sets does not fail — read() returns its fallback and the feature silently does
+ * nothing. That happened: OVERLAY_PAUSE was missing, so `pauseFile` was "" in the child,
+ * the show/hide branch was dead, and the banner stayed up for entire runs while the parent
+ * wrote and deleted pause files nobody was reading. Pairing this with overlayEnv() in a
+ * test makes the whole class of omission loud instead of invisible.
+ */
+export const scriptEnvKeys = (): string[] => [
+	...new Set([...SCRIPT.matchAll(/read\("(\w+)"/g)].map((m) => m[1])),
+];
+
+/** The child's env, extracted from the spawn call so scriptEnvKeys() can be checked against it. */
+export const overlayEnv = (
+	mode: keyof typeof MODES,
+	text: string,
+	parentPid: number,
+	goFile: string,
+	pauseFile: string,
+): Record<string, string> => ({
+	OVERLAY_TEXT: text,
+	OVERLAY_RGB: MODES[mode],
+	OVERLAY_PARENT: String(parentPid),
+	OVERLAY_COUNTDOWN: String(COUNTDOWN_SECONDS),
+	OVERLAY_GO: goFile,
+	OVERLAY_PAUSE: pauseFile,
+});
+
+/**
  * Show the banner until `stop()`. Never throws and never blocks: if osascript is missing or
  * the panel fails to build, the run proceeds silently.
  *
@@ -269,14 +310,7 @@ export function startOverlay(mode: keyof typeof MODES, text: string): Overlay {
 	try {
 		child = spawn("osascript", ["-l", "JavaScript", "-e", SCRIPT], {
 			stdio: "ignore",
-			env: {
-				...process.env,
-				OVERLAY_TEXT: text,
-				OVERLAY_RGB: MODES[mode],
-				OVERLAY_PARENT: String(process.pid),
-				OVERLAY_COUNTDOWN: String(COUNTDOWN_SECONDS),
-				OVERLAY_GO: goFile,
-			},
+			env: { ...process.env, ...overlayEnv(mode, text, process.pid, goFile, pauseFile) },
 		});
 		child.on("error", () => {});
 	} catch {

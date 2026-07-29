@@ -5,6 +5,7 @@ import { auditTaskPrompt, findScopeAmbiguities, framesShifted, observationBlocks
 import type { ObservationBundle } from "./harness.js";
 import type { AppMap } from "./types.js";
 import { EMPTY, bestClass, descriptorFor, lookup } from "./axdom.js";
+import { overlayEnv, scriptEnvKeys } from "./overlay.js";
 
 // Fixtures are synthetic, describing the CLASS of prompt rather than any specific
 // historical run, so the tests stay meaningful as tasks change.
@@ -388,4 +389,22 @@ test("descriptorFor__ReturnsEmpty__When__NothingUseful", () => {
 
 test("lookup__ReturnsEmpty__When__ElementHasNoFrame", () => {
 	assert.equal(lookup(EMPTY, undefined), "");
+});
+
+// overlay: the parent hands the JXA child a hand-built env, and a key the script reads but
+// the parent never sets fails SILENTLY — read() returns its fallback and the feature simply
+// does nothing. Exactly that happened to OVERLAY_PAUSE: show/hide was dead code for every
+// run, the banner stayed up the whole time, and the parent went on writing pause files
+// nothing was listening for. Scraping the script's own read() calls closes the class.
+
+test("overlayEnv__SuppliesEveryKey__When__ScriptReadsIt", () => {
+	const env = overlayEnv("drive", "banner text", 4242, "/tmp/go", "/tmp/pause");
+	const missing = scriptEnvKeys().filter((k) => !(k in env));
+	assert.deepEqual(missing, [], `JXA script reads these but the parent never sets them: ${missing.join(", ")}`);
+});
+
+test("overlayEnv__CarriesPauseFile__When__Built", () => {
+	// Named explicitly rather than left to the scrape: this is the one that was missing, and
+	// a regression here silently un-fixes the banner rather than failing anything.
+	assert.equal(overlayEnv("drive", "t", 1, "/tmp/go", "/tmp/pause").OVERLAY_PAUSE, "/tmp/pause");
 });

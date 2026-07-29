@@ -30,7 +30,7 @@ import {
 import { DOM_ACT_TOOL, DOM_RULES, DomBackend, FIND_TOOL } from "./dom.js";
 import { startOverlay } from "./overlay.js";
 import type { ActionRequest, Expectation, StepRecord } from "./types.js";
-import type { VerifyResult, VisualVerdict } from "./harness.js";
+import type { ObservationBundle, VerifyResult, VisualVerdict } from "./harness.js";
 
 const MAX_STEPS = Number(process.env.AGENT_STEPS ?? 15);
 /** Free read-only page searches per run, beyond which a find costs an action. */
@@ -335,12 +335,17 @@ async function main(): Promise<void> {
 		console.log(`task: ${task}\n`);
 
 		if (record) {
+			// Staging raises the window and resizes it to fill the display — as intrusive as
+			// any click, and the one moment an operator is most likely to reach for the mouse.
+			overlay.setDriving(true);
 			try {
 				const stage = stageWindowForRecording(app);
 				console.log(`recording stage: ${stage.detail}`);
 				await new Promise((r) => setTimeout(r, 1500));
 			} catch {
 				console.log("could not stage window for recording; recording may be degraded");
+			} finally {
+				overlay.setDriving(false);
 			}
 			fs.mkdirSync(framesDir, { recursive: true });
 			await driver.act({ kind: "tool", name: "start_recording", args: { output_dir: `${recordingDir}/trajectory` } });
@@ -374,7 +379,16 @@ async function main(): Promise<void> {
 		}
 
 		let blindStreak = 0;
-		let obs = await doObserve("agent-step-0");
+		// The first observation is the last thing that touches the app before the first model
+		// call, so it owns the handoff: without this the banner — which starts visible and is
+		// only ever hidden by a setDriving(false) — stays up through the whole opening think.
+		overlay.setDriving(true);
+		let obs: ObservationBundle;
+		try {
+			obs = await doObserve("agent-step-0");
+		} finally {
+			overlay.setDriving(false);
+		}
 		domEnrichment = { frames: obs.domEnriched, unavailable: obs.domUnavailable };
 		console.log(`dom enrichment: ${obs.domEnriched} frames${obs.domUnavailable ? ` (${obs.domUnavailable})` : ""}`);
 		const messages: Anthropic.MessageParam[] = [

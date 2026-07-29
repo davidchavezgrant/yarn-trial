@@ -35,13 +35,17 @@ ${rules}
 
 Use the "record" tool whenever you learn something a task agent would need: where a setting lives, the exact interaction pattern for a control (e.g. "right-click X, then choose Y"), a dead end ("Z is NOT in Settings"), or a quirk. Record findings as you go — do not save them all for the end.
 
+Breadth before depth. A map with one richly-detailed region and whole panels never opened is worse than an even one, because the task agent cannot tell the difference between "not in this app" and "not visited". Before you finish, every settings-bearing surface the app offers should have been opened at least once — each tab of a settings page, each section of a preferences area, each context menu on a distinct kind of object. Depth on any one region is worth spending steps on only once that sweep is done.
+
 When your step budget is spent or coverage is good, call "finish" with BOTH artifacts:
 
 1. "document" — the prose grounding document in markdown: a "Layout" section (main surfaces and how to reach them), a "How to" section (task recipes as exact interaction sequences), and a "Dead ends & quirks" section. Be specific and terse — this document is injected into the task agent's prompt.
 
 2. "nodes" + "edges" — the same knowledge as a graph, for code to query.
 
-On the graph, one thing matters more than completeness: SCOPE. Many apps let the same setting be changed in more than one place — an app-wide or brand-wide default, and a per-document override — and these are usually separate stores, so changing one does not change the other. An agent that changes the wrong one appears to succeed. When you find a control, ask "whose state does this change?" and set "scope" accordingly. If you find the same underlying setting exposed in two places, give BOTH controls the identical "settingKey" and their own distinct "scope". That pairing is what lets the harness warn the next agent.`;
+On the graph, one thing matters more than completeness: SCOPE. Many apps let the same setting be changed in more than one place — an app-wide or brand-wide default, and a per-document override — and these are usually separate stores, so changing one does not change the other. An agent that changes the wrong one appears to succeed. When you find a control, ask "whose state does this change?" and set "scope" accordingly. If you find the same underlying setting exposed in two places, give BOTH controls the identical "settingKey" and their own distinct "scope". That pairing is what lets the harness warn the next agent.
+
+Go looking for those pairs rather than waiting to stumble on them. Whenever you find a panel of defaults, spend steps hunting for where the same settings are overridden for a single document — and vice versa. A pair you never looked for is indistinguishable, in the finished map, from a setting that genuinely lives in one place, and it is the failure the next agent cannot detect on its own.`;
 
 const EXTRA_TOOLS: Anthropic.Tool[] = [
 	{
@@ -165,7 +169,16 @@ async function main(): Promise<void> {
 
 		let blindStreak = 0;
 		let findCalls = 0;
-		let obs = await doObserve("explore-step-0");
+		// Same handoff as the loop below: the banner starts visible and only a setDriving(false)
+		// takes it down, so the opening observation has to be the thing that lowers it — else it
+		// sits red through the first (long) model call with the machine idle.
+		overlay.setDriving(true);
+		let obs: Awaited<ReturnType<typeof doObserve>>;
+		try {
+			obs = await doObserve("explore-step-0");
+		} finally {
+			overlay.setDriving(false);
+		}
 		const messages: Anthropic.MessageParam[] = [
 			{
 				role: "user",
@@ -177,6 +190,9 @@ async function main(): Promise<void> {
 		];
 
 		let actions = 0;
+		// One-shot: an early finish is bounced back once for a coverage self-audit, and
+		// whatever comes next is accepted. See the challenge text below for why.
+		let coverageChallenged = false;
 		for (let turn = 1; turn <= MAX_STEPS * 2; turn++) {
 			const response = await client.messages.create({
 				model,
@@ -194,6 +210,41 @@ async function main(): Promise<void> {
 
 			if (!toolUse) {
 				messages.push({ role: "user", content: "Call exactly one tool (act, record, or finish)." });
+				continue;
+			}
+
+			/**
+			 * Challenge an early finish once, then take the answer either way.
+			 *
+			 * "Coverage is good" is the model's own unexamined judgement, and it is reached
+			 * from inside a transcript that necessarily contains only surfaces already
+			 * visited — the panels never opened are exactly the ones absent from the context
+			 * informing the call. Observed: a pass with 60% of its budget unspent finished
+			 * having swept one region deeply, and the resulting map lost an entire settings
+			 * panel that a previous pass had found. The map cannot express that gap, so the
+			 * task agent reads "not present in this app".
+			 *
+			 * Asking costs one turn, no action, and no app-specific knowledge — it names the
+			 * CLASS of thing to re-check, never a particular surface. Once only: a second
+			 * refusal would be badgering, and a model that has genuinely finished should be
+			 * able to say so and be believed.
+			 */
+			if (toolUse.name === "finish" && !coverageChallenged && actions < MAX_STEPS) {
+				coverageChallenged = true;
+				console.log(`  finish at ${actions}/${MAX_STEPS} actions — asking for a coverage self-audit first`);
+				messages.push({
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: toolUse.id,
+							content:
+								`Before this is accepted: you have ${MAX_STEPS - actions} of ${MAX_STEPS} actions left, so budget is not what is ending the run.\n\n` +
+								"List the settings-bearing surfaces this app offers — every tab of every settings or preferences area, every distinct kind of object with a context menu — and mark which you actually OPENED versus inferred. Then answer: for each panel of defaults you found, did you look for where those same settings are overridden for a single document, or the reverse?\n\n" +
+								"If anything is unopened, go open it — that is what the remaining budget is for. If coverage really is complete, call finish again and it will be accepted.",
+						},
+					],
+				});
 				continue;
 			}
 
