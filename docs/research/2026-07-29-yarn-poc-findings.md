@@ -310,6 +310,50 @@ What the honest numbers say:
    (`explore`/`curated`/`none`) plus the appmap's content hash, so a "grounded" claim can be
    audited after the fact.
 
+## Does grounding buy CORRECTNESS, not just speed? — yes, and it is the bigger finding
+
+Prompted by David asking whether the ~5-minute grounding pass buys anything beyond time.
+Re-reading the Yarn cursor A/B step-by-step, the two arms did not do the same thing:
+
+| | Grounded | Ungrounded |
+|---|---|---|
+| Route | sidebar → Brand Kit → Screen Clips | open a draft → Project actions → Screen Clip Settings… |
+| Scope changed | **brand-wide default** | **that one draft's override** |
+| Goal check | PASSED | PASSED |
+
+**Verified independent, not two views of one store** (probe, 2026-07-29): wrote `Original`
+to the per-draft panel, then read brand level — brand still read `Pointer-first`. Two
+separate settings. (The probe's write was reverted.)
+
+So on the task "change the cursor style to Pointer-first", the ungrounded agent changed a
+per-draft override on an arbitrary draft while the brand default stayed as it was. Both runs
+verify, both summaries are truthful about what they did, and **the harness cannot tell them
+apart** — the goal check only asks "does a control named Cursor Style read Pointer-first
+somewhere in the final observation", which is true in both scopes.
+
+Implications, in order of importance:
+
+1. **Grounding buys correctness, not merely speed.** The appmap contains "Screen Clips = the
+   cursor/motion defaults page" and separately notes that per-draft overrides exist. That
+   knowledge is what puts the grounded arm in the right scope. Ungrounded, the agent found
+   *a* control matching the words in the task and stopped — reasonable, and wrong.
+2. **This is a scope-ambiguity class, not a Yarn quirk.** Any app with global defaults plus
+   per-document overrides (editors, IDEs, design tools, browsers) has it. For Yarn's demo
+   pipeline it matters concretely: a demo recorded after a per-draft-only change looks right
+   in that draft and wrong everywhere else.
+3. **Our verification has a blind spot it cannot close alone.** Substring checks over the
+   focused window can confirm *a* control reads the target value; they cannot confirm it is
+   the *intended* control. Closing it needs either scope-aware evidence (assert the value
+   while on the brand page — i.e. grounding again) or a task statement that names the scope.
+4. **It reframes the ungrounded numbers.** "10 actions vs 4" is not purely a search-cost
+   penalty; ~4 of those ungrounded actions were spent arriving at, and then confirming, the
+   wrong scope. Speed and correctness degrade together.
+
+Not yet measured: how often this happens. n=4 ungrounded cursor runs, and all four chose the
+per-draft scope — consistent, but one task on one app. The obvious next test is a task with a
+known-unambiguous target (only one place it can live) to separate "grounding fixes scope
+errors" from "grounding fixes search".
+
 ## Harness bugs found (all fixed today)
 
 1. **`set_value` sent `text` where the driver expects `value`** — every direct field write
