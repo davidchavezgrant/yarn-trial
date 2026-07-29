@@ -12,3 +12,4 @@ docs/jasper-email-yarn-trial-brief.md
 # Swift sidecar build artifact
 native/axdom
 tmp/
+dist-electron

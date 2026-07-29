@@ -1,0 +1,193 @@
+/**
+ * The demo UI's markup and browser script, shared by both shells so they cannot drift:
+ * `src/ui.ts` (node:http + SSE, zero-install) and `electron/` (packaged app, first-party
+ * driver permission support).
+ *
+ * The page talks to its host through `window.__bus`, injected before this script runs.
+ * That is the only transport-specific surface: fetch + EventSource in the web shell,
+ * ipcRenderer in Electron.
+ */
+export interface UiBus {
+	loadApps(): Promise<unknown[]>;
+	run(opts: { app: string; task: string; record: boolean; noVision: boolean }): Promise<string | undefined>;
+	stop(): void;
+	onStarted(cb: (d: { app: string; task: string }) => void): void;
+	onLine(cb: (line: string) => void): void;
+	onDone(cb: (d: { code: number | null; elapsed: number }) => void): void;
+}
+
+export const CHROME = String.raw`<meta charset="utf-8">
+<title>Self-driving demo agent</title>
+<style>
+  :root { color-scheme: dark; --bg:#16181d; --panel:#1e2128; --line:#2e323c; --fg:#e6e8ec; --dim:#9aa1ad; --accent:#6c8cff; --ok:#57c98a; --bad:#e5736a; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 ui-sans-serif,-apple-system,system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:12px; }
+  h1 { font-size:15px; margin:0; font-weight:600; }
+  header span { color:var(--dim); font-size:12px; }
+  main { display:grid; grid-template-columns:300px 1fr; gap:0; height:calc(100vh - 51px); }
+  .col { padding:16px; overflow:auto; }
+  .col + .col { border-left:1px solid var(--line); }
+  label { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); margin:0 0 6px; }
+  input, textarea, button { font:inherit; color:var(--fg); background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:8px 10px; width:100%; }
+  input:focus, textarea:focus { outline:none; border-color:var(--accent); }
+  textarea { resize:vertical; min-height:74px; }
+  ul { list-style:none; margin:8px 0 0; padding:0; max-height:calc(100vh - 190px); overflow:auto; }
+  li { padding:7px 10px; border-radius:6px; cursor:pointer; display:flex; align-items:center; gap:8px; }
+  li:hover { background:var(--panel); }
+  li.sel { background:#2b3550; }
+  .badge { font-size:10px; padding:1px 6px; border-radius:99px; border:1px solid var(--line); color:var(--dim); }
+  .badge.g { color:var(--ok); border-color:#2f5d45; }
+  .badge.r { color:var(--accent); border-color:#3a4a7a; }
+  .row { display:flex; gap:10px; align-items:center; margin-top:12px; }
+  .row label { margin:0; text-transform:none; letter-spacing:0; font-size:13px; color:var(--fg); display:flex; align-items:center; gap:6px; }
+  .row input[type=checkbox] { width:auto; }
+  button.go { margin-top:14px; background:var(--accent); border-color:var(--accent); color:#0d1020; font-weight:600; cursor:pointer; }
+  button.go:disabled { opacity:.5; cursor:not-allowed; }
+  button.stop { margin-top:8px; background:transparent; color:var(--bad); border-color:#5c3230; cursor:pointer; }
+  #warn { margin-top:10px; padding:9px 11px; border-radius:6px; background:#3a2f1c; border:1px solid #6b552c; color:#f0d9a8; font-size:12.5px; display:none; }
+  #log { font:12.5px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; word-break:break-word; }
+  #log div { padding:1px 0; }
+  .t-step { color:var(--accent); }
+  .t-ok { color:var(--ok); }
+  .t-bad { color:var(--bad); }
+  .t-meta { color:var(--dim); }
+  .empty { color:var(--dim); font-style:italic; }
+  .fold summary { color:var(--dim); cursor:pointer; padding:2px 0; }
+  .fold > div { border-left:2px solid var(--line); margin-left:4px; padding-left:8px; }
+</style>
+<header>
+  <h1>Self-driving demo agent</h1>
+  <span id="status">idle</span>
+</header>
+<main>
+  <div class="col">
+    <label for="q">Target app</label>
+    <input id="q" placeholder="Search apps…" autocomplete="off">
+    <ul id="apps"></ul>
+  </div>
+  <div class="col">
+    <label for="task">Task (state the GOAL only — not the steps)</label>
+    <textarea id="task" placeholder="show me how to change the cursor type"></textarea>
+    <div id="warn"></div>
+    <div class="row">
+      <label><input type="checkbox" id="record"> Record video</label>
+      <label><input type="checkbox" id="novision"> No screenshots</label>
+    </div>
+    <button class="go" id="go" disabled>Run</button>
+    <button class="stop" id="stop" style="display:none">Stop run</button>
+    <div id="log" style="margin-top:16px"><span class="empty">Output appears here.</span></div>
+  </div>
+</main>`;
+
+export const APP_JS = String.raw`let apps = [], sel = null, running = false;
+
+const el = (id) => document.getElementById(id);
+
+async function loadApps() {
+  apps = await bus.loadApps();
+  render();
+}
+
+function render() {
+  const q = el('q').value.toLowerCase();
+  const hits = apps.filter(a => a.name.toLowerCase().includes(q)).slice(0, 60);
+  el('apps').innerHTML = hits.map(a =>
+    '<li data-n="' + encodeURIComponent(a.name) + '" class="' + (a.name === sel ? 'sel' : '') + '">' +
+    '<span style="flex:1">' + a.name.replace(/</g,'&lt;') + '</span>' +
+    (a.grounded ? '<span class="badge g">grounded</span>' : '') +
+    (a.running ? '<span class="badge r">open</span>' : '') + '</li>').join('');
+  for (const li of el('apps').children) {
+    li.onclick = () => { sel = decodeURIComponent(li.dataset.n); render(); check(); };
+  }
+}
+
+// Mirror auditTaskPrompt() in the browser so a hinted prompt is explained before the run
+// starts, not after the process exits. The server re-checks; this is UX, not enforcement.
+function hintWarning(t) {
+  const vocab = t.match(/\b(set_value|type_text|press_key|right_click|double_click|element_index|delivery_mode|AXPress|AX[A-Z]\w+)\b/g);
+  const mech = t.match(/\b(click|clicks|clicking|clicked|press|presses|pressing|keystroke\w*|select all|scroll\w*|hover\w*|drag\w*|cmd\+|ctrl\+|option\+|shift\+)/gi);
+  const uniq = mech ? [...new Set(mech.map(m => m.toLowerCase()))] : [];
+  if (vocab) return 'Names driver internals (' + [...new Set(vocab)].join(', ') + '). The agent will refuse: task prompts state the goal only.';
+  if (uniq.length >= 2) return 'Reads like a recipe (' + uniq.join(', ') + '). The agent will refuse — describe WHAT to achieve, not HOW.';
+  return '';
+}
+
+function check() {
+  const t = el('task').value.trim();
+  const w = t ? hintWarning(t) : '';
+  el('warn').style.display = w ? 'block' : 'none';
+  el('warn').textContent = w;
+  el('go').disabled = running || !sel || !t || !!w;
+  el('go').textContent = sel ? 'Run on ' + sel : 'Run';
+}
+
+// Startup diagnostics (17 scope-ambiguity lines on Yarn) pushed the actual steps off
+// screen. Fold them into one expandable row so the log opens on the run, not the preamble.
+let foldEl = null, foldCount = 0;
+function foldable(text) {
+  const log = el('log');
+  if (log.querySelector('.empty')) log.innerHTML = '';
+  if (!foldEl) {
+    foldEl = document.createElement('details');
+    foldEl.className = 'fold';
+    foldEl.innerHTML = '<summary></summary><div></div>';
+    log.appendChild(foldEl);
+  }
+  foldEl.querySelector('div').appendChild(Object.assign(document.createElement('div'), { textContent: text, className: 't-meta' }));
+  foldEl.querySelector('summary').textContent = ++foldCount + ' setup line' + (foldCount === 1 ? '' : 's') + ' (grounding, scope ambiguities) — click to expand';
+  log.scrollTop = log.scrollHeight;
+}
+
+function line(text) {
+  // Only the scope-ambiguity dump is folded; everything else stays inline.
+  if (/^\s+scope ambiguity:/.test(text)) return foldable(text);
+  const d = document.createElement('div');
+  let cls = '';
+  if (/^\[\d+\]/.test(text)) cls = 't-step';
+  else if (/✓|PASSED|=== DONE/.test(text)) cls = 't-ok';
+  else if (/✗|FAIL|WARNING|REFUS|error/i.test(text)) cls = 't-bad';
+  else if (/^(stats|verification|home reset|target|task|loaded|recording|run log|visual judge)/.test(text)) cls = 't-meta';
+  d.className = cls;
+  d.textContent = text;
+  const log = el('log');
+  if (log.querySelector('.empty')) log.innerHTML = '';
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+}
+
+const bus = window.__bus;   // {onStarted,onLine,onDone,loadApps,run,stop}
+bus.onStarted((d) => {
+  running = true; check();
+  el('stop').style.display = 'block';
+  el('status').textContent = 'running: ' + d.app;
+  el('log').innerHTML = ''; foldEl = null; foldCount = 0;
+  line('▶ ' + d.task + '  —  ' + d.app);
+});
+bus.onLine((t) => line(t));
+bus.onDone((d) => {
+  running = false; check();
+  el('stop').style.display = 'none';
+  el('status').textContent = 'idle';
+  line((d.code === 0 ? '■ finished' : '■ exited with code ' + d.code) + ' after ' + d.elapsed + 's');
+  loadApps();
+});
+
+el('q').addEventListener('input', render);
+// 'input' alone misses programmatic setValue and some IME/paste paths, which left the
+// Run button enabled next to a visible "this will be refused" warning. 'change' catches
+// the stragglers; the server re-checks regardless.
+for (const ev of ['input', 'change', 'keyup', 'paste']) el('task').addEventListener(ev, () => setTimeout(check, 0));
+el('go').onclick = async () => {
+  const err = await bus.run({ app: sel, task: el('task').value.trim(), record: el('record').checked, noVision: el('novision').checked });
+  if (err) line('✗ ' + err);
+};
+el('stop').onclick = () => bus.stop();
+
+loadApps();
+check();
+</script>`;
+
+/** Full standalone document; `bootstrap` installs window.__bus before the app script runs. */
+export const page = (bootstrap: string): string =>
+	`${CHROME}\n<script>${bootstrap}</script>\n<script>${APP_JS}</script>\n`;
