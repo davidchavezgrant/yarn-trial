@@ -65,13 +65,35 @@ Accessibility + Screen Recording permissions for your terminal, and either
 `ANTHROPIC_API_KEY` or `OPENROUTER_API_KEY` in the environment.
 
 ```sh
+./run doctor                         # preflight: keys, permissions, deps, appmaps
+./run                                # packaged Electron app (the deployment target)
+./run web                            # zero-install browser UI on :4319
+./run "show me how to change the cursor type" "Yarn" [--record]
+./run explore "Yarn"                 # grounding pass -> docs/appmaps/
+```
+
+`./run` sources `.env`/`../yarn/.env`, refuses to start a second concurrent run
+(LIMITATIONS §6), and rebuilds the Electron bundle only when sources changed. The
+underlying npm scripts still work if you prefer them:
+
+```sh
 npm install
 npm run build:native                 # optional: DOM enrichment sidecar (needs Xcode CLT)
 npm run probe "Notion Calendar"      # permissions + perception smoke test
 npm run explore -- "Notion Calendar" # grounding pass -> docs/appmaps/
 npm test                             # harness unit tests (34)
 npm run agent -- "Show me how to change my timezone to Paris" "Notion Calendar" --record
+npm run app                          # Electron shell
 ```
+
+**Two shells, one implementation.** `src/ui-core.ts` (app list, single-run guard, spawn,
+hygiene gate) and `src/ui-page.ts` (markup + browser script) are shared; the page reaches
+its host through `window.__bus`, which the web shell binds to fetch + EventSource and the
+Electron shell binds to ipcRenderer. Electron is the one that matters for shipping —
+Yarn's product is Electron, the driver has first-party support for that host, and a signed
+bundle escapes the ScreenCaptureKit limit that caps recording at ~4fps today. Packaging
+(electron-builder, signing, notarization) is not done yet; see
+`docs/research/2026-07-29-packaging-native-vs-electron.md`.
 
 `AGENT_MODEL` overrides the model. `src/step.mts` is a manual step driver for
 debugging individual interactions.
