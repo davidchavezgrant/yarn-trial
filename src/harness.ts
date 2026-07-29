@@ -23,6 +23,16 @@ export interface ObservationBundle {
 	domEnriched: number;
 	/** Set when enrichment could not run (sidecar unbuilt, disabled, native app). */
 	domUnavailable?: string;
+	/**
+	 * Every named element's position, keyed by name. The geometry channel's raw material:
+	 * comparing two observations' maps says which elements moved and by how far.
+	 *
+	 * Deliberately keyed by NAME rather than element_index, which is a walk order that
+	 * renumbers whenever the tree changes shape — the one thing guaranteed to happen when
+	 * the app redraws. Frames are in logical points, a different space from the screenshot
+	 * pixels a drag consumes, so a delta here is never fed back into an action.
+	 */
+	frames: Map<string, { x: number; y: number }>;
 }
 
 export function appSlug(app: string): string {
@@ -120,6 +130,7 @@ export async function observe(driver: Driver, win: WindowRef, shotName: string):
 
 	const lines: string[] = [];
 	const haystackParts: string[] = [];
+	const frames = new Map<string, { x: number; y: number }>();
 	for (const e of elements) {
 		let label = (e.label ?? "").toString().replace(/\s+/g, " ");
 		if (label.startsWith(CHROMIUM_IMAGE_PLACEHOLDER)) label = "";
@@ -140,6 +151,14 @@ export async function observe(driver: Driver, win: WindowRef, shotName: string):
 		// An icon inside a button repeats the button's name; the containment only informs
 		// when it names a DIFFERENT surface than the element's own label. Compare on the
 		// truncated forms actually rendered, or near-duplicates slip through.
+		// Record position under whatever names this element. A name colliding across
+		// siblings (several "Delete" buttons) makes the entry ambiguous, so drop both
+		// rather than pick one — the channel needs identity it can trust.
+		const key = label || descriptor;
+		if (key && e.frame) {
+			if (frames.has(key)) frames.set(key, { x: NaN, y: NaN });
+			else frames.set(key, { x: e.frame.x, y: e.frame.y });
+		}
 		const parent = ancestorOf(e);
 		const inWhat = parent && !label.slice(0, 40).startsWith(parent) ? ` in="${parent}"` : "";
 		lines.push(`[${e.element_index}] ${e.role} "${label.slice(0, 80)}"${val}${dsc}${inWhat}${f}${e.selected ? " SELECTED" : ""}${e.enabled === false ? " DISABLED" : ""}`);
@@ -159,7 +178,55 @@ export async function observe(driver: Driver, win: WindowRef, shotName: string):
 		appContent: elements.filter(isAppContent).length,
 		domEnriched: dom.byFrame.size,
 		domUnavailable: dom.unavailable,
+		frames,
 	};
+}
+
+/**
+ * Did any named element move by roughly the distance a drag asked for?
+ *
+ * The third verification channel, and on a canvas the only one that is both structural and
+ * quantitative. It exists because a drag on painted content is not necessarily invisible to
+ * the accessibility tree: the dragged thing has no element, but content around it does, and
+ * when the app re-lays-out that content its elements MOVE. Observed on one timeline — a
+ * button's frame went -617 -> -540 on a drag, and back to -617 on undo.
+ *
+ * Stronger than the pixel channel, which only reports that some region changed colour: this
+ * names WHICH element moved and by HOW FAR, and demands the distance match what was asked
+ * for. Weaker than text, which says what a thing IS rather than where it sits.
+ *
+ * Nothing here is app-specific — it compares two observations' geometry and knows nothing
+ * about what the elements are. The delta is a RATIO test rather than an equality one because
+ * the two spaces differ (frames are logical points, drags are screenshot pixels) and the
+ * scale factor is a display property; requiring only that the movement be proportional and
+ * in the right direction avoids baking a display's scale into the harness.
+ */
+export function framesShifted(
+	before: Map<string, { x: number; y: number }>,
+	after: Map<string, { x: number; y: number }>,
+	dragDx: number,
+	dragDy: number,
+): { shifted: boolean; movers: Array<{ name: string; dx: number; dy: number }> } {
+	// Below this a drag is not asking for meaningful movement, and every ratio blows up.
+	if (Math.abs(dragDx) < 8 && Math.abs(dragDy) < 8) return { shifted: false, movers: [] };
+
+	const movers: Array<{ name: string; dx: number; dy: number }> = [];
+	for (const [name, a] of before) {
+		const b = after.get(name);
+		// NaN marks a name that collided across siblings, so identity is not established.
+		if (!b || Number.isNaN(a.x) || Number.isNaN(b.x)) continue;
+		const dx = b.x - a.x, dy = b.y - a.y;
+		if (dx === 0 && dy === 0) continue;
+		// Proportional to the request, in the same direction, within a wide band: a real
+		// re-layout moves content by the drag delta scaled to logical points, while an
+		// unrelated repaint or a scroll moves things by an unrelated amount.
+		const wanted = Math.hypot(dragDx, dragDy), got = Math.hypot(dx, dy);
+		const sameDirection = dragDx * dx + dragDy * dy > 0;
+		const ratio = got / wanted;
+		if (sameDirection && ratio > 0.5 && ratio < 1.6) movers.push({ name, dx, dy });
+	}
+
+	return { shifted: movers.length > 0, movers };
 }
 
 export function observationBlocks(obs: ObservationBundle, vision = true): Array<Anthropic.TextBlockParam | Anthropic.ImageBlockParam> {
@@ -629,15 +696,19 @@ export async function visualJudge(
  *
  * - "text" — a substring appeared or disappeared in the AX tree. Discriminating and
  *   deterministic: it says WHAT changed.
+ * - "geometry" — a NAMED element's frame moved by about the distance the drag asked for.
+ *   Structural and quantitative: it says which element moved and how far, so it survives
+ *   the objection that something merely repainted. Available whenever painted content sits
+ *   near addressable content, which on a document surface is usual.
  * - "pixel" — the screen changed where the action was aimed, and did not change where it
- *   was not. Available on painted targets that have no text at all, but strictly weaker:
+ *   was not. The last resort, for painted regions with no neighbouring elements at all:
  *   it says SOMETHING moved, never that it moved somewhere correct.
  *
  * They are kept apart everywhere — in the result, in the step log, in the run summary —
  * because the whole risk with a canvas task is quoting the weak number as if it were the
  * strong one.
  */
-export type VerifyChannel = "text" | "pixel";
+export type VerifyChannel = "text" | "geometry" | "pixel";
 
 export interface VerifyResult {
 	verified: boolean;

@@ -9,6 +9,7 @@ import {
 	assertObservable,
 	auditTaskPrompt,
 	dragMoved,
+	framesShifted,
 	DRIVER_RULES,
 	findScopeAmbiguities,
 	findWindow,
@@ -557,7 +558,7 @@ async function main(): Promise<void> {
 						// check greps text, and a painted target has none. Say so, because
 						// otherwise the model reads "evidence failed" as a miss and retries the
 						// drag forever. There IS no text to find, and that is the honest answer.
-						const pixelOnly = records.some((r) => r.verificationChannel === "pixel") && !records.some((r) => r.verificationChannel === "text");
+						const pixelOnly = records.some((r) => r.verificationChannel === "pixel" || r.verificationChannel === "geometry") && !records.some((r) => r.verificationChannel === "text");
 						messages.push({
 							role: "user",
 							content: [
@@ -587,6 +588,7 @@ async function main(): Promise<void> {
 				 * would overstate it by exactly the distinction this whole layer exists to keep.
 				 */
 				const textSteps = records.filter((r) => r.verificationChannel === "text").length;
+				const geometrySteps = records.filter((r) => r.verificationChannel === "geometry").length;
 				const pixelSteps = records.filter((r) => r.verificationChannel === "pixel").length;
 				const verdict = !input.success
 					? "failure"
@@ -596,9 +598,9 @@ async function main(): Promise<void> {
 				console.log(`\n=== DONE (${verdict}) after ${records.length} actions ===`);
 				console.log(input.summary);
 				const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
-				fs.writeFileSync(runLog, JSON.stringify({ task, app, backend: backendKind, vision, grounding: groundingMeta, hintedPrompt: audit.hinted, hintReasons: audit.reasons, homeReset, domEnrichment, success: input.success, finalCheck, visualCheck: visual, verifiedSteps: records.length - unverified, verifiedByChannel: { text: textSteps, pixel: pixelSteps }, unverifiedSteps: unverified, expectationRejections, findCalls, summary: input.summary, elapsedSec, usage, ...(record ? { video: videoPath.replace(`${process.cwd()}/`, "") } : {}), steps: records }, null, 2));
+				fs.writeFileSync(runLog, JSON.stringify({ task, app, backend: backendKind, vision, grounding: groundingMeta, hintedPrompt: audit.hinted, hintReasons: audit.reasons, homeReset, domEnrichment, success: input.success, finalCheck, visualCheck: visual, verifiedSteps: records.length - unverified, verifiedByChannel: { text: textSteps, geometry: geometrySteps, pixel: pixelSteps }, unverifiedSteps: unverified, expectationRejections, findCalls, summary: input.summary, elapsedSec, usage, ...(record ? { video: videoPath.replace(`${process.cwd()}/`, "") } : {}), steps: records }, null, 2));
 				console.log(`stats: ${records.length} actions, ${elapsedSec}s, ${usage.modelCalls} model calls, ${usage.outputTokens} output tokens, grounding=${groundingMeta.provenance}, vision=${vision}, hintedPrompt=${audit.hinted}, homeReset=${homeReset}`);
-				console.log(`verification: ${records.length - unverified}/${records.length} steps verified (${textSteps} by text, ${pixelSteps} by pixels only)${expectationRejections ? `, ${expectationRejections} call(s) rejected for missing checks` : ""}${finalCheck ? `; final goal check: ${finalCheck.verified ? "PASSED" : "failed"} (${finalCheck.evidence?.textIncludes?.join(", ") ?? ""})` : ""}`);
+				console.log(`verification: ${records.length - unverified}/${records.length} steps verified (${textSteps} by text, ${geometrySteps} by geometry, ${pixelSteps} by pixels only)${expectationRejections ? `, ${expectationRejections} call(s) rejected for missing checks` : ""}${finalCheck ? `; final goal check: ${finalCheck.verified ? "PASSED" : "failed"} (${finalCheck.evidence?.textIncludes?.join(", ") ?? ""})` : ""}`);
 				if (visual && visual.verdict !== "PASS")
 					console.log(`NOTE: visual judge returned ${visual.verdict} — text evidence passed, but the final frame did not independently confirm the goal.`);
 				if (audit.hinted) console.log("NOTE: prompt contained method hints — NOT a clean autonomy result.");
@@ -655,6 +657,7 @@ async function main(): Promise<void> {
 			}
 
 			const prevHaystack = obs.haystack;
+			const prevFrames = obs.frames;
 			const prevShot = `${OUT}/agent-step-${step - 1}.png`;
 			while (driverBusy) await new Promise((r) => setTimeout(r, 50));
 			driverBusy = true;
@@ -693,18 +696,35 @@ async function main(): Promise<void> {
 				: verify(input.expectation, obs.haystack, input.action.name === "wait" ? undefined : prevHaystack);
 
 			/**
-			 * Fall back to the pixel channel for a drag the text channel could not see.
+			 * Fall back to weaker channels for a drag the text channel could not see.
 			 *
 			 * Only for drag, and only after text has failed: a painted target has no label to
-			 * grep, so refusing the step would make canvas work impossible, while preferring
-			 * pixels anywhere else would throw away the stronger evidence. The result is
-			 * tagged with its channel and stays tagged into the run log, because this proves
-			 * something moved and NOT that it moved anywhere correct.
+			 * grep, so refusing the step outright would make canvas work impossible, while
+			 * preferring weak evidence anywhere else would throw away the strong kind.
+			 *
+			 * Geometry before pixels, because it is the better evidence and costs nothing —
+			 * the frames are already in the observation. A drag on painted content usually
+			 * re-lays-out addressable content nearby, and a named element moving by the
+			 * distance asked for is a far narrower claim than a region changing colour.
+			 * Pixels remain for the case where nothing addressable sits near the target.
 			 */
 			if (!verdict.verified && !isError && input.action.name === "drag" && request?.kind === "tool") {
 				const args = request.args as Record<string, number>;
-				const m = dragMoved(prevShot, `${OUT}/agent-step-${step}.png`, { x: args.from_x, y: args.from_y }, { x: args.to_x, y: args.to_y });
-				if (m.moved)
+				const g = framesShifted(prevFrames, obs.frames, args.to_x - args.from_x, args.to_y - args.from_y);
+				const m = g.shifted
+					? undefined
+					: dragMoved(prevShot, `${OUT}/agent-step-${step}.png`, { x: args.from_x, y: args.from_y }, { x: args.to_x, y: args.to_y });
+				if (g.shifted)
+					verdict = {
+						verified: true,
+						channel: "geometry",
+						note:
+							`geometry evidence: ${g.movers.length} named element(s) moved by about the drag distance — ` +
+							`${g.movers.slice(0, 3).map((v) => `"${v.name}" by (${Math.round(v.dx)},${Math.round(v.dy)})`).join(", ")}. ` +
+							`The app re-laid-out addressable content, so the drag reached the document. This does NOT ` +
+							`establish the dragged thing landed at the right position.`,
+					};
+				else if (m?.moved)
 					verdict = {
 						verified: true,
 						channel: "pixel",

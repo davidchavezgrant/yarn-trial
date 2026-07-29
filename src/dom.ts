@@ -211,6 +211,9 @@ export class DomBackend {
 
 		return {
 			elementsText,
+			// The geometry channel is an AX-frame comparison and this backend reports no
+			// frames, so it simply never fires here — an empty map degrades it silently.
+			frames: new Map(),
 			haystack: `${snap.title}\n${haystackParts.join("\n")}`.toLowerCase(),
 			screenshotB64: fs.readFileSync(shotPath).toString("base64"),
 			title: snap.title,

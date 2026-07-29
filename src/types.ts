@@ -26,13 +26,14 @@ export interface StepRecord {
 	expectation: Expectation;
 	verified: boolean;
 	/**
-	 * Which evidence proved it. "text" is a substring that appeared or disappeared in the AX
-	 * tree; "pixel" is only that the screen changed where a drag was aimed, which is available
-	 * on painted targets but proves movement rather than correctness. Undefined when the step
-	 * did not verify. Kept per step so a run's totals can be split by channel — a pixel step
-	 * must never be counted as a text one.
+	 * Which evidence proved it, weakest last. "text" is a substring that appeared or
+	 * disappeared in the AX tree. "geometry" is a named element's frame moving by about the
+	 * distance a drag asked for — structural, but it locates the re-layout rather than the
+	 * dragged thing. "pixel" is only that the screen changed where the drag was aimed.
+	 * Undefined when the step did not verify. Kept per step so a run's totals can be split by
+	 * channel — a weak step must never be counted as a strong one.
 	 */
-	verificationChannel?: "text" | "pixel";
+	verificationChannel?: "text" | "geometry" | "pixel";
 	verificationNote: string;
 	screenshotFile?: string;
 	/**

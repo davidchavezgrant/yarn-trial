@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";
-import { auditTaskPrompt, findScopeAmbiguities, observationBlocks, pixelDelta, scopeWarnings, toActionRequest, verify } from "./harness.js";
+import { auditTaskPrompt, findScopeAmbiguities, framesShifted, observationBlocks, pixelDelta, scopeWarnings, toActionRequest, verify } from "./harness.js";
 import type { ObservationBundle } from "./harness.js";
 import type { AppMap } from "./types.js";
 import { EMPTY, bestClass, descriptorFor, lookup } from "./axdom.js";
@@ -155,6 +155,53 @@ test("auditTaskPrompt__Flags__When__PromptNamesDragCoordinates", () => {
 	assert.match(audit.reasons.join(" "), /screen coordinates/);
 });
 
+// framesShifted: the geometry channel. A drag on painted content has no element to grep,
+// but the app re-lays-out addressable content around it, and those elements have frames.
+// Observed on one timeline: a button went -617 -> -540 on a drag and back on undo.
+
+const at = (pairs: Array<[string, number, number]>) => new Map(pairs.map(([n, x, y]) => [n, { x, y }]));
+
+test("framesShifted__ReportsMover__When__ElementMovesByDragDistance", () => {
+	const before = at([["Edit Skip", -617, 300], ["Sidebar", 10, 40]]);
+	const after = at([["Edit Skip", -540, 300], ["Sidebar", 10, 40]]);
+	const r = framesShifted(before, after, 63, 0);
+	assert.equal(r.shifted, true);
+	assert.deepEqual(r.movers.map((m) => m.name), ["Edit Skip"]);
+});
+
+test("framesShifted__ReportsNothing__When__NothingMoved", () => {
+	const same = at([["Edit Skip", -617, 300]]);
+	assert.equal(framesShifted(same, at([["Edit Skip", -617, 300]]), 63, 0).shifted, false);
+});
+
+test("framesShifted__Ignores__When__MovementIsOppositeTheDrag", () => {
+	// Content sliding the wrong way is some other effect — a scroll, a panel opening —
+	// not the drag being verified.
+	const r = framesShifted(at([["Clip", 500, 0]]), at([["Clip", 437, 0]]), 63, 0);
+	assert.equal(r.shifted, false);
+});
+
+test("framesShifted__Ignores__When__MovementIsWildlyLargerThanAsked", () => {
+	// A page-sized jump in the same direction is a scroll or a navigation, and would
+	// otherwise let any drag claim credit for whatever the app happened to do.
+	const r = framesShifted(at([["Clip", 500, 0]]), at([["Clip", 1400, 0]]), 63, 0);
+	assert.equal(r.shifted, false);
+});
+
+test("framesShifted__Ignores__When__NameIsAmbiguousAcrossSiblings", () => {
+	// Several controls share a label; NaN marks the collision at observe() time. Identity
+	// is not established, so the element cannot witness anything.
+	const before = new Map([["Delete", { x: NaN, y: NaN }]]);
+	const after = new Map([["Delete", { x: NaN, y: NaN }]]);
+	assert.equal(framesShifted(before, after, 63, 0).shifted, false);
+});
+
+test("framesShifted__ReportsNothing__When__DragWasNegligible", () => {
+	// A few pixels is not a request to move anything, and every ratio test degenerates.
+	const r = framesShifted(at([["Clip", 500, 0]]), at([["Clip", 503, 0]]), 3, 0);
+	assert.equal(r.shifted, false);
+});
+
 test("auditTaskPrompt__Passes__When__NumbersAreGoalNotPosition", () => {
 	// The coordinate rule must not swallow numbers that specify the outcome. A resolution,
 	// a duration, and a count all read as digits and none of them is a hint.
@@ -250,6 +297,7 @@ test("scopeWarnings__ReturnsEmpty__When__NoAmbiguities", () => {
 
 const bundle: ObservationBundle = {
 	elementsText: '[3] AXButton "Save" @(10,20 80x30)',
+	frames: new Map([["Save", { x: 10, y: 20 }]]),
 	haystack: "save",
 	screenshotB64: "aGk=",
 	title: "Settings",
