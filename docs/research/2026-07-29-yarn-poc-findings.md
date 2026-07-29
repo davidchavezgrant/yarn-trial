@@ -534,6 +534,34 @@ Recommended shape, not yet built: keep strict text verification per step; add pi
 cheap "did anything render" gate; add the visual judge at the `done` boundary only, where one
 extra call per run buys goal-level proof and the scope check we currently lack.
 
+### Built: pixel-diff signal + visual judge (and a defect the build exposed)
+
+Both layers now ship. `pixelDelta()` records per-step visual change (deterministic, advisory,
+printed inline); `visualJudge()` adds one independent model call at the `done` boundary,
+advisory unless `VISUAL_JUDGE=block`.
+
+**The build falsified part of the probe above.** Wired up for real, the judge receives the
+*raw task string* — and on "show me how to change the cursor type" it **PASSED the known
+wrong-scope frame**, reasoning that an instructional task only asks to locate the control, so
+any panel showing it qualifies. The earlier probe had looked convincing only because I
+hand-wrote an explicit goal ("change the BRAND-WIDE DEFAULT…") that the harness never
+produces.
+
+Fix: pass the agent's own summary claim alongside the task, and judge the claim. Same frame,
+same vague task, now:
+
+> FAIL — "The agent claims it changed the brand-wide default in Brand Kit and explicitly left
+> the per-project override untouched, yet the only surface shown is the per-project Screen
+> Recording Settings panel … which contradicts that claim."
+
+The correct brand-scope frame still passes. Generalisable lesson: **verification must check
+what the agent claims it did, not the wording of the request** — a vague request makes almost
+any end state defensible.
+
+Live run with both layers: 4/4 steps verified, deltas 45.6% / 0.2% / 0.5% / 1.3% (the large
+first delta is the Brand Kit navigation; the small ones are dropdown and save), judge PASS
+naming the brand scope.
+
 ## Harness bugs found (all fixed today)
 
 1. **`set_value` sent `text` where the driver expects `value`** — every direct field write
