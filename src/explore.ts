@@ -16,6 +16,7 @@ import {
 	toActionRequest,
 } from "./harness.js";
 import { DOM_ACT_TOOL, DOM_RULES, DomBackend, FIND_TOOL } from "./dom.js";
+import { startOverlay } from "./overlay.js";
 import type { AppMap, AppMapEdge, AppMapNode } from "./types.js";
 
 const MAX_STEPS = Number(process.env.EXPLORE_STEPS ?? 25);
@@ -137,6 +138,9 @@ async function main(): Promise<void> {
 		process.exit(1);
 	}
 	const { client, model } = makeClient();
+	// A grounding pass clicks through the whole app for minutes on end — same takeover as a
+	// task run, different colour so the mode is readable at a glance.
+	const overlay = startOverlay("explore", `Agent exploring ${app} — do not touch`);
 	const driver = await Driver.start("explore");
 	const findings: string[] = [];
 	const outPath = `${process.cwd()}/docs/appmaps/${appSlug(app)}.md`;
@@ -147,6 +151,8 @@ async function main(): Promise<void> {
 		await driver.act({ kind: "tool", name: "launch_app", args: { name: app } });
 		await new Promise((r) => setTimeout(r, 1500));
 		const win = await findWindow(driver, app);
+		// Last chance to take your hands off before the run owns the pointer.
+		await overlay.countdown();
 		// Exploration runs once and its whole purpose is coverage, so it exhausts the
 		// continuation chain on every observation — the opposite tradeoff from the agent
 		// loop, which re-observes after every action and pays per-step for depth.
@@ -306,6 +312,7 @@ async function main(): Promise<void> {
 		console.log(`\n=== turn limit reached; wrote ${findings.length} raw findings ===`);
 	} finally {
 		await driver.close();
+		overlay.stop();
 	}
 }
 

@@ -1,5 +1,6 @@
 import { Driver } from "./driver.js";
 import { assertObservable } from "./harness.js";
+import { startOverlay } from "./overlay.js";
 
 function section(title: string, payload: unknown): void {
 	console.log(`\n=== ${title} ===`);
@@ -14,6 +15,7 @@ function section(title: string, payload: unknown): void {
 async function main(): Promise<void> {
 	const target = process.argv[2] ?? "Linear";
 	console.log("starting driver (in-process, no daemon)...");
+	const overlay = startOverlay("probe", `Agent probing ${target} — do not touch`);
 	const driver = await Driver.start("probe");
 
 	try {
@@ -53,6 +55,7 @@ async function main(): Promise<void> {
 		section("markdown tree (first 2500 chars)", state.text.slice(0, 2500));
 	} finally {
 		await driver.close();
+		overlay.stop();
 	}
 }
 

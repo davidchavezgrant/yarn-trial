@@ -26,6 +26,7 @@ import {
 	visualJudge,
 } from "./harness.js";
 import { DOM_ACT_TOOL, DOM_RULES, DomBackend, FIND_TOOL } from "./dom.js";
+import { startOverlay } from "./overlay.js";
 import type { ActionRequest, Expectation, StepRecord } from "./types.js";
 import type { VisualVerdict } from "./harness.js";
 
@@ -227,6 +228,11 @@ async function main(): Promise<void> {
 	}
 
 	const { client, model } = makeClient();
+	// Announce the takeover before the first action. A run seizes pointer and keyboard for
+	// minutes and is otherwise indistinguishable from an idle machine, so anyone sitting in
+	// front of it cannot tell when it is safe to type. OVERLAY=0 suppresses it for takes
+	// where the banner would be in frame.
+	const overlay = startOverlay("drive", `Agent driving ${app} — do not touch`);
 	const driver = await Driver.start("agent");
 	const records: StepRecord[] = [];
 	const startedAt = Date.now();
@@ -296,6 +302,8 @@ async function main(): Promise<void> {
 		await driver.act({ kind: "tool", name: "launch_app", args: { name: app } });
 		await new Promise((r) => setTimeout(r, 1500));
 		const win = await findWindow(driver, app);
+		// Last chance to take your hands off before the run owns the pointer.
+		await overlay.countdown();
 		// For the DOM backend the CDP bind is the observability gate; AX darkness is fine.
 		const dom = backendKind === "dom" ? await DomBackend.bind(driver, win) : undefined;
 		if (!dom) await assertObservable(driver, win, app);
@@ -714,6 +722,7 @@ async function main(): Promise<void> {
 			}
 		}
 		await driver.close();
+		overlay.stop();
 	}
 }
 

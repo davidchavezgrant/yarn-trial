@@ -17,6 +17,25 @@ import fs from "node:fs";
  * `native/axdom` sidecar walks the same tree and emits exactly those, and this module
  * joins them onto the driver's elements.
  *
+ * Why a native sidecar and not more TypeScript: these attributes only exist behind the
+ * macOS Accessibility C API (AXUIElementCopyAttributeValue), which Node cannot call —
+ * something compiled has to exist somewhere. The driver's Rust core is that something
+ * today, but its element projection is sealed in a published binary; the remaining
+ * options are an FFI bridge package (still a native addon, plus manual CFRelease /
+ * CFGetTypeID juggling in-process), forking the driver's Rust, or 120 lines of Swift.
+ * The sidecar is the smallest of the three. Running it as a separate process is then
+ * nearly free and buys hang isolation: AX calls block synchronously on the target app,
+ * so a wedged app costs a killed subprocess at the timeout below instead of a frozen
+ * agent. Swift needs CLT only to BUILD — the compiled binary runs on any Mac (Swift
+ * runtime ships with macOS since 10.14.4), so end users never need a toolchain.
+ * Durable exit: upstream the attribute passthrough into cua-driver, then delete
+ * native/ and the frame-join outright.
+ *
+ * What we lose without it: names for anonymous interactive controls. On Yarn that is
+ * 37 of 64 (play button, toolbar icons); the agent falls back to guessing from frame
+ * geometry and screenshots. Note the sidecar does NOT cover canvas-rendered content —
+ * that has no DOM at all and is handled by the pixel-delta and visual-judge layers.
+ *
  * Measured on Yarn (1488 nodes): 955 of 1044 anonymous nodes gain a name, including 37 of
  * the 64 anonymous interactive controls.
  *
