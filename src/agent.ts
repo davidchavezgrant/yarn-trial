@@ -612,7 +612,7 @@ async function main(): Promise<void> {
 				console.log(`\n=== DONE (${verdict}) after ${records.length} actions ===`);
 				console.log(input.summary);
 				const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
-				fs.writeFileSync(runLog, JSON.stringify({ task, app, backend: backendKind, vision, grounding: groundingMeta, hintedPrompt: audit.hinted, hintReasons: audit.reasons, homeReset, domEnrichment, success: input.success, finalCheck, visualCheck: visual, verifiedSteps: records.length - unverified, verifiedByChannel: { text: textSteps, geometry: geometrySteps, pixel: pixelSteps }, unverifiedSteps: unverified, expectationRejections, findCalls, summary: input.summary, elapsedSec, usage, ...(record ? { video: videoPath.replace(`${process.cwd()}/`, "") } : {}), steps: records }, null, 2));
+				fs.writeFileSync(runLog, JSON.stringify({ task, app, backend: backendKind, vision, grounding: groundingMeta, hintedPrompt: audit.hinted, hintReasons: audit.reasons, homeReset, domEnrichment, sessionRevivals: driver.revivals, success: input.success, finalCheck, visualCheck: visual, verifiedSteps: records.length - unverified, verifiedByChannel: { text: textSteps, geometry: geometrySteps, pixel: pixelSteps }, unverifiedSteps: unverified, expectationRejections, findCalls, summary: input.summary, elapsedSec, usage, ...(record ? { video: videoPath.replace(`${process.cwd()}/`, "") } : {}), steps: records }, null, 2));
 				console.log(`stats: ${records.length} actions, ${elapsedSec}s, ${usage.modelCalls} model calls, ${usage.outputTokens} output tokens, grounding=${groundingMeta.provenance}, vision=${vision}, hintedPrompt=${audit.hinted}, homeReset=${homeReset}`);
 				console.log(`verification: ${records.length - unverified}/${records.length} steps verified (${textSteps} by text, ${geometrySteps} by geometry, ${pixelSteps} by pixels only)${expectationRejections ? `, ${expectationRejections} call(s) rejected for missing checks` : ""}${finalCheck ? `; final goal check: ${finalCheck.verified ? "PASSED" : "failed"} (${finalCheck.evidence?.textIncludes?.join(", ") ?? ""})` : ""}`);
 				if (visual && visual.verdict !== "PASS")
@@ -787,7 +787,7 @@ async function main(): Promise<void> {
 		}
 
 		console.log(`\n=== step limit (${MAX_STEPS}) reached without done ===`);
-		fs.writeFileSync(runLog, JSON.stringify({ task, app, backend: backendKind, vision, grounding: groundingMeta, hintedPrompt: audit.hinted, hintReasons: audit.reasons, homeReset, domEnrichment, success: false, expectationRejections, findCalls, summary: "step limit reached", elapsedSec: Math.round((Date.now() - startedAt) / 1000), usage, steps: records }, null, 2));
+		fs.writeFileSync(runLog, JSON.stringify({ task, app, backend: backendKind, vision, grounding: groundingMeta, hintedPrompt: audit.hinted, hintReasons: audit.reasons, homeReset, domEnrichment, sessionRevivals: driver.revivals, success: false, expectationRejections, findCalls, summary: "step limit reached", elapsedSec: Math.round((Date.now() - startedAt) / 1000), usage, steps: records }, null, 2));
 		console.log(`run log: ${runLog}`);
 	} finally {
 		if (record) {
