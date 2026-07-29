@@ -235,19 +235,18 @@ const NOOP: Overlay = { async countdown() {}, setDriving() {}, stop() {} };
 /** Seconds of warning before a run takes the pointer. COUNTDOWN=0 skips it. */
 const COUNTDOWN_SECONDS = Number(process.env.COUNTDOWN ?? 3);
 
-/** Distinct colours so the mode is readable without reading the words. */
-const MODES = {
-	/** A task run: the agent is clicking and typing. */
-	drive: "0.80,0.11,0.18",
-	/** A grounding pass: same intrusiveness, different purpose. */
-	explore: "0.85,0.45,0.05",
-	/**
-	 * Diagnostics that mostly read but MAY click. Same red as a task run: the question the
-	 * banner answers is "can I touch this machine", and the answer is identical either way.
-	 * A distinct colour invited reading violet as "safe to interrupt", which it is not.
-	 */
-	probe: "0.80,0.11,0.18",
-};
+/**
+ * One colour for every mode: red.
+ *
+ * The banner answers exactly one question — "can I touch this machine right now" — and for
+ * a task run, a grounding pass and a diagnostic probe the answer is identically no; all
+ * three drive the pointer. Mode-specific colours (orange for explore, violet for probe)
+ * implied a difference in that answer and invited reading anything non-red as "safe to
+ * interrupt". The MODE is still in the banner's text, where a difference that does not
+ * change the answer belongs.
+ */
+const MODE_RGB = "0.80,0.11,0.18";
+const MODES = { drive: MODE_RGB, explore: MODE_RGB, probe: MODE_RGB };
 
 /**
  * Show the banner until `stop()`. Never throws and never blocks: if osascript is missing or

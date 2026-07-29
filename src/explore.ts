@@ -264,18 +264,28 @@ async function main(): Promise<void> {
 
 			let resultText: string;
 			let isError = false;
+			// Banner up only while the pointer is ours. Exploration is as intrusive as a task
+			// run, and just as thinking-dominated, so it gets the same treatment: visible for
+			// the act/settle/re-observe window, hidden for the model call between.
+			overlay.setDriving(true);
 			try {
-				const request = dom ? await dom.toRequest(input.action) : toActionRequest(input.action, win);
-				resultText = request
-					? (await driver.act(request)).text.slice(0, 400)
-					: "waited (no driver action)";
-			} catch (err) {
-				resultText = `ACTION FAILED: ${err instanceof Error ? err.message : String(err)}`;
-				isError = true;
-			}
+				try {
+					const request = dom ? await dom.toRequest(input.action) : toActionRequest(input.action, win);
+					resultText = request
+						? (await driver.act(request)).text.slice(0, 400)
+						: "waited (no driver action)";
+				} catch (err) {
+					resultText = `ACTION FAILED: ${err instanceof Error ? err.message : String(err)}`;
+					isError = true;
+				}
 
-			await new Promise((r) => setTimeout(r, SETTLE_MS));
-			obs = await doObserve(`explore-step-${actions}`);
+				await new Promise((r) => setTimeout(r, SETTLE_MS));
+				obs = await doObserve(`explore-step-${actions}`);
+			} finally {
+				// finally, not a trailing call: a throw from doObserve (a collapsed AX tree is
+				// routine here) would otherwise strand the banner up for the rest of the pass.
+				overlay.setDriving(false);
+			}
 				if (obs.appContent === 0) {
 					// AX tree collapsed (e.g. a modal/other window took over). Acting now means
 					// acting blind — stop rather than let the model flail against a menu bar.

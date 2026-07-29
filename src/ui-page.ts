@@ -12,6 +12,8 @@ export interface UiBus {
 	loadRuns(): Promise<unknown[]>;
 	/** Repo-relative mp4 path -> a URL this shell can play. */
 	videoUrl(rel: string): string;
+	/** Start a grounding (exploration) pass for an app. Resolves to an error string, or undefined. */
+	ground(app: string): Promise<string | undefined>;
 	run(opts: { app: string; task: string; record: boolean; noVision: boolean }): Promise<string | undefined>;
 	stop(): void;
 	onStarted(cb: (d: { app: string; task: string }) => void): void;
@@ -63,6 +65,14 @@ export const CHROME = String.raw`<meta charset="utf-8">
   .run video { width:100%; border-radius:6px; margin-top:8px; background:#000; display:block; }
   .run .ok { color:var(--ok); }
   .run .bad { color:var(--bad); }
+  .panehead { display:flex; align-items:center; justify-content:space-between; }
+  .mini { width:auto; padding:2px 8px; font-size:13px; line-height:1.2; color:var(--dim); cursor:pointer; }
+  .mini:hover { color:var(--fg); border-color:var(--accent); }
+  .btnrow { display:flex; gap:8px; margin-top:14px; }
+  .btnrow button { margin-top:0; }
+  button.ground { width:auto; padding-left:16px; padding-right:16px; background:transparent; color:var(--fg); cursor:pointer; }
+  button.ground:hover:not(:disabled) { border-color:var(--accent); }
+  button.ground:disabled { opacity:.5; cursor:not-allowed; }
   .fold summary { color:var(--dim); cursor:pointer; padding:2px 0; }
   .fold > div { border-left:2px solid var(--line); margin-left:4px; padding-left:8px; }
 </style>
@@ -84,12 +94,15 @@ export const CHROME = String.raw`<meta charset="utf-8">
       <label><input type="checkbox" id="record"> Record video</label>
       <label><input type="checkbox" id="novision"> No screenshots</label>
     </div>
-    <button class="go" id="go" disabled>Run</button>
+    <div class="btnrow">
+      <button class="go" id="go" disabled>Run</button>
+      <button class="ground" id="ground" disabled title="Autonomous exploration pass — writes docs/appmaps/">Ground</button>
+    </div>
     <button class="stop" id="stop" style="display:none">Stop run</button>
     <div id="log" style="margin-top:16px"><span class="empty">Output appears here.</span></div>
   </div>
   <div class="col">
-    <label>Recorded runs</label>
+    <div class="panehead"><label>Recorded runs</label><button id="refresh" class="mini" title="Rescan out/runs">↻</button></div>
     <div id="runs"><span class="empty">No recordings yet — tick “Record video”.</span></div>
   </div>
 </main>`;
@@ -134,6 +147,10 @@ function check() {
   el('warn').textContent = w;
   el('go').disabled = running || !sel || !t || !!w;
   el('go').textContent = sel ? 'Run on ' + sel : 'Run';
+  // Grounding needs only a target — it explores the app, it does not perform a task.
+  el('ground').disabled = running || !sel;
+  const g = sel ? apps.find(a => a.name === sel) : null;
+  el('ground').textContent = g && g.grounded ? 'Reground' : 'Ground';
 }
 
 // Startup diagnostics (17 scope-ambiguity lines on Yarn) pushed the actual steps off
@@ -188,12 +205,25 @@ bus.onDone((d) => {
   loadRuns();
 });
 
-async function loadRuns() {
+let runSig = '';
+async function loadRuns(force) {
   const runs = await bus.loadRuns();
   const box = el('runs');
+  // Rebuilding innerHTML tears down any <video> mid-playback, and this runs on a timer —
+  // so redraw only when the set of runs actually changed. Signature over ids, not the
+  // whole payload: an in-flight run's log is rewritten as it goes.
+  const sig = runs.map(r => r.id).join('|');
+  if (!force && sig === runSig) return;
+  runSig = sig;
+
   if (!runs.length) { box.innerHTML = '<span class="empty">No recordings yet — tick “Record video”.</span>'; return; }
+
+  // Preserve which cards were open across a redraw, so a new recording appearing does not
+  // collapse the one being watched.
+  const open = new Set([...box.querySelectorAll('.run')].filter(c => c.querySelector('video')).map(c => c.dataset.id));
+
   box.innerHTML = runs.map((r, i) =>
-    '<div class="run" data-i="' + i + '">' +
+    '<div class="run" data-i="' + i + '" data-id="' + r.id + '">' +
       '<div class="task">' + r.task.replace(/</g,'&lt;') + '</div>' +
       '<div class="meta">' +
         '<span>' + r.app.replace(/</g,'&lt;') + '</span>' +
@@ -203,15 +233,23 @@ async function loadRuns() {
         (r.visual ? '<span>judge ' + r.visual + '</span>' : '') +
       '</div>' +
     '</div>').join('');
+
+  const attach = (card, r, autoplay) => {
+    const v = document.createElement('video');
+    v.src = bus.videoUrl(r.video);
+    v.controls = true; v.autoplay = autoplay; v.loop = true; v.muted = true;
+    card.appendChild(v);
+  };
+
   // Load the mp4 only when a card is opened; autoloading every one would fetch the lot.
   for (const card of box.children) {
-    card.onclick = () => {
-      if (card.querySelector('video')) { card.querySelector('video').remove(); return; }
-      const r = runs[Number(card.dataset.i)];
-      const v = document.createElement('video');
-      v.src = bus.videoUrl(r.video);
-      v.controls = true; v.autoplay = true; v.loop = true; v.muted = true;
-      card.appendChild(v);
+    const r = runs[Number(card.dataset.i)];
+    if (open.has(card.dataset.id)) attach(card, r, false);
+    card.onclick = (e) => {
+      if (e.target.tagName === 'VIDEO') return;   // clicking the player is not a toggle
+      const existing = card.querySelector('video');
+      if (existing) { existing.remove(); return; }
+      attach(card, r, true);
     };
   }
 }
@@ -226,6 +264,16 @@ el('go').onclick = async () => {
   if (err) line('✗ ' + err);
 };
 el('stop').onclick = () => bus.stop();
+el('refresh').onclick = () => loadRuns(true);
+el('ground').onclick = async () => {
+  const err = await bus.ground(sel);
+  if (err) line('✗ ' + err);
+};
+
+// Recordings also arrive from headless ./run invocations and other sessions, so the
+// gallery cannot rely on the in-UI done event alone. Cheap poll: loadRuns() only
+// redraws when the set of run ids changes, so this is a directory stat most ticks.
+setInterval(() => loadRuns(false), 4000);
 
 loadApps();
 loadRuns();

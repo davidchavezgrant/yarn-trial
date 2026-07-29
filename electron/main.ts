@@ -50,6 +50,7 @@ window.__bus = {
   // handler at all (symptom: a black video stuck at 0:00 and no protocol log line).
   videoUrl: (rel) => window.__videoBase + rel.split('/').map(encodeURIComponent).join('/'),
   run: (opts) => ipcRenderer.invoke('run', opts),
+  ground: (app) => ipcRenderer.invoke('ground', app),
   stop: () => ipcRenderer.invoke('stop'),
   onStarted: (cb) => ipcRenderer.on('started', (_e, d) => cb(d)),
   onLine: (cb) => ipcRenderer.on('line', (_e, t) => cb(t)),
@@ -159,6 +160,16 @@ ipcMain.handle("run", (_event, opts: RunOptions) => {
 		onDone: (code, elapsed) => win?.webContents.send("done", { code, elapsed }),
 	});
 	if (!err) win?.webContents.send("started", { app: opts.app, task: opts.task });
+
+	return err;
+});
+
+ipcMain.handle("ground", (_event, app: string) => {
+	const err = runs.explore(app, {
+		onLine: (line) => win?.webContents.send("line", line),
+		onDone: (code, elapsed) => win?.webContents.send("done", { code, elapsed }),
+	});
+	if (!err) win?.webContents.send("started", { app, task: `grounding pass — exploring ${app}` });
 
 	return err;
 });

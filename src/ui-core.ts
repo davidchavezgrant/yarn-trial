@@ -1,4 +1,4 @@
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn as spawnProcess, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { appSlug, auditTaskPrompt } from "./harness.js";
@@ -171,8 +171,25 @@ export class RunController {
 		if (opts.record) args.push("--record");
 		if (opts.noVision) args.push("--no-vision");
 
+		return this.spawn(args, handlers);
+	}
+
+	/**
+	 * Grounding pass for an app. Shares the single-run guard with start(): exploration
+	 * drives the same driver, so running one alongside a task would kill both
+	 * (LIMITATIONS §6). Overwrites docs/appmaps/<app>.{md,json}.
+	 */
+	explore(app: string, handlers: RunHandlers): string | undefined {
+		if (this.current) return "a run is already in progress — driver sessions are not concurrent-safe (LIMITATIONS §6)";
+		if (!app.trim()) return "pick an app to ground";
+
+		return this.spawn(["tsx", "src/explore.ts", app.trim()], handlers);
+	}
+
+	/** Shared launcher for task runs and grounding passes. */
+	private spawn(args: string[], handlers: RunHandlers): undefined {
 		// No shell: task text is user input and passes through as a single argv entry.
-		const child = spawn("npx", args, { cwd: process.cwd(), env: process.env });
+		const child = spawnProcess("npx", args, { cwd: process.cwd(), env: process.env });
 		const startedAt = Date.now();
 		this.current = { child, startedAt };
 
