@@ -22,6 +22,9 @@ import type { AppMap, AppMapEdge, AppMapNode } from "./types.js";
 const MAX_STEPS = Number(process.env.EXPLORE_STEPS ?? 25);
 const SETTLE_MS = 900;
 
+/** The payload of the "finish" tool — the pass's entire output, prose plus graph. */
+type FinishInput = { document: string; nodes?: AppMapNode[]; edges?: AppMapEdge[] };
+
 const systemPrompt = (rules: string): string => `You are an exploration agent building grounding notes for a macOS app, so a future task-running agent can navigate it directly without dead ends. You drive the app through a UI driver: each turn you receive the window's elements (addressing handle, role, label/value) and a screenshot, and you perform ONE action via the "act" tool.
 
 Your goal is a map, not a task: systematically visit the app's main surfaces — menus, settings panels and their tabs, context menus on notable controls, pickers — and record where things live and how to operate them.
@@ -124,8 +127,9 @@ const provenanceHeader = (
 	backend: string,
 	findCalls: number,
 	guidance?: string,
+	salvaged = false,
 ): string =>
-	`<!-- provenance: explore | app: ${app} | date: ${new Date().toISOString().slice(0, 10)} | backend: ${backend} | actions: ${actions} | findings: ${findings} | finds: ${findCalls}${guidance ? " | operator-guidance: yes" : ""} -->\n` +
+	`<!-- provenance: explore | app: ${app} | date: ${new Date().toISOString().slice(0, 10)} | backend: ${backend} | actions: ${actions} | findings: ${findings} | finds: ${findCalls}${guidance ? " | operator-guidance: yes" : ""}${salvaged ? " | salvaged: session died before finish" : ""} -->\n` +
 	"<!-- Written by src/explore.ts. DO NOT HAND-EDIT: edits make this a curated recipe, not exploration output — move such notes to docs/recipes/<app>.md instead. -->\n\n";
 
 async function main(): Promise<void> {
@@ -151,6 +155,38 @@ async function main(): Promise<void> {
 	const graphPath = `${process.cwd()}/docs/appmaps/${appSlug(app)}.json`;
 	fs.mkdirSync(`${process.cwd()}/docs/appmaps`, { recursive: true });
 
+	// Declared out here, not in the try, because the salvage path in the catch needs them:
+	// the transcript IS the pass's memory, and a throw must not put it out of reach.
+	const messages: Anthropic.MessageParam[] = [];
+	let tools: Anthropic.Tool[] = [];
+	let basePrompt = "";
+	let actions = 0;
+	let findCalls = 0;
+
+	const writeArtifacts = (out: FinishInput, noteCount: number, salvaged = false): void => {
+		const prose = provenanceHeader(app, actions, noteCount, backendKind, findCalls, guidance, salvaged) + out.document;
+		fs.writeFileSync(outPath, prose);
+		console.log(`\n=== exploration ${salvaged ? "SALVAGED" : "finished"} after ${actions} actions, ${noteCount} findings ===`);
+		console.log(`grounding notes: ${outPath}`);
+
+		const graph: AppMap = {
+			app,
+			capturedAt: new Date().toISOString(),
+			provenance: "explore",
+			proseSha256: createHash("sha256").update(prose).digest("hex").slice(0, 12),
+			nodes: out.nodes ?? [],
+			edges: out.edges ?? [],
+		};
+		fs.writeFileSync(graphPath, JSON.stringify(graph, null, 2));
+		const ambiguities = findScopeAmbiguities(graph);
+		console.log(`structured graph: ${graphPath} (${graph.nodes.length} nodes, ${graph.edges.length} edges)`);
+		if (ambiguities.length > 0) {
+			console.log(`scope ambiguities found (${ambiguities.length}) — the task agent will be warned about these:`);
+			for (const a of ambiguities)
+				console.log(`  · ${a.settingKey}: ${a.nodes.map((n) => `${n.id} [${n.scope}]`).join(" vs ")}`);
+		}
+	};
+
 	try {
 		await driver.act({ kind: "tool", name: "launch_app", args: { name: app } });
 		await new Promise((r) => setTimeout(r, 1500));
@@ -163,12 +199,11 @@ async function main(): Promise<void> {
 		const dom = backendKind === "dom" ? await DomBackend.bind(driver, win, Infinity) : undefined;
 		if (!dom) await assertObservable(driver, win, app);
 		const doObserve = (name: string) => (dom ? dom.observe(name, Infinity) : observe(driver, win, name));
-		const tools: Anthropic.Tool[] = dom ? [DOM_ACT_TOOL, FIND_TOOL, ...EXTRA_TOOLS] : [ACT_TOOL, ...EXTRA_TOOLS];
-		const basePrompt = systemPrompt(dom ? DOM_RULES : DRIVER_RULES);
+		tools = dom ? [DOM_ACT_TOOL, FIND_TOOL, ...EXTRA_TOOLS] : [ACT_TOOL, ...EXTRA_TOOLS];
+		basePrompt = systemPrompt(dom ? DOM_RULES : DRIVER_RULES);
 		console.log(`exploring ${app} pid=${win.pid} window=${win.windowId} backend=${backendKind}\n`);
 
 		let blindStreak = 0;
-		let findCalls = 0;
 		// Same handoff as the loop below: the banner starts visible and only a setDriving(false)
 		// takes it down, so the opening observation has to be the thing that lowers it — else it
 		// sits red through the first (long) model call with the machine idle.
@@ -179,17 +214,14 @@ async function main(): Promise<void> {
 		} finally {
 			overlay.setDriving(false);
 		}
-		const messages: Anthropic.MessageParam[] = [
-			{
-				role: "user",
-				content: [
-					{ type: "text", text: `Explore "${app}". Step budget: ${MAX_STEPS} actions. Initial observation follows.` },
-					...observationBlocks(obs),
-				],
-			},
-		];
+		messages.push({
+			role: "user",
+			content: [
+				{ type: "text", text: `Explore "${app}". Step budget: ${MAX_STEPS} actions. Initial observation follows.` },
+				...observationBlocks(obs),
+			],
+		});
 
-		let actions = 0;
 		// One-shot: an early finish is bounced back once for a coverage self-audit, and
 		// whatever comes next is accepted. See the challenge text below for why.
 		let coverageChallenged = false;
@@ -249,28 +281,7 @@ async function main(): Promise<void> {
 			}
 
 			if (toolUse.name === "finish") {
-				const out = toolUse.input as { document: string; nodes?: AppMapNode[]; edges?: AppMapEdge[] };
-				const prose = provenanceHeader(app, actions, findings.length, backendKind, findCalls, guidance) + out.document;
-				fs.writeFileSync(outPath, prose);
-				console.log(`\n=== exploration finished after ${actions} actions, ${findings.length} findings ===`);
-				console.log(`grounding notes: ${outPath}`);
-
-				const graph: AppMap = {
-					app,
-					capturedAt: new Date().toISOString(),
-					provenance: "explore",
-					proseSha256: createHash("sha256").update(prose).digest("hex").slice(0, 12),
-					nodes: out.nodes ?? [],
-					edges: out.edges ?? [],
-				};
-				fs.writeFileSync(graphPath, JSON.stringify(graph, null, 2));
-				const ambiguities = findScopeAmbiguities(graph);
-				console.log(`structured graph: ${graphPath} (${graph.nodes.length} nodes, ${graph.edges.length} edges)`);
-				if (ambiguities.length > 0) {
-					console.log(`scope ambiguities found (${ambiguities.length}) — the task agent will be warned about these:`);
-					for (const a of ambiguities)
-						console.log(`  · ${a.settingKey}: ${a.nodes.map((n) => `${n.id} [${n.scope}]`).join(" vs ")}`);
-				}
+				writeArtifacts(toolUse.input as FinishInput, findings.length);
 
 				return;
 			}
@@ -371,6 +382,66 @@ async function main(): Promise<void> {
 				`# ${app} — grounding notes (partial)\n\n${findings.map((f) => `- ${f}`).join("\n")}`,
 		);
 		console.log(`\n=== turn limit reached; wrote ${findings.length} raw findings ===`);
+	} catch (err) {
+		/**
+		 * A dead driver session must not also destroy the map.
+		 *
+		 * "finish" was the only thing that wrote an artifact, so any throw — a collapsed AX
+		 * tree, the app quitting, the driver session ending — discarded the entire pass.
+		 * Observed: a run died on action 15 of 25 having just found a settings panel an
+		 * earlier pass had missed, and produced nothing at all. Five minutes of driving the
+		 * machine, zero output, and the loss is silent because the previous appmap is still
+		 * sitting on disk looking current.
+		 *
+		 * Emitting the map needs no driver — everything learned is already in the transcript.
+		 * So ask for it: one model call, tool_choice pinned to finish. The stamp records that
+		 * the pass was salvaged, because a map built from a truncated sweep is a weaker
+		 * artifact than a completed one and the next reader should be able to tell.
+		 */
+		if (findings.length === 0) throw err;
+		console.error(`\nexploration threw after ${actions} actions: ${err instanceof Error ? err.message : String(err)}`);
+		console.log(`salvaging ${findings.length} findings into a map — no driver needed for this`);
+
+		// The throw may have left an assistant tool_use unanswered; the API rejects that.
+		const last = messages[messages.length - 1];
+		if (last?.role === "assistant" && Array.isArray(last.content)) {
+			const dangling = last.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
+			if (dangling)
+				messages.push({
+					role: "user",
+					content: [{ type: "tool_result", tool_use_id: dangling.id, is_error: true, content: "The driver session ended; that action did not run." }],
+				});
+		}
+		messages.push({
+			role: "user",
+			content:
+				"The driver session has ended, so no further actions are possible and you will get no more observations. " +
+				"Call finish NOW and emit the best map you can from what you already saw. Do not describe surfaces you never opened — " +
+				"an incomplete map is fine, an invented one is not.",
+		});
+
+		try {
+			const rescue = await client.messages.create({
+				model,
+				max_tokens: 16000,
+				system: guidance ? `${basePrompt}\n\n# Operator guidance for this run\n${guidance}` : basePrompt,
+				tools,
+				tool_choice: { type: "tool", name: "finish" },
+				messages,
+			});
+			const out = rescue.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
+			if (!out) throw new Error("model did not emit finish");
+			writeArtifacts(out.input as FinishInput, findings.length, true);
+		} catch (rescueErr) {
+			// Last resort: the raw findings, unshaped. Still better than nothing.
+			console.error(`salvage call failed: ${rescueErr instanceof Error ? rescueErr.message : String(rescueErr)}`);
+			fs.writeFileSync(
+				outPath,
+				provenanceHeader(app, actions, findings.length, backendKind, findCalls, guidance, true) +
+					`# ${app} — grounding notes (raw findings only)\n\n${findings.map((f) => `- ${f}`).join("\n")}`,
+			);
+			console.log(`wrote ${findings.length} raw findings to ${outPath}`);
+		}
 	} finally {
 		await driver.close();
 		overlay.stop();
