@@ -420,6 +420,30 @@ field of the run log. Fixed: `resetToHome` now presses escape and retries once w
 control is missing (3 of the 4 valid runs above needed it), and the agent prints an explicit
 NOT-comparable warning when a reset fails.
 
+## "Show me how to X" now performs X
+
+The vision A/B surfaced a product question the harness had been answering inconsistently:
+given "show me how to change the cursor type", the agent navigated to the Cursor Style
+dropdown, opened it, and described the remaining steps in its summary — truthful, and useless
+as a demo video. Nothing in the prompt said which reading was intended, so it varied per run.
+
+Resolved in favour of performing the action, since the artifact is a recorded demo. The
+prompt now states that instructional phrasings are requests to do the thing end to end; that
+a task naming no value leaves the choice to the agent rather than licensing a stop-short; and
+that changes must be committed and confirmed persisted.
+
+**Irreversible actions are the exception** — delete, publish, export, send, share, purchase,
+account changes. There the agent goes to the final confirmation step, does not confirm, and
+says so. Without this the same instruction would make "show me how to delete a draft" destroy
+a draft.
+
+Verified (`out/runs/2026-07-29T21-0*.json`):
+
+| Task | Result |
+|---|---|
+| show me how to change the cursor type (×2) | 4 actions; picks a value, saves, confirms the Save affordance is gone, stays at brand scope |
+| show me how to delete a draft | stops with Project actions open on Delete, never clicks; 12 drafts before, 12 after |
+
 ## Harness bugs found (all fixed today)
 
 1. **`set_value` sent `text` where the driver expects `value`** — every direct field write
