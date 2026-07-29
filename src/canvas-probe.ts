@@ -76,6 +76,16 @@ const SURVEY_Y = Number(process.env.SURVEY_Y ?? 800);
 /** Pans left before surveying, to start from the viewport's origin. Overshoot is free. */
 const HOME = Number(process.env.HOME_PANS ?? 12);
 /**
+ * Gate 1: drag the target this many pixels right and check whether it MOVED.
+ *
+ * Everything downstream of a canvas task assumes a synthetic drag actuates the app at all,
+ * and that is not a given: set_value fails on this app's controls because it writes AX state
+ * without firing a DOM event, and a canvas listening for pointer events could refuse a
+ * synthesized drag the same way. Cheaper to find out here than after building the action.
+ * 0 = skip.
+ */
+const DRAG_DX = Number(process.env.DRAG_DX ?? 0);
+/**
  * A point on the same canvas that is NOT the target — empty space beside it. Clicking here
  * first shows what any click does, so the target click's diff can be read for what is
  * specific to the target. Without it the probe cannot tell a per-target readout from a
@@ -83,6 +93,17 @@ const HOME = Number(process.env.HOME_PANS ?? 12);
  */
 const DECOY_X = process.env.DECOY_X ? Number(process.env.DECOY_X) : undefined;
 const DECOY_Y = process.env.DECOY_Y ? Number(process.env.DECOY_Y) : undefined;
+/**
+ * Where to click before sending undo, and how many times to send it.
+ *
+ * A shortcut goes to the focused control, so the click has to land INSIDE the canvas, on the
+ * same row as the target but far from it — near the row's start, which is empty on any
+ * left-to-right canvas. Presses default to 3 because one edit can be several undo steps
+ * (this app's drag registered as two) and undoing past the probe's own edits is harmless:
+ * the probe made every edit in the document since it opened.
+ */
+const UNDO_FOCUS_X = Number(process.env.UNDO_FOCUS_X ?? 700);
+const UNDO_PRESSES = Number(process.env.UNDO_PRESSES ?? 3);
 
 interface Row {
 	index: number;
@@ -202,6 +223,30 @@ print(sum(1 for p in data if p > 12) / float(len(data)))
 		const v = Number(out);
 
 		return Number.isFinite(v) ? v : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Pixels differing across the WHOLE frame. Used to check a restore, where a local crop lies:
+ * an object returning to its origin and an indicator arriving there look identical up close,
+ * and an edit that rippled across the canvas is invisible in any one crop.
+ */
+function frameDelta(beforePath: string, afterPath: string): number | undefined {
+	const script = `
+import sys
+from PIL import Image, ImageChops
+a = Image.open(sys.argv[1]).convert("RGB")
+b = Image.open(sys.argv[2]).convert("RGB")
+if a.size != b.size:
+    print("-1"); sys.exit(0)
+print(sum(1 for p in ImageChops.difference(a, b).convert("L").getdata() if p > 12))
+`;
+	try {
+		const v = Number(execFileSync("python3", ["-c", script, beforePath, afterPath], { encoding: "utf8" }).trim());
+
+		return Number.isFinite(v) && v >= 0 ? v : undefined;
 	} catch {
 		return undefined;
 	}
@@ -499,6 +544,114 @@ async function main(): Promise<void> {
 		// Only text the decoy click did NOT also produce can be specific to the target.
 		const specific = appeared.filter((r) => !decoyKeys.has(`${r.role}|${r.frame}`));
 		const newTimecodes = timecodes(specific);
+		/**
+		 * GATE 1 — does a synthetic drag move the target?
+		 *
+		 * Detected WITHOUT knowing what the target looks like: crop the neighbourhood of the
+		 * origin and of the destination, and compare each against itself before and after. A
+		 * target that moved leaves its origin (origin changes) and arrives at the destination
+		 * (destination changes). A target that ignored the drag leaves both roughly untouched.
+		 * That reasoning holds for a dot, a handle, a node or a knob, which is the point — no
+		 * colour, no shape, nothing about this app.
+		 *
+		 * The confound is a canvas that repaints on any pointer input (this timeline redraws
+		 * its playhead wherever you press). Hence the same before/after crops are taken for the
+		 * DECOY drag too: whatever a drag over inert canvas produces is the floor the real
+		 * drag has to clear.
+		 */
+		if (DRAG_DX !== 0) {
+			const dragFrom = async (fx: number, fy: number, tag: string) => {
+				const pre = await snap(`canvas-probe-${tag}-pre`);
+				await driver.act({
+					kind: "tool",
+					name: "drag",
+					args: {
+						from_x: fx,
+						from_y: fy,
+						to_x: fx + DRAG_DX,
+						to_y: fy,
+						duration_ms: 600,
+						steps: 40,
+						pid: win.pid,
+						window_id: win.windowId,
+						delivery_mode: "foreground",
+					},
+				});
+				await new Promise((r) => setTimeout(r, 1200));
+				const post = await snap(`canvas-probe-${tag}-post`);
+
+				return {
+					origin: localDelta(pre.shot, post.shot, fx, fy),
+					dest: localDelta(pre.shot, post.shot, fx + DRAG_DX, fy),
+					pre,
+					post,
+				};
+			};
+
+			section(`GATE 1: drag ${DRAG_DX}px right`);
+			const real = await dragFrom(x, y, "drag");
+			console.log(`target @(${x},${y}): origin ${real.origin}, destination ${real.dest}`);
+			// Drag the decoy back the other way, so the control cannot double as a second nudge
+			// of the real target and both drags end where they started.
+			let floor = 0;
+			if (DECOY_X !== undefined && DECOY_Y !== undefined) {
+				const ctl = await dragFrom(DECOY_X, DECOY_Y, "dragctl");
+				floor = Math.max(ctl.origin ?? 0, ctl.dest ?? 0);
+				console.log(`decoy  @(${DECOY_X},${DECOY_Y}): origin ${ctl.origin}, destination ${ctl.dest}`);
+			}
+			const moved = (real.origin ?? 0) > floor * 1.5 && (real.dest ?? 0) > floor * 1.5;
+			console.log(
+				moved
+					? `MOVED — both ends changed more than a drag over inert canvas (floor ${floor}). Actuation works.`
+					: `NO MOVEMENT beyond what dragging inert canvas produces (floor ${floor}). Either the app` +
+							"\nignores synthetic drags, or the drag missed the target. Check the -pre/-post frames.",
+			);
+			console.log(`frames: ${OUT}/canvas-probe-drag-{pre,post}.png`);
+
+			/**
+			 * Put it back. A probe that leaves the document edited is not read-only, and the next
+			 * run's coordinates would be measured against a canvas this one changed.
+			 *
+			 * Undo, NOT a reverse drag — the reverse drag was tried first and did nothing, twice.
+			 * Two generic reasons, both worth knowing before writing any coordinate action:
+			 *
+			 * 1. A canvas that draws an indicator at the last press point leaves that indicator
+			 *    sitting ON the thing you just dropped. Pressing there again grabs the indicator,
+			 *    not the target. Grabbing a moved object is therefore never symmetric with moving
+			 *    it, and "drag back" is not an undo primitive.
+			 * 2. A keyboard shortcut goes to the focused control, and a probe leaves focus
+			 *    wherever it last acted — which may be a text field in a side panel. So click a
+			 *    neutral point INSIDE the canvas before sending the shortcut. Without that click
+			 *    four undos in a row reported success and changed nothing.
+			 *
+			 * Verified by comparing against the pre-drag frame rather than by local delta: a
+			 * local crop cannot distinguish "the object came back" from "the indicator moved".
+			 */
+			await driver.act({
+				kind: "tool",
+				name: "click",
+				args: { x: UNDO_FOCUS_X, y, pid: win.pid, window_id: win.windowId, delivery_mode: "foreground" },
+			});
+			await new Promise((r) => setTimeout(r, 900));
+			for (let i = 0; i < UNDO_PRESSES; i++) {
+				await driver.act({
+					kind: "tool",
+					name: "hotkey",
+					args: { keys: ["cmd", "z"], pid: win.pid, window_id: win.windowId, delivery_mode: "foreground" },
+				});
+				await new Promise((r) => setTimeout(r, 1000));
+			}
+			const restored = await snap("canvas-probe-restored");
+			const back = frameDelta(real.pre.shot, restored.shot);
+			const moved_ = frameDelta(real.pre.shot, real.post.shot);
+			console.log(
+				`restore: ${back} px differ from the pre-drag frame (the drag itself changed ${moved_}).` +
+					(back !== undefined && moved_ !== undefined && back < moved_ / 4
+						? " Document restored."
+						: " NOT RESTORED — undo it by hand before the next run."),
+			);
+		}
+
 		section("VERDICT");
 		/**
 		 * A dead click is not a measurement. But "did it land" cannot be answered by the pixels
