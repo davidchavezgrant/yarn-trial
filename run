@@ -3,7 +3,6 @@
 # remember the shape of; this is the thing you can hand to someone.
 #
 #   ./run                                   packaged app (Electron) — the deployment target
-#   ./run web                               zero-install browser UI on :4319
 #   ./run "show me how to change X"         headless: run a task against the default app
 #   ./run "<task>" "App Name" [--record]    ...against a named app, flags passed through
 #   ./run explore "App Name"                grounding pass -> docs/appmaps/
@@ -57,11 +56,6 @@ app | "")
 		npx tsc -p tsconfig.electron.json
 	fi
 	exec npx electron dist-electron/electron/main.js
-	;;
-
-web)
-	have_key || die "no API key: export OPENROUTER_API_KEY or ANTHROPIC_API_KEY (or put it in .env)"
-	exec npm run --silent ui
 	;;
 
 explore)

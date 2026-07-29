@@ -316,7 +316,10 @@ async function main(): Promise<void> {
 		// for DOM made AX-vs-DOM comparisons uneven (one arm started from a declared home,
 		// the other from wherever the previous run stopped).
 		if (!noReset) {
+			// The reset clicks, so it is actuation like any step.
+			overlay.setDriving(true);
 			const reset = await resetToHome(driver, win, app);
+			overlay.setDriving(false);
 			homeReset = reset.result;
 			console.log(`home reset: ${reset.result} — ${reset.detail}`);
 			if (reset.result === "none")
@@ -501,6 +504,7 @@ async function main(): Promise<void> {
 
 					while (driverBusy) await new Promise((r) => setTimeout(r, 50));
 					driverBusy = true;
+					overlay.setDriving(true);
 					let finalShot = "";
 					try {
 						const finalObs = await doObserve("agent-final");
@@ -508,6 +512,7 @@ async function main(): Promise<void> {
 						finalCheck = { ...verify(input.evidence!, finalObs.haystack), evidence: input.evidence };
 					} finally {
 						driverBusy = false;
+						overlay.setDriving(false);
 					}
 
 					// Independent visual check of the goal state — a SEPARATE model call that
@@ -635,6 +640,10 @@ async function main(): Promise<void> {
 			const prevShot = `${OUT}/agent-step-${step - 1}.png`;
 			while (driverBusy) await new Promise((r) => setTimeout(r, 50));
 			driverBusy = true;
+			// Banner up only while the pointer is actually ours: this block is the whole
+			// actuation window (act, settle, re-observe). It goes back down before the next
+			// model call, which is most of the run's wall clock.
+			overlay.setDriving(true);
 			try {
 				if (!isError) {
 					try {
@@ -657,6 +666,7 @@ async function main(): Promise<void> {
 				} else blindStreak = 0;
 			} finally {
 				driverBusy = false;
+				overlay.setDriving(false);
 			}
 			// `wait` legitimately changes nothing, so exempt it from the discrimination
 			// requirement (its point is that already-true state persists).

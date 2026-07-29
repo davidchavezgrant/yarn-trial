@@ -1,14 +1,17 @@
 /**
- * The demo UI's markup and browser script, shared by both shells so they cannot drift:
- * `src/ui.ts` (node:http + SSE, zero-install) and `electron/` (packaged app, first-party
- * driver permission support).
+ * The demo UI's markup and browser script, rendered by the Electron shell (`electron/`).
  *
- * The page talks to its host through `window.__bus`, injected before this script runs.
- * That is the only transport-specific surface: fetch + EventSource in the web shell,
- * ipcRenderer in Electron.
+ * The page reaches its host through `window.__bus`, injected before this script runs, so
+ * nothing here imports Electron directly. That indirection is worth keeping even with one
+ * shell: it is what let a browser-based shell exist earlier, and it keeps the renderer
+ * testable without an Electron process.
  */
 export interface UiBus {
 	loadApps(): Promise<unknown[]>;
+	/** Recorded runs, newest first, each carrying the prompt that produced it. */
+	loadRuns(): Promise<unknown[]>;
+	/** Repo-relative mp4 path -> a URL this shell can play. */
+	videoUrl(rel: string): string;
 	run(opts: { app: string; task: string; record: boolean; noVision: boolean }): Promise<string | undefined>;
 	stop(): void;
 	onStarted(cb: (d: { app: string; task: string }) => void): void;
@@ -25,7 +28,7 @@ export const CHROME = String.raw`<meta charset="utf-8">
   header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:12px; }
   h1 { font-size:15px; margin:0; font-weight:600; }
   header span { color:var(--dim); font-size:12px; }
-  main { display:grid; grid-template-columns:300px 1fr; gap:0; height:calc(100vh - 51px); }
+  main { display:grid; grid-template-columns:250px 1fr 330px; gap:0; height:calc(100vh - 51px); }
   .col { padding:16px; overflow:auto; }
   .col + .col { border-left:1px solid var(--line); }
   label { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); margin:0 0 6px; }
@@ -53,6 +56,13 @@ export const CHROME = String.raw`<meta charset="utf-8">
   .t-bad { color:var(--bad); }
   .t-meta { color:var(--dim); }
   .empty { color:var(--dim); font-style:italic; }
+  .run { padding:8px 10px; border:1px solid var(--line); border-radius:8px; margin-bottom:8px; cursor:pointer; }
+  .run:hover { border-color:var(--accent); }
+  .run .task { font-size:12.5px; color:var(--fg); margin-bottom:4px; }
+  .run .meta { font-size:11px; color:var(--dim); display:flex; gap:8px; flex-wrap:wrap; }
+  .run video { width:100%; border-radius:6px; margin-top:8px; background:#000; display:block; }
+  .run .ok { color:var(--ok); }
+  .run .bad { color:var(--bad); }
   .fold summary { color:var(--dim); cursor:pointer; padding:2px 0; }
   .fold > div { border-left:2px solid var(--line); margin-left:4px; padding-left:8px; }
 </style>
@@ -77,6 +87,10 @@ export const CHROME = String.raw`<meta charset="utf-8">
     <button class="go" id="go" disabled>Run</button>
     <button class="stop" id="stop" style="display:none">Stop run</button>
     <div id="log" style="margin-top:16px"><span class="empty">Output appears here.</span></div>
+  </div>
+  <div class="col">
+    <label>Recorded runs</label>
+    <div id="runs"><span class="empty">No recordings yet — tick “Record video”.</span></div>
   </div>
 </main>`;
 
@@ -171,7 +185,36 @@ bus.onDone((d) => {
   el('status').textContent = 'idle';
   line((d.code === 0 ? '■ finished' : '■ exited with code ' + d.code) + ' after ' + d.elapsed + 's');
   loadApps();
+  loadRuns();
 });
+
+async function loadRuns() {
+  const runs = await bus.loadRuns();
+  const box = el('runs');
+  if (!runs.length) { box.innerHTML = '<span class="empty">No recordings yet — tick “Record video”.</span>'; return; }
+  box.innerHTML = runs.map((r, i) =>
+    '<div class="run" data-i="' + i + '">' +
+      '<div class="task">' + r.task.replace(/</g,'&lt;') + '</div>' +
+      '<div class="meta">' +
+        '<span>' + r.app.replace(/</g,'&lt;') + '</span>' +
+        '<span class="' + (r.success ? 'ok' : 'bad') + '">' + (r.success ? '✓' : '✗') + ' ' + r.verified + '/' + r.actions + '</span>' +
+        '<span>' + r.elapsedSec + 's</span>' +
+        '<span>' + r.grounding + '</span>' +
+        (r.visual ? '<span>judge ' + r.visual + '</span>' : '') +
+      '</div>' +
+    '</div>').join('');
+  // Load the mp4 only when a card is opened; autoloading every one would fetch the lot.
+  for (const card of box.children) {
+    card.onclick = () => {
+      if (card.querySelector('video')) { card.querySelector('video').remove(); return; }
+      const r = runs[Number(card.dataset.i)];
+      const v = document.createElement('video');
+      v.src = bus.videoUrl(r.video);
+      v.controls = true; v.autoplay = true; v.loop = true; v.muted = true;
+      card.appendChild(v);
+    };
+  }
+}
 
 el('q').addEventListener('input', render);
 // 'input' alone misses programmatic setValue and some IME/paste paths, which left the
@@ -185,6 +228,7 @@ el('go').onclick = async () => {
 el('stop').onclick = () => bus.stop();
 
 loadApps();
+loadRuns();
 check();
 </script>`;
 

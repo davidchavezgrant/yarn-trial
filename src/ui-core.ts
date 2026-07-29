@@ -1,15 +1,16 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import { appSlug, auditTaskPrompt } from "./harness.js";
 
 /**
- * Host-side logic shared by both UI shells (`src/ui.ts` and `electron/main.ts`): app
- * enumeration, the single-run guard, and spawning the agent.
+ * Host-side logic for the Electron shell: app enumeration, the recorded-run gallery, the
+ * single-run guard, and spawning the agent.
  *
- * Extracted so the two shells cannot enforce different rules. In particular the
- * single-run guard is not a UI nicety — a second driver session shuts down the shared
- * daemon and kills the run already in flight (LIMITATIONS §6), so both shells must refuse
- * rather than queue.
+ * Kept separate from `electron/main.ts` because none of it needs Electron — it is plain
+ * Node, and testable as such. The single-run guard is not a UI nicety: a second driver
+ * session shuts down the shared daemon and kills the run already in flight
+ * (LIMITATIONS §6), so the shell must refuse rather than queue.
  */
 
 export interface AppEntry {
@@ -61,6 +62,73 @@ export function listApps(): AppEntry[] {
 
 			return a.name.localeCompare(b.name);
 		});
+}
+
+export interface PastRun {
+	id: string;
+	app: string;
+	task: string;
+	success: boolean;
+	actions: number;
+	verified: number;
+	elapsedSec: number;
+	grounding: string;
+	visual?: string;
+	/** Repo-relative path to the run's mp4, when it was recorded. */
+	video?: string;
+	startedAt: string;
+}
+
+/**
+ * Recorded runs, newest first, for the gallery.
+ *
+ * Only runs with a video are listed: the gallery exists to play them back, and a run log
+ * without one is already readable in `out/runs/`. The task text ships with each entry
+ * because a video of a settings page is meaningless without the prompt that produced it —
+ * that pairing is the whole point of showing them together.
+ */
+export function listRecordedRuns(limit = 40): PastRun[] {
+	const dir = `${process.cwd()}/out/runs`;
+	if (!fs.existsSync(dir)) return [];
+
+	const out: PastRun[] = [];
+	for (const f of fs.readdirSync(dir).filter((n) => n.endsWith(".json")).sort().reverse()) {
+		if (out.length >= limit) break;
+		let d: any;
+		try {
+			d = JSON.parse(fs.readFileSync(`${dir}/${f}`, "utf8"));
+		} catch {
+			continue; // a half-written log during a live run is not an error worth surfacing
+		}
+		if (!d.video || !fs.existsSync(`${process.cwd()}/${d.video}`)) continue;
+		out.push({
+			id: f.replace(/\.json$/, ""),
+			app: d.app ?? "",
+			task: d.task ?? "",
+			success: !!d.success,
+			actions: Array.isArray(d.steps) ? d.steps.length : 0,
+			verified: d.verifiedSteps ?? 0,
+			elapsedSec: d.elapsedSec ?? 0,
+			grounding: d.grounding?.provenance ?? "none",
+			visual: d.visualCheck?.verdict,
+			video: d.video,
+			startedAt: d.steps?.[0]?.timestamp ?? "",
+		});
+	}
+
+	return out;
+}
+
+/**
+ * Resolve a repo-relative video path for serving, rejecting anything outside out/recording.
+ * The path arrives from the renderer, so it is untrusted even though the renderer is ours.
+ */
+export function resolveVideo(rel: string): string | undefined {
+	const root = `${process.cwd()}/out/recording/`;
+	const full = path.resolve(process.cwd(), rel);
+	if (!full.startsWith(root) || !full.endsWith(".mp4") || !fs.existsSync(full)) return undefined;
+
+	return full;
 }
 
 export interface RunOptions {

@@ -1,7 +1,6 @@
-import { app, BrowserWindow, ipcMain, systemPreferences } from "electron";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { listApps, RunController, type RunOptions } from "../src/ui-core.js";
+import { app, BrowserWindow, ipcMain, net, protocol, systemPreferences } from "electron";
+import fs from "node:fs";
+import { listApps, listRecordedRuns, resolveVideo, RunController, type RunOptions } from "../src/ui-core.js";
 import { page } from "../src/ui-page.js";
 
 /**
@@ -29,14 +28,27 @@ import { page } from "../src/ui-page.js";
  * the transport differs — ipcRenderer here, fetch + EventSource there.
  */
 
+// Must be declared BEFORE app.whenReady(): a scheme registered later is not treated as
+// privileged, and <video> then refuses to stream from it (no range support, no bypass of
+// the data: document's null origin).
+protocol.registerSchemesAsPrivileged([
+	{ scheme: "agentvideo", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true } },
+]);
+
 const runs = new RunController();
 let win: BrowserWindow | undefined;
 
 /** Injected before the shared app script; implements the `window.__bus` contract. */
 const BOOTSTRAP = String.raw`
 const { ipcRenderer } = require('electron');
+window.__videoBase = 'agentvideo:///';
 window.__bus = {
   loadApps: () => ipcRenderer.invoke('apps'),
+  loadRuns: () => ipcRenderer.invoke('runs'),
+  // Encode per SEGMENT: encodeURIComponent on the whole path turns every "/" into %2F,
+  // leaving a standard-scheme URL with no path to route, so the request never reaches the
+  // handler at all (symptom: a black video stuck at 0:00 and no protocol log line).
+  videoUrl: (rel) => window.__videoBase + rel.split('/').map(encodeURIComponent).join('/'),
   run: (opts) => ipcRenderer.invoke('run', opts),
   stop: () => ipcRenderer.invoke('stop'),
   onStarted: (cb) => ipcRenderer.on('started', (_e, d) => cb(d)),
@@ -94,6 +106,53 @@ function createWindow(): void {
 
 ipcMain.handle("apps", () => listApps());
 
+ipcMain.handle("runs", () => listRecordedRuns());
+
+/**
+ * Videos are served through a custom scheme rather than file:// — a data: document has a
+ * null origin and cannot load file:// subresources, so <video src="file://…"> is blocked.
+ */
+function registerVideoProtocol(): void {
+	protocol.handle("agentvideo", (request) => {
+		// A `standard` scheme parses authority, so agentvideo:///out/x.mp4 puts "out" in
+		// `host` and only "/x.mp4" in `pathname` — dropping the first path segment. Rejoin
+		// them instead of reading pathname alone.
+		const u = new URL(request.url);
+		const rel = decodeURIComponent(`${u.host}${u.pathname}`).replace(/^\/+/, "");
+		const full = resolveVideo(rel);
+		if (!full) return new Response("not found", { status: 404 });
+
+		// Serve ranges ourselves. net.fetch on a file:// URL answers 200 with the whole
+		// body and no Accept-Ranges, and Chromium will not seek a resource it cannot range
+		// -request — the symptom is a scrubber that does nothing, most visibly in
+		// fullscreen where the timeline is the only control.
+		const size = fs.statSync(full).size;
+		const range = request.headers.get("range");
+		const match = range ? /bytes=(\d*)-(\d*)/.exec(range) : null;
+		if (match) {
+			const start = match[1] ? Number(match[1]) : 0;
+			const end = match[2] ? Math.min(Number(match[2]), size - 1) : size - 1;
+			if (start >= size || start > end)
+				return new Response(null, { status: 416, headers: { "content-range": `bytes */${size}` } });
+
+			return new Response(fs.readFileSync(full).subarray(start, end + 1), {
+				status: 206,
+				headers: {
+					"content-type": "video/mp4",
+					"content-range": `bytes ${start}-${end}/${size}`,
+					"accept-ranges": "bytes",
+					"content-length": String(end - start + 1),
+				},
+			});
+		}
+
+		return new Response(fs.readFileSync(full), {
+			status: 200,
+			headers: { "content-type": "video/mp4", "accept-ranges": "bytes", "content-length": String(size) },
+		});
+	});
+}
+
 ipcMain.handle("run", (_event, opts: RunOptions) => {
 	const err = runs.start(opts, {
 		onLine: (line) => win?.webContents.send("line", line),
@@ -106,7 +165,11 @@ ipcMain.handle("run", (_event, opts: RunOptions) => {
 
 ipcMain.handle("stop", () => runs.stop());
 
-void app.whenReady().then(createWindow);
+
+void app.whenReady().then(() => {
+	registerVideoProtocol();
+	createWindow();
+});
 
 app.on("window-all-closed", () => {
 	runs.stop();

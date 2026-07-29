@@ -94,6 +94,7 @@ const total = parseInt(read("OVERLAY_COUNTDOWN", "0"), 10) || 0;
 const goFile = read("OVERLAY_GO", "");
 let left = -1; // -1 = waiting for go, >0 = ticking, 0 = run in progress
 if (total <= 0) left = 0;
+let ticks = 0;
 
 const app = $.NSApplication.sharedApplication;
 // Accessory policy: no Dock tile, no menu bar, and crucially no activation, so showing
@@ -155,6 +156,28 @@ for (let i = 0; i < screens.count; i++) {
 const exists = (p) => p && $.NSFileManager.defaultManager.fileExistsAtPath(p);
 
 /**
+ * Hide while the model thinks, show while the pointer is actually being driven.
+ *
+ * A banner that is up for the whole run stops being read: most of a run's wall clock is
+ * model thinking, during which the machine is safe to touch, so a permanent bar trains the
+ * operator to ignore exactly the thing meant to warn them. Appearing only around real
+ * actuation makes its presence informative again.
+ *
+ * Same one-bit file handshake as the go-file, for the same reason: this process is blocked
+ * in its own run loop and there is no IPC channel into JXA.
+ */
+const pauseFile = read("OVERLAY_PAUSE", "");
+let hidden = false;
+const setHidden = (want) => {
+  if (want === hidden) return;
+  hidden = want;
+  for (let i = 0; i < labels.length; i++) {
+    if (want) labels[i].panel.orderOut(null);
+    else labels[i].panel.orderFrontRegardless;
+  }
+};
+
+/**
  * The countdown ticks in the banner rather than the terminal, because the banner is where
  * the operator is already looking. The parent sleeps for the same duration; this only draws
  * it, and the go-file is the whole handshake — one bit, no IPC channel into a JXA process.
@@ -164,6 +187,8 @@ const exists = (p) => p && $.NSFileManager.defaultManager.fileExistsAtPath(p);
  * throw, SIGKILL or a closed terminal — none of which run a finally block.
  */
 while (true) {
+  // Never hide during the countdown — that phase exists to be seen.
+  if (left === 0 && pauseFile) setHidden(exists(pauseFile));
   if (left < 0 && exists(goFile)) left = total;
   if (left > 0) {
     const s = text + "  —  starting in " + left;
@@ -175,8 +200,14 @@ while (true) {
         labels[i].view.layer.backgroundColor = fill(rgb);
       }
   }
-  $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(1));
-  if (!parentAlive(parentPid)) $.exit(0);
+  // 1s while counting down (the countdown decrements once per tick); 0.2s afterwards, so
+  // show/hide tracks individual actions instead of lagging a second behind them.
+  $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(left > 0 ? 1 : 0.2));
+  // parentAlive forks /bin/kill, so keep it at roughly 1Hz rather than every fast tick.
+  // A stranded banner for one extra second is cheaper than five subprocesses a second.
+  if (++ticks % 5 === 0 || left > 0) {
+    if (!parentAlive(parentPid)) $.exit(0);
+  }
 }
 `;
 
@@ -188,10 +219,18 @@ export interface Overlay {
 	 * means what it says. Resolves immediately when COUNTDOWN=0.
 	 */
 	countdown(): Promise<void>;
+	/**
+	 * Hide the banner while the model thinks; show it while the pointer is being driven.
+	 *
+	 * Most of a run's wall clock is model thinking, and during that the machine is safe to
+	 * touch. A bar that is up the whole time therefore teaches the operator to ignore it —
+	 * so it is only up when it means something.
+	 */
+	setDriving(driving: boolean): void;
 	stop(): void;
 }
 
-const NOOP: Overlay = { async countdown() {}, stop() {} };
+const NOOP: Overlay = { async countdown() {}, setDriving() {}, stop() {} };
 
 /** Seconds of warning before a run takes the pointer. COUNTDOWN=0 skips it. */
 const COUNTDOWN_SECONDS = Number(process.env.COUNTDOWN ?? 3);
@@ -202,8 +241,12 @@ const MODES = {
 	drive: "0.80,0.11,0.18",
 	/** A grounding pass: same intrusiveness, different purpose. */
 	explore: "0.85,0.45,0.05",
-	/** Diagnostics that mostly read but may click. Violet, not blue — blue is the countdown. */
-	probe: "0.50,0.20,0.70",
+	/**
+	 * Diagnostics that mostly read but MAY click. Same red as a task run: the question the
+	 * banner answers is "can I touch this machine", and the answer is identical either way.
+	 * A distinct colour invited reading violet as "safe to interrupt", which it is not.
+	 */
+	probe: "0.80,0.11,0.18",
 };
 
 /**
@@ -220,6 +263,9 @@ export function startOverlay(mode: keyof typeof MODES, text: string): Overlay {
 	// Touched to release the countdown. A file, not a signal or a pipe: the JXA process is
 	// blocked in its own run loop and this is one bit of state, checked once a second.
 	const goFile = `${tmpdir()}/agent-overlay-go-${process.pid}`;
+	// Present = hidden. Same one-bit file handshake as goFile: the JXA process sits in its
+	// own run loop, so there is no channel to signal it through.
+	const pauseFile = `${tmpdir()}/agent-overlay-pause-${process.pid}`;
 
 	try {
 		child = spawn("osascript", ["-l", "JavaScript", "-e", SCRIPT], {
@@ -246,6 +292,17 @@ export function startOverlay(mode: keyof typeof MODES, text: string): Overlay {
 		} catch {}
 		try {
 			rmSync(goFile, { force: true });
+			rmSync(pauseFile, { force: true });
+		} catch {}
+	};
+
+	// Present = hidden. The banner starts visible; the agent hides it the moment it begins
+	// waiting on the model and shows it again around each actuation.
+	const setDriving = (driving: boolean): void => {
+		if (stopped) return;
+		try {
+			if (driving) rmSync(pauseFile, { force: true });
+			else writeFileSync(pauseFile, "");
 		} catch {}
 	};
 
@@ -268,5 +325,5 @@ export function startOverlay(mode: keyof typeof MODES, text: string): Overlay {
 		process.exit(143);
 	});
 
-	return { countdown, stop };
+	return { countdown, setDriving, stop };
 }
