@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";
-import { auditTaskPrompt, findScopeAmbiguities, observationBlocks, pixelDelta, scopeWarnings, verify } from "./harness.js";
+import { auditTaskPrompt, findScopeAmbiguities, observationBlocks, pixelDelta, scopeWarnings, toActionRequest, verify } from "./harness.js";
 import type { ObservationBundle } from "./harness.js";
 import type { AppMap } from "./types.js";
 import { EMPTY, bestClass, descriptorFor, lookup } from "./axdom.js";
@@ -94,6 +94,76 @@ test("verify__Passes__When__NoPrevHaystackGiven", () => {
 	// Final-state checks (done evidence) assert state, not change — no discrimination demand.
 	const result = verify({ description: "", textIncludes: ["cassidy"] }, "select voice: cassidy");
 	assert.equal(result.verified, true);
+});
+
+// --- painted targets. A canvas draws its contents instead of building them from controls,
+// so there is no element to address and no label to grep. Two consequences are tested here:
+// coordinate actuation must reach the driver with background delivery ruled out, and a
+// success that rests on pixels must stay LABELLED as pixels all the way into the run log.
+
+test("toActionRequest__EmitsForegroundDrag__When__ActionIsDrag", () => {
+	const win = { pid: 42, windowId: 7, app: "Anything" };
+	const req = toActionRequest({ name: "drag", from_x: 100, from_y: 200, to_x: 340, to_y: 200 }, win);
+	assert.equal(req?.kind, "tool");
+	const tool = req as { kind: "tool"; name: string; args: Record<string, unknown> };
+	assert.equal(tool.name, "drag");
+	assert.deepEqual([tool.args.from_x, tool.args.from_y, tool.args.to_x, tool.args.to_y], [100, 200, 340, 200]);
+	// Pinned in code, not offered to the model: the driver states background drag is
+	// unavailable on macOS, so a model-chosen delivery mode could only ever be wrong.
+	assert.equal(tool.args.delivery_mode, "foreground");
+});
+
+test("toActionRequest__AddressesByCoordinate__When__ClickHasNoElementIndex", () => {
+	const win = { pid: 42, windowId: 7, app: "Anything" };
+	const tool = toActionRequest({ name: "click", x: 880, y: 610 }, win) as { args: Record<string, unknown> };
+	assert.equal(tool.args.x, 880);
+	assert.equal(tool.args.element_index, undefined);
+});
+
+test("toActionRequest__PrefersElementIndex__When__BothGiven", () => {
+	// element_index is verifiable by label; a coordinate is not. When the model supplies
+	// both, the stronger addressing wins.
+	const win = { pid: 42, windowId: 7, app: "Anything" };
+	const tool = toActionRequest({ name: "click", element_index: 12, x: 880, y: 610 }, win) as { args: Record<string, unknown> };
+	assert.equal(tool.args.element_index, 12);
+	assert.equal(tool.args.x, undefined);
+});
+
+test("verify__ReportsTextChannel__When__SubstringEvidenceSatisfied", () => {
+	// The channel is what keeps a pixel run from being quoted as a text run, so the strong
+	// channel has to name itself too — an untagged pass would be indistinguishable later.
+	const result = verify({ description: "", textIncludes: ["paris"] }, "time zone: paris", "time zone: new york");
+	assert.equal(result.verified, true);
+	assert.equal(result.channel, "text");
+});
+
+test("auditTaskPrompt__Passes__When__PromptIsGoalOnlyAboutCanvasContent", () => {
+	// Canvas work must not need method in the prompt. Naming what is wrong with the result
+	// is a goal; naming the control or the gesture that fixes it is not.
+	for (const task of [
+		"The tiger appears before I mention tigers — line them up",
+		"The cutaway lands too late in the voiceover; fix the timing",
+	])
+		assert.equal(auditTaskPrompt(task).hinted, false, task);
+});
+
+test("auditTaskPrompt__Flags__When__PromptNamesDragCoordinates", () => {
+	// Coordinates are the purest form of method: they encode the answer the agent is
+	// supposed to derive from looking at the screen.
+	const audit = auditTaskPrompt("Drag the sync point from x=940 to x=1080 to line up the tiger");
+	assert.equal(audit.hinted, true);
+	assert.match(audit.reasons.join(" "), /screen coordinates/);
+});
+
+test("auditTaskPrompt__Passes__When__NumbersAreGoalNotPosition", () => {
+	// The coordinate rule must not swallow numbers that specify the outcome. A resolution,
+	// a duration, and a count all read as digits and none of them is a hint.
+	for (const task of [
+		"Export the draft at 1920 x 1080",
+		"Trim the intro to 30 seconds",
+		"Add 3 more scenes to the script",
+	])
+		assert.equal(auditTaskPrompt(task).hinted, false, task);
 });
 
 // --- appmap graph: the structured companion to the prose map. It earns its place by

@@ -25,6 +25,14 @@ export interface StepRecord {
 	action: ActionRequest;
 	expectation: Expectation;
 	verified: boolean;
+	/**
+	 * Which evidence proved it. "text" is a substring that appeared or disappeared in the AX
+	 * tree; "pixel" is only that the screen changed where a drag was aimed, which is available
+	 * on painted targets but proves movement rather than correctness. Undefined when the step
+	 * did not verify. Kept per step so a run's totals can be split by channel — a pixel step
+	 * must never be counted as a text one.
+	 */
+	verificationChannel?: "text" | "pixel";
 	verificationNote: string;
 	screenshotFile?: string;
 	/**

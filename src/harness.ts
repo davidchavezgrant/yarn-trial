@@ -481,6 +481,65 @@ print(changed / float(w * h))
 	}
 }
 
+/**
+ * Did a drag move something from where it was pressed to where it was released?
+ *
+ * The only evidence available on a painted target: it has no label to grep, so text
+ * verification has nothing to work with. The test is deliberately about GEOMETRY, not
+ * appearance — crop the neighbourhood of each endpoint and compare it against itself
+ * before and after. A thing that moved vacates its origin and arrives at its destination,
+ * whatever colour or shape it is. Nothing here knows what is being dragged.
+ *
+ * Both ends must change. One end alone is the common false positive: a canvas that draws an
+ * indicator wherever you press lights up the origin on every drag, including one that
+ * grabbed nothing.
+ *
+ * What it cannot do, and no amount of tuning will fix: say the thing landed in the RIGHT
+ * place. That is why the channel is named in the result and why done(success) refuses it.
+ */
+export function dragMoved(
+	beforePath: string,
+	afterPath: string,
+	from: { x: number; y: number },
+	to: { x: number; y: number },
+	radius = 14,
+): { moved: boolean; origin?: number; dest?: number } {
+	if (!fs.existsSync(beforePath) || !fs.existsSync(afterPath)) return { moved: false };
+
+	const script = `
+import sys
+from PIL import Image, ImageChops
+a = Image.open(sys.argv[1]).convert("RGB")
+b = Image.open(sys.argv[2]).convert("RGB")
+if a.size != b.size:
+    print("SIZE_MISMATCH"); sys.exit(0)
+r = int(sys.argv[6])
+def frac(cx, cy):
+    box = (max(0, cx - r), max(0, cy - r), min(a.width, cx + r), min(a.height, cy + r))
+    if box[2] <= box[0] or box[3] <= box[1]: return 0.0
+    d = ImageChops.difference(a.crop(box), b.crop(box)).convert("L").getdata()
+    return sum(1 for p in d if p > 12) / float(len(d))
+print(frac(int(sys.argv[3]), int(sys.argv[4])), frac(int(sys.argv[5]), int(sys.argv[4] if len(sys.argv) < 8 else sys.argv[7])))
+`;
+	try {
+		const out = execFileSync(
+			"python3",
+			["-c", script, beforePath, afterPath, String(from.x), String(from.y), String(to.x), String(radius), String(to.y)],
+			{ encoding: "utf8" },
+		).trim();
+		if (out === "SIZE_MISMATCH") return { moved: false };
+		const [origin, dest] = out.split(/\s+/).map(Number);
+		if (!Number.isFinite(origin) || !Number.isFinite(dest)) return { moved: false };
+		// A tenth of a small crop is well clear of antialiasing while far below what an
+		// arriving object produces (measured: 0.04-0.12 for a real move, 0 for inert canvas).
+		const MIN = 0.02;
+
+		return { moved: origin > MIN && dest > MIN, origin, dest };
+	} catch {
+		return { moved: false };
+	}
+}
+
 export interface VisualVerdict {
 	verdict: "PASS" | "FAIL" | "UNPROVEN";
 	scope: string;
@@ -565,9 +624,25 @@ export async function visualJudge(
 	}
 }
 
+/**
+ * Which evidence proved a step, and therefore how much the step is worth.
+ *
+ * - "text" — a substring appeared or disappeared in the AX tree. Discriminating and
+ *   deterministic: it says WHAT changed.
+ * - "pixel" — the screen changed where the action was aimed, and did not change where it
+ *   was not. Available on painted targets that have no text at all, but strictly weaker:
+ *   it says SOMETHING moved, never that it moved somewhere correct.
+ *
+ * They are kept apart everywhere — in the result, in the step log, in the run summary —
+ * because the whole risk with a canvas task is quoting the weak number as if it were the
+ * strong one.
+ */
+export type VerifyChannel = "text" | "pixel";
+
 export interface VerifyResult {
 	verified: boolean;
 	note: string;
+	channel?: VerifyChannel;
 }
 
 /**
@@ -612,7 +687,7 @@ export function verify(expectation: Expectation, haystack: string, prevHaystack?
 			};
 	}
 
-	return { verified: true, note: "expectation met" };
+	return { verified: true, note: "expectation met", channel: "text" };
 }
 
 /**
@@ -628,6 +703,17 @@ export function verify(expectation: Expectation, haystack: string, prevHaystack?
  */
 const DRIVER_VOCAB = /\b(set_value|type_text|press_key|right_click|double_click|element_index|delivery_mode|AXPress|AX[A-Z]\w+)\b/g;
 const MECHANIC_VERBS = /\b(click|clicks|clicking|clicked|right[- ]click\w*|double[- ]click\w*|press|presses|pressing|keystroke\w*|select all|scroll\w*|hover\w*|drag\w*|cmd\+|ctrl\+|option\+|shift\+|⌘)/gi;
+/**
+ * Screen coordinates, which arrived as a hint vector the moment painted targets became
+ * actionable. A coordinate is the purest possible method hint: deriving it from the pixels
+ * is the entire task on a canvas, so handing it over skips the only hard part. One is enough
+ * to fail the prompt — unlike mechanic verbs, there is no innocent reading of "x=940".
+ *
+ * Both spellings the hint actually takes: an axis assignment, and a pair introduced by a
+ * preposition. The pair requires that preposition so a bare "1080, 720" — a resolution, a
+ * legitimate goal — does not trip it.
+ */
+const COORD_HINT = /\b[xy]\s*[=:]\s*-?\d+|\b(?:at|to|from)\s+\(?\s*\d{2,4}\s*,\s*\d{2,4}\s*\)?/gi;
 
 export interface PromptAudit {
 	hinted: boolean;
@@ -640,6 +726,8 @@ export function auditTaskPrompt(task: string): PromptAudit {
 	const mechanics = [...new Set((task.match(MECHANIC_VERBS) ?? []).map((m) => m.toLowerCase()))];
 	if (vocab.length > 0) reasons.push(`names driver/AX internals: ${vocab.join(", ")}`);
 	if (mechanics.length >= 2) reasons.push(`describes interaction mechanics, not just the goal: ${mechanics.join(", ")}`);
+	const coords = [...new Set(task.match(COORD_HINT) ?? [])];
+	if (coords.length > 0) reasons.push(`gives screen coordinates, which the agent must derive itself: ${coords.join(", ")}`);
 
 	return { hinted: reasons.length > 0, reasons };
 }
@@ -652,6 +740,7 @@ export const SUPPORTED_ACTIONS = [
 	"press_key",
 	"set_value",
 	"scroll",
+	"drag",
 	"wait",
 ] as const;
 
@@ -676,7 +765,13 @@ export function toActionRequest(a: any, win: WindowRef): ActionRequest | null {
 		case "click":
 		case "right_click":
 		case "double_click":
-			return { kind: "tool", name: a.name, args: { ...base, element_index: a.element_index } };
+			// x/y instead of element_index for painted targets. A canvas draws its contents
+			// rather than building them from controls, so there is frequently no element to
+			// address — measured on one timeline: nothing but the window and the web area
+			// covers a draggable handle.
+			return a.element_index === undefined && a.x !== undefined
+				? { kind: "tool", name: a.name, args: { ...base, x: a.x, y: a.y, delivery_mode: "foreground" } }
+				: { kind: "tool", name: a.name, args: { ...base, element_index: a.element_index } };
 		case "type_text":
 			// element_index directs the write to a specific field — without it the driver
 			// types at whatever has focus, and a preceding no-op click means keystrokes
@@ -712,6 +807,31 @@ export function toActionRequest(a: any, win: WindowRef): ActionRequest | null {
 				name: "scroll",
 				args: { ...base, direction: a.direction, ...(a.amount ? { amount: a.amount } : {}), ...(a.element_index !== undefined ? { element_index: a.element_index } : {}) },
 			};
+		case "drag":
+			/**
+			 * Press-drag-release between two points, for targets that are painted rather than
+			 * built. Coordinates are window-local screenshot pixels — the same space as the
+			 * observation's PNG, so a pixel read off the image needs no conversion (AX frames
+			 * do; they are logical points).
+			 *
+			 * delivery_mode is pinned, not offered: the driver states background drag is
+			 * unavailable on macOS. Duration and step count are slow on purpose — a drag the
+			 * app can follow, and one that reads as human in a recording.
+			 */
+			return {
+				kind: "tool",
+				name: "drag",
+				args: {
+					...base,
+					from_x: a.from_x,
+					from_y: a.from_y,
+					to_x: a.to_x,
+					to_y: a.to_y,
+					duration_ms: 600,
+					steps: 40,
+					delivery_mode: "foreground",
+				},
+			};
 		default:
 			throw new UnsupportedActionError(a.name);
 	}
@@ -729,6 +849,12 @@ export const ACT_TOOL: Anthropic.Tool = {
 				properties: {
 					name: { type: "string", enum: [...SUPPORTED_ACTIONS] },
 					element_index: { type: "integer", description: "Target element from the current observation. Required for click/right_click/double_click/set_value. STRONGLY recommended for type_text (directs the text into that field instead of relying on focus) and available for press_key." },
+					x: { type: "integer", description: "For click/right_click/double_click on a PAINTED target with no element_index: horizontal pixel in the screenshot. Only use when no element covers the thing you mean." },
+					y: { type: "integer", description: "Vertical pixel in the screenshot. Pairs with x." },
+					from_x: { type: "integer", description: "For drag: where to press, in screenshot pixels." },
+					from_y: { type: "integer", description: "For drag: where to press, in screenshot pixels." },
+					to_x: { type: "integer", description: "For drag: where to release, in screenshot pixels." },
+					to_y: { type: "integer", description: "For drag: where to release, in screenshot pixels." },
 					text: { type: "string", description: "For type_text/set_value (the text/value to write)." },
 					key: { type: "string", description: "For press_key: return, tab, escape, up, down, a-z, 0-9, etc." },
 					modifiers: { type: "array", items: { type: "string" }, description: "For press_key: cmd, shift, option, ctrl." },
@@ -759,4 +885,11 @@ export const DRIVER_RULES = `Rules learned from this driver (follow them):
 - If an element only advertises AXShowMenu (e.g. labels that open context menus), use right_click.
 - Text fields are often pre-filled: click the field to focus it, then press cmd+a, then type. Never type without focusing first.
 - Menu-bar keyboard shortcuts (like cmd+,) need delivery_mode "foreground". Escape to close overlays also usually needs "foreground".
-- A silent no-op click means your next keystrokes hit global shortcuts and can open random overlays. If the observation shows an unexpected overlay, close it (escape, foreground) before continuing.`;
+- A silent no-op click means your next keystrokes hit global shortcuts and can open random overlays. If the observation shows an unexpected overlay, close it (escape, foreground) before continuing.
+
+Painted targets (canvases, timelines, image regions):
+- Some things are DRAWN, not built from controls, so no element_index exists for them. Look for them in the screenshot. Only then, address them by pixel: x/y on click, from_x/from_y/to_x/to_y on drag.
+- Screenshot pixels are exactly what the driver consumes — the pixel you read IS the pixel it acts on. Do NOT convert. (The "frame" values printed beside elements are a DIFFERENT space — logical points — so never feed a frame coordinate to a coordinate action.)
+- Prefer element_index whenever an element covers what you mean. Coordinates cannot be verified by the harness the way labels can, so they are the fallback, not the default.
+- Dragging a thing puts it under wherever you released. If a pointer indicator follows your press, it now sits on top of the thing you just dropped, so pressing there again grabs the indicator instead — a reverse drag is NOT an undo.
+- A canvas usually reacts to ANY press (scrubbing, selecting, deselecting). Text appearing after you act on a canvas may just be that reaction, not proof you hit the target.`;

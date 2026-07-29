@@ -8,6 +8,7 @@ import {
 	appSlug,
 	assertObservable,
 	auditTaskPrompt,
+	dragMoved,
 	DRIVER_RULES,
 	findScopeAmbiguities,
 	findWindow,
@@ -28,7 +29,7 @@ import {
 import { DOM_ACT_TOOL, DOM_RULES, DomBackend, FIND_TOOL } from "./dom.js";
 import { startOverlay } from "./overlay.js";
 import type { ActionRequest, Expectation, StepRecord } from "./types.js";
-import type { VisualVerdict } from "./harness.js";
+import type { VerifyResult, VisualVerdict } from "./harness.js";
 
 const MAX_STEPS = Number(process.env.AGENT_STEPS ?? 15);
 /** Free read-only page searches per run, beyond which a find costs an action. */
@@ -552,6 +553,11 @@ async function main(): Promise<void> {
 
 					if (!finalCheck.verified) {
 						console.log(`    -> done(success) REFUTED by final observation: ${finalCheck.note}`);
+						// A run carried by pixel evidence lands here by construction: the final
+						// check greps text, and a painted target has none. Say so, because
+						// otherwise the model reads "evidence failed" as a miss and retries the
+						// drag forever. There IS no text to find, and that is the honest answer.
+						const pixelOnly = records.some((r) => r.verificationChannel === "pixel") && !records.some((r) => r.verificationChannel === "text");
 						messages.push({
 							role: "user",
 							content: [
@@ -561,7 +567,11 @@ async function main(): Promise<void> {
 									is_error: true,
 									content:
 										`DONE NOT ACCEPTED — your evidence failed against a fresh observation: ${finalCheck.note}\n` +
-										"The goal state is not proven. Diagnose and continue, or call done(success: false).",
+										(pixelOnly
+											? "Every step in this run was verified by pixels alone, so the app exposes no text for this target and " +
+												"no substring can prove the goal. Do not keep retrying. If you believe the manipulation succeeded, call " +
+												"done(success: false) and say in your summary what you did and that it is unverifiable through this channel."
+											: "The goal state is not proven. Diagnose and continue, or call done(success: false)."),
 								},
 							],
 						});
@@ -570,6 +580,14 @@ async function main(): Promise<void> {
 				}
 
 				const unverified = records.filter((r) => !r.verified).length;
+				/**
+				 * Verified steps split by evidence channel, never summed into one number.
+				 * A pixel step proves something moved where the action was aimed; a text step
+				 * proves WHAT changed. Reporting "8/8 verified" over a run carried by pixels
+				 * would overstate it by exactly the distinction this whole layer exists to keep.
+				 */
+				const textSteps = records.filter((r) => r.verificationChannel === "text").length;
+				const pixelSteps = records.filter((r) => r.verificationChannel === "pixel").length;
 				const verdict = !input.success
 					? "failure"
 					: unverified === 0
@@ -578,9 +596,9 @@ async function main(): Promise<void> {
 				console.log(`\n=== DONE (${verdict}) after ${records.length} actions ===`);
 				console.log(input.summary);
 				const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
-				fs.writeFileSync(runLog, JSON.stringify({ task, app, backend: backendKind, vision, grounding: groundingMeta, hintedPrompt: audit.hinted, hintReasons: audit.reasons, homeReset, domEnrichment, success: input.success, finalCheck, visualCheck: visual, verifiedSteps: records.length - unverified, unverifiedSteps: unverified, expectationRejections, findCalls, summary: input.summary, elapsedSec, usage, ...(record ? { video: videoPath.replace(`${process.cwd()}/`, "") } : {}), steps: records }, null, 2));
+				fs.writeFileSync(runLog, JSON.stringify({ task, app, backend: backendKind, vision, grounding: groundingMeta, hintedPrompt: audit.hinted, hintReasons: audit.reasons, homeReset, domEnrichment, success: input.success, finalCheck, visualCheck: visual, verifiedSteps: records.length - unverified, verifiedByChannel: { text: textSteps, pixel: pixelSteps }, unverifiedSteps: unverified, expectationRejections, findCalls, summary: input.summary, elapsedSec, usage, ...(record ? { video: videoPath.replace(`${process.cwd()}/`, "") } : {}), steps: records }, null, 2));
 				console.log(`stats: ${records.length} actions, ${elapsedSec}s, ${usage.modelCalls} model calls, ${usage.outputTokens} output tokens, grounding=${groundingMeta.provenance}, vision=${vision}, hintedPrompt=${audit.hinted}, homeReset=${homeReset}`);
-				console.log(`verification: ${records.length - unverified}/${records.length} steps verified${expectationRejections ? `, ${expectationRejections} call(s) rejected for missing checks` : ""}${finalCheck ? `; final goal check: ${finalCheck.verified ? "PASSED" : "failed"} (${finalCheck.evidence?.textIncludes?.join(", ") ?? ""})` : ""}`);
+				console.log(`verification: ${records.length - unverified}/${records.length} steps verified (${textSteps} by text, ${pixelSteps} by pixels only)${expectationRejections ? `, ${expectationRejections} call(s) rejected for missing checks` : ""}${finalCheck ? `; final goal check: ${finalCheck.verified ? "PASSED" : "failed"} (${finalCheck.evidence?.textIncludes?.join(", ") ?? ""})` : ""}`);
 				if (visual && visual.verdict !== "PASS")
 					console.log(`NOTE: visual judge returned ${visual.verdict} — text evidence passed, but the final frame did not independently confirm the goal.`);
 				if (audit.hinted) console.log("NOTE: prompt contained method hints — NOT a clean autonomy result.");
@@ -670,9 +688,32 @@ async function main(): Promise<void> {
 			}
 			// `wait` legitimately changes nothing, so exempt it from the discrimination
 			// requirement (its point is that already-true state persists).
-			const verdict = isError
+			let verdict: VerifyResult = isError
 				? { verified: false, note: "action errored" }
 				: verify(input.expectation, obs.haystack, input.action.name === "wait" ? undefined : prevHaystack);
+
+			/**
+			 * Fall back to the pixel channel for a drag the text channel could not see.
+			 *
+			 * Only for drag, and only after text has failed: a painted target has no label to
+			 * grep, so refusing the step would make canvas work impossible, while preferring
+			 * pixels anywhere else would throw away the stronger evidence. The result is
+			 * tagged with its channel and stays tagged into the run log, because this proves
+			 * something moved and NOT that it moved anywhere correct.
+			 */
+			if (!verdict.verified && !isError && input.action.name === "drag" && request?.kind === "tool") {
+				const args = request.args as Record<string, number>;
+				const m = dragMoved(prevShot, `${OUT}/agent-step-${step}.png`, { x: args.from_x, y: args.from_y }, { x: args.to_x, y: args.to_y });
+				if (m.moved)
+					verdict = {
+						verified: true,
+						channel: "pixel",
+						note:
+							`pixel evidence only: the origin changed by ${((m.origin ?? 0) * 100).toFixed(1)}% and the ` +
+							`destination by ${((m.dest ?? 0) * 100).toFixed(1)}%, consistent with something moving between ` +
+							`them. This does NOT establish it landed in the right place.`,
+					};
+			}
 			// Advisory pixel signal: the AX text channel does not carry rendered content, so a
 			// canvas that failed to repaint is invisible to verify(). Recorded, never a gate.
 			const delta = pixelDelta(prevShot, `${OUT}/agent-step-${step}.png`);
@@ -685,6 +726,7 @@ async function main(): Promise<void> {
 				action: request ?? { kind: "tool", name: input.action.name, args: {} },
 				expectation: input.expectation ?? { description: "(none provided)" },
 				verified: verdict.verified,
+				verificationChannel: verdict.channel,
 				verificationNote: verdict.note,
 				screenshotFile: `agent-step-${step}.png`,
 				pixelDelta: delta,
