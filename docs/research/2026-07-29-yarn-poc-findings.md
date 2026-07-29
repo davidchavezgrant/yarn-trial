@@ -562,6 +562,38 @@ Live run with both layers: 4/4 steps verified, deltas 45.6% / 0.2% / 0.5% / 1.3%
 first delta is the Brand Kit navigation; the small ones are dropdown and save), judge PASS
 naming the brand scope.
 
+### Scope ambiguities: present both routes, let the agent choose
+
+The first version of the warning ended with "prefer the broadest (app/workspace/brand)
+default rather than a single document's override" — a policy hardcoded into the harness.
+That is wrong whenever the task is genuinely about one document, and it substitutes the
+harness's judgement for the agent's on a question only the task context can answer.
+
+Now the warning lists every scope with its **full navigation route** and hands over the
+decision, requiring only that the choice be stated and justified in the summary. The
+requirement matters more than the choice: an unstated scope is what makes a wrong one
+indistinguishable from a deliberate one after the fact.
+
+Verified in both directions, recorded:
+
+| Task | Route taken | Judge |
+|---|---|---|
+| "…for just this one project, without affecting other projects" | document (Project actions → Screen Clip Settings), 8 actions | PASS — "the brand-wide Brand Kit surface is not open and thus untouched" |
+| "show me how to change the cursor type" | brand (Brand Kit → Screen Clips), 4 actions | PASS — "Default Brand Brand Kit … Cursor Style" |
+
+The old hardcoded rule would have gotten the first one wrong.
+
+**Size**: entries group by surface *pair*, not per setting. Yarn's 16 dual-scope settings all
+share the same brand-vs-document panels, so per-setting entries repeated one pair of routes
+15 times — 10,866 chars of warning against a 5,884-char appmap. Grouped: 1,855 chars, and it
+now carries full multi-hop routes it previously lacked.
+
+**Staging regression found by this run**: System Events reports **zero windows** for a
+natively-fullscreen app, so `windows[0]` threw "Invalid index" and recording staging failed on
+every Yarn run. Absence of windows is now itself the fullscreen signal. The error handler also
+reported the echoed command rather than osascript's stderr, hiding the cause behind "Command
+failed: osascript -l JavaScript -e" — it now surfaces the real message.
+
 ## Harness bugs found (all fixed today)
 
 1. **`set_value` sent `text` where the driver expects `value`** — every direct field write
