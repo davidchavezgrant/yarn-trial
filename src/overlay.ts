@@ -307,6 +307,22 @@ export function startOverlay(mode: keyof typeof MODES, text: string): Overlay {
 	// own run loop, so there is no channel to signal it through.
 	const pauseFile = `${tmpdir()}/agent-overlay-pause-${process.pid}`;
 
+	/**
+	 * Clear both handshake files before the child can read them. They are named by pid and
+	 * only stop() removes them, so a run killed with SIGKILL — or a closed terminal — leaves
+	 * them in /tmp forever, and macOS recycles pids (they wrap at 99999). A later run that
+	 * inherits one of those pids finds its own go-file ALREADY THERE: the child fires the
+	 * countdown at launch, it burns down during driver startup while nobody is looking, and
+	 * the banner is red by the time the run actually takes the pointer. Reproduced by planting
+	 * a go-file: the banner read "Agent exploring Yarn — do not touch" in full mode colour six
+	 * seconds before countdown() was called. A stale pause-file is the same hazard mirrored —
+	 * the banner starts hidden and the warning never appears at all.
+	 */
+	try {
+		rmSync(goFile, { force: true });
+		rmSync(pauseFile, { force: true });
+	} catch {}
+
 	try {
 		child = spawn("osascript", ["-l", "JavaScript", "-e", SCRIPT], {
 			stdio: "ignore",
