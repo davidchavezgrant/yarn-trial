@@ -1,59 +1,37 @@
-<!-- provenance: explore | app: Yarn | date: 2026-07-29 | actions: 23 | findings: 0 -->
+<!-- provenance: explore | app: Yarn | date: 2026-07-29 | backend: ax | actions: 11 | findings: 7 | finds: 0 -->
 <!-- Written by src/explore.ts. DO NOT HAND-EDIT: edits make this a curated recipe, not exploration output — move such notes to docs/recipes/<app>.md instead. -->
 
 ## Layout
 
-Yarn is an Electron/web app: one window "Yarn" containing a single AXWebArea. Everything is in-page; the macOS menu bar is nearly empty of app features.
+Yarn is a single-window Electron/web app. There is **no macOS Preferences window** (cmd+, does nothing); all settings live inside the web UI.
 
-**macOS menu bar** (only useful items)
-- Yarn: About Yarn, Hide, Quit. **No Preferences/Settings item** — settings are in-app.
-- File: Close Window (often disabled), Close All.
-- Edit: standard, mostly DISABLED unless a text field is focused.
-- View: Reload, Force Reload, Toggle Developer Tools, Actual Size / Zoom In / Zoom Out.
-- Window / Help: standard / empty.
-
-**Left sidebar (always present)**
-- Top: AXPopUpButton "David's Workspace" (workspace switcher).
-- `Library`, `Your Drafts`.
-- List of draft shortcuts (each row is AXButton "Untitled" containing an inline-editable AXTextField), then `New draft`.
-- Bottom: `Invite Members`, `Brand Kit`, `Settings`.
-
-**Library** (sidebar → Library): title "Your Library"; Search AXTextField; `Grid` / `List` buttons; one unlabeled sort AXPopUpButton; blue `New Draft`; "Collections" section with `New Collection`; then an AXTable "grid" of draft cards. Each card = inline title AXTextField + "Draft" badge + "You – <time>" + an unlabeled "..." AXPopUpButton (per-item menu).
-
-**Your Drafts**: page titled "Drafts", same controls as Library (Search, Grid/List, sort popup, New Draft, card grid) but no Collections section.
-
-**Brand Kit** (sidebar → Brand Kit): breadcrumb "Default Brand Brand Kit" and a second-column nav: Brand Overview, Templates, Workflows, Colors, Type, Screen Clips, Motion, Layout, Misc. Reopening Brand Kit returns to the last-visited sub-section.
-- *Brand Overview*: "Brand options" AXPopUpButton ("..." top-right) + "Overview notes" AXTextArea.
-- *Templates*: Grid/List buttons, sort toggles exposed as AXCheckBox "Sort by newest" / "Sort A-Z", blue `New Template`; empty state "No templates yet for this brand."; right pane "Select a template to view its details."
-- *Colors*: groups "Background" and "Text Colors"; each swatch = AXPopUpButton "Open paint picker" + adjacent AXButton "Color actions"; trailing "Add Background" / "Add Text Color" tiles; bottom "Color Notes" AXTextArea + "More information" (i) button.
-- *Motion*: "Motion Principles" + "Motion notes" AXTextArea. *Misc*: "Misc Context" + "Misc notes" AXTextArea. (Type / Layout / Workflows not opened; Type & Layout follow the same notes/settings pattern.)
-- *Screen Clips* (the big settings page, "Screen Clip Settings"): sections **Cursor** (Auto-Hide Cursor: `Auto Hide`/`Off`; Text Cursor: `Hide`/`Show`; Cursor Style AXComboBox = Arrow-first | Pointer-first | Original; Cursor Scale slider), **Screen Display** (Screen Window Padding, Shadow Opacity, Shadow Blur, Shadow Spread sliders; Shadow X/Y Offset text fields), **Sound Effects** (Cursor Clicks checkbox + preset combobox; Keyboard Presses checkbox + set combobox "Set B" + volume combobox), **Visual Effects** (Entrance/Exit Animation popup "Fade Up"; Motion Blur `Off|Low|Medium|High`; Default Zoom Type `Glide|Fixed`; Default Zoom Level slider).
-
-**Settings** (sidebar bottom → Settings): a **modal dialog** with an X close button (top-right, an unlabeled AXButton ~42x42) — Escape does NOT reliably close it; click the X.
-- Left pane: profile avatar ("Edit profile photo"), name/email, `Sign out` at bottom.
-- Right pane (scrollable, sections in order):
-  - **Preferences**: Auto-Add Screen Zooms `On`/`Off`; Theme `Dark`/`Light`/`System` (quick switch Shift+Cmd+\); Agent model popup (Opus 5 ✓, Fable 5, Opus 4.8, GPT-5.6 Sol); Agent effort popup (High); "Agent Fast Mode default" checkbox.
-  - **Your Plan**: Free, "Resets on …", credits used, `Upgrade`.
-  - **Workspace settings**: Workspace name text field; Icon upload button; Custom window sizes rows (name + "1440x897"-style fields with `Remove`) + `Add Size`.
-  - **Integrations**: Figma / Google Slides ("Sign in with…"), Notion MCP (`Connect Notion`), Team YouTube, Personal YouTube, Screen Studio Import (`Import`).
-  - **Team Members**: `Invite Members` + member rows with a role AXPopUpButton.
-  - Lower sections are reported by AX at a collapsed y (~1657, 1x1 frames) until the dialog is scrolled — scroll the dialog to interact with them reliably.
+- **Left sidebar** (always visible): workspace popup "David's Workspace", `Library`, `Your Drafts`, the project/draft list (several `Untitled`, "YT Long - How to buy wholesale for your store", "YT Short - Store Owner Responsibilities", …), `New draft`, and at the bottom `Invite Members`, `Brand Kit`, `Settings`.
+- **Brand Kit** (sidebar → "Brand Kit"): nav column with `Brand Overview`, `Templates`, `Workflows`, `Colors`, `Type`, `Screen Clips`, `Motion`, `Layout`, `Misc`; a "Brand options" ⋯ popup at the top-right of the pane. Brand selector shows "Default Brand".
+- **Brand Kit → Screen Clips** — page titled **"Screen Clip Settings"**, the BRAND-WIDE defaults:
+  - Cursor: Auto-Hide Cursor [Auto Hide | Off]; Text Cursor [Hide | Show]; Cursor Style combobox (Arrow-first / Pointer-first / Original); Cursor Scale slider (1.60).
+  - Screen Display: Screen Window Padding (18.0), Shadow Opacity (72%), Shadow Blur (32), Shadow Spread (-18) sliders; Shadow X Offset (0) and Shadow Y Offset (12) text fields.
+  - Sound Effects: Cursor Clicks checkbox + volume combo ("Extra Soft"); Keyboard Presses checkbox + key-set combo ("Set B") + volume combo ("Extra Soft").
+  - Visual Effects: Entrance/Exit Animation popup ("Fade Up"); Motion Blur [Off|Low|Medium|High]; Default Zoom Type [Glide|Fixed]; Default Zoom Level slider (54%).
+- **Project editor** (click any draft in the sidebar): title text field, `Agent`/`Script` tabs, voice popup ("Select voice: Annie"), **Project actions ⋯ popup**, script/scene pane, video preview, timeline (Add scene, Library, Timeline Zoom), top-right paint picker, music popup ("Vintage Groove"), `Publish`, `Export`.
+- **Project actions ⋯ menu** (right of the voice popup): New Agent Chat, Copy Transcript, Make a copy, Download SRT…, **Screen Clip Settings…**, Show Version History…, `Brand ▸ Default Brand`, aspect ratio (Widescreen 16:9 / Laptop 16:10 / Square 1:1 / Vertical 9:16), Performance Mode (Efficiency / Default / Ultra), Delete.
+- **Per-project Screen Clip Settings** — popover titled **"Screen Recording Settings"**, identical control list to Brand Kit → Screen Clips but stored on THIS project. Closed with its **Done** button (bottom-right).
+- **Settings modal** (sidebar → "Settings"; close with the X at its top-right): profile (photo, David / me@davidgrant.info, Sign out); Preferences = Auto-Add Screen Zooms [On|Off], Theme [Dark|Light|System] (also shift+cmd+\), Agent model popup (Opus 5), Agent effort popup (High), "Agent Fast Mode default" checkbox; Your Plan (Free, 0/2,000 credits, Upgrade); Workspace settings = workspace name field, icon upload, Custom window sizes (Default 1440x897, Custom 1 1600x987, Add Size / Remove); Integrations (Figma, Google Slides, Notion MCP, Team YouTube, Personal YouTube, Screen Studio Import); Team Members + Invite Members.
+- **macOS menu bar** is minimal: Yarn (About, Services, Quit), File (Close Window, Close All), Edit (standard text items, mostly disabled), View (Reload, Force Reload, Toggle Developer Tools, Actual Size/Zoom), Window, Help (empty).
 
 ## How to
-- **Open app settings**: click sidebar `Settings` (bottom-left). Close with the unlabeled X button at the dialog's top-right (~42x42 element listed just after the sidebar items).
-- **Change theme / default agent model**: Settings → Preferences → Theme buttons / `Agent model` popup → pick item. To close a popup without choosing, click the same popup button again (Escape doesn't work).
-- **Reach screen-recording visual defaults** (cursor, shadows, sounds, zoom): sidebar `Brand Kit` → `Screen Clips`.
-- **Per-draft actions in Library/Drafts**: `right_click` the card's unlabeled "..." AXPopUpButton (plain click is a no-op) → menu: "Move to David's Workspace", "Rename", "Make a copy", "Delete".
-- **Rename a draft**: either right-click "..." → Rename (title field becomes editable with text selected; type, Enter commits, Escape cancels) or click the inline title AXTextField on the card / sidebar row, cmd+a, type.
-- **Create things**: `New Draft` (Library/Drafts header) or sidebar `New draft`; `New Collection` (Library); `New Template` (Brand Kit → Templates).
-- **Search drafts**: click the Search AXTextField in Library/Drafts header, then type.
+
+- **Change a cursor/shadow/zoom/sound setting as the brand-wide default**: sidebar → `Brand Kit` → `Screen Clips` → operate the control. Segmented buttons (Auto Hide/Off, Hide/Show, Off/Low/Medium/High, Glide/Fixed) apply on click; sliders are AXSlider; Shadow X/Y are text fields (click, cmd+a, type).
+- **Change the same setting for one project only**: open the project from the sidebar → click `Project actions` (⋯ next to the voice popup) → `Screen Clip Settings…` → change the control → click `Done`. This does **not** touch the brand default, and the brand page does not override a project that already has its own value.
+- **Set Cursor Style**: click the Cursor Style combobox, then click the desired row — "Arrow-first", "Pointer-first" or "Original".
+- **Change project aspect ratio / performance mode / assigned brand**: Project actions ⋯ → the matching item (Widescreen 16:9 / Laptop 16:10 / Square 1:1 / Vertical 9:16; Efficiency / Default / Ultra; Brand ▸).
+- **Theme, Auto-Add Screen Zooms, agent model/effort defaults, workspace name, custom recording window sizes, integrations, invites**: sidebar → `Settings`, then close via the X at the modal's top-right.
+- **Per-chat agent effort** (vs the app default): the composer's "Effort: High" popup at the bottom of the script/agent pane.
 
 ## Dead ends & quirks
-- No app Preferences menu item and cmd+, does nothing useful — Settings only via the sidebar.
-- **Web popup menus ignore Escape.** The Agent-model style popups close by clicking the popup button again. The Library card "..." popover is worse: Escape, clicking the AXWindow (AXPress fails with -25206), and scrolling all fail; the only way out is to select a menu item (use the harmless "Rename", then Escape to cancel the inline edit).
-- Background scrolling is unavailable for this Electron window ("background_unavailable"); scroll requests on the web area fail.
-- Duplicate element sets: header controls and card rows appear twice in the AX tree (two "Your Library"/"Search"/"New Draft" entries, cards repeated). Either copy usually works; prefer the first occurrence.
-- The card "..." AXPopUpButton advertises only AXShowMenu → must use right_click.
-- Settings dialog's lower half (Workspace settings, Integrations, Team Members) reports 1x1 frames at the same y until scrolled — don't trust those coordinates.
-- Brand Kit remembers the last sub-section; after navigating away and back you may not land on the page you expect.
-- Traffic-light buttons appear as three unlabeled 16x16 AXButtons at the window's top-left — don't click them.
+
+- Cursor/shadow/zoom/sound-effect settings are **NOT** in the sidebar `Settings` modal — only `Auto-Add Screen Zooms` (app-level recording preference) is there. They live in Brand Kit → Screen Clips (brand) or Project actions ⋯ → Screen Clip Settings… (project).
+- **Escape does not close** the Settings modal or the "Screen Recording Settings" popover; use the X and `Done` respectively. Escape *does* close combobox dropdowns.
+- Clicks on menu items / web buttons sometimes no-op on the first attempt; if the observation is unchanged, re-read indices and click again.
+- While a web dropdown is open, the accessibility tree collapses to only macOS menu-bar items — the option rows are visible only in the screenshot.
+- Element indices change on every observation; never reuse an index from an earlier snapshot (a stale index once landed on an AXMenuItem "" and silently did nothing).
+- The main window reports an empty title; Help menu is empty; there is no in-app Preferences menu item.

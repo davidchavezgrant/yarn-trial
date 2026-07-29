@@ -9,24 +9,29 @@ import {
 	assertObservable,
 	auditTaskPrompt,
 	DRIVER_RULES,
+	findScopeAmbiguities,
 	findWindow,
+	loadAppMapGraph,
 	makeClient,
 	observationBlocks,
 	observe,
 	OUT,
 	resetToHome,
+	scopeWarnings,
 	stageWindowForRecording,
 	TargetNotObservableError,
 	toActionRequest,
 	verify,
 } from "./harness.js";
-import { DOM_ACT_TOOL, DOM_RULES, DomBackend } from "./dom.js";
+import { DOM_ACT_TOOL, DOM_RULES, DomBackend, FIND_TOOL } from "./dom.js";
 import type { ActionRequest, Expectation, StepRecord } from "./types.js";
 
 const MAX_STEPS = Number(process.env.AGENT_STEPS ?? 15);
+/** Free read-only page searches per run, beyond which a find costs an action. */
+const MAX_FINDS = Number(process.env.AGENT_FINDS ?? 20);
 const SETTLE_MS = 900;
 
-const systemPrompt = (rules: string): string => `You are a UI automation agent driving a macOS app through a UI driver. Each turn you receive an observation: the target window's interactive elements (addressing handle, role, label/value) and a screenshot. You perform ONE action per turn by calling the "act" tool, then the harness executes it, waits, re-observes, and reports back.
+const systemPrompt = (rules: string, vision: boolean): string => `You are a UI automation agent driving a macOS app through a UI driver. Each turn you receive an observation: the target window's interactive elements (addressing handle, role, label/value)${vision ? " and a screenshot" : "; element frames give positions — there is no screenshot"}. You perform ONE action per turn by calling the "act" tool, then the harness executes it, waits, re-observes, and reports back.
 
 ${rules}
 - Set a concrete, checkable expectation for every action: textIncludes and/or textExcludes, literal substrings checked against the window title plus all element labels and values in the NEXT observation. This is MANDATORY — an act call carrying only a prose description is rejected and NOT executed, costing you a turn. Supply it even when you are certain the action will work.
@@ -47,7 +52,10 @@ const DONE_TOOL: Anthropic.Tool = {
 			evidence: {
 				type: "object",
 				description:
-					"REQUIRED when success is true. Substring checks proving the GOAL state (not merely the last action) — run against a fresh observation. E.g. for a timezone change: textIncludes ['GMT+2'].",
+					"REQUIRED when success is true. Substring checks proving the GOAL state (not merely the last action) — run against a fresh observation. " +
+					"When the goal REPLACES one state with another, presence of the new value is NOT sufficient: apps routinely show the new value ALONGSIDE the old " +
+					"one (a preview, a secondary column, an unsaved draft), so a presence-only check passes while nothing actually changed. Pair textIncludes on the " +
+					"new value with textExcludes on the old one. E.g. changing the timezone from EDT to Paris: textIncludes ['GMT+2'] AND textExcludes ['EDT'].",
 				properties: {
 					description: { type: "string" },
 					textIncludes: { type: "array", items: { type: "string" } },
@@ -163,17 +171,21 @@ function assembleVideo(framesDir: string, times: number[], outPath: string): voi
 async function main(): Promise<void> {
 	const argv = process.argv.slice(2);
 	const record = argv.includes("--record");
+	// A/B arm: drop the screenshot from every model message. The observation becomes
+	// text-only (title + AX elements with frames); capture for recording/artifacts is
+	// unaffected. Measures what the image channel is worth in actions/tokens/correctness.
+	const vision = !argv.includes("--no-vision");
 	const backendIdx = argv.indexOf("--backend");
 	const backendKind = backendIdx >= 0 ? (argv[backendIdx + 1] ?? "ax") : "ax";
 	const args = argv.filter(
 		(a, i) =>
-			!["--record", "--hinted", "--no-reset"].includes(a) &&
+			!["--record", "--hinted", "--no-reset", "--no-vision"].includes(a) &&
 			(backendIdx < 0 || (i !== backendIdx && i !== backendIdx + 1)),
 	);
 	const task = args[0];
 	const app = args[1] ?? "Notion Calendar";
 	if (!task || !["ax", "dom"].includes(backendKind)) {
-		console.error('usage: tsx src/agent.ts "<task>" ["App Name"] [--record] [--backend ax|dom]');
+		console.error('usage: tsx src/agent.ts "<task>" ["App Name"] [--record] [--backend ax|dom] [--no-vision]');
 		console.error("--backend dom drives an Electron/browser target over CDP; launch it with --remote-debugging-port first.");
 		process.exit(1);
 	}
@@ -211,6 +223,8 @@ async function main(): Promise<void> {
 	let driverBusy = false;
 	let homeReset: string = noReset ? "skipped" : "pending";
 	let expectationRejections = 0;
+	let findCalls = 0;
+	let malformedStreak = 0;
 
 	// Window-scoped recording: poll the driver's window snapshots (which work even
 	// when the window is occluded, backgrounded, or on another Space) and assemble
@@ -229,17 +243,34 @@ async function main(): Promise<void> {
 	const grounding = loadGrounding(app);
 	// What the log records: provenance + path + content hash, not the full text — enough
 	// to pin exactly which appmap version grounded the run without bloating every log.
-	const groundingMeta = {
+	const groundingMeta: Record<string, unknown> = {
 		provenance: grounding.provenance,
 		...(grounding.path ? { path: grounding.path.replace(`${process.cwd()}/`, "") } : {}),
 		...(grounding.notes ? { sha256: createHash("sha256").update(grounding.notes).digest("hex").slice(0, 12) } : {}),
 	};
-	const basePrompt = systemPrompt(backendKind === "dom" ? DOM_RULES : DRIVER_RULES);
+	// The structured appmap rides alongside the prose one. Its job here is the scope
+	// warning: prose could not stop four ungrounded runs from silently changing a
+	// per-draft override instead of the brand default, because both satisfy a
+	// substring check. Naming each collision explicitly gives the model something
+	// specific to act on. NO_GROUNDING drops it too, so the A/B stays honest.
+	const graph = grounding.notes ? loadAppMapGraph(app) : undefined;
+	const warnings = graph ? scopeWarnings(graph) : "";
+	const ambiguities = graph ? findScopeAmbiguities(graph) : [];
+
+	const basePrompt = systemPrompt(backendKind === "dom" ? DOM_RULES : DRIVER_RULES, vision);
 	const system = grounding.notes
-		? `${basePrompt}\n\n# App grounding notes for ${app} (from a prior exploration pass — trust these to skip dead ends)\n${grounding.notes}`
+		? `${basePrompt}\n\n# App grounding notes for ${app} (from a prior exploration pass — trust these to skip dead ends)\n${grounding.notes}${warnings}`
 		: basePrompt;
 	if (grounding.notes) console.log(`loaded grounding notes for ${app} (provenance: ${grounding.provenance}, ${groundingMeta.path})`);
-	const tools: Anthropic.Tool[] = [backendKind === "dom" ? DOM_ACT_TOOL : ACT_TOOL, DONE_TOOL];
+	if (graph) {
+		groundingMeta.graph = { nodes: graph.nodes.length, edges: graph.edges.length, scopeAmbiguities: ambiguities.map((a) => a.settingKey) };
+		console.log(`loaded appmap graph: ${graph.nodes.length} nodes, ${graph.edges.length} edges`);
+		for (const a of ambiguities)
+			console.log(`  scope ambiguity: ${a.settingKey} — ${a.nodes.map((n) => `${n.id} [${n.scope}]`).join(" vs ")}`);
+	}
+	// find is DOM-only: it is the escape hatch from the semantic_v2 node budget, and the
+	// AX path has no budget to escape (get_window_state returns the whole tree).
+	const tools: Anthropic.Tool[] = backendKind === "dom" ? [DOM_ACT_TOOL, FIND_TOOL, DONE_TOOL] : [ACT_TOOL, DONE_TOOL];
 
 	try {
 		await driver.act({ kind: "tool", name: "launch_app", args: { name: app } });
@@ -253,7 +284,10 @@ async function main(): Promise<void> {
 
 		// Start from a declared home state, so a run never inherits the previous run's
 		// navigation. --no-reset opts out (e.g. deliberately resuming mid-flow).
-		if (!noReset && !dom) {
+		// Runs on BOTH backends: resetToHome uses the AX path either way, and skipping it
+		// for DOM made AX-vs-DOM comparisons uneven (one arm started from a declared home,
+		// the other from wherever the previous run stopped).
+		if (!noReset) {
 			const reset = await resetToHome(driver, win, app);
 			homeReset = reset.result;
 			console.log(`home reset: ${reset.result} — ${reset.detail}`);
@@ -308,20 +342,35 @@ async function main(): Promise<void> {
 				role: "user",
 				content: [
 					{ type: "text", text: `Task: ${task}\nTarget app: ${app}\n\nInitial observation follows.` },
-					...observationBlocks(obs),
+					...observationBlocks(obs, vision),
 				],
 			},
 		];
 
 		for (let step = 1; step <= MAX_STEPS; step++) {
-			const response = await client.messages.create({
-				model,
-				max_tokens: 16000,
-				system,
-				tools,
-				cache_control: { type: "ephemeral" },
-				messages,
-			});
+			// A provider overload can arrive as an empty body, which the SDK surfaces as a
+			// JSON parse error from inside the call — not something the malformed-content
+			// check below can see. Both failure shapes are the same transient event, so
+			// they share one backoff-and-retry path.
+			let response: Anthropic.Message;
+			try {
+				response = await client.messages.create({
+					model,
+					max_tokens: 16000,
+					system,
+					tools,
+					cache_control: { type: "ephemeral" },
+					messages,
+				});
+			} catch (err) {
+				const detail = err instanceof Error ? err.message.slice(0, 200) : String(err);
+				if (++malformedStreak >= 5) throw new Error(`5 consecutive model-call failures; last: ${detail}`);
+				const backoffMs = 2000 * 2 ** (malformedStreak - 1);
+				console.log(`    -> model call failed (${malformedStreak}/5), retrying in ${backoffMs / 1000}s: ${detail}`);
+				await new Promise((r) => setTimeout(r, backoffMs));
+				step--; // a failed call is not a step
+				continue;
+			}
 
 			usage.modelCalls++;
 			usage.inputTokens += response.usage?.input_tokens ?? 0;
@@ -330,11 +379,59 @@ async function main(): Promise<void> {
 
 			if (response.stop_reason === "refusal") throw new Error("model refused the request");
 
+			// OpenRouter can return an error payload with no content array; treating that as
+			// a well-formed message crashed the run and lost every step of work behind it.
+			if (!Array.isArray(response.content)) {
+				const detail = JSON.stringify(response).slice(0, 300);
+				// Usually a transient provider overload, so back off before retrying —
+				// three immediate retries just burn the allowance in under a second.
+				if (++malformedStreak >= 5) throw new Error(`5 consecutive malformed model responses; last: ${detail}`);
+				const backoffMs = 2000 * 2 ** (malformedStreak - 1);
+				console.log(`    -> malformed model response (${malformedStreak}/5), retrying in ${backoffMs / 1000}s: ${detail}`);
+				await new Promise((r) => setTimeout(r, backoffMs));
+				step--; // a failed call is not a step
+				continue;
+			}
+			malformedStreak = 0;
+
 			const toolUse = response.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
 			messages.push({ role: "assistant", content: response.content });
 
 			if (!toolUse) {
 				messages.push({ role: "user", content: "You must call exactly one tool (act or done)." });
+				continue;
+			}
+
+			// find is a read-only page search, not an action: it consumes a model call but
+			// not a step, so a search never costs the agent part of its action budget.
+			if (toolUse.name === "find") {
+				const q = (toolUse.input as { query: string }).query;
+				let text: string;
+				try {
+					while (driverBusy) await new Promise((r) => setTimeout(r, 50));
+					driverBusy = true;
+					const hits = await dom!.find(q);
+					driverBusy = false;
+					text = hits.length
+						? `find("${q}") matched ${hits.length}:\n` +
+							hits
+								.slice(0, 40)
+								.map((r) => `[${r.ref}] ${r.role} "${(r.name ?? "").slice(0, 80)}"${r.value && r.value !== r.name ? ` value="${r.value.slice(0, 60)}"` : ""} (${r.actions.join(",") || "no actions"}) ${r.visibility}`)
+								.join("\n")
+						: `find("${q}") matched nothing. Try a shorter or differently-worded string — matching is over role, accessible name, and visible text.`;
+				} catch (err) {
+					driverBusy = false;
+					text = `find("${q}") failed: ${err instanceof Error ? err.message.slice(0, 200) : String(err)}`;
+				}
+				console.log(`    find "${q}" -> ${text.split("\n")[0]}`);
+				findCalls++;
+				messages.push({
+					role: "user",
+					content: [{ type: "tool_result", tool_use_id: toolUse.id, content: text }],
+				});
+				// Refunding the step keeps searching free, but a model that only ever
+				// searches would loop forever — past the cap, finds start costing a step.
+				if (findCalls <= MAX_FINDS) step--;
 				continue;
 			}
 
@@ -403,8 +500,8 @@ async function main(): Promise<void> {
 				console.log(`\n=== DONE (${verdict}) after ${records.length} actions ===`);
 				console.log(input.summary);
 				const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
-				fs.writeFileSync(runLog, JSON.stringify({ task, app, backend: backendKind, grounding: groundingMeta, hintedPrompt: audit.hinted, hintReasons: audit.reasons, homeReset, success: input.success, finalCheck, verifiedSteps: records.length - unverified, unverifiedSteps: unverified, expectationRejections, summary: input.summary, elapsedSec, usage, ...(record ? { video: videoPath.replace(`${process.cwd()}/`, "") } : {}), steps: records }, null, 2));
-				console.log(`stats: ${records.length} actions, ${elapsedSec}s, ${usage.modelCalls} model calls, ${usage.outputTokens} output tokens, grounding=${groundingMeta.provenance}, hintedPrompt=${audit.hinted}, homeReset=${homeReset}`);
+				fs.writeFileSync(runLog, JSON.stringify({ task, app, backend: backendKind, vision, grounding: groundingMeta, hintedPrompt: audit.hinted, hintReasons: audit.reasons, homeReset, success: input.success, finalCheck, verifiedSteps: records.length - unverified, unverifiedSteps: unverified, expectationRejections, findCalls, summary: input.summary, elapsedSec, usage, ...(record ? { video: videoPath.replace(`${process.cwd()}/`, "") } : {}), steps: records }, null, 2));
+				console.log(`stats: ${records.length} actions, ${elapsedSec}s, ${usage.modelCalls} model calls, ${usage.outputTokens} output tokens, grounding=${groundingMeta.provenance}, vision=${vision}, hintedPrompt=${audit.hinted}, homeReset=${homeReset}`);
 				console.log(`verification: ${records.length - unverified}/${records.length} steps verified${expectationRejections ? `, ${expectationRejections} call(s) rejected for missing checks` : ""}${finalCheck ? `; final goal check: ${finalCheck.verified ? "PASSED" : "failed"} (${finalCheck.evidence?.textIncludes?.join(", ") ?? ""})` : ""}`);
 				if (audit.hinted) console.log("NOTE: prompt contained method hints — NOT a clean autonomy result.");
 				console.log(`run log: ${runLog}`);
@@ -452,7 +549,7 @@ async function main(): Promise<void> {
 			let isError = false;
 			let request: ActionRequest | null = null;
 			try {
-				request = dom ? dom.toRequest(input.action) : toActionRequest(input.action, win);
+				request = dom ? await dom.toRequest(input.action) : toActionRequest(input.action, win);
 			} catch (err) {
 				// Unsupported action: report it back so the model can pick a real one.
 				resultText = `ACTION REJECTED: ${err instanceof Error ? err.message : String(err)}`;
@@ -515,7 +612,7 @@ async function main(): Promise<void> {
 								type: "text",
 								text: `Driver result: ${resultText}\nVerification: ${verdict.verified ? "PASSED" : `FAILED — ${verdict.note}`}\n\nNew observation follows.`,
 							},
-							...observationBlocks(obs),
+							...observationBlocks(obs, vision),
 						],
 					},
 				],
@@ -523,7 +620,7 @@ async function main(): Promise<void> {
 		}
 
 		console.log(`\n=== step limit (${MAX_STEPS}) reached without done ===`);
-		fs.writeFileSync(runLog, JSON.stringify({ task, app, backend: backendKind, grounding: groundingMeta, hintedPrompt: audit.hinted, hintReasons: audit.reasons, homeReset, success: false, expectationRejections, summary: "step limit reached", elapsedSec: Math.round((Date.now() - startedAt) / 1000), usage, steps: records }, null, 2));
+		fs.writeFileSync(runLog, JSON.stringify({ task, app, backend: backendKind, vision, grounding: groundingMeta, hintedPrompt: audit.hinted, hintReasons: audit.reasons, homeReset, success: false, expectationRejections, findCalls, summary: "step limit reached", elapsedSec: Math.round((Date.now() - startedAt) / 1000), usage, steps: records }, null, 2));
 		console.log(`run log: ${runLog}`);
 	} finally {
 		if (record) {

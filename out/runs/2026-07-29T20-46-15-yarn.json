@@ -1,0 +1,167 @@
+{
+  "task": "Change the cursor style to Original",
+  "app": "Yarn",
+  "backend": "ax",
+  "vision": true,
+  "grounding": {
+    "provenance": "explore",
+    "path": "docs/appmaps/yarn.md",
+    "sha256": "898dab217917",
+    "graph": {
+      "nodes": 51,
+      "edges": 11,
+      "scopeAmbiguities": [
+        "agent-effort",
+        "auto-hide-cursor",
+        "cursor-clicks-sound",
+        "cursor-scale",
+        "cursor-style",
+        "default-zoom-level",
+        "default-zoom-type",
+        "entrance-exit-animation",
+        "keyboard-presses-sound",
+        "motion-blur",
+        "screen-window-padding",
+        "shadow-blur",
+        "shadow-opacity",
+        "shadow-spread",
+        "shadow-x-offset",
+        "shadow-y-offset",
+        "text-cursor"
+      ]
+    }
+  },
+  "hintedPrompt": false,
+  "hintReasons": [],
+  "homeReset": "reset",
+  "success": true,
+  "finalCheck": {
+    "verified": true,
+    "note": "expectation met",
+    "evidence": {
+      "description": "Brand Kit Screen Clip Settings shows Cursor Style = Original, no Pointer-first and no unsaved Save Changes button",
+      "textIncludes": [
+        "Cursor Style",
+        "Original",
+        "Screen Clip Settings"
+      ],
+      "textExcludes": [
+        "Pointer-first",
+        "Save Changes"
+      ]
+    }
+  },
+  "verifiedSteps": 3,
+  "unverifiedSteps": 1,
+  "expectationRejections": 0,
+  "findCalls": 0,
+  "summary": "Changed the brand-wide (Default Brand → Brand Kit → Screen Clips) Cursor Style from \"Pointer-first\" to \"Original\" and clicked Save Changes; the setting now reads Original with no unsaved-changes buttons. Scope changed: brand default, not a single project's override.",
+  "elapsedSec": 71,
+  "usage": {
+    "inputTokens": 10,
+    "outputTokens": 1064,
+    "cacheReadTokens": 131257,
+    "modelCalls": 5
+  },
+  "steps": [
+    {
+      "index": 1,
+      "timestamp": "2026-07-29T20:46:35.512Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 53134,
+          "window_id": 23585,
+          "element_index": 48
+        }
+      },
+      "expectation": {
+        "description": "Brand Kit page opens",
+        "textIncludes": [
+          "Brand Overview",
+          "Screen Clips"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-1.png",
+      "modelReasoning": "Cursor style scope is ambiguous; use brand-wide default in Brand Kit."
+    },
+    {
+      "index": 2,
+      "timestamp": "2026-07-29T20:46:50.240Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 53134,
+          "window_id": 23585,
+          "element_index": 100
+        }
+      },
+      "expectation": {
+        "description": "Cursor Style dropdown opens (tree may collapse to menu bar only)",
+        "textExcludes": [
+          "Cursor Scale"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "expected absent but found: Cursor Scale",
+      "screenshotFile": "agent-step-2.png",
+      "modelReasoning": "Open the cursor style dropdown to pick Original."
+    },
+    {
+      "index": 3,
+      "timestamp": "2026-07-29T20:47:03.427Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 53134,
+          "window_id": 23585,
+          "element_index": 114
+        }
+      },
+      "expectation": {
+        "description": "Cursor Style combobox now reads Original",
+        "textIncludes": [
+          "Original"
+        ],
+        "textExcludes": [
+          "Pointer-first"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-3.png",
+      "modelReasoning": "Select the Original option."
+    },
+    {
+      "index": 4,
+      "timestamp": "2026-07-29T20:47:15.501Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 53134,
+          "window_id": 23585,
+          "element_index": 85
+        }
+      },
+      "expectation": {
+        "description": "Changes saved; Save Changes/Cancel buttons disappear",
+        "textIncludes": [
+          "Original"
+        ],
+        "textExcludes": [
+          "Save Changes"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-4.png",
+      "modelReasoning": "Persist the brand-wide cursor style change."
+    }
+  ]
+}

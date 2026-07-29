@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { auditTaskPrompt, verify } from "./harness.js";
+import { auditTaskPrompt, findScopeAmbiguities, observationBlocks, scopeWarnings, verify } from "./harness.js";
+import type { ObservationBundle } from "./harness.js";
+import type { AppMap } from "./types.js";
 
 // Fixtures are synthetic, describing the CLASS of prompt rather than any specific
 // historical run, so the tests stay meaningful as tasks change.
@@ -90,4 +92,75 @@ test("verify__Passes__When__NoPrevHaystackGiven", () => {
 	// Final-state checks (done evidence) assert state, not change — no discrimination demand.
 	const result = verify({ description: "", textIncludes: ["cassidy"] }, "select voice: cassidy");
 	assert.equal(result.verified, true);
+});
+
+// --- appmap graph: the structured companion to the prose map. It earns its place by
+// catching the wrong-scope failure prose could not — on Yarn, "Cursor Style" is editable
+// brand-wide and per-draft (independent stores), and all four ungrounded runs changed the
+// per-draft one while passing verification.
+
+const yarnish: AppMap = {
+	app: "Yarn",
+	capturedAt: "2026-07-29T00:00:00.000Z",
+	provenance: "explore",
+	nodes: [
+		{ id: "brand-kit/screen-clips", title: "Screen Clip Settings", kind: "surface", scope: "brand" },
+		{ id: "brand-kit/screen-clips/cursor-style", title: "Cursor Style", kind: "control", scope: "brand", settingKey: "cursor-style" },
+		{ id: "editor/screen-clip-settings/cursor-style", title: "Cursor Style", kind: "control", scope: "document", settingKey: "cursor-style" },
+		{ id: "settings/theme", title: "Theme", kind: "control", scope: "app", settingKey: "theme" },
+	],
+	edges: [{ from: "root", to: "brand-kit/screen-clips", action: 'click "Brand Kit"' }],
+};
+
+test("findScopeAmbiguities__ReportsSetting__When__SameKeyEditableAtTwoScopes", () => {
+	const found = findScopeAmbiguities(yarnish);
+	assert.equal(found.length, 1);
+	assert.equal(found[0].settingKey, "cursor-style");
+	assert.deepEqual(found[0].nodes.map((n) => n.scope).sort(), ["brand", "document"]);
+});
+
+test("findScopeAmbiguities__IgnoresSetting__When__EditableAtOneScopeOnly", () => {
+	assert.equal(findScopeAmbiguities(yarnish).some((a) => a.settingKey === "theme"), false);
+});
+
+test("findScopeAmbiguities__ReturnsEmpty__When__NoControlsCarrySettingKeys", () => {
+	const map: AppMap = { ...yarnish, nodes: yarnish.nodes.map(({ settingKey, ...n }) => n) };
+	assert.deepEqual(findScopeAmbiguities(map), []);
+});
+
+test("scopeWarnings__NamesBothScopes__When__AmbiguityExists", () => {
+	const w = scopeWarnings(yarnish);
+	assert.match(w, /cursor-style/);
+	assert.match(w, /brand-kit\/screen-clips\/cursor-style \(brand scope\)/);
+	assert.match(w, /editor\/screen-clip-settings\/cursor-style \(document scope\)/);
+	assert.match(w, /SEPARATE stores/);
+});
+
+test("scopeWarnings__ReturnsEmpty__When__NoAmbiguities", () => {
+	assert.equal(scopeWarnings({ ...yarnish, nodes: [yarnish.nodes[3]] }), "");
+});
+
+// --no-vision A/B arm: the text block must be identical across arms so the only
+// difference the model sees is the presence of the image.
+
+const bundle: ObservationBundle = {
+	elementsText: '[3] AXButton "Save" @(10,20 80x30)',
+	haystack: "save",
+	screenshotB64: "aGk=",
+	title: "Settings",
+	appContent: 1,
+};
+
+test("observationBlocks__OmitsImageBlock__When__VisionDisabled", () => {
+	const blocks = observationBlocks(bundle, false);
+	assert.equal(blocks.length, 1);
+	assert.equal(blocks[0].type, "text");
+});
+
+test("observationBlocks__KeepsTextIdentical__When__VisionDisabled", () => {
+	const withVision = observationBlocks(bundle, true);
+	const without = observationBlocks(bundle, false);
+	assert.equal(withVision.length, 2);
+	assert.equal(withVision[1].type, "image");
+	assert.deepEqual(without[0], withVision[0]);
 });

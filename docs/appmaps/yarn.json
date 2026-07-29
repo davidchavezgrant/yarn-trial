@@ -1,0 +1,511 @@
+{
+  "app": "Yarn",
+  "capturedAt": "2026-07-29T20:45:57.706Z",
+  "provenance": "explore",
+  "proseSha256": "898dab217917",
+  "nodes": [
+    {
+      "id": "root",
+      "title": "Yarn main window (sidebar + content)",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Sidebar: workspace popup, Library, Your Drafts, project list, New draft, Invite Members, Brand Kit, Settings. Window title is empty."
+    },
+    {
+      "id": "brand-kit",
+      "title": "Brand Kit",
+      "kind": "surface",
+      "scope": "brand",
+      "notes": "Pages: Brand Overview, Templates, Workflows, Colors, Type, Screen Clips, Motion, Layout, Misc. 'Brand options' popup top-right. Brand = Default Brand."
+    },
+    {
+      "id": "brand-kit/screen-clips",
+      "title": "Brand Kit > Screen Clips ('Screen Clip Settings')",
+      "kind": "surface",
+      "scope": "brand",
+      "notes": "Brand-wide screen clip defaults; sections Cursor / Screen Display / Sound Effects / Visual Effects."
+    },
+    {
+      "id": "brand-kit/screen-clips/auto-hide-cursor",
+      "title": "Auto-Hide Cursor (brand default)",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "auto-hide-cursor",
+      "options": [
+        "Auto Hide",
+        "Off"
+      ]
+    },
+    {
+      "id": "brand-kit/screen-clips/text-cursor",
+      "title": "Text Cursor (brand default)",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "text-cursor",
+      "options": [
+        "Hide",
+        "Show"
+      ]
+    },
+    {
+      "id": "brand-kit/screen-clips/cursor-style",
+      "title": "Cursor Style (brand default)",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "cursor-style",
+      "options": [
+        "Arrow-first",
+        "Pointer-first",
+        "Original"
+      ],
+      "notes": "Combobox; observed value Pointer-first."
+    },
+    {
+      "id": "brand-kit/screen-clips/cursor-scale",
+      "title": "Cursor Scale (brand default)",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "cursor-scale",
+      "notes": "Slider, observed 1.60"
+    },
+    {
+      "id": "brand-kit/screen-clips/screen-window-padding",
+      "title": "Screen Window Padding (brand default)",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "screen-window-padding",
+      "notes": "Slider, 18.0"
+    },
+    {
+      "id": "brand-kit/screen-clips/shadow-opacity",
+      "title": "Shadow Opacity (brand default)",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "shadow-opacity",
+      "notes": "Slider, 72%"
+    },
+    {
+      "id": "brand-kit/screen-clips/shadow-blur",
+      "title": "Shadow Blur (brand default)",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "shadow-blur",
+      "notes": "Slider, 32"
+    },
+    {
+      "id": "brand-kit/screen-clips/shadow-spread",
+      "title": "Shadow Spread (brand default)",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "shadow-spread",
+      "notes": "Slider, -18"
+    },
+    {
+      "id": "brand-kit/screen-clips/shadow-x-offset",
+      "title": "Shadow X Offset (brand default)",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "shadow-x-offset",
+      "notes": "Text field, 0"
+    },
+    {
+      "id": "brand-kit/screen-clips/shadow-y-offset",
+      "title": "Shadow Y Offset (brand default)",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "shadow-y-offset",
+      "notes": "Text field, 12"
+    },
+    {
+      "id": "brand-kit/screen-clips/cursor-clicks-sound",
+      "title": "Cursor Clicks sound (brand default)",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "cursor-clicks-sound",
+      "notes": "Checkbox + volume combobox (Extra Soft)"
+    },
+    {
+      "id": "brand-kit/screen-clips/keyboard-presses-sound",
+      "title": "Keyboard Presses sound (brand default)",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "keyboard-presses-sound",
+      "notes": "Checkbox + key set combobox (Set B) + volume combobox (Extra Soft)"
+    },
+    {
+      "id": "brand-kit/screen-clips/entrance-exit-animation",
+      "title": "Entrance/Exit Animation (brand default)",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "entrance-exit-animation",
+      "notes": "Popup button, Fade Up"
+    },
+    {
+      "id": "brand-kit/screen-clips/motion-blur",
+      "title": "Motion Blur (brand default)",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "motion-blur",
+      "options": [
+        "Off",
+        "Low",
+        "Medium",
+        "High"
+      ]
+    },
+    {
+      "id": "brand-kit/screen-clips/default-zoom-type",
+      "title": "Default Zoom Type (brand default)",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "default-zoom-type",
+      "options": [
+        "Glide",
+        "Fixed"
+      ]
+    },
+    {
+      "id": "brand-kit/screen-clips/default-zoom-level",
+      "title": "Default Zoom Level (brand default)",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "default-zoom-level",
+      "notes": "Slider, 54%"
+    },
+    {
+      "id": "project",
+      "title": "Project editor",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Click a draft in the sidebar. Agent/Script tabs, voice popup, Project actions, timeline, Publish/Export."
+    },
+    {
+      "id": "project/actions-menu",
+      "title": "Project actions menu",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Items: New Agent Chat (disabled), Copy Transcript, Make a copy, Download SRT..., Screen Clip Settings..., Show Version History..., Brand > Default Brand, aspect ratio, Performance Mode, Delete."
+    },
+    {
+      "id": "project/actions-menu/aspect-ratio",
+      "title": "Aspect ratio",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "aspect-ratio",
+      "options": [
+        "Widescreen (16:9)",
+        "Laptop (16:10)",
+        "Square (1:1)",
+        "Vertical (9:16)"
+      ]
+    },
+    {
+      "id": "project/actions-menu/performance-mode",
+      "title": "Performance Mode",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "performance-mode",
+      "options": [
+        "Efficiency",
+        "Default",
+        "Ultra"
+      ]
+    },
+    {
+      "id": "project/actions-menu/brand",
+      "title": "Brand assignment (Brand > Default Brand)",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "project-brand",
+      "notes": "Submenu choosing which brand kit this project inherits from."
+    },
+    {
+      "id": "project/screen-clip-settings",
+      "title": "Per-project Screen Clip Settings popover ('Screen Recording Settings')",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Reached via Project actions > Screen Clip Settings...; same controls as Brand Kit > Screen Clips but per project; close with Done."
+    },
+    {
+      "id": "project/screen-clip-settings/auto-hide-cursor",
+      "title": "Auto-Hide Cursor (this project)",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "auto-hide-cursor",
+      "options": [
+        "Auto Hide",
+        "Off"
+      ]
+    },
+    {
+      "id": "project/screen-clip-settings/text-cursor",
+      "title": "Text Cursor (this project)",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "text-cursor",
+      "options": [
+        "Hide",
+        "Show"
+      ]
+    },
+    {
+      "id": "project/screen-clip-settings/cursor-style",
+      "title": "Cursor Style (this project)",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "cursor-style",
+      "options": [
+        "Arrow-first",
+        "Pointer-first",
+        "Original"
+      ],
+      "notes": "Observed Arrow-first while the brand default was Pointer-first - separate stores."
+    },
+    {
+      "id": "project/screen-clip-settings/cursor-scale",
+      "title": "Cursor Scale (this project)",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "cursor-scale"
+    },
+    {
+      "id": "project/screen-clip-settings/screen-window-padding",
+      "title": "Screen Window Padding (this project)",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "screen-window-padding"
+    },
+    {
+      "id": "project/screen-clip-settings/shadow-opacity",
+      "title": "Shadow Opacity (this project)",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "shadow-opacity"
+    },
+    {
+      "id": "project/screen-clip-settings/shadow-blur",
+      "title": "Shadow Blur (this project)",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "shadow-blur"
+    },
+    {
+      "id": "project/screen-clip-settings/shadow-spread",
+      "title": "Shadow Spread (this project)",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "shadow-spread"
+    },
+    {
+      "id": "project/screen-clip-settings/shadow-x-offset",
+      "title": "Shadow X Offset (this project)",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "shadow-x-offset"
+    },
+    {
+      "id": "project/screen-clip-settings/shadow-y-offset",
+      "title": "Shadow Y Offset (this project)",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "shadow-y-offset"
+    },
+    {
+      "id": "project/screen-clip-settings/cursor-clicks-sound",
+      "title": "Cursor Clicks sound (this project)",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "cursor-clicks-sound"
+    },
+    {
+      "id": "project/screen-clip-settings/keyboard-presses-sound",
+      "title": "Keyboard Presses sound (this project)",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "keyboard-presses-sound"
+    },
+    {
+      "id": "project/screen-clip-settings/entrance-exit-animation",
+      "title": "Entrance/Exit Animation (this project)",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "entrance-exit-animation"
+    },
+    {
+      "id": "project/screen-clip-settings/motion-blur",
+      "title": "Motion Blur (this project)",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "motion-blur",
+      "options": [
+        "Off",
+        "Low",
+        "Medium",
+        "High"
+      ]
+    },
+    {
+      "id": "project/screen-clip-settings/default-zoom-type",
+      "title": "Default Zoom Type (this project)",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "default-zoom-type",
+      "options": [
+        "Glide",
+        "Fixed"
+      ]
+    },
+    {
+      "id": "project/screen-clip-settings/default-zoom-level",
+      "title": "Default Zoom Level (this project)",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "default-zoom-level"
+    },
+    {
+      "id": "project/composer-effort",
+      "title": "Composer 'Effort: High' popup (this chat)",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "agent-effort",
+      "notes": "Per-chat override of the app-level Agent effort default."
+    },
+    {
+      "id": "settings",
+      "title": "Settings modal (sidebar > Settings)",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Close with the X at top-right; escape does NOT close it."
+    },
+    {
+      "id": "settings/auto-add-screen-zooms",
+      "title": "Auto-Add Screen Zooms",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "auto-add-screen-zooms",
+      "options": [
+        "On",
+        "Off"
+      ],
+      "notes": "Only screen-recording-related toggle in Settings."
+    },
+    {
+      "id": "settings/theme",
+      "title": "Theme",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "theme",
+      "options": [
+        "Dark",
+        "Light",
+        "System"
+      ],
+      "notes": "Quick switch shift+cmd+backslash."
+    },
+    {
+      "id": "settings/agent-model",
+      "title": "Agent model default",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "agent-model",
+      "notes": "Popup, observed Opus 5"
+    },
+    {
+      "id": "settings/agent-effort",
+      "title": "Agent effort default",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "agent-effort",
+      "notes": "Popup, observed High; per-chat equivalent is the composer 'Effort' popup."
+    },
+    {
+      "id": "settings/agent-fast-mode",
+      "title": "Agent Fast Mode default",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "agent-fast-mode",
+      "notes": "Checkbox, checked"
+    },
+    {
+      "id": "settings/workspace-name",
+      "title": "Workspace name",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "workspace-name",
+      "notes": "Text field 'David's Workspace', up to 65 chars"
+    },
+    {
+      "id": "settings/custom-window-sizes",
+      "title": "Custom window sizes",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "custom-window-sizes",
+      "notes": "Rows: Default 1440x897, Custom 1 1600x987; Add Size / Remove"
+    },
+    {
+      "id": "settings/integrations",
+      "title": "Integrations (Figma, Google Slides, Notion MCP, Team/Personal YouTube, Screen Studio Import)",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "integrations",
+      "notes": "Sign-in / connect buttons - externally visible, do not click."
+    }
+  ],
+  "edges": [
+    {
+      "from": "root",
+      "to": "brand-kit",
+      "action": "click \"Brand Kit\" near the bottom of the left sidebar"
+    },
+    {
+      "from": "brand-kit",
+      "to": "brand-kit/screen-clips",
+      "action": "click \"Screen Clips\" in the Brand Kit nav column"
+    },
+    {
+      "from": "root",
+      "to": "project",
+      "action": "click a draft name in the sidebar (e.g. \"YT Long - How to buy wholesale for your store\")"
+    },
+    {
+      "from": "project",
+      "to": "project/actions-menu",
+      "action": "click the \"Project actions\" popup button (right of the 'Select voice' popup)"
+    },
+    {
+      "from": "project/actions-menu",
+      "to": "project/screen-clip-settings",
+      "action": "click \"Screen Clip Settings...\" (may need a second click if the first no-ops)"
+    },
+    {
+      "from": "project/screen-clip-settings",
+      "to": "project",
+      "action": "click \"Done\" (escape does not close it)"
+    },
+    {
+      "from": "project/actions-menu",
+      "to": "project",
+      "action": "press escape to dismiss the menu"
+    },
+    {
+      "from": "root",
+      "to": "settings",
+      "action": "click \"Settings\" at the bottom of the left sidebar"
+    },
+    {
+      "from": "settings",
+      "to": "root",
+      "action": "click the X button at the modal's top-right (escape does not close it)"
+    },
+    {
+      "from": "project",
+      "to": "brand-kit",
+      "action": "click \"Brand Kit\" in the sidebar"
+    },
+    {
+      "from": "brand-kit",
+      "to": "root",
+      "action": "click \"Library\" or \"Your Drafts\" in the sidebar"
+    }
+  ]
+}

@@ -30,22 +30,57 @@ export interface StepRecord {
 	modelReasoning?: string;
 }
 
-export interface AppMapState {
+/**
+ * Structured companion to the prose appmap. Exploration emits BOTH: `docs/appmaps/<app>.md`
+ * (injected into the prompt, which the model reads well) and `<app>.json` (this shape, which
+ * code can query, diff, and validate). The prose stays the prompt input; the graph exists for
+ * the things prose cannot do.
+ *
+ * The motivating case is real: on "change the cursor style to Pointer-first", the ungrounded
+ * agent changed a per-draft override while the grounded one changed the brand-wide default,
+ * and both passed verification because the evidence check only proves *a* control reads the
+ * value, not that it is the *intended* one. Prose cannot express "this control exists at two
+ * scopes"; `scope` + `settingKey` can, and `findScopeAmbiguities()` finds them mechanically.
+ */
+export type SurfaceScope = "app" | "workspace" | "brand" | "document" | "unknown";
+
+export interface AppMapNode {
+	/** Stable slug, e.g. "brand-kit/screen-clips". */
 	id: string;
 	title: string;
-	fingerprint: string;
-	screenshotFile?: string;
+	kind: "surface" | "control";
+	/** Whose state this changes. The lever against wrong-scope success. */
+	scope: SurfaceScope;
+	/**
+	 * Present on controls only: identity of the SETTING, independent of where it is edited.
+	 * Two nodes sharing a settingKey but differing in scope are a scope ambiguity.
+	 */
+	settingKey?: string;
+	/** Observed values for enumerable controls (combobox/segmented). */
+	options?: string[];
+	notes?: string;
 }
 
 export interface AppMapEdge {
 	from: string;
-	action: string;
 	to: string;
+	/** How to get there, e.g. 'click "Brand Kit"'. Prose is fine; this is not replayed yet. */
+	action: string;
+}
+
+export interface ScopeAmbiguity {
+	settingKey: string;
+	/** Node ids that edit the same setting at different scopes. */
+	nodes: Array<{ id: string; scope: SurfaceScope }>;
 }
 
 export interface AppMap {
 	app: string;
 	capturedAt: string;
-	states: AppMapState[];
+	/** "explore" only — same provenance rule as the prose map. */
+	provenance: "explore";
+	/** sha256 prefix of the prose map written in the same pass, pairing the two artifacts. */
+	proseSha256?: string;
+	nodes: AppMapNode[];
 	edges: AppMapEdge[];
 }

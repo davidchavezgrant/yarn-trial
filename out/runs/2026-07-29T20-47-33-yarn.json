@@ -1,0 +1,166 @@
+{
+  "task": "Change the cursor style to Pointer-first",
+  "app": "Yarn",
+  "backend": "ax",
+  "vision": true,
+  "grounding": {
+    "provenance": "explore",
+    "path": "docs/appmaps/yarn.md",
+    "sha256": "898dab217917",
+    "graph": {
+      "nodes": 51,
+      "edges": 11,
+      "scopeAmbiguities": [
+        "agent-effort",
+        "auto-hide-cursor",
+        "cursor-clicks-sound",
+        "cursor-scale",
+        "cursor-style",
+        "default-zoom-level",
+        "default-zoom-type",
+        "entrance-exit-animation",
+        "keyboard-presses-sound",
+        "motion-blur",
+        "screen-window-padding",
+        "shadow-blur",
+        "shadow-opacity",
+        "shadow-spread",
+        "shadow-x-offset",
+        "shadow-y-offset",
+        "text-cursor"
+      ]
+    }
+  },
+  "hintedPrompt": false,
+  "hintReasons": [],
+  "homeReset": "reset",
+  "success": true,
+  "finalCheck": {
+    "verified": true,
+    "note": "expectation met",
+    "evidence": {
+      "description": "Brand Screen Clip Settings shows Cursor Style Pointer-first and no unsaved-changes buttons",
+      "textIncludes": [
+        "Pointer-first",
+        "Cursor Style",
+        "Screen Clip Settings"
+      ],
+      "textExcludes": [
+        "Save Changes"
+      ]
+    }
+  },
+  "verifiedSteps": 3,
+  "unverifiedSteps": 1,
+  "expectationRejections": 0,
+  "findCalls": 0,
+  "summary": "Changed Cursor Style to \"Pointer-first\" at the BRAND scope (Brand Kit → Screen Clips → Screen Clip Settings for \"Default Brand\"), then clicked Save Changes; the combobox now reads Pointer-first (previously \"Original\") and the Save/Cancel buttons are gone, indicating the change is persisted. No per-project override was touched.",
+  "elapsedSec": 77,
+  "usage": {
+    "inputTokens": 10,
+    "outputTokens": 1071,
+    "cacheReadTokens": 131239,
+    "modelCalls": 5
+  },
+  "steps": [
+    {
+      "index": 1,
+      "timestamp": "2026-07-29T20:47:52.164Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 53134,
+          "window_id": 23585,
+          "element_index": 48
+        }
+      },
+      "expectation": {
+        "description": "Brand Kit page opens with nav items",
+        "textIncludes": [
+          "Screen Clips",
+          "Brand Overview"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-1.png",
+      "modelReasoning": "Open Brand Kit to reach brand-wide Screen Clips settings."
+    },
+    {
+      "index": 2,
+      "timestamp": "2026-07-29T20:48:05.625Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 53134,
+          "window_id": 23585,
+          "element_index": 100
+        }
+      },
+      "expectation": {
+        "description": "Dropdown opens (tree may collapse to menu bar only)",
+        "textExcludes": [
+          "Shadow Y Offset"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "expected absent but found: Shadow Y Offset",
+      "screenshotFile": "agent-step-2.png",
+      "modelReasoning": "Open the Cursor Style dropdown."
+    },
+    {
+      "index": 3,
+      "timestamp": "2026-07-29T20:48:18.364Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 53134,
+          "window_id": 23585,
+          "element_index": 112
+        }
+      },
+      "expectation": {
+        "description": "Cursor Style combobox now shows Pointer-first",
+        "textIncludes": [
+          "Pointer-first"
+        ],
+        "textExcludes": [
+          "Arrow-first"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-3.png",
+      "modelReasoning": "Select Pointer-first option."
+    },
+    {
+      "index": 4,
+      "timestamp": "2026-07-29T20:48:40.023Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 53134,
+          "window_id": 23585,
+          "element_index": 85
+        }
+      },
+      "expectation": {
+        "description": "Changes saved; Save Changes/Cancel buttons disappear",
+        "textIncludes": [
+          "Pointer-first"
+        ],
+        "textExcludes": [
+          "Save Changes"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-4.png",
+      "modelReasoning": "Persist the brand-wide cursor style change."
+    }
+  ]
+}

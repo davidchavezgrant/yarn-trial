@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { Driver } from "./driver.js";
-import type { ActionRequest, Expectation } from "./types.js";
+import type { ActionRequest, AppMap, Expectation, ScopeAmbiguity, SurfaceScope } from "./types.js";
 
 export const OUT = `${process.cwd()}/out`;
 
@@ -120,11 +120,11 @@ export async function observe(driver: Driver, win: WindowRef, shotName: string):
 	};
 }
 
-export function observationBlocks(obs: ObservationBundle): Array<Anthropic.TextBlockParam | Anthropic.ImageBlockParam> {
-	return [
-		{ type: "text", text: `Window title: "${obs.title}"\nElements:\n${obs.elementsText}` },
-		{ type: "image", source: { type: "base64", media_type: "image/png", data: obs.screenshotB64 } },
-	];
+export function observationBlocks(obs: ObservationBundle, vision = true): Array<Anthropic.TextBlockParam | Anthropic.ImageBlockParam> {
+	const text: Anthropic.TextBlockParam = { type: "text", text: `Window title: "${obs.title}"\nElements:\n${obs.elementsText}` };
+	if (!vision) return [text];
+
+	return [text, { type: "image", source: { type: "base64", media_type: "image/png", data: obs.screenshotB64 } }];
 }
 
 /**
@@ -248,6 +248,60 @@ else {
 		return { staged: true, detail: `filled its current display @ ${r.frame.w}x${r.frame.h}${lowDpi}` };
 	} catch (err) {
 		return { staged: false, detail: err instanceof Error ? err.message.split("\n")[0] : String(err) };
+	}
+}
+
+/**
+ * Controls that edit the SAME setting from different scopes — the failure this graph exists
+ * to surface. Measured on Yarn: "Cursor Style" is editable brand-wide (Brand Kit ▸ Screen
+ * Clips) and per-draft (Project actions ▸ Screen Clip Settings), they are independent stores,
+ * and all four ungrounded runs silently changed the per-draft one while passing verification.
+ */
+export function findScopeAmbiguities(map: AppMap): ScopeAmbiguity[] {
+	const byKey = new Map<string, Array<{ id: string; scope: SurfaceScope }>>();
+	for (const n of map.nodes) {
+		if (!n.settingKey) continue;
+		const list = byKey.get(n.settingKey) ?? [];
+		list.push({ id: n.id, scope: n.scope });
+		byKey.set(n.settingKey, list);
+	}
+
+	const out: ScopeAmbiguity[] = [];
+	for (const [settingKey, nodes] of byKey) {
+		if (new Set(nodes.map((n) => n.scope)).size > 1) out.push({ settingKey, nodes });
+	}
+
+	return out.sort((a, b) => a.settingKey.localeCompare(b.settingKey));
+}
+
+/**
+ * Prompt text warning the agent about ambiguous settings, appended to the prose map. Prose
+ * alone did not prevent the wrong-scope changes; naming each collision explicitly, with the
+ * scope of every candidate, gives the model something it cannot skim past.
+ */
+export function scopeWarnings(map: AppMap): string {
+	const ambiguities = findScopeAmbiguities(map);
+	if (ambiguities.length === 0) return "";
+
+	const lines = ambiguities.map((a) => {
+		const where = a.nodes.map((n) => `${n.id} (${n.scope} scope)`).join(" vs ");
+
+		return `- "${a.settingKey}" can be changed in more than one place: ${where}. These are SEPARATE stores — changing one does not change the other. If the task does not say which scope it means, prefer the broadest (app/workspace/brand) default rather than a single document's override, and say in your summary which scope you changed.`;
+	});
+
+	return `\n\n# Ambiguous settings in this app (from the structured appmap — read carefully)\n${lines.join("\n")}`;
+}
+
+export function loadAppMapGraph(app: string): AppMap | undefined {
+	const path = `${process.cwd()}/docs/appmaps/${appSlug(app)}.json`;
+	if (!fs.existsSync(path)) return undefined;
+
+	try {
+		return JSON.parse(fs.readFileSync(path, "utf8")) as AppMap;
+	} catch (err) {
+		console.log(`WARNING: could not parse ${path}: ${err instanceof Error ? err.message : String(err)}`);
+
+		return undefined;
 	}
 }
 
