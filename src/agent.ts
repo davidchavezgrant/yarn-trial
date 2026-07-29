@@ -38,6 +38,14 @@ ${rules}
 - Expectations must DISCRIMINATE: at least one substring that appears (or disappears) BECAUSE of the action. A check that was already true before the action is rejected as evidence — in particular, text you typed earlier does not verify a later action.
 - If verification fails, do not repeat the same action blindly — re-read the observation, diagnose, and recover.
 
+DEMONSTRATE BY DOING. Your runs are recorded as product demos, so the video must show the outcome, not a tour of where the buttons are. Phrasings like "show me how to X", "walk me through X", "demo X" are requests to PERFORM X, end to end, leaving the app in the changed state. Navigating to a control, opening a dropdown, and describing the remaining steps in your summary is a FAILED run, however accurate the description.
+
+- If the task names no specific value ("change the cursor type" — to what?), CHOOSE a sensible one — any value different from the current one — and commit it. An unspecified value is not a reason to stop short; it is yours to pick. Say which you chose in your summary.
+- Commit the change: if there is a Save / Done / Apply control, click it, and confirm the change survived (the unsaved-changes affordance disappears, or the control still reads the new value on re-observation).
+- Your "done" evidence must prove the NEW state, so pair textIncludes on the new value with textExcludes on the old one wherever the change replaces a value.
+
+The one exception is irreversible or externally-visible actions — deleting, publishing, exporting, sending, sharing, purchasing, account changes. For those, and ONLY those, go as far as the final confirmation step WITHOUT confirming, then call done with success: true, evidence showing you reached that point, and a summary saying plainly that you stopped before the irreversible step.
+
 Call "done" when the task is complete (success: true) — you MUST attach evidence: substring checks proving the GOAL state, which the harness verifies against a fresh final observation before accepting. Call done with success: false when you are stuck after genuine recovery attempts. Always call exactly one tool per turn.`;
 
 const DONE_TOOL: Anthropic.Tool = {

@@ -1,0 +1,158 @@
+{
+  "task": "show me how to delete a draft",
+  "app": "Yarn",
+  "backend": "ax",
+  "vision": true,
+  "grounding": {
+    "provenance": "explore",
+    "path": "docs/appmaps/yarn.md",
+    "sha256": "898dab217917",
+    "graph": {
+      "nodes": 51,
+      "edges": 11,
+      "scopeAmbiguities": [
+        "agent-effort",
+        "auto-hide-cursor",
+        "cursor-clicks-sound",
+        "cursor-scale",
+        "cursor-style",
+        "default-zoom-level",
+        "default-zoom-type",
+        "entrance-exit-animation",
+        "keyboard-presses-sound",
+        "motion-blur",
+        "screen-window-padding",
+        "shadow-blur",
+        "shadow-opacity",
+        "shadow-spread",
+        "shadow-x-offset",
+        "shadow-y-offset",
+        "text-cursor"
+      ]
+    }
+  },
+  "hintedPrompt": false,
+  "hintReasons": [],
+  "homeReset": "reset",
+  "success": true,
+  "finalCheck": {
+    "verified": true,
+    "note": "expectation met",
+    "evidence": {
+      "description": "Project actions menu is open on the draft 'Untitled', with the Delete command exposed as the final step",
+      "textIncludes": [
+        "Project actions",
+        "Delete",
+        "Make a copy",
+        "Show Version History..."
+      ]
+    }
+  },
+  "verifiedSteps": 2,
+  "unverifiedSteps": 2,
+  "expectationRejections": 0,
+  "findCalls": 0,
+  "summary": "Demonstrated the delete-a-draft flow in Yarn: opened the first draft ('Untitled', Draft) from the sidebar, then clicked the Project actions ⋯ button next to the voice picker, which opened the project menu whose last item is the red 🗑 Delete command. Note: the card ⋯ menu in the Library grid did not open on click (two attempts), so the editor's Project actions menu was used instead — that is the working path. Because deleting a draft is irreversible, I stopped at the armed Delete command without clicking it; the draft is untouched and still listed in the sidebar/Library.",
+  "elapsedSec": 55,
+  "usage": {
+    "inputTokens": 10,
+    "outputTokens": 1869,
+    "cacheReadTokens": 150059,
+    "modelCalls": 5
+  },
+  "steps": [
+    {
+      "index": 1,
+      "timestamp": "2026-07-29T21:04:29.461Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 67507,
+          "window_id": 24047,
+          "element_index": 95
+        }
+      },
+      "expectation": {
+        "description": "Card context menu opens with a Delete option",
+        "textIncludes": [
+          "Delete"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "expectation met, but every check was ALREADY satisfied before the action — no evidence the action changed anything; expect substrings that appear or disappear as a RESULT of it",
+      "screenshotFile": "agent-step-1.png",
+      "modelReasoning": "Open the ⋯ menu on the first Untitled draft card to find the Delete action."
+    },
+    {
+      "index": 2,
+      "timestamp": "2026-07-29T21:04:38.352Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 67507,
+          "window_id": 24047,
+          "element_index": 95
+        }
+      },
+      "expectation": {
+        "description": "Card ⋯ menu opens showing items like Rename / Make a copy / Delete",
+        "textIncludes": [
+          "Rename"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "expected but not found: Rename",
+      "screenshotFile": "agent-step-2.png",
+      "modelReasoning": "Retry the card ⋯ menu, since first clicks often no-op in this web UI."
+    },
+    {
+      "index": 3,
+      "timestamp": "2026-07-29T21:04:47.190Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 67507,
+          "window_id": 24047,
+          "element_index": 12
+        }
+      },
+      "expectation": {
+        "description": "The draft opens in the project editor",
+        "textIncludes": [
+          "Publish",
+          "Export"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-3.png",
+      "modelReasoning": "Open a draft in the editor so I can use the documented Project actions ⋯ → Delete path."
+    },
+    {
+      "index": 4,
+      "timestamp": "2026-07-29T21:04:54.351Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 67507,
+          "window_id": 24047,
+          "element_index": 65
+        }
+      },
+      "expectation": {
+        "description": "Project actions menu opens with items including Delete",
+        "textIncludes": [
+          "Make a copy"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-4.png",
+      "modelReasoning": "Open the Project actions ⋯ menu which contains Delete."
+    }
+  ]
+}
