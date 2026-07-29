@@ -11,7 +11,8 @@
     "test": "tsx --test src/*.test.ts",
     "agent": "tsx src/agent.ts",
     "explore": "tsx src/explore.ts",
-    "build:native": "swiftc -O native/axdom.swift -o native/axdom"
+    "build:native": "swiftc -O native/axdom.swift -o native/axdom",
+    "ui": "tsx src/ui.ts"
   },
   "keywords": [],
   "author": "",
