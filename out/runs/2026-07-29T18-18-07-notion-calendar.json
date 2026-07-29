@@ -1,0 +1,169 @@
+{
+  "task": "Change my primary time zone to New York",
+  "app": "Notion Calendar",
+  "backend": "ax",
+  "grounding": {
+    "provenance": "explore",
+    "path": "docs/appmaps/notion-calendar.md",
+    "sha256": "bdaa00738ff0"
+  },
+  "hintedPrompt": false,
+  "hintReasons": [],
+  "homeReset": "reset",
+  "success": true,
+  "finalCheck": {
+    "verified": true,
+    "note": "expectation met",
+    "evidence": {
+      "description": "Grid primary time zone label now reads EDT (New York) instead of GMT+2, and event times shifted back 6 hours (e.g. current time 2:19PM instead of 8:18PM).",
+      "textIncludes": [
+        "EDT"
+      ],
+      "textExcludes": [
+        "GMT+2"
+      ]
+    }
+  },
+  "verifiedSteps": 4,
+  "unverifiedSteps": 1,
+  "expectationRejections": 0,
+  "summary": "Opened the grid's primary time zone menu (clicked the \"GMT+2\" label), chose \"Change time zone\", and selected \"Eastern Daylight Time – New York\". The grid's primary time zone label is now \"EDT\" and all event times re-rendered in New York time (current time marker 2:19PM vs 8:18PM previously).",
+  "elapsedSec": 68,
+  "usage": {
+    "inputTokens": 12,
+    "outputTokens": 1684,
+    "cacheReadTokens": 245900,
+    "modelCalls": 6
+  },
+  "steps": [
+    {
+      "index": 1,
+      "timestamp": "2026-07-29T18:18:24.074Z",
+      "action": {
+        "kind": "tool",
+        "name": "press_key",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "key": ",",
+          "modifiers": [
+            "cmd"
+          ],
+          "delivery_mode": "foreground"
+        }
+      },
+      "expectation": {
+        "description": "Settings modal opens",
+        "textIncludes": [
+          "Settings · Notion Calendar"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-1.png",
+      "modelReasoning": "Time zone setting lives in Settings ▸ General."
+    },
+    {
+      "index": 2,
+      "timestamp": "2026-07-29T18:18:39.513Z",
+      "action": {
+        "kind": "tool",
+        "name": "press_key",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "key": "escape",
+          "delivery_mode": "foreground"
+        }
+      },
+      "expectation": {
+        "description": "Settings closes, back to calendar",
+        "textIncludes": [
+          "Jul 26 – Aug 1, 2026 · Notion Calendar"
+        ],
+        "textExcludes": [
+          "Calendar navigation"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-2.png",
+      "modelReasoning": "Time zones are configured on the grid, not in Settings."
+    },
+    {
+      "index": 3,
+      "timestamp": "2026-07-29T18:18:47.528Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "element_index": 15
+        }
+      },
+      "expectation": {
+        "description": "A time zone picker/menu opens",
+        "textIncludes": [
+          "time zone"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-3.png",
+      "modelReasoning": "Clicking the primary time zone label on the grid should open the time zone selector."
+    },
+    {
+      "index": 4,
+      "timestamp": "2026-07-29T18:18:55.300Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "element_index": 480
+        }
+      },
+      "expectation": {
+        "description": "Time zone search list opens",
+        "textIncludes": [
+          "Search"
+        ],
+        "textExcludes": [
+          "Remove time zone from list"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-4.png",
+      "modelReasoning": "Choose \"Change time zone\" to pick New York."
+    },
+    {
+      "index": 5,
+      "timestamp": "2026-07-29T18:19:03.570Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "element_index": 480
+        }
+      },
+      "expectation": {
+        "description": "Primary time zone becomes New York; grid label changes",
+        "textIncludes": [
+          "GMT-4"
+        ],
+        "textExcludes": [
+          "GMT+2"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "expected but not found: GMT-4",
+      "screenshotFile": "agent-step-5.png",
+      "modelReasoning": "Select New York as the primary time zone."
+    }
+  ]
+}

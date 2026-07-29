@@ -1,0 +1,141 @@
+{
+  "task": "Change the cursor style to Arrow-first",
+  "app": "Yarn",
+  "backend": "ax",
+  "grounding": {
+    "provenance": "explore",
+    "path": "docs/appmaps/yarn.md",
+    "sha256": "8a271aee4769"
+  },
+  "hintedPrompt": false,
+  "hintReasons": [],
+  "homeReset": "reset",
+  "success": true,
+  "finalCheck": {
+    "verified": true,
+    "note": "expectation met",
+    "evidence": {
+      "description": "Cursor Style combobox reads Arrow-first with no pending save banner",
+      "textIncludes": [
+        "Cursor Style",
+        "Arrow-first"
+      ],
+      "textExcludes": [
+        "Save Changes",
+        "Pointer-first"
+      ]
+    }
+  },
+  "verifiedSteps": 4,
+  "unverifiedSteps": 0,
+  "expectationRejections": 0,
+  "summary": "Navigated Brand Kit → Screen Clips, opened the Cursor Style combobox, selected Arrow-first, and clicked Save Changes. The setting now reads Arrow-first with the unsaved-changes buttons gone.",
+  "elapsedSec": 45,
+  "usage": {
+    "inputTokens": 10,
+    "outputTokens": 1015,
+    "cacheReadTokens": 107021,
+    "modelCalls": 5
+  },
+  "steps": [
+    {
+      "index": 1,
+      "timestamp": "2026-07-29T18:57:57.105Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 32
+        }
+      },
+      "expectation": {
+        "description": "Brand Kit page opens with sub-nav",
+        "textIncludes": [
+          "Brand Kit",
+          "Screen Clips"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-1.png",
+      "modelReasoning": "Cursor style is in Brand Kit → Screen Clips."
+    },
+    {
+      "index": 2,
+      "timestamp": "2026-07-29T18:58:03.824Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 84
+        }
+      },
+      "expectation": {
+        "description": "Dropdown opens showing options",
+        "textIncludes": [
+          "Arrow-first"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-2.png",
+      "modelReasoning": "Open the Cursor Style dropdown to select Arrow-first."
+    },
+    {
+      "index": 3,
+      "timestamp": "2026-07-29T18:58:12.922Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 110
+        }
+      },
+      "expectation": {
+        "description": "Combobox value becomes Arrow-first and menu closes",
+        "textIncludes": [
+          "Arrow-first"
+        ],
+        "textExcludes": [
+          "Pointer-first"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-3.png",
+      "modelReasoning": "Select Arrow-first from the open dropdown."
+    },
+    {
+      "index": 4,
+      "timestamp": "2026-07-29T18:58:22.020Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 69
+        }
+      },
+      "expectation": {
+        "description": "Change saved; Save Changes/Cancel buttons disappear while Cursor Style stays Arrow-first",
+        "textIncludes": [
+          "Arrow-first"
+        ],
+        "textExcludes": [
+          "Save Changes"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-4.png",
+      "modelReasoning": "Persist the cursor style change."
+    }
+  ]
+}

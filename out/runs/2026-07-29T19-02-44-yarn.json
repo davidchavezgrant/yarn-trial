@@ -1,0 +1,365 @@
+{
+  "task": "Create a new draft, then open the Script tab and write a two-scene script introducing a coffee ordering app called Brew, then set the voice to Cassidy. Do not rename the draft. Do not publish, export, or record anything.",
+  "app": "Yarn",
+  "backend": "ax",
+  "grounding": {
+    "provenance": "explore",
+    "path": "docs/appmaps/yarn.md",
+    "sha256": "8a271aee4769"
+  },
+  "hintedPrompt": false,
+  "hintReasons": [],
+  "homeReset": "reset",
+  "success": true,
+  "finalCheck": {
+    "verified": true,
+    "note": "expectation met",
+    "evidence": {
+      "description": "Draft still Untitled, Script tab shows two scenes about Brew coffee app, voice picker reads Cassidy",
+      "textIncludes": [
+        "Select voice: Cassidy",
+        "Meet Brew, the coffee ordering app",
+        "Pick your size, milk, and pickup time",
+        "Script"
+      ],
+      "textExcludes": [
+        "Select voice: Sarah"
+      ]
+    }
+  },
+  "verifiedSteps": 10,
+  "unverifiedSteps": 3,
+  "expectationRejections": 0,
+  "summary": "Created a new draft via the Library \"New Draft\" button (draft left named \"Untitled\"). On the Script tab I wrote a two-scene script introducing Brew: Scene 1 — \"Meet Brew, the coffee ordering app that gets your morning right. Open Brew and your favorite cafe is one tap away.\" and Scene 2 (created with the timeline's Add scene control) — \"Pick your size, milk, and pickup time, pay in the app, and Brew tells you the moment your coffee is ready.\" Both scenes appear as separate scene blocks in the script pane and timeline. Then I opened the voice picker and selected Cassidy; the control now reads \"Select voice: Cassidy\". Nothing was published, exported, or recorded, and the draft was not renamed.",
+  "elapsedSec": 159,
+  "usage": {
+    "inputTokens": 28,
+    "outputTokens": 5643,
+    "cacheReadTokens": 829744,
+    "modelCalls": 14
+  },
+  "steps": [
+    {
+      "index": 1,
+      "timestamp": "2026-07-29T19:03:00.127Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 50
+        }
+      },
+      "expectation": {
+        "description": "A new draft editor opens",
+        "textExcludes": [
+          "Your Library"
+        ],
+        "textIncludes": [
+          "Script"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-1.png",
+      "modelReasoning": "Click New Draft to create a new draft."
+    },
+    {
+      "index": 2,
+      "timestamp": "2026-07-29T19:03:07.743Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 46
+        }
+      },
+      "expectation": {
+        "description": "Script tab active with script editor area",
+        "textIncludes": [
+          "Type script or # for new scene"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "expectation met, but every check was ALREADY satisfied before the action — no evidence the action changed anything; expect substrings that appear or disappear as a RESULT of it",
+      "screenshotFile": "agent-step-2.png",
+      "modelReasoning": "Explicitly select the Script tab."
+    },
+    {
+      "index": 3,
+      "timestamp": "2026-07-29T19:03:17.139Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 55
+        }
+      },
+      "expectation": {
+        "description": "Script editor focused (caret in editor)",
+        "textIncludes": [
+          "Type script or # for new scene"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "expectation met, but every check was ALREADY satisfied before the action — no evidence the action changed anything; expect substrings that appear or disappear as a RESULT of it",
+      "screenshotFile": "agent-step-3.png",
+      "modelReasoning": "Focus the script text area before typing."
+    },
+    {
+      "index": 4,
+      "timestamp": "2026-07-29T19:03:27.239Z",
+      "action": {
+        "kind": "tool",
+        "name": "type_text",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "text": "# Scene 1: Meet Brew",
+          "element_index": 55
+        }
+      },
+      "expectation": {
+        "description": "Scene 1 heading text appears in script editor",
+        "textIncludes": [
+          "Scene 1"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "action errored",
+      "screenshotFile": "agent-step-4.png",
+      "modelReasoning": "Type the first scene heading using the # scene syntax."
+    },
+    {
+      "index": 5,
+      "timestamp": "2026-07-29T19:03:36.881Z",
+      "action": {
+        "kind": "tool",
+        "name": "press_key",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "key": "escape",
+          "delivery_mode": "foreground"
+        }
+      },
+      "expectation": {
+        "description": "Comment popup dismissed",
+        "textExcludes": [
+          "e@Agent ne 1: Meet Brew"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-5.png",
+      "modelReasoning": "Dismiss the accidental comment popup."
+    },
+    {
+      "index": 6,
+      "timestamp": "2026-07-29T19:03:48.395Z",
+      "action": {
+        "kind": "tool",
+        "name": "set_value",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 55,
+          "value": "# Scene 1: Meet Brew"
+        }
+      },
+      "expectation": {
+        "description": "Script editor contains Scene 1 text",
+        "textIncludes": [
+          "Scene 1: Meet Brew"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-6.png",
+      "modelReasoning": "Try setting the value of the script text area directly since typing didn't reach it."
+    },
+    {
+      "index": 7,
+      "timestamp": "2026-07-29T19:04:04.081Z",
+      "action": {
+        "kind": "tool",
+        "name": "set_value",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 55,
+          "value": "# Scene 1: Meet Brew\nMeet Brew, the coffee ordering app that gets your morning right. Open Brew, and your favorite cafe is one tap away.\n# Scene 2: Order in seconds\nPick your size, milk, and pickup time, pay in the app, and Brew tells you the moment your coffee is ready."
+        }
+      },
+      "expectation": {
+        "description": "Both scenes present in script",
+        "textIncludes": [
+          "Scene 2: Order in seconds",
+          "coffee ordering app"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-7.png",
+      "modelReasoning": "Write the full two-scene script into the script editor."
+    },
+    {
+      "index": 8,
+      "timestamp": "2026-07-29T19:04:26.625Z",
+      "action": {
+        "kind": "tool",
+        "name": "set_value",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 55,
+          "value": "# Scene 1: Meet Brew - Meet Brew, the coffee ordering app that gets your morning right. Open Brew and your favorite cafe is one tap away."
+        }
+      },
+      "expectation": {
+        "description": "Script contains only scene 1 text now",
+        "textIncludes": [
+          "Meet Brew - Meet Brew"
+        ],
+        "textExcludes": [
+          "Scene 2: Order in seconds"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-8.png",
+      "modelReasoning": "Reset the editor to only scene 1 content so I can add scene 2 as a separate scene block."
+    },
+    {
+      "index": 9,
+      "timestamp": "2026-07-29T19:04:36.596Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 121
+        }
+      },
+      "expectation": {
+        "description": "A second scene block/text area is created in the script",
+        "textIncludes": [
+          "Type script or # for new scene"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-9.png",
+      "modelReasoning": "Use the Add scene button to create a second scene so I can write scene 2 separately."
+    },
+    {
+      "index": 10,
+      "timestamp": "2026-07-29T19:04:48.366Z",
+      "action": {
+        "kind": "tool",
+        "name": "set_value",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 67,
+          "value": "Pick your size, milk, and pickup time, pay in the app, and Brew tells you the moment your coffee is ready."
+        }
+      },
+      "expectation": {
+        "description": "Second scene now contains scene 2 narration",
+        "textIncludes": [
+          "Pick your size, milk, and pickup time"
+        ],
+        "textExcludes": [
+          "Type script or # for new scene"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-10.png",
+      "modelReasoning": "Write scene 2 narration into the newly created empty scene."
+    },
+    {
+      "index": 11,
+      "timestamp": "2026-07-29T19:04:57.116Z",
+      "action": {
+        "kind": "tool",
+        "name": "set_value",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 66,
+          "value": "Meet Brew, the coffee ordering app that gets your morning right. Open Brew and your favorite cafe is one tap away."
+        }
+      },
+      "expectation": {
+        "description": "Scene 1 narration cleaned of the # prefix",
+        "textIncludes": [
+          "Meet Brew, the coffee ordering app"
+        ],
+        "textExcludes": [
+          "# Scene 1: Meet Brew"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-11.png",
+      "modelReasoning": "Remove the literal \"# Scene 1:\" markup from scene 1's narration text."
+    },
+    {
+      "index": 12,
+      "timestamp": "2026-07-29T19:05:05.822Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 49
+        }
+      },
+      "expectation": {
+        "description": "Voice picker menu opens listing voices including Cassidy",
+        "textIncludes": [
+          "Cassidy"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-12.png",
+      "modelReasoning": "Open the voice selector to choose Cassidy."
+    },
+    {
+      "index": 13,
+      "timestamp": "2026-07-29T19:05:14.345Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 159
+        }
+      },
+      "expectation": {
+        "description": "Voice set to Cassidy",
+        "textIncludes": [
+          "Select voice: Cassidy"
+        ],
+        "textExcludes": [
+          "Select voice: Sarah"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-13.png",
+      "modelReasoning": "Select the Cassidy voice."
+    }
+  ]
+}

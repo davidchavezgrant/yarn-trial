@@ -1,4 +1,5 @@
 import { Driver } from "./driver.js";
+import { assertObservable } from "./harness.js";
 
 function section(title: string, payload: unknown): void {
 	console.log(`\n=== ${title} ===`);

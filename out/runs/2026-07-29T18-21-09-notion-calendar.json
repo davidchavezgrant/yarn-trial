@@ -1,0 +1,210 @@
+{
+  "task": "Change my primary time zone to New York",
+  "app": "Notion Calendar",
+  "backend": "ax",
+  "grounding": {
+    "provenance": "none"
+  },
+  "hintedPrompt": false,
+  "hintReasons": [],
+  "homeReset": "reset",
+  "success": true,
+  "finalCheck": {
+    "verified": true,
+    "note": "expectation met",
+    "evidence": {
+      "description": "Grid primary time zone label now shows EDT (Eastern Daylight Time – New York) instead of GMT+2, and event times are displayed in New York time (GMT−4)",
+      "textIncludes": [
+        "EDT"
+      ],
+      "textExcludes": [
+        "GMT+2"
+      ]
+    }
+  },
+  "verifiedSteps": 3,
+  "unverifiedSteps": 4,
+  "expectationRejections": 0,
+  "summary": "Opened the primary time zone context menu on the calendar grid's time zone label (GMT+2), chose \"Change time zone\", and selected \"Eastern Daylight Time – New York\". The grid's primary time zone label now reads EDT and all event times shifted accordingly (e.g. Dan Berman 9–10 PM → 3–4 PM). An accidental side-effect edit to the \"Dan Berman\" event description was discarded so no event data was modified.",
+  "elapsedSec": 86,
+  "usage": {
+    "inputTokens": 16,
+    "outputTokens": 2948,
+    "cacheReadTokens": 422937,
+    "modelCalls": 8
+  },
+  "steps": [
+    {
+      "index": 1,
+      "timestamp": "2026-07-29T18:21:27.151Z",
+      "action": {
+        "kind": "tool",
+        "name": "press_key",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "key": "escape",
+          "delivery_mode": "foreground"
+        }
+      },
+      "expectation": {
+        "description": "Context menu closes",
+        "textExcludes": [
+          "Remove time zone from list"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-1.png",
+      "modelReasoning": "Close the context menu before opening Settings."
+    },
+    {
+      "index": 2,
+      "timestamp": "2026-07-29T18:21:34.231Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "element_index": 520
+        }
+      },
+      "expectation": {
+        "description": "Settings window opens",
+        "textIncludes": [
+          "Settings"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "expectation met, but every check was ALREADY satisfied before the action — no evidence the action changed anything; expect substrings that appear or disappear as a RESULT of it",
+      "screenshotFile": "agent-step-2.png",
+      "modelReasoning": "Open Notion Calendar Settings to find the primary time zone setting."
+    },
+    {
+      "index": 3,
+      "timestamp": "2026-07-29T18:21:43.516Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "element_index": 478
+        }
+      },
+      "expectation": {
+        "description": "Settings dialog closes",
+        "textExcludes": [
+          "Calendar navigation"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-3.png",
+      "modelReasoning": "Settings says time zones are configured on the grid, so close settings."
+    },
+    {
+      "index": 4,
+      "timestamp": "2026-07-29T18:21:51.421Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "element_index": 480
+        }
+      },
+      "expectation": {
+        "description": "A time zone search/picker opens",
+        "textIncludes": [
+          "Search"
+        ],
+        "textExcludes": [
+          "Remove time zone from list"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "action errored",
+      "screenshotFile": "agent-step-4.png",
+      "modelReasoning": "Click \"Change time zone\" in the context menu on the primary GMT+2 timezone label."
+    },
+    {
+      "index": 5,
+      "timestamp": "2026-07-29T18:22:00.316Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "element_index": 480
+        }
+      },
+      "expectation": {
+        "description": "Primary time zone becomes New York (GMT-4)",
+        "textIncludes": [
+          "GMT-4"
+        ],
+        "textExcludes": [
+          "GMT+2"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "expected but not found: GMT-4",
+      "screenshotFile": "agent-step-5.png",
+      "modelReasoning": "Select New York as the primary time zone from the picker list."
+    },
+    {
+      "index": 6,
+      "timestamp": "2026-07-29T18:22:14.220Z",
+      "action": {
+        "kind": "tool",
+        "name": "press_key",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "key": "escape",
+          "delivery_mode": "foreground"
+        }
+      },
+      "expectation": {
+        "description": "Event panel closes, grid still shows EDT",
+        "textIncludes": [
+          "EDT"
+        ],
+        "textExcludes": [
+          "Participants and Rooms"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "expected absent but found: Participants and Rooms",
+      "screenshotFile": "agent-step-6.png",
+      "modelReasoning": "Close the accidentally opened event panel without modifying it."
+    },
+    {
+      "index": 7,
+      "timestamp": "2026-07-29T18:22:24.269Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "element_index": 502
+        }
+      },
+      "expectation": {
+        "description": "Change discarded, dialog closes",
+        "textExcludes": [
+          "Edit repeat event"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-7.png",
+      "modelReasoning": "Discard the accidental edit to the Dan Berman event so only the time zone change persists."
+    }
+  ]
+}

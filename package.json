@@ -8,6 +8,7 @@
   "scripts": {
     "probe": "tsx src/probe.ts",
     "typecheck": "tsc",
+    "test": "tsx --test src/*.test.ts",
     "agent": "tsx src/agent.ts",
     "explore": "tsx src/explore.ts"
   },

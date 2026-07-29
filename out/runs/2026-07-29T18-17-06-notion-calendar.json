@@ -1,0 +1,169 @@
+{
+  "task": "Change my primary time zone to Paris",
+  "app": "Notion Calendar",
+  "backend": "ax",
+  "grounding": {
+    "provenance": "explore",
+    "path": "docs/appmaps/notion-calendar.md",
+    "sha256": "bdaa00738ff0"
+  },
+  "hintedPrompt": false,
+  "hintReasons": [],
+  "homeReset": "reset",
+  "success": true,
+  "finalCheck": {
+    "verified": true,
+    "note": "expectation met",
+    "evidence": {
+      "description": "Grid primary time zone label now shows GMT+2 (Paris / Central European Summer Time) instead of EDT, and event times shifted +6h",
+      "textIncludes": [
+        "GMT+2"
+      ],
+      "textExcludes": [
+        "EDT"
+      ]
+    }
+  },
+  "verifiedSteps": 4,
+  "unverifiedSteps": 1,
+  "expectationRejections": 0,
+  "summary": "Clicked the primary time zone label (EDT) on the calendar grid → \"Change time zone\" → selected \"GMT+02:00 Central European Summer Time – Paris\". The grid's primary time zone label now reads GMT+2 and all event times shifted accordingly (e.g. current time indicator moved from 2:17 PM to 8:17 PM), confirming the primary time zone is Paris.",
+  "elapsedSec": 61,
+  "usage": {
+    "inputTokens": 12,
+    "outputTokens": 1799,
+    "cacheReadTokens": 245870,
+    "modelCalls": 6
+  },
+  "steps": [
+    {
+      "index": 1,
+      "timestamp": "2026-07-29T18:17:23.824Z",
+      "action": {
+        "kind": "tool",
+        "name": "press_key",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "key": ",",
+          "modifiers": [
+            "cmd"
+          ],
+          "delivery_mode": "foreground"
+        }
+      },
+      "expectation": {
+        "description": "Settings modal opens",
+        "textIncludes": [
+          "Settings · Notion Calendar"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-1.png",
+      "modelReasoning": "Open Settings to reach the General pane's Time zones section."
+    },
+    {
+      "index": 2,
+      "timestamp": "2026-07-29T18:17:34.434Z",
+      "action": {
+        "kind": "tool",
+        "name": "press_key",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "key": "escape",
+          "delivery_mode": "foreground"
+        }
+      },
+      "expectation": {
+        "description": "Settings closes, back to calendar",
+        "textIncludes": [
+          "Jul 26 – Aug 1, 2026 · Notion Calendar"
+        ],
+        "textExcludes": [
+          "Calendar navigation"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-2.png",
+      "modelReasoning": "Time zones are configured on the grid, so close Settings."
+    },
+    {
+      "index": 3,
+      "timestamp": "2026-07-29T18:17:42.155Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "element_index": 15
+        }
+      },
+      "expectation": {
+        "description": "Clicking EDT label opens a time zone picker/menu",
+        "textIncludes": [
+          "time zone"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-3.png",
+      "modelReasoning": "The primary time zone is configured on the grid via the timezone label."
+    },
+    {
+      "index": 4,
+      "timestamp": "2026-07-29T18:17:49.935Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "element_index": 480
+        }
+      },
+      "expectation": {
+        "description": "A time zone search field/list opens",
+        "textIncludes": [
+          "Search"
+        ],
+        "textExcludes": [
+          "Remove time zone from list"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-4.png",
+      "modelReasoning": "Choose \"Change time zone\" to pick Paris."
+    },
+    {
+      "index": 5,
+      "timestamp": "2026-07-29T18:17:57.996Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "element_index": 484
+        }
+      },
+      "expectation": {
+        "description": "Grid time zone label changes from EDT to CEST",
+        "textIncludes": [
+          "CEST"
+        ],
+        "textExcludes": [
+          "Central European Summer Time – Paris"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "expected but not found: CEST",
+      "screenshotFile": "agent-step-5.png",
+      "modelReasoning": "Select Paris as the primary time zone."
+    }
+  ]
+}

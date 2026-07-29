@@ -1,41 +1,48 @@
-// Notion Calendar (Electron/web app) — grounding notes
+<!-- provenance: explore | app: Notion Calendar | date: 2026-07-29 | actions: 20 | findings: 12 -->
+<!-- Written by src/explore.ts. DO NOT HAND-EDIT: edits make this a curated recipe, not exploration output — move such notes to docs/recipes/<app>.md instead. -->
 
 ## Layout
-- **Main window** ("<date range> · Notion Calendar"), 3 panes:
-  - **Left sidebar** (toggle with `` ` `` or "Hide sidebar" button @~276,40): mini-month table with ▲/▼ month arrows (@374,88 / @400,88), "Scheduling" row (+ eye button), "Meet with…" field, calendar list ("me@davidgrant.info" *Default*, "Holidays in United States"), "Add calendar account", "Add Notion database", "Notion", help "?" bottom-left.
-  - **Center grid**: header shows month/year, day columns, "All-day" row, "+" (create event) at ~301,112, timezone label (EDT), red now-line. Event chips are AXStaticText (click works despite AXPress warning).
-  - **Right context panel** (toggle button @1470,41): default shows "Welcome to Notion Calendar" checklist + "Useful shortcuts"; switches to **Event detail** when an event is clicked, or **Create event** draft when a new event is started. Close panel content with the X at ~1470,110.
-- **Top bar**: avatar (D), view picker button "Week" (@1000,41), "Today", ‹ / › week nav, "Search events" field (@1234,41).
-- **Menu bar**: Notion Calendar (About / Check for Updates… / **Settings…** / Quit), Edit (Undo, Cut/Copy/Paste, **Delete**, Select All Visible, **Duplicate** — Delete/Duplicate enabled only when an event is selected), View (Default Hour Size, Zoom Hours In/Out, Interface Scale, Reload, Toggle Developer Tools, Toggle Full Screen), Window, Help. A menu-bar-extra shows the upcoming meeting ("Upcoming in N min", "Start transcription").
-- **Settings** (modal overlay inside the window; open via menu **Notion Calendar ▸ Settings…**; close with X @~1293,146 or escape). Left nav (AXStaticText rows, click them — the "no AXPress" warning is wrong):
-  - **General**: Calendar view (Weekends, Declined events, Week numbers toggles; "Start week on:" = Sunday), Calendar navigation ("Press T to:" = Go to today), Meetings ("Show upcoming meeting in context panel" = 4 hours before), Language, Time format (12-hour), Time zones (+ "Ask to change time zone to new locations"), Location ("Open location links in:" Google Maps), Theme (Auto/Light/Dark radios), System startup ("Open calendar"). Scroll inside the modal for lower sections.
-  - **Profile** (not opened), **Notifications**: macOS notifications (System Preferences link), Default event reminders (only a "Google Calendar Settings" external link — per-calendar reminders are NOT editable in-app), Upcoming meeting notifications ("Show upcoming meeting notification" = 1 min before; "Play sound…" = Blip).
-  - **Menu bar**: "Menu bar calendar" toggle, "Include events:" (3 days), All-day events / Events without participants / Events without conferencing-location toggles, "Preview upcoming event in menu bar" (12 hours before), Event title / Event time toggles, System-wide shortcut recorders (show/hide menu bar calendar = control⌘K, join upcoming meeting = control⌘J).
-  - **Conferencing** (not opened).
-  - **Calendar accounts ▸ me@davidgrant.info** (Google Calendar): Default Notion workspace ("Connect workspace"), Default conferencing dropdown, "Use join and transcribe AI meeting notes shortcut" dropdown, Calendars list, Remove account ▸ Disconnect (disabled).
-  - **Add calendar account**, **Notion workspaces ▸ Add Notion workspace**.
-- **⌘K command palette** (needs delivery_mode foreground): field "Type a command…"; groups & shortcuts — Calendar: Create event… (C), Meet with… (F), Show teammate calendar… (P), Create recurring scheduling link…, Create one-off scheduling link… (S), Add Notion database… (O). Navigation: Go to date… (.), Go to today (T), Left-align today (⌥T), Next/prev week (J/K), Search events (/ or ⌘F). Time zones: Travel to time zone… (Z), Show additional time zones…. App: Show menu bar calendar (⌃⌘K), Hide sidebar (`), Set theme…. Calendars: Hide "<calendar>" calendar. View: Start week on…, Day view (1/D), Month view (M), Set number of displayed days…, Select all visible (⌘A), Default hour size (⇧⌘0), Zoom hours in/out (⇧⌘. / ⇧⌘,), Hide weekends (⇧⌘E), Hide declined events (⇧⌘D), Show week numbers. Settings & help: Invite…, Get mobile app, Show keyboard shortcuts (?), Go to settings, Support & feedback (G then F). Accounts: Add Google Calendar account, Manage calendar accounts, Log out. Notion Calendar: Check for update, About.
-- **View picker menu** (click "Week"): Day (1 or D), Week (0 or W ✓), Month (M), "Number of days ›", "View settings ›".
+
+Notion Calendar is an Electron web app: everything (incl. Settings) lives inside ONE window; the window **title changes** to reflect the active surface (`Jul 26 – Aug 1, 2026 · Notion Calendar`, `Settings · Notion Calendar`, `Menu bar settings · …`, `<Event title> · …`). Use the title to verify navigation.
+
+**Top bar (right→left):** avatar/profile button (~1182,49) · view picker button labelled with current view ("Week", ~1218,46) · "Today" · prev/next arrows (1373 / 1404) · "Search" button (1452,46) · right-panel toggle (1688,46).
+**Top bar (left):** window traffic lights · "Hide sidebar" (80,45) · search icon (172,45) · new-event/compose icon (202,45).
+
+**Left sidebar (~0–240 px):** mini month calendar (`July 2026`, chevrons at 178/204,93; each day is an AXButton) → **Scheduling** row (+ button at 208,329; eye at ~197,273) → "Meet with…" text field → calendar accounts group: `me@davidgrant.info` (account header), calendar rows `me@davidgrant.info Default` and `Holidays in United States` → "Add calendar account" → "Add Notion database" → "Notion" section → help "?" bottom-left.
+
+**Right context panel** (toggle 1688,46): by default shows "Welcome to Notion Calendar" onboarding checklist (Use ⌘K command palette / Connect another calendar / Connect Notion workspace / Create scheduling link) + "Useful shortcuts" list. Selecting an event replaces it with the **Event detail** editor. Close the onboarding card with the X at (1688,115).
+
+**Settings modal** (⌘, foreground, or menu Notion Calendar ▸ Settings…): left nav *Account* = General, Profile, Notifications, Menu bar, Conferencing; *Calendar accounts* = me@davidgrant.info, Add calendar account; *Notion workspaces* = Add Notion workspace. Close: X at (1304,225) or escape (foreground).
+- **General:** Weekends / Declined events / Week numbers toggles; "Start week on:" (Sunday); "Press T to:" (Go to today); "Show upcoming meeting in context panel:" (4 hours before meeting); then Language (English), Time format (12-hour), Time zones + "Ask to change time zone to new locations", Location ("Open location links in:" Google Maps), Theme (Auto/Light/Dark radios), System startup ("Open calendar").
+- **Notifications:** macOS notifications (→ System Preferences link), Default event reminders (only a link to Google Calendar Settings), Upcoming meeting notification timing (1 min before meeting) + sound (Blip).
+- **Menu bar:** "Menu bar calendar" toggle, Include events (3 days), All-day events / Events without participants / Events without conferencing-location toggles, "Preview upcoming event in menu bar" (12 hours before event), Event title / Event time, and global shortcut recorder fields (control⌘K show menu-bar calendar, control⌘J join meeting).
+- **Conferencing:** Google Meet "Connected by default"; Zoom [Connect]; Custom video link [Add]; default conferencing is set per calendar account.
+- **Calendar account page (me@davidgrant.info / Google Calendar):** Default Notion workspace [Connect workspace], Default conferencing dropdown, "Use join and transcribe AI meeting notes shortcut" (No meetings), Calendars list, Remove account ▸ Disconnect (disabled).
+
+**⌘K command palette** (field "Type a command…"): Calendar — Create event… (C), Meet with… (F), Show teammate calendar… (P), Create recurring scheduling link…, Create one-off scheduling link… (S), Add Notion database… (O). Navigation — Go to date… (.), Go to today (T), Left-align today (⌥T), next/prev week (J/K), Search events (/ or ⌘F). Time zones — Travel to time zone… (Z), Show additional time zones…. App — Show menu bar calendar (⌃⌘K), Hide sidebar (`), Set theme…. Calendars — Hide "<calendar>" calendar. View — Start week on…, Display day view (1/D), Display month view (M), Set number of displayed days…, Select all visible (⌘A), Default hour size (⇧⌘0), Zoom hours in/out (⇧⌘. / ⇧⌘,), Hide weekends (⇧⌘E), Hide declined events (⇧⌘D), Show week numbers. Settings & help — Invite…, Get mobile app, Show keyboard shortcuts (?), Go to settings (⌘,), Support & feedback (G then F). Accounts — Add Google Calendar account, Manage calendar accounts, Log out. Notion Calendar — Check for update, About.
+
+**Mac menu bar:** Notion Calendar (About / Check for Updates… / Settings… / Quit), Edit (Undo, Cut/Copy/Paste, Delete, Select All Visible, Duplicate — Delete/Duplicate enabled only when an event is selected), View (Default Hour Size, Zoom Hours In/Out, Interface Scale, Reload, Toggle Developer Tools, Toggle Full Screen), Window, Help (Learn more, Notion Calendar, Settings…).
 
 ## How to
-- **Open Settings**: click menu bar "Notion Calendar" ▸ "Settings…" (element list exposes these AXMenuItems directly). Switch panes by clicking the nav labels (General / Profile / Notifications / Menu bar / Conferencing / account email). Close: escape (foreground).
-- **Change a setting**: open Settings ▸ correct pane, then click the AXCheckBox (toggles) or the dropdown AXButton (e.g. "Sunday", "4 hours before meeting", "Blip"). Revert by clicking again / re-selecting.
-- **Switch calendar view**: press `d`/`w`/`m` (or `1`–`9` for N days), or click "Week" button and choose Day/Week/Month. Submenus ("Number of days", "View settings") need hover — clicking those rows just closes the menu.
-- **Navigate dates**: `t` = today, `j`/`k` = next/prev week, `.` = Go to date, ‹/› buttons, or click a day in the mini month.
-- **Open an event**: click its chip in the grid → right panel becomes the Event editor (title, start/end time, date, "Propose new time", timezone/location, participants + RSVP Yes/No/Maybe, "Add participant or room", "Add meeting note", conferencing/Zoom, links, description, calendar picker, Busy, Default visibility, Reminders). Escape closes the panel.
-- **Event actions**: right-click the event chip → color swatches, RSVP (E then Y/N/M), Email participants (E then E), Join Zoom meeting (⌘J), Open attachments ›, Cut/Copy/Duplicate (⌘X/⌘C/⌘D), Remove (delete, destructive).
-- **Create an event**: press `c` (or ⌘K ▸ "Create event…", or the "+" at grid top-left). Fill the "Title" field, adjust the time/date fields, then click elsewhere / press return to keep it. NOTE: the event is created instantly (see quirks).
-- **Delete an event you created**: select it, then menu Edit ▸ Delete (toast "Event deleted" + Undo button appears bottom-center; click Undo to restore).
-- **Hide/show a calendar**: hover its sidebar row → two small buttons appear at the right (~x=383 and ~x=404 on the row); either toggles visibility. Equivalent: ⌘K ▸ "Hide '<calendar>' calendar".
-- **Search events**: click the "Search events" field top-right, or press `/` / ⌘F.
-- **Change the primary time zone** (verified sequence): the timezone lives on the GRID, not in Settings (Settings ▸ General ▸ Time zones only has the "Ask to change…" checkbox). Right-click the timezone label in the grid header gutter (shows "EDT"/"GMT+2", ~@345,113) → menu: "Change time zone" / "Rename" / "Remove time zone from list" → click "Change time zone" → a picker opens with a search field PRE-FILLED with the current city → click the field, press cmd+a, type the city (e.g. "Paris") → click the matching result row (AXStaticText). Verify: the gutter label changes (e.g. EDT → GMT+2) and the now-line/today highlight shift. Alternative: ⌘K ▸ "Travel to time zone… (Z)".
+
+- **Open Settings:** `press_key ,` with modifiers `[cmd]`, delivery_mode **foreground**. Switch panes by clicking the nav labels (they are AXStaticText and warn "does not advertise AXPress" — the click works; verify via window title). Close with escape (foreground).
+- **Open command palette:** `press_key k` + `[cmd]`, foreground. Type to filter, Enter to run, escape to close.
+- **Change view:** click the view button labelled "Week" (top bar) → choose Day / Week / Month; or press D / W / M / 1. "Number of days ›" and "View settings ›" are submenus that need hover (AXPress on them just closes the menu — use ⌘K commands like "Set number of displayed days…" instead).
+- **Open an event:** click the event's title text on the grid → right panel becomes the Event editor (title changes to the event name). Fields are AXTextFields: title, start time, end time, date, time zone, "Add participant or room", "Reminders". Edit pattern: click field → `cmd+a` → type. Buttons: Propose new time, RSVP Yes/No/Maybe, Add meeting note (+ chevron), conferencing row, calendar row, "Busy", "Default visibility". Deselect with escape.
+- **Event actions:** right_click the event → menu with color swatches, RSVP Yes/No/Maybe (E then Y/N/M), Email participants (E then E), Join Google Meet meeting (⌘J), Block on calendar, Cut/Copy/Duplicate (⌘X/⌘C/⌘D), **Remove (delete — destructive)**. Escape (foreground) closes it.
+- **Create event:** press `c` (or ⌘K → "Create event…"), or click the compose icon at (202,45).
+- **Go to a date:** press `.` (Go to date…) or click a day in the sidebar mini-month; "Today" button / `t` returns to today.
+- **Scheduling links:** click sidebar "Scheduling" → flyout with [Create recurring link] / [Create one-off link] (S). Escape closes the flyout.
+- **Search events:** click "Search" (1452,46) or `/` / ⌘F.
+- **Toggle a calendar's visibility:** hover the calendar row in the sidebar → click the small button at the row's right edge (~x=208). Click again to restore.
 
 ## Dead ends & quirks
-- **⌘, does NOT open Settings** (no-op); use the Notion Calendar menu item. (The palette lists "Go to settings ⌘,", but the keystroke didn't work through the driver.)
-- Many rows are `AXStaticText` reporting "does not advertise AXPress (AXShowMenu…)" — the click usually still works (Settings nav, event chips, palette items). Verify via the window title, which reflects the current surface ("Settings · …", "Notification settings · …", "Create event · …", "<event name> · …").
-- **Background scroll is unavailable** for this Electron window; use `delivery_mode: "foreground"` for scroll and for escape/⌘K.
-- Do NOT batch a `record` call in the same block as an `act` call — the act's observation comes back empty ("...") and you waste a turn recovering.
-- **Pressing `c` immediately creates+saves an untitled 30-minute event; escape does not discard it.** Clean up with Edit ▸ Delete.
-- Right-clicking a sidebar calendar row does **not** open a context menu; it only reveals the hover buttons.
-- Per-calendar default reminders are not in-app (only a Google Calendar web link in Settings ▸ Notifications).
-- "Disconnect" account button is disabled; scheduling-link creation and account/log-out actions exist in ⌘K — avoid (externally visible).
+
+- **Do not batch `record` with `act` in the same tool block** — the act is silently dropped (output `...`, nothing happens). Issue one `act` per block.
+- Most web-content elements report "does not advertise AXPress (actions: AXShowMenu…)"; plain `click` still works. Only true context menus need `right_click` (events do; sidebar calendar rows do NOT — right-click just reveals their hover buttons).
+- Elements below the visible fold report **1px-high frames** (Settings General below "Meetings", palette rows past ~10). They're still clickable by index, but scroll or filter for reliability.
+- Sidebar calendar row's right-hand button **immediately hides that calendar** (no menu/confirmation) and all its events vanish; click it again to unhide. There is no color/settings context menu on calendar rows.
+- Per-calendar default reminders are NOT in-app (Notifications pane only links to Google Calendar Settings). Default conferencing/default calendar live on the **calendar account** page, not in General.
+- "Disconnect" for the calendar account is disabled. Avoid Zoom [Connect], "Add calendar account", "Add Notion workspace", "Invite…", "Log out" — external/irreversible.
+- Escape and ⌘-shortcuts must use `delivery_mode: "foreground"`.
+- Selecting an event replaces the onboarding panel; pressing escape / deselecting brings the "Welcome to Notion Calendar" panel back.

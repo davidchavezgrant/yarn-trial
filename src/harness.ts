@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import fs from "node:fs";
 import { Driver } from "./driver.js";
-import type { ActionRequest } from "./types.js";
+import type { ActionRequest, Expectation } from "./types.js";
 
 export const OUT = `${process.cwd()}/out`;
 
@@ -15,6 +15,8 @@ export interface ObservationBundle {
 	haystack: string;
 	screenshotB64: string;
 	title: string;
+	/** Count of non-menu-bar AX elements. 0 means the app is not addressable right now. */
+	appContent: number;
 }
 
 export function appSlug(app: string): string {
@@ -41,6 +43,39 @@ export async function findWindow(driver: Driver, app: string): Promise<WindowRef
 	if (!win) throw new Error(`no window found for app "${app}"`);
 
 	return { pid: win.pid, windowId: win.window_id };
+}
+
+/**
+ * A window on an inactive macOS Space (e.g. because another app is fullscreen) still
+ * appears in the window list and every driver call still succeeds — but Chromium has
+ * suspended the app: no app-content AX elements, no screenshot. The failure looks
+ * like a healthy app, so detect it explicitly instead of letting the caller flail
+ * against a menu-bar-only tree. See LIMITATIONS.md §1.
+ */
+export class TargetNotObservableError extends Error {
+	constructor(app: string, detail: string) {
+		super(
+			`"${app}" is running but not observable (${detail}).\n` +
+				`Most likely it is on an inactive macOS Space — another app is fullscreen, or the\n` +
+				`window is on a different desktop. Programmatic activation cannot fix this; bring the\n` +
+				`app onto the active Space (click it in the Dock or ⌘-Tab to it), then re-run.`,
+		);
+		this.name = "TargetNotObservableError";
+	}
+}
+
+const isAppContent = (e: any) => !String(e.role ?? "").startsWith("AXMenu");
+
+export async function assertObservable(driver: Driver, win: WindowRef, app: string): Promise<void> {
+	const state = await driver.act({
+		kind: "tool",
+		name: "get_window_state",
+		args: { pid: win.pid, window_id: win.windowId },
+	});
+	const elements: any[] = JSON.parse(state.structuredJson ?? "{}").elements ?? [];
+	const content = elements.filter(isAppContent).length;
+	if (content === 0)
+		throw new TargetNotObservableError(app, `${elements.length} AX elements, none of them app content`);
 }
 
 export async function observe(driver: Driver, win: WindowRef, shotName: string): Promise<ObservationBundle> {
@@ -71,11 +106,16 @@ export async function observe(driver: Driver, win: WindowRef, shotName: string):
 
 	const title = structured.window?.title ?? "";
 
+	// The driver reports success but writes no file when the window isn't composited.
+	if (!fs.existsSync(shotPath))
+		throw new TargetNotObservableError(title || "target", "the driver could not capture the window");
+
 	return {
 		elementsText: lines.join("\n"),
 		haystack: `${title}\n${haystackParts.join("\n")}`.toLowerCase(),
 		screenshotB64: fs.readFileSync(shotPath).toString("base64"),
 		title,
+		appContent: elements.filter(isAppContent).length,
 	};
 }
 
@@ -86,15 +126,176 @@ export function observationBlocks(obs: ObservationBundle): Array<Anthropic.TextB
 	];
 }
 
-export function toActionRequest(a: any, win: WindowRef): ActionRequest {
+/**
+ * Per-app "home" state: where a run must start so results are comparable.
+ *
+ * A run that begins wherever the last run happened to stop is not a measurement — it
+ * inherits that run's navigation for free. (Measured: the Yarn cursor task took 3 actions
+ * starting on the settings page it ends on, vs 4 from the app's home view — the difference
+ * is entirely the navigation step the warm start skipped.)
+ *
+ * `label` is matched against element labels in the observation; the first match is clicked
+ * with foreground delivery. Apps absent from this map get no reset, and the run log records
+ * `homeReset: "none"` so the omission is visible rather than silent.
+ */
+const APP_HOME: Record<string, { label: string; description: string }> = {
+	yarn: { label: "Library", description: "left-rail Library view" },
+	"notion-calendar": { label: "Today", description: "current week, no modal open" },
+};
+
+export type HomeResetResult = "reset" | "already-home" | "none" | "failed";
+
+export async function resetToHome(
+	driver: Driver,
+	win: WindowRef,
+	app: string,
+): Promise<{ result: HomeResetResult; detail: string }> {
+	const home = APP_HOME[appSlug(app)];
+	if (!home) return { result: "none", detail: `no home state declared for "${app}"` };
+
+	const obs = await observe(driver, win, "home-reset-probe");
+	const line = obs.elementsText.split("\n").find((l) => l.includes(`"${home.label}"`));
+	if (!line) return { result: "failed", detail: `home control "${home.label}" not present` };
+
+	const index = Number(line.match(/^\[(\d+)\]/)?.[1]);
+	if (!Number.isFinite(index)) return { result: "failed", detail: `could not parse index from: ${line}` };
+
+	await driver.act({
+		kind: "tool",
+		name: "click",
+		args: { pid: win.pid, window_id: win.windowId, element_index: index, delivery_mode: "foreground" },
+	});
+	await new Promise((r) => setTimeout(r, 1200));
+
+	return { result: "reset", detail: `clicked "${home.label}" → ${home.description}` };
+}
+
+export interface VerifyResult {
+	verified: boolean;
+	note: string;
+}
+
+/**
+ * Check an expectation against the post-action observation text.
+ *
+ * Two ways to fail beyond a plain substring miss, both discovered by auditing real run
+ * logs (2026-07-29):
+ * - An expectation with no textIncludes/textExcludes used to pass vacuously — 2–6 steps
+ *   per historical run were "verified" by an unfalsifiable prose description.
+ * - A substring already on screen BEFORE the action passes the presence check while
+ *   proving nothing about the action (e.g. text the agent itself typed two steps ago).
+ *   When `prevHaystack` is supplied, at least one check must discriminate: an include
+ *   absent before, or an exclude present before. Final-state checks (done) pass no
+ *   prevHaystack — there the claim is about state, not change.
+ */
+export function verify(expectation: Expectation, haystack: string, prevHaystack?: string): VerifyResult {
+	const includes = expectation.textIncludes ?? [];
+	const excludes = expectation.textExcludes ?? [];
+	if (includes.length === 0 && excludes.length === 0)
+		return { verified: false, note: "no checkable expectation (textIncludes/textExcludes)" };
+
+	const missing = includes.filter((t) => !haystack.includes(t.toLowerCase()));
+	const present = excludes.filter((t) => haystack.includes(t.toLowerCase()));
+	if (missing.length || present.length) {
+		const parts: string[] = [];
+		if (missing.length) parts.push(`expected but not found: ${missing.join(", ")}`);
+		if (present.length) parts.push(`expected absent but found: ${present.join(", ")}`);
+
+		return { verified: false, note: parts.join("; ") };
+	}
+
+	if (prevHaystack !== undefined) {
+		const discriminating =
+			includes.some((t) => !prevHaystack.includes(t.toLowerCase())) ||
+			excludes.some((t) => prevHaystack.includes(t.toLowerCase()));
+		if (!discriminating)
+			return {
+				verified: false,
+				note:
+					"expectation met, but every check was ALREADY satisfied before the action — no evidence " +
+					"the action changed anything; expect substrings that appear or disappear as a RESULT of it",
+			};
+	}
+
+	return { verified: true, note: "expectation met" };
+}
+
+/**
+ * Task prompts must state the GOAL only. Method knowledge — which control to click, what
+ * key to press, which driver call to use — belongs in the appmap (a declared, measurable
+ * input), never in the task text, where it silently inflates results and makes a run look
+ * autonomous when it was dictated. See docs/research/2026-07-29-prompt-hygiene.md.
+ *
+ * Detection is deliberately narrow and high-precision: driver/AX vocabulary, and
+ * interaction-mechanic verbs (click/press/keystroke), which describe HOW to act rather
+ * than WHAT to achieve. Outcome verbs ("create a draft", "set the voice", "open the
+ * Script tab") are legitimate task specification and do not trip it.
+ */
+const DRIVER_VOCAB = /\b(set_value|type_text|press_key|right_click|double_click|element_index|delivery_mode|AXPress|AX[A-Z]\w+)\b/g;
+const MECHANIC_VERBS = /\b(click|clicks|clicking|clicked|right[- ]click\w*|double[- ]click\w*|press|presses|pressing|keystroke\w*|select all|scroll\w*|hover\w*|drag\w*|cmd\+|ctrl\+|option\+|shift\+|⌘)/gi;
+
+export interface PromptAudit {
+	hinted: boolean;
+	reasons: string[];
+}
+
+export function auditTaskPrompt(task: string): PromptAudit {
+	const reasons: string[] = [];
+	const vocab = [...new Set(task.match(DRIVER_VOCAB) ?? [])];
+	const mechanics = [...new Set((task.match(MECHANIC_VERBS) ?? []).map((m) => m.toLowerCase()))];
+	if (vocab.length > 0) reasons.push(`names driver/AX internals: ${vocab.join(", ")}`);
+	if (mechanics.length >= 2) reasons.push(`describes interaction mechanics, not just the goal: ${mechanics.join(", ")}`);
+
+	return { hinted: reasons.length > 0, reasons };
+}
+
+export const SUPPORTED_ACTIONS = [
+	"click",
+	"right_click",
+	"double_click",
+	"type_text",
+	"press_key",
+	"set_value",
+	"scroll",
+	"wait",
+] as const;
+
+export class UnsupportedActionError extends Error {
+	constructor(name: string) {
+		super(`unsupported action "${name}" — supported actions are: ${SUPPORTED_ACTIONS.join(", ")}`);
+		this.name = "UnsupportedActionError";
+	}
+}
+
+/**
+ * Translate a model-proposed action into a driver call. Returns null for actions that
+ * need no driver call (`wait` — the caller's settle delay is the action). Throws
+ * UnsupportedActionError for anything unrecognized; callers must report that back to
+ * the model as a failed step rather than aborting the run.
+ */
+export function toActionRequest(a: any, win: WindowRef): ActionRequest | null {
 	const base = { pid: win.pid, window_id: win.windowId };
 	switch (a.name) {
+		case "wait":
+			return null;
 		case "click":
 		case "right_click":
 		case "double_click":
 			return { kind: "tool", name: a.name, args: { ...base, element_index: a.element_index } };
 		case "type_text":
-			return { kind: "tool", name: "type_text", args: { ...base, text: a.text, ...(a.delivery_mode ? { delivery_mode: a.delivery_mode } : {}) } };
+			// element_index directs the write to a specific field — without it the driver
+			// types at whatever has focus, and a preceding no-op click means keystrokes
+			// land on the window and trigger the app's global shortcuts.
+			return {
+				kind: "tool",
+				name: "type_text",
+				args: {
+					...base,
+					text: a.text,
+					...(a.element_index !== undefined ? { element_index: a.element_index } : {}),
+					...(a.delivery_mode ? { delivery_mode: a.delivery_mode } : {}),
+				},
+			};
 		case "press_key":
 			return {
 				kind: "tool",
@@ -108,7 +309,8 @@ export function toActionRequest(a: any, win: WindowRef): ActionRequest {
 				},
 			};
 		case "set_value":
-			return { kind: "tool", name: "set_value", args: { ...base, element_index: a.element_index, text: a.text } };
+			// The driver's parameter is `value`, not `text`.
+			return { kind: "tool", name: "set_value", args: { ...base, element_index: a.element_index, value: a.text } };
 		case "scroll":
 			return {
 				kind: "tool",
@@ -116,7 +318,7 @@ export function toActionRequest(a: any, win: WindowRef): ActionRequest {
 				args: { ...base, direction: a.direction, ...(a.amount ? { amount: a.amount } : {}), ...(a.element_index !== undefined ? { element_index: a.element_index } : {}) },
 			};
 		default:
-			throw new Error(`unknown action ${a.name}`);
+			throw new UnsupportedActionError(a.name);
 	}
 }
 
@@ -130,12 +332,9 @@ export const ACT_TOOL: Anthropic.Tool = {
 			action: {
 				type: "object",
 				properties: {
-					name: {
-						type: "string",
-						enum: ["click", "right_click", "double_click", "type_text", "press_key", "set_value", "scroll"],
-					},
-					element_index: { type: "integer", description: "Target element from the current observation (click/right_click/double_click/set_value, optional focus target for press_key)." },
-					text: { type: "string", description: "For type_text/set_value." },
+					name: { type: "string", enum: [...SUPPORTED_ACTIONS] },
+					element_index: { type: "integer", description: "Target element from the current observation. Required for click/right_click/double_click/set_value. STRONGLY recommended for type_text (directs the text into that field instead of relying on focus) and available for press_key." },
+					text: { type: "string", description: "For type_text/set_value (the text/value to write)." },
 					key: { type: "string", description: "For press_key: return, tab, escape, up, down, a-z, 0-9, etc." },
 					modifiers: { type: "array", items: { type: "string" }, description: "For press_key: cmd, shift, option, ctrl." },
 					delivery_mode: { type: "string", enum: ["background", "foreground"] },
@@ -148,10 +347,11 @@ export const ACT_TOOL: Anthropic.Tool = {
 				type: "object",
 				properties: {
 					description: { type: "string" },
-					textIncludes: { type: "array", items: { type: "string" }, description: "Substrings that should appear in the next observation." },
-					textExcludes: { type: "array", items: { type: "string" }, description: "Substrings that should NOT appear in the next observation." },
+					textIncludes: { type: "array", items: { type: "string" }, description: "REQUIRED unless textExcludes is given. Substrings that should appear in the next observation (window title, element labels, or values). Prose here is useless — use literal strings the app will render." },
+					textExcludes: { type: "array", items: { type: "string" }, description: "Substrings that should NOT appear in the next observation. Satisfies the checkable-expectation requirement on its own." },
 				},
 				required: ["description"],
+				description: "You MUST supply textIncludes and/or textExcludes. An act call with only a prose description is REJECTED WITHOUT BEING EXECUTED, because the harness cannot verify it.",
 			},
 		},
 		required: ["action", "expectation"],

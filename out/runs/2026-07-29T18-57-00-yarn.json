@@ -1,0 +1,143 @@
+{
+  "task": "Change the cursor style to Pointer-first",
+  "app": "Yarn",
+  "backend": "ax",
+  "grounding": {
+    "provenance": "explore",
+    "path": "docs/appmaps/yarn.md",
+    "sha256": "8a271aee4769"
+  },
+  "hintedPrompt": false,
+  "hintReasons": [],
+  "homeReset": "reset",
+  "success": true,
+  "finalCheck": {
+    "verified": true,
+    "note": "expectation met",
+    "evidence": {
+      "description": "Cursor Style shows Pointer-first and change is committed",
+      "textIncludes": [
+        "Cursor Style",
+        "Pointer-first"
+      ],
+      "textExcludes": [
+        "Save Changes",
+        "Arrow-first"
+      ]
+    }
+  },
+  "verifiedSteps": 4,
+  "unverifiedSteps": 0,
+  "expectationRejections": 0,
+  "summary": "Navigated to Brand Kit → Screen Clips, opened the Cursor Style combobox, selected \"Pointer-first\", and clicked Save Changes. Cursor Style now reads \"Pointer-first\" with no pending Save/Cancel buttons.",
+  "elapsedSec": 42,
+  "usage": {
+    "inputTokens": 10,
+    "outputTokens": 1013,
+    "cacheReadTokens": 106186,
+    "modelCalls": 5
+  },
+  "steps": [
+    {
+      "index": 1,
+      "timestamp": "2026-07-29T18:57:15.784Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 32
+        }
+      },
+      "expectation": {
+        "description": "Brand Kit page opens",
+        "textIncludes": [
+          "Brand Kit"
+        ],
+        "textExcludes": [
+          "Your Library"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-1.png",
+      "modelReasoning": "Cursor style setting lives in Brand Kit → Screen Clips."
+    },
+    {
+      "index": 2,
+      "timestamp": "2026-07-29T18:57:22.859Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 84
+        }
+      },
+      "expectation": {
+        "description": "Dropdown opens showing options",
+        "textIncludes": [
+          "Pointer-first"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-2.png",
+      "modelReasoning": "Open the Cursor Style dropdown to select Pointer-first."
+    },
+    {
+      "index": 3,
+      "timestamp": "2026-07-29T18:57:29.145Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 112
+        }
+      },
+      "expectation": {
+        "description": "Cursor Style combobox now shows Pointer-first and menu closed",
+        "textIncludes": [
+          "Pointer-first"
+        ],
+        "textExcludes": [
+          "Arrow-first"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-3.png",
+      "modelReasoning": "Select the Pointer-first option."
+    },
+    {
+      "index": 4,
+      "timestamp": "2026-07-29T18:57:37.665Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 69
+        }
+      },
+      "expectation": {
+        "description": "Change saved; Save/Cancel buttons disappear, Cursor Style stays Pointer-first",
+        "textIncludes": [
+          "Pointer-first"
+        ],
+        "textExcludes": [
+          "Save Changes"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-4.png",
+      "modelReasoning": "Persist the cursor style change."
+    }
+  ]
+}

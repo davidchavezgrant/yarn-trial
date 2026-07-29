@@ -1,0 +1,281 @@
+{
+  "task": "Change my primary time zone to Paris",
+  "app": "Notion Calendar",
+  "backend": "ax",
+  "grounding": {
+    "provenance": "none"
+  },
+  "hintedPrompt": false,
+  "hintReasons": [],
+  "homeReset": "reset",
+  "success": true,
+  "finalCheck": {
+    "verified": true,
+    "note": "expectation met",
+    "evidence": {
+      "description": "Grid gutter time zone label now shows GMT+2 (Paris) instead of EDT, and event times shifted +6h (e.g. DEATH DO US PART now 10:40 – 11:40 PM)",
+      "textIncludes": [
+        "GMT+2",
+        "10:40 – 11:40 PM"
+      ],
+      "textExcludes": [
+        "EDT"
+      ]
+    }
+  },
+  "verifiedSteps": 6,
+  "unverifiedSteps": 4,
+  "expectationRejections": 0,
+  "summary": "Opened the grid time-zone label context menu (EDT), chose \"Change time zone\", and typed \"Paris\" into the time zone picker. The primary time zone is now Paris: the gutter label reads GMT+2, the context menu's \"Change time zone\" value reads \"Paris\", and all event times shifted from EDT to Paris time (current time went from 2:20 PM to 8:20 PM).",
+  "elapsedSec": 113,
+  "usage": {
+    "inputTokens": 22,
+    "outputTokens": 3295,
+    "cacheReadTokens": 836763,
+    "modelCalls": 11
+  },
+  "steps": [
+    {
+      "index": 1,
+      "timestamp": "2026-07-29T18:19:31.290Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "element_index": 520
+        }
+      },
+      "expectation": {
+        "description": "Settings window opens",
+        "textIncludes": [
+          "Settings"
+        ],
+        "textExcludes": [
+          "Welcome to Notion Calendar"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "expected absent but found: Welcome to Notion Calendar",
+      "screenshotFile": "agent-step-1.png",
+      "modelReasoning": "Open Settings to find time zone preference."
+    },
+    {
+      "index": 2,
+      "timestamp": "2026-07-29T18:19:42.878Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "element_index": 478
+        }
+      },
+      "expectation": {
+        "description": "Settings modal closes",
+        "textExcludes": [
+          "Calendar navigation"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-2.png",
+      "modelReasoning": "Close the Settings dialog to access the grid time zone label."
+    },
+    {
+      "index": 3,
+      "timestamp": "2026-07-29T18:19:50.733Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "element_index": 15
+        }
+      },
+      "expectation": {
+        "description": "A time zone picker/menu appears",
+        "textIncludes": [
+          "time zone"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-3.png",
+      "modelReasoning": "Clicking the EDT timezone label in the grid gutter should open the time zone picker."
+    },
+    {
+      "index": 4,
+      "timestamp": "2026-07-29T18:19:58.200Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "element_index": 480
+        }
+      },
+      "expectation": {
+        "description": "Time zone search picker opens",
+        "textIncludes": [
+          "Search"
+        ],
+        "textExcludes": [
+          "Remove time zone from list"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-4.png",
+      "modelReasoning": "Open the time zone picker to select Paris."
+    },
+    {
+      "index": 5,
+      "timestamp": "2026-07-29T18:20:07.418Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "element_index": 569
+        }
+      },
+      "expectation": {
+        "description": "Time zone search field focused",
+        "textIncludes": [
+          "New York"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "expectation met, but every check was ALREADY satisfied before the action — no evidence the action changed anything; expect substrings that appear or disappear as a RESULT of it",
+      "screenshotFile": "agent-step-5.png",
+      "modelReasoning": "Focus the time zone search field before typing."
+    },
+    {
+      "index": 6,
+      "timestamp": "2026-07-29T18:20:19.849Z",
+      "action": {
+        "kind": "tool",
+        "name": "type_text",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "text": "Paris",
+          "element_index": 569
+        }
+      },
+      "expectation": {
+        "description": "Search results show Paris",
+        "textIncludes": [
+          "Paris"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "action errored",
+      "screenshotFile": "agent-step-6.png",
+      "modelReasoning": "Search for Paris in the time zone picker."
+    },
+    {
+      "index": 7,
+      "timestamp": "2026-07-29T18:20:32.780Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "element_index": 478
+        }
+      },
+      "expectation": {
+        "description": "Settings modal closes",
+        "textExcludes": [
+          "macOS notifications"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-7.png",
+      "modelReasoning": "The Settings modal is intercepting keystrokes; close it."
+    },
+    {
+      "index": 8,
+      "timestamp": "2026-07-29T18:20:41.450Z",
+      "action": {
+        "kind": "tool",
+        "name": "type_text",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "text": "Paris",
+          "element_index": 478
+        }
+      },
+      "expectation": {
+        "description": "Search results list Paris",
+        "textIncludes": [
+          "Paris"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "expected but not found: Paris",
+      "screenshotFile": "agent-step-8.png",
+      "modelReasoning": "Type Paris into the now-unobstructed time zone search field."
+    },
+    {
+      "index": 9,
+      "timestamp": "2026-07-29T18:20:52.675Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "element_index": 15
+        }
+      },
+      "expectation": {
+        "description": "Context menu shows the current time zone name",
+        "textIncludes": [
+          "Change time zone"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-9.png",
+      "modelReasoning": "Verify which time zone was actually selected (should be Paris)."
+    },
+    {
+      "index": 10,
+      "timestamp": "2026-07-29T18:21:01.011Z",
+      "action": {
+        "kind": "tool",
+        "name": "press_key",
+        "args": {
+          "pid": 95923,
+          "window_id": 22433,
+          "key": "escape",
+          "delivery_mode": "foreground"
+        }
+      },
+      "expectation": {
+        "description": "Context menu closes, grid shows GMT+2",
+        "textIncludes": [
+          "GMT+2"
+        ],
+        "textExcludes": [
+          "Remove time zone from list"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-10.png",
+      "modelReasoning": "Dismiss the context menu to leave the app in a clean state."
+    }
+  ]
+}
