@@ -1,0 +1,278 @@
+{
+  "task": "Change the cursor style to Arrow-first",
+  "app": "Yarn",
+  "backend": "ax",
+  "grounding": {
+    "provenance": "none"
+  },
+  "hintedPrompt": false,
+  "hintReasons": [],
+  "homeReset": "reset",
+  "success": true,
+  "finalCheck": {
+    "verified": true,
+    "note": "expectation met",
+    "evidence": {
+      "description": "Screen Recording Settings panel shows Cursor Style set to Arrow-first",
+      "textIncludes": [
+        "Cursor Style",
+        "Arrow-first"
+      ],
+      "textExcludes": [
+        "Pointer-first"
+      ]
+    }
+  },
+  "verifiedSteps": 7,
+  "unverifiedSteps": 3,
+  "expectationRejections": 0,
+  "summary": "Opened a draft's Project actions → Screen Clip Settings (Screen Recording Settings panel), and set Cursor Style via the dropdown (options: Arrow-first, Pointer-first, Original) to \"Arrow-first\", confirmed with Done. Reopening the panel shows Cursor Style = Arrow-first.",
+  "elapsedSec": 123,
+  "usage": {
+    "inputTokens": 22,
+    "outputTokens": 3280,
+    "cacheReadTokens": 518856,
+    "modelCalls": 11
+  },
+  "video": "out/recording/2026-07-29T19-14-18-yarn/window.mp4",
+  "steps": [
+    {
+      "index": 1,
+      "timestamp": "2026-07-29T19:14:37.238Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 37
+        }
+      },
+      "expectation": {
+        "description": "Settings page opens",
+        "textIncludes": [
+          "Settings"
+        ],
+        "textExcludes": [
+          "Your Library"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "expected absent but found: Your Library",
+      "screenshotFile": "agent-step-1.png",
+      "modelReasoning": "Cursor style is likely a setting in the app settings."
+    },
+    {
+      "index": 2,
+      "timestamp": "2026-07-29T19:14:48.189Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 40
+        }
+      },
+      "expectation": {
+        "description": "Settings dialog closes",
+        "textExcludes": [
+          "Auto-Add Screen Zooms"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-2.png",
+      "modelReasoning": "Close settings dialog since cursor style isn't there."
+    },
+    {
+      "index": 3,
+      "timestamp": "2026-07-29T19:14:58.384Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 12
+        }
+      },
+      "expectation": {
+        "description": "Draft editor opens",
+        "textExcludes": [
+          "Collections"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-3.png",
+      "modelReasoning": "Open a draft to access editor where cursor style settings live."
+    },
+    {
+      "index": 4,
+      "timestamp": "2026-07-29T19:15:11.911Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 51
+        }
+      },
+      "expectation": {
+        "description": "Project actions menu opens with options",
+        "textIncludes": [
+          "Cursor"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "expected but not found: Cursor",
+      "screenshotFile": "agent-step-4.png",
+      "modelReasoning": "Explore project actions menu for cursor settings."
+    },
+    {
+      "index": 5,
+      "timestamp": "2026-07-29T19:15:20.693Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 130
+        }
+      },
+      "expectation": {
+        "description": "Screen Clip Settings dialog opens with cursor options",
+        "textIncludes": [
+          "Cursor"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-5.png",
+      "modelReasoning": "Screen Clip Settings likely contains the cursor style option."
+    },
+    {
+      "index": 6,
+      "timestamp": "2026-07-29T19:15:33.696Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 139
+        }
+      },
+      "expectation": {
+        "description": "Cursor Style dropdown opens showing options",
+        "textIncludes": [
+          "Arrow-first"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "expectation met, but every check was ALREADY satisfied before the action — no evidence the action changed anything; expect substrings that appear or disappear as a RESULT of it",
+      "screenshotFile": "agent-step-6.png",
+      "modelReasoning": "Open the Cursor Style dropdown to inspect options and current selection."
+    },
+    {
+      "index": 7,
+      "timestamp": "2026-07-29T19:15:45.590Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 80
+        }
+      },
+      "expectation": {
+        "description": "Dropdown closes with Arrow-first selected",
+        "textIncludes": [
+          "Arrow-first",
+          "Cursor Style"
+        ],
+        "textExcludes": [
+          "Pointer-first"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-7.png",
+      "modelReasoning": "Explicitly select Arrow-first as the cursor style."
+    },
+    {
+      "index": 8,
+      "timestamp": "2026-07-29T19:15:54.296Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 200
+        }
+      },
+      "expectation": {
+        "description": "Settings panel closes",
+        "textExcludes": [
+          "Screen Recording Settings"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-8.png",
+      "modelReasoning": "Confirm the settings panel with Done to persist the cursor style."
+    },
+    {
+      "index": 9,
+      "timestamp": "2026-07-29T19:16:06.029Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 51
+        }
+      },
+      "expectation": {
+        "description": "Project actions menu reopens",
+        "textIncludes": [
+          "Screen Clip Settings..."
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-9.png",
+      "modelReasoning": "Reopen settings to display the resulting cursor style for verification."
+    },
+    {
+      "index": 10,
+      "timestamp": "2026-07-29T19:16:14.801Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 130
+        }
+      },
+      "expectation": {
+        "description": "Screen Recording Settings panel shows Cursor Style Arrow-first",
+        "textIncludes": [
+          "Cursor Style",
+          "Arrow-first"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-10.png",
+      "modelReasoning": "Reopen the panel so the final observation shows the cursor style value."
+    }
+  ]
+}

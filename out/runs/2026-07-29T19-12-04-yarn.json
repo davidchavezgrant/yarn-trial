@@ -1,0 +1,280 @@
+{
+  "task": "Change the cursor style to Pointer-first",
+  "app": "Yarn",
+  "backend": "ax",
+  "grounding": {
+    "provenance": "none"
+  },
+  "hintedPrompt": false,
+  "hintReasons": [],
+  "homeReset": "reset",
+  "success": true,
+  "finalCheck": {
+    "verified": true,
+    "note": "expectation met",
+    "evidence": {
+      "description": "Screen Recording Settings shows Cursor Style set to Pointer-first, with no Arrow-first present",
+      "textIncludes": [
+        "Cursor Style",
+        "Pointer-first"
+      ],
+      "textExcludes": [
+        "Arrow-first"
+      ]
+    }
+  },
+  "verifiedSteps": 8,
+  "unverifiedSteps": 2,
+  "expectationRejections": 0,
+  "summary": "Opened a draft in Yarn, used Project actions → Screen Clip Settings..., and changed Cursor Style from \"Arrow-first\" to \"Pointer-first\". Confirmed with Done and reopened the panel; Cursor Style still reads Pointer-first.",
+  "elapsedSec": 131,
+  "usage": {
+    "inputTokens": 22,
+    "outputTokens": 3190,
+    "cacheReadTokens": 534639,
+    "modelCalls": 11
+  },
+  "video": "out/recording/2026-07-29T19-12-04-yarn/window.mp4",
+  "steps": [
+    {
+      "index": 1,
+      "timestamp": "2026-07-29T19:12:26.106Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 37
+        }
+      },
+      "expectation": {
+        "description": "Settings page opens",
+        "textIncludes": [
+          "Settings"
+        ],
+        "textExcludes": [
+          "Your Library"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "expected absent but found: Your Library",
+      "screenshotFile": "agent-step-1.png",
+      "modelReasoning": "Cursor style setting is likely in Settings."
+    },
+    {
+      "index": 2,
+      "timestamp": "2026-07-29T19:12:41.077Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 40
+        }
+      },
+      "expectation": {
+        "description": "Settings modal closes",
+        "textExcludes": [
+          "Auto-Add Screen Zooms"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-2.png",
+      "modelReasoning": "No cursor setting in Settings; close it to look in a draft editor."
+    },
+    {
+      "index": 3,
+      "timestamp": "2026-07-29T19:12:54.528Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 14
+        }
+      },
+      "expectation": {
+        "description": "Draft editor opens",
+        "textExcludes": [
+          "Your Library"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-3.png",
+      "modelReasoning": "Open a draft editor where cursor style settings for recordings live."
+    },
+    {
+      "index": 4,
+      "timestamp": "2026-07-29T19:13:06.060Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 51
+        }
+      },
+      "expectation": {
+        "description": "Project actions menu opens with items",
+        "textIncludes": [
+          "Cursor"
+        ]
+      },
+      "verified": false,
+      "verificationNote": "expected but not found: Cursor",
+      "screenshotFile": "agent-step-4.png",
+      "modelReasoning": "Check the project actions menu for cursor settings."
+    },
+    {
+      "index": 5,
+      "timestamp": "2026-07-29T19:13:15.088Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 152
+        }
+      },
+      "expectation": {
+        "description": "Screen Clip Settings dialog opens with cursor options",
+        "textIncludes": [
+          "Cursor"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-5.png",
+      "modelReasoning": "Screen Clip Settings likely contains cursor style options."
+    },
+    {
+      "index": 6,
+      "timestamp": "2026-07-29T19:13:25.190Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 161
+        }
+      },
+      "expectation": {
+        "description": "Cursor Style dropdown opens showing options",
+        "textIncludes": [
+          "Pointer-first"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-6.png",
+      "modelReasoning": "Open the cursor style dropdown to select Pointer-first."
+    },
+    {
+      "index": 7,
+      "timestamp": "2026-07-29T19:13:33.222Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 82
+        }
+      },
+      "expectation": {
+        "description": "Cursor Style now shows Pointer-first",
+        "textIncludes": [
+          "Pointer-first"
+        ],
+        "textExcludes": [
+          "Arrow-first"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-7.png",
+      "modelReasoning": "Select the Pointer-first option."
+    },
+    {
+      "index": 8,
+      "timestamp": "2026-07-29T19:13:48.611Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 222
+        }
+      },
+      "expectation": {
+        "description": "Settings panel closes",
+        "textExcludes": [
+          "Screen Recording Settings"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-8.png",
+      "modelReasoning": "Commit and close the settings panel with Done."
+    },
+    {
+      "index": 9,
+      "timestamp": "2026-07-29T19:13:58.383Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 51
+        }
+      },
+      "expectation": {
+        "description": "Project actions menu opens",
+        "textIncludes": [
+          "Screen Clip Settings..."
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-9.png",
+      "modelReasoning": "Reopen the settings to verify the change persisted."
+    },
+    {
+      "index": 10,
+      "timestamp": "2026-07-29T19:14:08.577Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 152
+        }
+      },
+      "expectation": {
+        "description": "Settings panel reopens showing Cursor Style = Pointer-first",
+        "textIncludes": [
+          "Cursor Style",
+          "Pointer-first"
+        ],
+        "textExcludes": [
+          "Arrow-first"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-10.png",
+      "modelReasoning": "Reopen Screen Clip Settings to confirm the Pointer-first value persisted."
+    }
+  ]
+}

@@ -1,0 +1,117 @@
+{
+  "task": "Change the cursor style to Arrow-first",
+  "app": "Yarn",
+  "backend": "ax",
+  "grounding": {
+    "provenance": "explore",
+    "path": "docs/appmaps/yarn.md",
+    "sha256": "8a271aee4769"
+  },
+  "hintedPrompt": false,
+  "hintReasons": [],
+  "homeReset": "reset",
+  "success": true,
+  "finalCheck": {
+    "verified": true,
+    "note": "expectation met",
+    "evidence": {
+      "description": "Screen Clip Settings Cursor Style combobox reads Arrow-first with no open dropdown",
+      "textIncludes": [
+        "Cursor Style",
+        "Arrow-first",
+        "Screen Clip Settings"
+      ],
+      "textExcludes": [
+        "Pointer-first"
+      ]
+    }
+  },
+  "verifiedSteps": 3,
+  "unverifiedSteps": 0,
+  "expectationRejections": 0,
+  "summary": "Navigated to Brand Kit → Screen Clips (Screen Clip Settings), opened the Cursor Style combobox and selected \"Arrow-first\". The Cursor section now shows Cursor Style = Arrow-first, and the dropdown is closed (no Pointer-first/Original options visible).",
+  "elapsedSec": 44,
+  "usage": {
+    "inputTokens": 8,
+    "outputTokens": 1189,
+    "cacheReadTokens": 67100,
+    "modelCalls": 4
+  },
+  "video": "out/recording/2026-07-29T19-11-19-yarn/window.mp4",
+  "steps": [
+    {
+      "index": 1,
+      "timestamp": "2026-07-29T19:11:37.134Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 34
+        }
+      },
+      "expectation": {
+        "description": "Brand Kit page opens with second-column nav",
+        "textIncludes": [
+          "Brand Kit",
+          "Screen Clips"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-1.png",
+      "modelReasoning": "Brand Kit contains the Screen Clips settings with Cursor Style."
+    },
+    {
+      "index": 2,
+      "timestamp": "2026-07-29T19:11:49.139Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 86
+        }
+      },
+      "expectation": {
+        "description": "Cursor style options list appears",
+        "textIncludes": [
+          "Pointer-first",
+          "Original"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-2.png",
+      "modelReasoning": "Verify which option is actually selected in the cursor style combobox."
+    },
+    {
+      "index": 3,
+      "timestamp": "2026-07-29T19:11:57.982Z",
+      "action": {
+        "kind": "tool",
+        "name": "click",
+        "args": {
+          "pid": 85692,
+          "window_id": 22287,
+          "element_index": 110
+        }
+      },
+      "expectation": {
+        "description": "Menu closes, Cursor Style shows Arrow-first",
+        "textIncludes": [
+          "Arrow-first"
+        ],
+        "textExcludes": [
+          "Pointer-first"
+        ]
+      },
+      "verified": true,
+      "verificationNote": "expectation met",
+      "screenshotFile": "agent-step-3.png",
+      "modelReasoning": "Select the Arrow-first option to set/confirm cursor style and close the dropdown."
+    }
+  ]
+}
