@@ -133,10 +133,12 @@ This drives infrastructure, legal review, and the deny-list above. **Needs Yarn'
 
 ### Q3. What does onboarding a new app actually cost, and who does it?
 
-Today: one scouting pass, ~25 minutes of machine time, plus a human sanity-check of the
-notes. The open questions are commercial rather than technical:
+Today: one scouting pass — **measured at ~5-6 minutes** of machine time (Yarn 4m57s / 23
+actions; Notion Calendar 5m51s / 20 actions), plus a human sanity-check of the notes. That
+is ~0.4% of Jasper's ~24h per-app budget, so cost is not the constraint; trust is. The open
+questions are commercial rather than technical:
 
-- Is 25 min + review acceptable per app, or does it need to be push-button?
+- Is 6 min + review acceptable per app, or does it need to be push-button?
 - Does the scouting pass need a human in the loop for safety, or can it self-certify?
 - How many apps is the target — ten, hundreds? That decides whether we hand-tune per app or
   build for unattended scale.

@@ -56,9 +56,9 @@ NL task ──▶ agent.ts ── autonomous loop (Claude Opus 5, tool use)
    "the UI observably changed," and every step is auditable in the run log
    (action, expectation, verdict, screenshot, timestamp).
 
-2. **Grounding as a separate, cacheable pass.** Exploration is expensive (~25 min)
-   but runs once per app; it cut the timezone task from 5 actions to 3 with zero dead
-   ends. This maps directly onto Jasper's ~24h per-app onboarding budget, and it's the
+2. **Grounding as a separate, cacheable pass.** Exploration takes ~5-6 min (measured)
+   and runs once per app. Clean re-measure: it roughly halves actions and tokens, and
+   more importantly it fixes wrong-scope changes that otherwise pass verification. This maps directly onto Jasper's ~24h per-app onboarding budget, and it's the
    embryo of recipe compilation: thinking at grounding time, cheap execution at run time.
 
 3. **Window-scoped recording that can't leak.** `--record` polls the driver's

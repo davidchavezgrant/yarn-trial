@@ -11,7 +11,7 @@ Prototype: a natural-language task → verified UI actions on a Mac app, recorde
 NL task
   ▼
 Agent loop (Claude Opus 5)              src/agent.ts
-  observe: AX elements + window screenshot
+  observe: AX elements (+ DOM id/class via native/axdom) + window screenshot
   decide:  ONE action + a checkable expectation (tool use)
   act:     via the driver boundary
   verify:  re-observe, check expectation, feed verdict back
@@ -21,14 +21,29 @@ Driver boundary (Observation/ActionRequest)   src/driver.ts
 @trycua/cua-driver → target app (AX actions, pid-targeted input)
 ```
 
-- **Verification is first-class.** Every action carries an expectation the harness
-  checks against the next observation; failures are fed back so the model recovers
-  instead of repeating. Every step is logged to `out/runs/<stamp>-<app>.json` (action,
-  expectation, verdict, screenshot).
+Design decisions and their reasoning live in `docs/architecture.md`.
+
+- **Verification is first-class**, in three layers of decreasing authority:
+  1. *Text* (per step, deterministic, gates the run) — the expectation must be checkable
+     and *discriminating*, i.e. satisfied only after the action. An act call with nothing
+     checkable is rejected without being executed.
+  2. *Pixel delta* (per step, deterministic, advisory) — fraction of pixels changed since
+     the last observation, because canvas content is invisible to AX.
+  3. *Visual judge* (once, at `done`, advisory) — a separate model call sees the task, the
+     agent's claim, and the final frame. `VISUAL_JUDGE=block` makes a FAIL reject success.
+
+  Every step is logged to `out/runs/<stamp>-<app>.json` (action, expectation, verdict,
+  pixel delta, screenshot). Known gap: text checks prove *a* control holds the value, not
+  that it is the *intended* one — see LIMITATIONS §8.
+- **DOM enrichment without CDP.** `native/axdom` (Swift, `npm run build:native`) recovers
+  the DOM id/class Chromium drops from its AX tree, naming 955 of 1044 anonymous Yarn
+  nodes. Optional: unbuilt or `AXDOM=0` degrades silently to the bare AX view.
 - **Grounding** comes in two tiers, kept separate so that measuring one doesn't
   quietly measure the other:
   - `docs/appmaps/<app>.md` — output of the autonomous exploration pass
-    (`src/explore.ts`), stamped with a provenance header. ~25 min per app.
+    (`src/explore.ts`), stamped with a provenance header. Measured ~5-6 min per app
+    (Yarn 23 actions, Notion Calendar 20). Emits a prose map plus a `<app>.json` graph
+    whose scope metadata drives the ambiguity warnings.
   - `docs/recipes/<app>.md` — hand-curated notes, including verified task recipes.
 
   Both are auto-loaded into the agent's prompt and the run log records which was used.
@@ -51,9 +66,10 @@ Accessibility + Screen Recording permissions for your terminal, and either
 
 ```sh
 npm install
+npm run build:native                 # optional: DOM enrichment sidecar (needs Xcode CLT)
 npm run probe "Notion Calendar"      # permissions + perception smoke test
 npm run explore -- "Notion Calendar" # grounding pass -> docs/appmaps/
-npm test                             # prompt-hygiene guard tests
+npm test                             # harness unit tests (34)
 npm run agent -- "Show me how to change my timezone to Paris" "Notion Calendar" --record
 ```
 
@@ -62,19 +78,28 @@ debugging individual interactions.
 
 ## Honest limitations
 
-- Two apps tested (Notion Calendar, Yarn) — generalization beyond them is claimed,
-  not proven, and there is **no measured failure rate**: one run per condition.
+- Two apps tested (Notion Calendar, Yarn), **both Electron** — nothing here tests a
+  native AppKit AX tree, so "arbitrary Mac apps" is unproven. Sample sizes are 2-4 runs
+  per condition, not a measured failure rate.
+- **Roughly one run in three aborts** on AX flakiness (empty tree, focus loss, dead driver
+  session). Retries were clean every time, so it is a throughput cost rather than a
+  capability limit — but it is the main obstacle to unattended operation (LIMITATIONS §10).
+- **Verification cannot tell which control it verified.** Yarn exposes 16 settings at both
+  a brand-wide and a per-project scope; every ungrounded run changed the wrong one while
+  passing its checks. Mitigated by appmap scope warnings and the visual judge, not solved
+  (LIMITATIONS §8).
 - Target app must be on the active macOS Space. Off-Space, Chromium suspends the
   whole app while every driver call still reports success (LIMITATIONS §1).
 - Electron's AX tree goes intermittently dark under focus churn; the agent falls
-  back to keyboard navigation + screenshot verification, but this is the
-  reliability frontier.
+  back to keyboard navigation, and the pixel/visual layers make the degradation visible
+  rather than silently "verified". Still the reliability frontier.
 - ~10s of model thinking between actions — fine async, wrong for a human watching
   live. Caching grounded runs as replayable recipes is the obvious next step.
 - Recording is ~4fps snapshot-based; real 30fps window capture needs a signed app
   (`tools/winrec.swift` documents the ScreenCaptureKit boundary for unsigned CLIs).
-- The cua driver composites window snapshots incorrectly for windows on non-retina
-  displays (upstream bug); `--record` stages the window onto the main display.
+- Recording staging fills the window's *current* display and leaves native fullscreen
+  alone. (An earlier claim that the driver miscomposites 1x displays did not reproduce
+  when measured, so windows are no longer moved between monitors — LIMITATIONS §3.)
 
 ## Measurement discipline
 
@@ -95,6 +120,7 @@ contaminated. Read those before quoting a figure.
 
 ## Docs
 
+- `docs/architecture.md` — design decisions, why each was made, and when to revisit
 - `docs/product.md` — status assessment and open product questions (non-technical)
 - `docs/research/` — driver quirks, verified sequences, and measured results
 - `docs/appmaps/` — grounding notes produced by the exploration pass
