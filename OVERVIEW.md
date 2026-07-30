@@ -1,6 +1,8 @@
-# Self-driving demo agent
+# Self-driving demo agent — overview
 
 Prototype: a natural-language task → verified UI actions on a Mac app, recorded.
+Setup instructions live in `README.md`; this file is what the prototype does and what
+it's worth.
 
 > "Show me how to change my timezone to Paris" → the agent performs the change in
 > Notion Calendar, verifying every step, and records a window-scoped video of itself.
@@ -63,6 +65,8 @@ Design decisions and their reasoning live in `docs/architecture.md`.
 Prereqs: macOS 15+, Node 22+, `ffmpeg` (assembly), `python3` with PIL (frame QC),
 Accessibility + Screen Recording permissions for your terminal, and either
 `ANTHROPIC_API_KEY` or `OPENROUTER_API_KEY` in the environment.
+Starting from a fresh clone, follow **`README.md`** — it covers the TCC grants and the
+per-app grounding pass step by step.
 
 ```sh
 ./run doctor                         # preflight: keys, permissions, deps, appmaps
@@ -148,3 +152,4 @@ contaminated. Read those before quoting a figure.
 - `docs/appmaps/` — grounding notes produced by the exploration pass
 - `docs/recipes/` — hand-curated grounding notes
 - `LIMITATIONS.md` — running log of what constrains the agent in practice
+- `README.md` — fresh-clone setup on a new machine
