@@ -1026,8 +1026,42 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 			// the click. Clamping toward the click instead leaves the whole gap on the OLD control.
 			const latest = dispatchMs - duration;
 			const moveStart = Math.max(0, Math.min(earliest, Math.max(latest, 0)));
+			/**
+			 * The control this action targets, if its recorded rect is trustworthy.
+			 *
+			 * AX geometry can be stale or ambiguous: one run's tree carried TWO "Save Changes"
+			 * buttons and the agent pressed the offscreen one, so both click_point and targetRect
+			 * pointed 41px above the visible button. Requiring the rect to agree with where the
+			 * click actually landed catches that; without agreement there is no rect to cross into,
+			 * so neither the pointer change nor the highlight fires.
+			 */
+			const rect = step?.targetRect;
+			const rectForHover =
+				rect &&
+				rect.w > 0 &&
+				rect.h > 0 &&
+				target.x >= rect.x - HOVER_SLOP_PX &&
+				target.x <= rect.x + rect.w + HOVER_SLOP_PX &&
+				target.y >= rect.y - HOVER_SLOP_PX &&
+				target.y <= rect.y + rect.h + HOVER_SLOP_PX
+					? rect
+					: undefined;
+
+			/**
+			 * Switch pointer type on ENTRY to the control, not on the click.
+			 *
+			 * A real pointer changes the instant it crosses into a hoverable element — that is the
+			 * whole cue that something is clickable. Applying the new type only after the movement
+			 * meant the arrow flew all the way to Brand Kit, sat on it for six seconds, and became a
+			 * hand exactly as it clicked, which reads as no change at all.
+			 *
+			 * Keyed off the same crossing the hover highlight uses, so the tint and the pointer
+			 * change together.
+			 */
 			const nextType = pointerTypeForRole(step?.targetRole);
-			for (const m of move) cursor.push({ tMs: moveStart + m.tMs, x: m.x, y: m.y, type });
+			const enterAt = rectForHover ? enterTime(move, rectForHover) : Infinity;
+			for (const m of move)
+				cursor.push({ tMs: moveStart + m.tMs, x: m.x, y: m.y, type: m.tMs >= enterAt ? nextType : type });
 			type = nextType;
 			at = target;
 			cursor.push({ tMs: dispatchMs, x: at.x, y: at.y, type });
@@ -1044,36 +1078,22 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 			 * nothing at all.
 			 */
 			/**
-			 * Only when the rect actually contains the point the driver clicked.
+			 * Light the control up from the same crossing, so tint and pointer change together.
 			 *
-			 * AX geometry can be stale or ambiguous: one run's tree carried TWO "Save Changes"
-			 * buttons and the agent pressed the offscreen one, so both click_point and targetRect
-			 * pointed 41px above the visible button — the highlight landed on blank space beside
-			 * the real control. Requiring the rect to agree with the click point catches that
-			 * disagreement, and dropping the highlight is better than confidently drawing it in
-			 * the wrong place.
+			 * The app itself almost never paints a hover: AX actuation leaves the physical pointer
+			 * wherever it was, so no mouseover fires — on one run the real pointer was inside the
+			 * window for 12 of 164 frames. A cursor resting on a control that stays inert reads as
+			 * not really being there.
 			 */
-			const rect = step?.targetRect;
-			const agrees =
-				rect &&
-				rect.w > 0 &&
-				rect.h > 0 &&
-				at.x >= rect.x - HOVER_SLOP_PX &&
-				at.x <= rect.x + rect.w + HOVER_SLOP_PX &&
-				at.y >= rect.y - HOVER_SLOP_PX &&
-				at.y <= rect.y + rect.h + HOVER_SLOP_PX;
-			// From the moment the pointer ENTERS the control, not when it finishes settling. A real
-			// hover fires on the crossing, and the last stretch of a reach is the slow part —
-			// waiting for the movement to end left the highlight visibly late.
-			const hoverFrom = moveStart + enterTime(move, rect ?? { x: 0, y: 0, w: 0, h: 0 });
+			const hoverFrom = moveStart + enterAt;
 			// The click can precede the pointer's arrival when an action's footage was trimmed, and
 			// a span that ends before it starts renders as a permanent highlight.
-			if (rect && agrees && completeMs > hoverFrom)
+			if (rectForHover && completeMs > hoverFrom)
 				hovers.push({
 					startMs: hoverFrom,
 					endMs: completeMs,
-					...rect,
-					stepIndex: step.index,
+					...rectForHover,
+					stepIndex: step?.index,
 				});
 		}
 		lastActionMs = Math.max(lastActionMs, completeMs);
