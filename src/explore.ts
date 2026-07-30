@@ -5,8 +5,8 @@ import { Driver } from "./driver.js";
 import {
 	ACT_TOOL,
 	appSlug,
-	assertObservable,
 	DRIVER_RULES,
+	ensureObservable,
 	findScopeAmbiguities,
 	findWindow,
 	makeClient,
@@ -190,14 +190,15 @@ async function main(): Promise<void> {
 	try {
 		await driver.act({ kind: "tool", name: "launch_app", args: { name: app } });
 		await new Promise((r) => setTimeout(r, 1500));
-		const win = await findWindow(driver, app);
+		// Reassigned by ensureObservable — see the same call in src/agent.ts.
+		let win = await findWindow(driver, app);
 		// Last chance to take your hands off before the run owns the pointer.
 		await overlay.countdown();
 		// Exploration runs once and its whole purpose is coverage, so it exhausts the
 		// continuation chain on every observation — the opposite tradeoff from the agent
 		// loop, which re-observes after every action and pays per-step for depth.
 		const dom = backendKind === "dom" ? await DomBackend.bind(driver, win, Infinity) : undefined;
-		if (!dom) await assertObservable(driver, win, app);
+		if (!dom) win = await ensureObservable(driver, win, app);
 		const doObserve = (name: string) => (dom ? dom.observe(name, Infinity) : observe(driver, win, name));
 		tools = dom ? [DOM_ACT_TOOL, FIND_TOOL, ...EXTRA_TOOLS] : [ACT_TOOL, ...EXTRA_TOOLS];
 		basePrompt = systemPrompt(dom ? DOM_RULES : DRIVER_RULES);

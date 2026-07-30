@@ -6,9 +6,9 @@ import { Driver } from "./driver.js";
 import {
 	ACT_TOOL,
 	appSlug,
-	assertObservable,
 	auditTaskPrompt,
 	dragMoved,
+	ensureObservable,
 	framesShifted,
 	DRIVER_RULES,
 	findScopeAmbiguities,
@@ -144,6 +144,13 @@ for i, p in enumerate(sorted(glob.glob("${framesDir}/f-*.png"))):
 }
 
 function assembleVideo(framesDir: string, times: number[], outPath: string): void {
+	// A run that dies before the first frame lands never creates the directory — that is a
+	// failed run, already reported, and an ENOENT stack on top of it only obscures the cause.
+	if (!fs.existsSync(framesDir)) {
+		console.log("no frames captured — skipping video assembly");
+
+		return;
+	}
 	const all = fs.readdirSync(framesDir).filter((f) => f.endsWith(".png")).sort();
 	// Majority vote: the modal frame size defines "tight" for this run; composite/
 	// mis-scaled captures show up as size outliers.
@@ -303,12 +310,14 @@ async function main(): Promise<void> {
 	try {
 		await driver.act({ kind: "tool", name: "launch_app", args: { name: app } });
 		await new Promise((r) => setTimeout(r, 1500));
-		const win = await findWindow(driver, app);
+		// Reassigned by ensureObservable: recovering an unobservable target can relaunch it
+		// onto a new window, and every later call must use that one.
+		let win = await findWindow(driver, app);
 		// Last chance to take your hands off before the run owns the pointer.
 		await overlay.countdown();
 		// For the DOM backend the CDP bind is the observability gate; AX darkness is fine.
 		const dom = backendKind === "dom" ? await DomBackend.bind(driver, win) : undefined;
-		if (!dom) await assertObservable(driver, win, app);
+		if (!dom) win = await ensureObservable(driver, win, app);
 		const doObserve = (name: string) => (dom ? dom.observe(name) : observe(driver, win, name));
 		console.log(`target: ${app} pid=${win.pid} window=${win.windowId} backend=${backendKind}`);
 

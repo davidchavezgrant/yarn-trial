@@ -71,9 +71,9 @@ export async function findWindow(driver: Driver, app: string): Promise<WindowRef
 export class TargetNotObservableError extends Error {
 	constructor(app: string, detail: string) {
 		super(
-			`"${app}" is running but not observable (${detail}).\n` +
+			`"${app}" is running but not observable (${detail}), and foregrounding it did not help.\n` +
 				`Most likely it is on an inactive macOS Space — another app is fullscreen, or the\n` +
-				`window is on a different desktop. Programmatic activation cannot fix this; bring the\n` +
+				`window is on a different desktop. Programmatic activation cannot fix that; bring the\n` +
 				`app onto the active Space (click it in the Dock or ⌘-Tab to it), then re-run.`,
 		);
 		this.name = "TargetNotObservableError";
@@ -92,6 +92,69 @@ export async function assertObservable(driver: Driver, win: WindowRef, app: stri
 	const content = elements.filter(isAppContent).length;
 	if (content === 0)
 		throw new TargetNotObservableError(app, `${elements.length} AX elements, none of them app content`);
+}
+
+/**
+ * Best-effort foregrounding. Every nudge is independently optional: `bring_to_front` is the
+ * driver's own, `activate` re-raises an app whose windows are all hidden, and the unminimize
+ * pass covers a window the AX tree reports but Chromium has stopped rendering.
+ *
+ * None of these can move a window between Spaces — macOS refuses background-initiated Space
+ * switches, and all three return success while changing nothing (LIMITATIONS §1). They are
+ * here for the cases that DO recover: no open window, hidden app, minimized window.
+ */
+async function foregroundApp(driver: Driver, app: string, pid: number): Promise<void> {
+	try {
+		await driver.act({ kind: "tool", name: "bring_to_front", args: { pid } });
+	} catch {}
+	// `launch_app` on a running app is `open -a`: it opens a window when the app has none,
+	// which is one of the states that reads as "running but not observable".
+	try {
+		await driver.act({ kind: "tool", name: "launch_app", args: { name: app } });
+	} catch {}
+	try {
+		execFileSync(
+			"osascript",
+			[
+				"-e",
+				`tell application "${app.replace(/"/g, '\\"')}" to activate`,
+				"-e",
+				`tell application "System Events" to tell process "${app.replace(/"/g, '\\"')}" to set value of attribute "AXMinimized" of every window to false`,
+			],
+			{ encoding: "utf8", timeout: 5000, stdio: "ignore" },
+		);
+	} catch {
+		// Missing Automation permission, or an app that refuses the AXMinimized write.
+	}
+	// Chromium rebuilds the AX tree lazily once the window is rendering again.
+	await new Promise((r) => setTimeout(r, 2000));
+}
+
+/**
+ * Observability with one recovery attempt: an unobservable target is foregrounded and
+ * re-probed before the run is abandoned. Returns the window to use — possibly a NEW one,
+ * because an app that was running with no open windows gets a fresh window id from the
+ * relaunch, and the id probed a moment earlier then belongs to nothing.
+ */
+export async function ensureObservable(driver: Driver, win: WindowRef, app: string): Promise<WindowRef> {
+	try {
+		await assertObservable(driver, win, app);
+
+		return win;
+	} catch (err) {
+		if (!(err instanceof TargetNotObservableError)) throw err;
+	}
+
+	console.log(`"${app}" is not observable — foregrounding it and retrying`);
+	await foregroundApp(driver, app, win.pid);
+	const fresh = await findWindow(driver, app);
+	// Throws TargetNotObservableError again if foregrounding did not help — which is the
+	// off-Space case, and its message says so.
+	await assertObservable(driver, fresh, app);
+	if (fresh.windowId !== win.windowId || fresh.pid !== win.pid)
+		console.log(`recovered on a different window: pid=${fresh.pid} window=${fresh.windowId}`);
+
+	return fresh;
 }
 
 export async function observe(driver: Driver, win: WindowRef, shotName: string): Promise<ObservationBundle> {

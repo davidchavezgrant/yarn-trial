@@ -47,6 +47,14 @@ populating the tree. (`AXEnhancedUserInterface` returns -25208, unsupported.)
 - Detection: treat `AX windows == 0` or `non-menu elements == 0` as "target not
   observable" and fail fast with that diagnosis rather than letting the model flail
   against a menu-bar-only tree.
+- Recovery attempt (added 2026-07-30): `ensureObservable()` in `src/harness.ts` no longer
+  fails on the first unobservable probe. It foregrounds the target — driver
+  `bring_to_front`, `launch_app` (= `open -a`, which opens a window when the app has none),
+  `activate`, and an `AXMinimized = false` pass over every window — waits 2s for Chromium to
+  rebuild the tree, **re-runs `findWindow`** (the relaunch can produce a new window id) and
+  re-probes. This fixes the *other* causes that present identically: app running with no
+  open window, hidden app, minimized window. It does **not** fix the off-Space case above,
+  and is not claimed to — that probe fails again and the error says foregrounding was tried.
 - Product-side (Yarn controls its own app): force-enable Chromium accessibility, disable
   background throttling, or expose CDP so perception doesn't depend on AX at all.
 
