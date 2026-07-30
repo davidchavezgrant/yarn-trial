@@ -4,6 +4,7 @@ import type { MotionConstants, MotionSegment } from "./motion-types.js";
 import {
 	buildFramePlan,
 	buildTrack,
+	correctToChange,
 	ACTION_MAX_MS,
 	GAP_BEAT_MS,
 	joinSteps,
@@ -427,6 +428,31 @@ test("buildTrack__SkipsActions__When__TheyPrecedeTheFirstUsableFrame", () => {
 	const clicks = track.events.filter((e) => e.kind === "mousedown");
 	assert.equal(clicks.length, 1, "only the action with footage should be rendered");
 	assert.ok(clicks[0].tMs > 0, "and it must not be pinned to the timeline start");
+});
+
+test("correctToChange__MovesOntoTheControl__When__AxGeometryIsStale", () => {
+	// One run's tree carried TWO "Save Changes" buttons; the agent pressed the offscreen one, so
+	// click_point AND targetRect both landed 41px above the visible button — wrong together, which
+	// no consistency check between them can catch. The before/after diff is independent of both.
+	const fixed = correctToChange({ x: 1279, y: 27 }, { x: 1214, y: 63, w: 190, h: 30 }, { width: 1920, height: 1080 });
+	assert.ok(Math.abs(fixed.x - 1309) < 2 && Math.abs(fixed.y - 78) < 2, `got ${fixed.x},${fixed.y}`);
+});
+
+test("correctToChange__LeavesThePoint__When__ChangeIsAWholeNavigation", () => {
+	// A navigation repaints most of the window, so its centroid says nothing about the pointer.
+	const p = { x: 100, y: 800 };
+	assert.deepEqual(correctToChange(p, { x: 0, y: 0, w: 1900, h: 1000 }, { width: 1920, height: 1080 }), p);
+});
+
+test("correctToChange__LeavesThePoint__When__ChangeIsFarAway", () => {
+	// A click that opens a panel elsewhere must not drag the cursor across the screen to it.
+	const p = { x: 100, y: 800 };
+	assert.deepEqual(correctToChange(p, { x: 1500, y: 60, w: 80, h: 24 }, { width: 1920, height: 1080 }), p);
+});
+
+test("correctToChange__LeavesThePoint__When__ClickIsAlreadyInside", () => {
+	const p = { x: 1250, y: 75 };
+	assert.deepEqual(correctToChange(p, { x: 1214, y: 63, w: 190, h: 30 }, { width: 1920, height: 1080 }), p);
 });
 
 test("buildFramePlan__NamesEveryFrame__When__FileListIsGiven", () => {

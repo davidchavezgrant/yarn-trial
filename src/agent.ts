@@ -427,6 +427,12 @@ async function main(): Promise<void> {
 			fs.mkdirSync(framesDir, { recursive: true });
 			await driver.act({ kind: "tool", name: "start_recording", args: { output_dir: `${recordingDir}/trajectory` } });
 			recordingActive = true;
+			// Record the run, not the setup. start_recording backfills turns from earlier in the
+			// driver session — the home reset's own clicks land in trajectory/ as turn-00001 and
+			// friends, and the humanize pass then animates a cursor navigating out of wherever the
+			// last run finished, before the task has begun. Marked here rather than filtered later
+			// so the artifact says which turns predate the take.
+			fs.writeFileSync(`${recordingDir}/recording-started.json`, JSON.stringify({ epochMs: Date.now() }));
 			frameLoop = (async () => {
 				while (recordingActive) {
 					if (!driverBusy) {

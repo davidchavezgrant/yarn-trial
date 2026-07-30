@@ -11,11 +11,12 @@
  * renderer) and, unless --no-video, humanized.mp4 alongside it.
  */
 
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { MotionConstants, MotionSegmentLibrary } from "./motion-types.js";
 import { renderTrack } from "./render.js";
-import { buildTrack, readTrajectory, type RunLogStep } from "./track.js";
+import { buildTrack, readTrajectory, type RunLogStep, type TrajectoryTurn } from "./track.js";
 
 const OUT = `${process.cwd()}/out`;
 const DATA = `${process.cwd()}/data`;
@@ -58,6 +59,44 @@ function readFrameTimes(recordingDir: string, files: string[]): number[] {
 	return times as number[];
 }
 
+/**
+ * Measure what actually changed on screen for each turn, in its own capture pixels.
+ *
+ * The independent check on AX geometry: a tree can report a control's position from a stale layout
+ * or name two controls the same, but the before/after diff cannot. Shelled to python + PIL, the
+ * same pattern badFrames() uses in src/agent.ts, because there is no image decoder in the node
+ * dependencies and this needs one for a handful of files.
+ */
+function attachChangeBoxes(turns: TrajectoryTurn[]): void {
+	const dirs = turns.map((t) => t.dir).filter((d) => fs.existsSync(path.join(d, "before.png")));
+	if (dirs.length === 0) return;
+	const script = `
+import json, sys
+from PIL import Image, ImageChops
+out = {}
+for d in sys.argv[1:]:
+    try:
+        a = Image.open(d + "/before.png").convert("L")
+        b = Image.open(d + "/after.png").convert("L")
+        if a.size != b.size: continue
+        bb = ImageChops.difference(a, b).point(lambda p: 255 if p > 40 else 0).getbbox()
+        if bb: out[d] = list(bb)
+    except Exception: pass
+print(json.dumps(out))
+`;
+	try {
+		const raw = execFileSync("python3", ["-c", script, ...dirs], { encoding: "utf8", maxBuffer: 1 << 22 });
+		const boxes: Record<string, [number, number, number, number]> = JSON.parse(raw);
+		for (const t of turns) {
+			const bb = boxes[t.dir];
+			if (bb) t.changeBox = { x: bb[0], y: bb[1], w: bb[2] - bb[0], h: bb[3] - bb[1] };
+		}
+	} catch (err) {
+		// Advisory only: without it, click points stand as the driver reported them.
+		console.log(`could not measure changed regions: ${err instanceof Error ? err.message.slice(0, 80) : err}`);
+	}
+}
+
 function main(): void {
 	const argv = process.argv.slice(2);
 	const stamp = argv.find((a) => !a.startsWith("--"));
@@ -91,6 +130,7 @@ function main(): void {
 		console.error(`no driver turns in ${recordingDir}/trajectory — nothing to animate`);
 		process.exit(1);
 	}
+	attachChangeBoxes(turns);
 
 	// The run log is optional: without it there are no element roles, so every pointer stays an
 	// arrow, but the geometry and timing all come from the trajectory and the track still builds.
@@ -150,6 +190,14 @@ function main(): void {
 	const firstBefore = path.join(turns[0].dir, "before.png");
 	const captureSize = fs.existsSync(firstBefore) ? pngSize(firstBefore) : frameSize;
 
+	// Stamped by the agent when recording actually starts. start_recording backfills turns from
+	// earlier in the driver session, so without this the home reset's clicks are animated as part
+	// of the take. Absent on recordings made before the agent wrote it.
+	const startedFile = path.join(recordingDir, "recording-started.json");
+	const recordedFromMs = fs.existsSync(startedFile)
+		? (JSON.parse(fs.readFileSync(startedFile, "utf8")).epochMs as number)
+		: undefined;
+
 	let frameTimes = readFrameTimes(recordingDir, frameFiles);
 	if (frameTimes.length === 0) {
 		// Older recordings predate times.json. Fall back to file mtimes, which are within a frame
@@ -166,6 +214,7 @@ function main(): void {
 		steps,
 		turns,
 		frameTimes,
+		recordedFromMs,
 		frameFiles,
 		frameSize,
 		captureSize,

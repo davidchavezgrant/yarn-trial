@@ -78,6 +78,45 @@ export const MIN_REPLAY_PX = 60;
  */
 export const MAX_REPLAY_PERP = 0.6;
 
+/** How far outside its own rect a click may fall before the rect is treated as stale. */
+export const HOVER_SLOP_PX = 12;
+
+/**
+ * Correct a click point against the pixels that actually changed.
+ *
+ * AX geometry is not always current. One run's tree carried TWO "Save Changes" buttons and the
+ * agent pressed the offscreen one, so the driver's click_point AND the recorded rect both landed
+ * 41px above the visible button — agreeing with each other and wrong together, which no
+ * consistency check between them can catch. The before/after diff is independent of both.
+ *
+ * Deliberately conservative: it only moves the point when the change is small enough to be one
+ * control, and only far enough to reach it. A navigation repaints most of the window and is left
+ * alone, because the changed region then says nothing about where the pointer was.
+ */
+export function correctToChange(
+	point: { x: number; y: number },
+	change: { x: number; y: number; w: number; h: number } | undefined,
+	frame: { width: number; height: number },
+): { x: number; y: number } {
+	if (!change || change.w <= 0 || change.h <= 0) return point;
+	const area = (change.w * change.h) / (frame.width * frame.height);
+	if (area > MAX_CORRECTION_AREA) return point;
+	const inside =
+		point.x >= change.x && point.x <= change.x + change.w && point.y >= change.y && point.y <= change.y + change.h;
+	if (inside) return point;
+	const cx = change.x + change.w / 2;
+	const cy = change.y + change.h / 2;
+	if (Math.hypot(cx - point.x, cy - point.y) > MAX_CORRECTION_PX) return point;
+
+	return { x: cx, y: cy };
+}
+
+/** A changed region larger than this fraction of the frame is a navigation, not one control. */
+export const MAX_CORRECTION_AREA = 0.02;
+
+/** Never move a click point further than this; beyond it the pairing is a guess. */
+export const MAX_CORRECTION_PX = 120;
+
 /** A driver turn, as recorded in trajectory/turn-NNNNN/action.json. */
 export interface TrajectoryTurn {
 	tool: string;
@@ -97,6 +136,10 @@ export interface TrajectoryTurn {
 	 * turn's width as the run's scale put later clicks hundreds of pixels off target.
 	 */
 	captureWidth?: number;
+	/** The driver warned this element does not advertise AXPress; the click may have no-opped. */
+	warned?: boolean;
+	/** Region that changed between before.png and after.png, in this turn's capture pixels. */
+	changeBox?: { x: number; y: number; w: number; h: number };
 }
 
 /** The subset of a run log this pass reads. */
@@ -106,6 +149,10 @@ export interface RunLogStep {
 	action: { kind: string; name?: string; args?: Record<string, unknown> };
 	targetRole?: string;
 	targetRect?: { x: number; y: number; w: number; h: number };
+	/** Fraction of pixels that changed after this action. 0 means the screen did not react. */
+	pixelDelta?: number;
+	/** Did the step's own expectation hold? False plus a driver warning means a no-op. */
+	verified?: boolean;
 }
 
 export interface JoinedAction {
@@ -152,6 +199,11 @@ export function readTrajectory(recordingDir: string): TrajectoryTurn[] {
 			epochMs: Math.round(Number(raw.timestamp) * 1000),
 			dir,
 			captureWidth: pngWidth(path.join(dir, "before.png")),
+			// The driver warns when an element does not advertise AXPress. Usually the click works
+			// anyway, but when it does not the frames show nothing happening — and animating a
+			// deliberate reach into a control that never responded is the most misleading thing
+			// this pass can do. Paired with a zero pixel delta below, it is a confirmed no-op.
+			warned: /does not advertise/i.test(String(raw.result_summary ?? "")),
 		});
 	}
 
@@ -174,11 +226,24 @@ export function joinSteps(steps: RunLogStep[], turns: TrajectoryTurn[]): JoinedA
 		let match: RunLogStep | undefined;
 		for (let probe = si; probe < steps.length; probe++) {
 			const name = steps[probe].action.name ?? steps[probe].action.kind;
-			if (name === turn.tool) {
-				match = steps[probe];
-				si = probe + 1;
-				break;
-			}
+			if (name !== turn.tool) continue;
+			/**
+			 * Tool name alone is not enough to pair on. Almost every action in a run is a click, so
+			 * a turn the run log never recorded — a retried click, an action that failed before the
+			 * step was written — silently consumed the NEXT step, shifting every later pairing by
+			 * one. Observed on a real run: a no-op press on an unlabelled image took the following
+			 * step's target, so its rect and role described a control it never touched.
+			 *
+			 * The element index is the same value on both sides and is exact, so it disambiguates
+			 * where the name cannot. Falling back to the name keeps coordinate-addressed actions
+			 * and older logs working.
+			 */
+			const stepEl = steps[probe].action.args?.element_index;
+			const turnEl = turn.arguments.element_index;
+			if (stepEl !== undefined && turnEl !== undefined && stepEl !== turnEl) continue;
+			match = steps[probe];
+			si = probe + 1;
+			break;
 		}
 		joined.push({ step: match, turn });
 	}
@@ -672,6 +737,8 @@ export interface BuildTrackInput {
 	steps: RunLogStep[];
 	turns: TrajectoryTurn[];
 	frameTimes: number[];
+	/** Epoch ms when recording actually began, so pre-take setup turns can be excluded. */
+	recordedFromMs?: number;
 	/** Usable frame filenames, index-aligned with frameTimes. Carried into the plan so the
 	 *  renderer resolves frames by name instead of re-deriving an index from the directory. */
 	frameFiles?: string[];
@@ -727,13 +794,44 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 	 * is genuinely no frame of them happening.
 	 */
 	const firstFrameMs = input.frameTimes[0] ?? 0;
+	/**
+	 * Nothing before the take begins.
+	 *
+	 * start_recording backfills turns from earlier in the driver session, so the home reset's own
+	 * clicks — navigating out of wherever the LAST run finished — arrive as the first turns and get
+	 * animated as though they were the task. `recordedFromMs` is stamped by the agent when
+	 * recording actually starts; without it the first usable frame is the best available proxy.
+	 */
+	const startMs = Math.max(firstFrameMs, input.recordedFromMs ?? 0);
 
 	for (const { step, turn } of joined) {
-		if (turn.epochMs < firstFrameMs) continue;
+		if (turn.epochMs < startMs) continue;
+		/**
+		 * Skip a click the driver warned about that also failed its own verification.
+		 *
+		 * Together those mean the agent pressed something that does not advertise AXPress and the
+		 * expected result did not appear — a no-op. Animating it shows the pointer making a
+		 * deliberate reach into a control that never reacts; on one run that was an unlabelled
+		 * image beside the search field, which reads as the cursor clicking the search bar for no
+		 * reason.
+		 *
+		 * Pixel delta is NOT the test, though it looks like the obvious one: that step measured
+		 * 0.49 because the previous navigation was still painting. Verification knows what the
+		 * action was supposed to achieve; a pixel count only knows that something moved.
+		 */
+		if (turn.warned && step?.verified === false) continue;
 		const dispatchMs = toOutputMs(plan, input.frameTimes, turn.epochMs - (turn.endMs - turn.startMs));
 		const completeMs = toOutputMs(plan, input.frameTimes, turn.epochMs);
 		const raw = actionPoint(turn);
-		const target = raw ? toFrame(raw, turn.captureWidth) : undefined;
+		// Corrected against the pixels before scaling: the change box is in the same capture space
+		// the driver reported the click point in.
+		const fixed = raw
+			? correctToChange(raw, turn.changeBox, {
+					width: turn.captureWidth ?? input.captureSize.width,
+					height: Math.round(((turn.captureWidth ?? input.captureSize.width) * input.frameSize.height) / input.frameSize.width),
+				})
+			: undefined;
+		const target = fixed ? toFrame(fixed, turn.captureWidth) : undefined;
 
 		if (target) {
 			const distance = Math.hypot(target.x - at.x, target.y - at.y);
@@ -778,11 +876,30 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 			 * position would put a highlight on whatever the pointer happens to overlap, including
 			 * nothing at all.
 			 */
-			if (step?.targetRect && step.targetRect.w > 0 && step.targetRect.h > 0)
+			/**
+			 * Only when the rect actually contains the point the driver clicked.
+			 *
+			 * AX geometry can be stale or ambiguous: one run's tree carried TWO "Save Changes"
+			 * buttons and the agent pressed the offscreen one, so both click_point and targetRect
+			 * pointed 41px above the visible button — the highlight landed on blank space beside
+			 * the real control. Requiring the rect to agree with the click point catches that
+			 * disagreement, and dropping the highlight is better than confidently drawing it in
+			 * the wrong place.
+			 */
+			const rect = step?.targetRect;
+			const agrees =
+				rect &&
+				rect.w > 0 &&
+				rect.h > 0 &&
+				at.x >= rect.x - HOVER_SLOP_PX &&
+				at.x <= rect.x + rect.w + HOVER_SLOP_PX &&
+				at.y >= rect.y - HOVER_SLOP_PX &&
+				at.y <= rect.y + rect.h + HOVER_SLOP_PX;
+			if (rect && agrees)
 				hovers.push({
 					startMs: moveStart + duration,
 					endMs: completeMs,
-					...step.targetRect,
+					...rect,
 					stepIndex: step.index,
 				});
 		}
