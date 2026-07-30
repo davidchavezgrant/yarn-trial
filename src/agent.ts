@@ -12,6 +12,7 @@ import {
 	dragMoved,
 	DRIVER_RULES,
 	ensureObservable,
+	checkableCount,
 	failedProvider,
 	findScopeAmbiguities,
 	findWindow,
@@ -35,6 +36,7 @@ import {
 	UNREADY_EXIT,
 	verificationTallies,
 	verify,
+	VISION_ONLY_RULES,
 	visualJudge,
 } from "./harness.js";
 import { DOM_ACT_TOOL, DOM_RULES, DomBackend, FIND_TOOL } from "./dom.js";
@@ -84,7 +86,7 @@ const RESPONSE_WINDOW_MS = 4000;
 const STAGE_SETTLE_HITS = 3;
 const STAGE_SETTLE_MAX_MS = 12_000;
 
-const systemPrompt = (rules: string, vision: boolean, vocab: TargetVocabulary): string => `You are a UI automation agent driving ${vocab.subject} through a UI driver. Each turn you receive an observation: ${vocab.container}'s interactive elements (addressing handle, role, label/value)${vision ? " and a screenshot" : "; element frames give positions — there is no screenshot"}. You perform ONE action per turn by calling the "act" tool, then the harness executes it, waits, re-observes, and reports back.
+const systemPrompt = (rules: string, vision: boolean, vocab: TargetVocabulary, ax = true): string => `You are a UI automation agent driving ${vocab.subject} through a UI driver. Each turn you receive an observation: ${ax ? `${vocab.container}'s interactive elements (addressing handle, role, label/value)${vision ? " and a screenshot" : "; element frames give positions — there is no screenshot"}` : `${vocab.container}'s window title and a screenshot — there is NO element list`}. You perform ONE action per turn by calling the "act" tool, then the harness executes it, waits, re-observes, and reports back.
 ${vocab.cautions ? `\n${vocab.cautions}\n` : ""}
 ${rules}
 - Set a concrete, checkable expectation for every action: textIncludes and/or textExcludes, literal substrings checked against the window title plus all element labels and values in the NEXT observation. This is MANDATORY — an act call carrying only a prose description is rejected and NOT executed, costing you a turn. Supply it even when you are certain the action will work.
@@ -280,6 +282,15 @@ async function main(): Promise<void> {
 	// text-only (title + AX elements with frames); capture for recording/artifacts is
 	// unaffected. Measures what the image channel is worth in actions/tokens/correctness.
 	const vision = !argv.includes("--no-vision");
+	// The complementary A/B arm: drop the ELEMENT LIST from every model message, leaving the
+	// screenshot as the model's only perception (vision-only). The harness keeps the full
+	// observation — verify(), the journal and teardown are instruments, not perception — so
+	// the arm isolates what the model sees without weakening what the run can prove.
+	const noAx = argv.includes("--no-ax");
+	if (noAx && !vision) {
+		console.error("--no-ax and --no-vision together leave the model with a window title and nothing else — refusing.");
+		process.exit(1);
+	}
 	// off | advisory (default) | block. Advisory records the judge's verdict without letting
 	// it decide the run: it is a second opinion, and a wrong confident verdict in either
 	// direction is worse than no verdict until we have a measured error rate for it.
@@ -288,7 +299,7 @@ async function main(): Promise<void> {
 	const backendKind = backendIdx >= 0 ? (argv[backendIdx + 1] ?? "ax") : "ax";
 	const args = argv.filter(
 		(a, i) =>
-			!["--record", "--hinted", "--no-reset", "--no-vision", "--allow-unready"].includes(a) &&
+			!["--record", "--hinted", "--no-reset", "--no-vision", "--no-ax", "--allow-unready"].includes(a) &&
 			(backendIdx < 0 || (i !== backendIdx && i !== backendIdx + 1)),
 	);
 	// `--url` is VALUE-bearing, so it is consumed as a pair before the positionals are read —
@@ -307,8 +318,14 @@ async function main(): Promise<void> {
 	// Calendar remains available by passing it explicitly.
 	const app = target.kind === "web" ? targetLabel(target) : (afterUrl[1] ?? "Yarn");
 	if (!task || !["ax", "dom"].includes(backendKind)) {
-		console.error('usage: tsx src/agent.ts "<task>" ["App Name"] [--record] [--backend ax|dom] [--no-vision]');
+		console.error('usage: tsx src/agent.ts "<task>" ["App Name"] [--record] [--backend ax|dom] [--no-vision] [--no-ax]');
 		console.error("--backend dom drives an Electron/browser target over CDP; launch it with --remote-debugging-port first.");
+		process.exit(1);
+	}
+	if (noAx && backendKind === "dom") {
+		// The DOM backend's observation IS a ref list; suppressing it leaves ref actions
+		// addressing handles the model has never seen.
+		console.error("--no-ax only applies to the ax backend — the DOM backend has no AX list to drop.");
 		process.exit(1);
 	}
 
@@ -408,6 +425,9 @@ async function main(): Promise<void> {
 					app,
 					backend: backendKind,
 					vision,
+					// What the MODEL was shown, so an A/B analysis reads arms off the logs
+					// themselves instead of trusting a dispatch manifest.
+					ax: !noAx,
 					grounding: groundingMeta,
 					hintedPrompt: audit.hinted,
 					hintReasons: audit.reasons,
@@ -466,7 +486,12 @@ async function main(): Promise<void> {
 	const warnings = graph ? scopeWarnings(graph) : "";
 	const ambiguities = graph ? findScopeAmbiguities(graph) : [];
 
-	const basePrompt = systemPrompt(backendKind === "dom" ? DOM_RULES : DRIVER_RULES, vision, targetVocabulary(target));
+	const basePrompt = systemPrompt(
+		backendKind === "dom" ? DOM_RULES : noAx ? VISION_ONLY_RULES : DRIVER_RULES,
+		vision,
+		targetVocabulary(target),
+		!noAx,
+	);
 	const system = grounding.notes
 		? `${basePrompt}\n\n# App grounding notes for ${app} (from a prior exploration pass — trust these to skip dead ends)\n${grounding.notes}${warnings}`
 		: basePrompt;
@@ -665,7 +690,7 @@ async function main(): Promise<void> {
 				role: "user",
 				content: [
 					{ type: "text", text: `Task: ${task}\nTarget app: ${app}\n\nInitial observation follows.` },
-					...observationBlocks(obs, vision),
+					...observationBlocks(obs, vision, !noAx),
 				],
 			},
 		];
@@ -814,7 +839,7 @@ async function main(): Promise<void> {
 				let finalCheck: { verified: boolean; note: string; evidence?: Expectation } | undefined;
 				let visual: VisualVerdict | undefined;
 				if (input.success) {
-					const checkable = input.evidence?.textIncludes?.length || input.evidence?.textExcludes?.length;
+					const checkable = checkableCount(input.evidence);
 					if (!checkable) {
 						console.log("    -> done(success) rejected: no checkable evidence");
 						messages.push({
@@ -924,7 +949,7 @@ async function main(): Promise<void> {
 				console.log(`\n=== DONE (${verdict}) after ${records.length} actions ===`);
 				console.log(input.summary);
 				const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
-				console.log(`stats: ${records.length} actions, ${elapsedSec}s, ${usage.modelCalls} model calls, ${usage.outputTokens} output tokens, grounding=${groundingMeta.provenance}, vision=${vision}, hintedPrompt=${audit.hinted}, homeReset=${homeReset}`);
+				console.log(`stats: ${records.length} actions, ${elapsedSec}s, ${usage.modelCalls} model calls, ${usage.outputTokens} output tokens, grounding=${groundingMeta.provenance}, vision=${vision}, ax=${!noAx}, hintedPrompt=${audit.hinted}, homeReset=${homeReset}`);
 				console.log(`verification: ${records.length - unverified}/${records.length} steps verified (${textSteps} by text, ${geometrySteps} by geometry, ${pixelSteps} by pixels only)${expectationRejections ? `, ${expectationRejections} call(s) rejected for missing checks` : ""}${finalCheck ? `; final goal check: ${finalCheck.verified ? "PASSED" : "failed"} (${finalCheck.evidence?.textIncludes?.join(", ") ?? ""})` : ""}`);
 				if (visual && visual.verdict !== "PASS")
 					console.log(`NOTE: visual judge returned ${visual.verdict} — text evidence passed, but the final frame did not independently confirm the goal.`);
@@ -942,7 +967,7 @@ async function main(): Promise<void> {
 			// expectation arrives silently — and an unverifiable action that "worked"
 			// is indistinguishable from one we simply never checked. Refuse to act
 			// until the model commits to a checkable claim.
-			const checkable = input.expectation?.textIncludes?.length || input.expectation?.textExcludes?.length;
+			const checkable = checkableCount(input.expectation);
 			if (!checkable) {
 				console.log("    -> ✗ rejected: no checkable expectation (textIncludes/textExcludes)");
 				expectationRejections++;
@@ -963,6 +988,35 @@ async function main(): Promise<void> {
 										"title, element labels, or element values.\n" +
 										"A prose description alone cannot be verified, so the action was not performed. " +
 										"Re-issue the same action with a checkable expectation.",
+								},
+							],
+						},
+					],
+				});
+				continue;
+			}
+
+			// The vision-only arm never receives element handles, so an element_index in its act
+			// call is a fabricated number — and executing it would actuate whatever element the
+			// walk happens to put at that position, crediting the arm with an AX-addressed action
+			// it could not have aimed. Rejected unexecuted, same shape as the expectation gate.
+			if (noAx && input.action?.element_index !== undefined) {
+				console.log("    -> ✗ rejected: element_index in a vision-only run");
+				expectationRejections++;
+				messages.push({
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: toolUse.id,
+							is_error: true,
+							content: [
+								{
+									type: "text",
+									text:
+										"ACTION NOT EXECUTED — you passed element_index, but this run has no element list; " +
+										"any index is a guess. Address the target by screenshot pixel instead: x/y for clicks, " +
+										"from_x/from_y/to_x/to_y for drags.",
 								},
 							],
 						},
@@ -1129,7 +1183,7 @@ async function main(): Promise<void> {
 								type: "text",
 								text: `Driver result: ${resultText}\nVerification: ${verdict.verified ? "PASSED" : `FAILED — ${verdict.note}`}\n\nNew observation follows.`,
 							},
-							...observationBlocks(obs, vision),
+							...observationBlocks(obs, vision, !noAx),
 						],
 					},
 				],

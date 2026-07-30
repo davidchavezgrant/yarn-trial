@@ -1039,7 +1039,7 @@ export function recoverLeakedGraph(text: string): {
  * mistake is not recoverable.
  */
 const DESTRUCTIVE_LABEL =
-	/\b(delete|remove|discard|erase|trash|publish|export|download|send|share|invite|buy|purchase|subscribe|unsubscribe|sign out|log out|revoke|deactivate|reset|restore|merge|archive)\b/i;
+	/\b(delete|remove|discard|erase|trash|clear|publish|export|download|send|share|invite|buy|purchase|subscribe|unsubscribe|sign ?out|log ?out|revoke|deactivate|reset|restore|merge|archive)\b/i;
 
 /**
  * The same guard, retuned for the open web, where the verb set above is wrong in both
@@ -1054,7 +1054,7 @@ const DESTRUCTIVE_LABEL =
  * side effect, not an externally visible one.
  */
 const DESTRUCTIVE_LABEL_WEB =
-	/\b(delete|remove|discard|erase|trash|publish|send|share|invite|buy|purchase|subscribe|unsubscribe|sign out|log out|revoke|deactivate|reset|restore|merge|archive|confirm|submit|post|reply|accept|decline|place order|checkout|check out|pay|book|sign up|register|apply|transfer|withdraw)\b/i;
+	/\b(delete|remove|discard|erase|trash|clear|publish|send|share|invite|buy|purchase|subscribe|unsubscribe|sign ?out|log ?out|revoke|deactivate|reset|restore|merge|archive|confirm|submit|post|reply|accept|decline|place order|checkout|check out|pay|book|sign ?up|register|apply|transfer|withdraw)\b/i;
 /**
  * Which control an action operates, resolved against the observation the model was looking at.
  *
@@ -1113,8 +1113,14 @@ export function destructiveTarget(action: any, obs: ObservationBundle, web = fal
 	return pattern.test(target.name) ? target.name : undefined;
 }
 
-export function observationBlocks(obs: ObservationBundle, vision = true): Array<Anthropic.TextBlockParam | Anthropic.ImageBlockParam> {
-	const text: Anthropic.TextBlockParam = { type: "text", text: `Window title: "${obs.title}"\nElements:\n${obs.elementsText}` };
+export function observationBlocks(obs: ObservationBundle, vision = true, ax = true): Array<Anthropic.TextBlockParam | Anthropic.ImageBlockParam> {
+	// `ax: false` is the vision-only measurement arm: the MODEL loses the element list, while
+	// the harness keeps the full bundle — verify(), the mutation journal and teardown all still
+	// read it. The isolation is of what the model perceives, not of what the run can prove.
+	const text: Anthropic.TextBlockParam = {
+		type: "text",
+		text: ax ? `Window title: "${obs.title}"\nElements:\n${obs.elementsText}` : `Window title: "${obs.title}"`,
+	};
 	// An empty frame is possible on the DOM path, where a missing screenshot degrades the
 	// observation rather than ending the run (see DomBackend.observe). Sending it anyway would
 	// put an empty base64 image block on the wire and the API would reject the whole request —
@@ -1840,11 +1846,34 @@ export interface VerifyResult {
  *   absent before, or an exclude present before. Final-state checks (done) pass no
  *   prevHaystack — there the claim is about state, not change.
  */
+/**
+ * How many checkable substrings an expectation actually carries, blanks excluded.
+ *
+ * The gate that decides whether an act/done call is checkable at all must agree with
+ * `verify()` about what counts, or a `textIncludes: [""]` passes the gate ("length 1") and is
+ * then silently dropped by verify — the two disagreeing is exactly how the blank-substring
+ * bypass slipped through. Both call this.
+ */
+export function checkableCount(expectation: Expectation | undefined): number {
+	if (!expectation) return 0;
+
+	return (expectation.textIncludes ?? []).filter((t) => t.trim() !== "").length
+		+ (expectation.textExcludes ?? []).filter((t) => t.trim() !== "").length;
+}
+
 export function verify(expectation: Expectation, haystack: string, prevHaystack?: string): VerifyResult {
-	const includes = expectation.textIncludes ?? [];
-	const excludes = expectation.textExcludes ?? [];
+	// Blank and whitespace-only substrings are dropped before anything else, because every
+	// string contains "" and every rendered observation contains a space: an include of "" or
+	// " " passes the presence check against ANY screen. On the done path there is no
+	// prevHaystack, so the discrimination guard below never runs to catch it either — which
+	// made `done(success, evidence: {textIncludes: [""]})` accepted against any final
+	// observation, and `wait` + `textIncludes: [""]` a free "verified" step. A check the whole
+	// screen satisfies is not a check; strip these, then treat "nothing left to check" exactly
+	// as an empty expectation.
+	const includes = (expectation.textIncludes ?? []).filter((t) => t.trim() !== "");
+	const excludes = (expectation.textExcludes ?? []).filter((t) => t.trim() !== "");
 	if (includes.length === 0 && excludes.length === 0)
-		return { verified: false, note: "no checkable expectation (textIncludes/textExcludes)" };
+		return { verified: false, note: "no checkable expectation (non-empty textIncludes/textExcludes)" };
 
 	const missing = includes.filter((t) => !haystack.includes(t.toLowerCase()));
 	const present = excludes.filter((t) => haystack.includes(t.toLowerCase()));
@@ -1883,8 +1912,18 @@ export function verify(expectation: Expectation, haystack: string, prevHaystack?
  * than WHAT to achieve. Outcome verbs ("create a draft", "set the voice", "open the
  * Script tab") are legitimate task specification and do not trip it.
  */
-const DRIVER_VOCAB = /\b(set_value|type_text|press_key|right_click|double_click|element_index|delivery_mode|AXPress|AX[A-Z]\w+)\b/g;
-const MECHANIC_VERBS = /\b(click|clicks|clicking|clicked|right[- ]click\w*|double[- ]click\w*|press|presses|pressing|keystroke\w*|select all|scroll\w*|hover\w*|drag\w*|cmd\+|ctrl\+|option\+|shift\+|⌘)/gi;
+// `i` flag: a hinted prompt written with capitalised snake_case tool names ("Set_Value") is
+// still a hinted prompt. The AX alternate carries its own case in the class.
+const DRIVER_VOCAB = /\b(set_value|type_text|press_key|right_click|double_click|element_index|delivery_mode|axpress|ax[A-Za-z]\w+)\b/gi;
+// Every verb bounded on BOTH sides, so "clickable" and "pressure" no longer read as method
+// hints and refuse a legitimate goal-only prompt. These are the AMBIGUOUS mechanics — one may
+// be incidental ("...the Save button"), so the threshold is two.
+const MECHANIC_VERBS = /\b(?:click(?:s|ing|ed)?|right[- ]click\w*|double[- ]click\w*|press(?:es|ing|ed)?|keystroke\w*|select all|scroll\w*|hover\w*|drag\w*)\b/gi;
+// A named keystroke is a pure method hint with no innocent reading, so ONE is enough — like a
+// coordinate. The cmd glyph lives here rather than in MECHANIC_VERBS because `⌘` is a non-word
+// character: a leading `\b` can never precede it, so inside the bounded group it was dead and
+// a prompt handing over "⌘+," slipped through with zero hits.
+const KEYSTROKE_HINT = /(?:cmd|ctrl|control|option|opt|alt|shift)\s*\+|⌘|⌥|⌃|⇧/gi;
 /**
  * Screen coordinates, which arrived as a hint vector the moment painted targets became
  * actionable. A coordinate is the purest possible method hint: deriving it from the pixels
@@ -1904,10 +1943,18 @@ export interface PromptAudit {
 
 export function auditTaskPrompt(task: string): PromptAudit {
 	const reasons: string[] = [];
-	const vocab = [...new Set(task.match(DRIVER_VOCAB) ?? [])];
-	const mechanics = [...new Set((task.match(MECHANIC_VERBS) ?? []).map((m) => m.toLowerCase()))];
+	const vocab = [...new Set((task.match(DRIVER_VOCAB) ?? []).map((m) => m.toLowerCase()))];
+	// OCCURRENCES, not unique spellings. A dictated click-path — "click Brand Kit, click
+	// Screen Clips, click Cursor Style" — is four hints that all spell "click", and deduping
+	// them to one collapsed a complete method recipe below the ≥2 threshold and passed it as
+	// goal-only. The threshold still allows ONE incidental mechanic verb ("...the Save
+	// button"); two or more describe HOW rather than WHAT.
+	const mechanicHits = (task.match(MECHANIC_VERBS) ?? []).map((m) => m.toLowerCase());
+	const mechanics = [...new Set(mechanicHits)];
 	if (vocab.length > 0) reasons.push(`names driver/AX internals: ${vocab.join(", ")}`);
-	if (mechanics.length >= 2) reasons.push(`describes interaction mechanics, not just the goal: ${mechanics.join(", ")}`);
+	if (mechanicHits.length >= 2) reasons.push(`describes interaction mechanics, not just the goal: ${mechanics.join(", ")}`);
+	const keys = [...new Set((task.match(KEYSTROKE_HINT) ?? []).map((m) => m.toLowerCase().replace(/\s+/g, "")))];
+	if (keys.length > 0) reasons.push(`names a keystroke, which is a method not a goal: ${keys.join(", ")}`);
 	const coords = [...new Set(task.match(COORD_HINT) ?? [])];
 	if (coords.length > 0) reasons.push(`gives screen coordinates, which the agent must derive itself: ${coords.join(", ")}`);
 
@@ -2105,6 +2152,23 @@ Painted targets (canvases, timelines, image regions):
 - Prefer element_index whenever an element covers what you mean. Coordinates cannot be verified by the harness the way labels can, so they are the fallback, not the default.
 - Dragging a thing puts it under wherever you released. If a pointer indicator follows your press, it now sits on top of the thing you just dropped, so pressing there again grabs the indicator instead — a reverse drag is NOT an undo.
 - A canvas usually reacts to ANY press (scrubbing, selecting, deselecting). Text appearing after you act on a canvas may just be that reaction, not proof you hit the target.`;
+
+/**
+ * The vision-only measurement arm's replacement for DRIVER_RULES. Exists because most of
+ * DRIVER_RULES teaches element_index discipline, and an agent with no element list needs the
+ * opposite: everything is a painted target. Expectations still work unchanged — verification
+ * reads the harness's own observation, which keeps its element text regardless of what the
+ * model was shown — and that is what makes this arm comparable to the others at all.
+ */
+export const VISION_ONLY_RULES = `Rules for this driver (follow them):
+- You see the screenshot ONLY. There is no element list and no element_index — never pass one. Address every click/drag by screenshot pixel: x/y on click, from_x/from_y/to_x/to_y on drag.
+- Screenshot pixels are exactly what the driver consumes — the pixel you read IS the pixel it acts on.
+- Aim at the CENTER of the thing you mean. Small targets punish edge guesses.
+- Text fields are often pre-filled: click the field to focus it, then press cmd+a, then type. Never type without focusing first.
+- Menu-bar keyboard shortcuts (like cmd+,) need delivery_mode "foreground". Escape to close overlays also usually needs "foreground".
+- A silent no-op click means your next keystrokes hit global shortcuts and can open random overlays. If the screenshot shows an unexpected overlay, close it (escape, foreground) before continuing.
+- Your expectations are still checked against the app's rendered text (the harness reads it even though you cannot), so write textIncludes/textExcludes with the literal strings you can READ IN THE SCREENSHOT.
+- Dragging a thing puts it under wherever you released. A reverse drag is NOT an undo.`;
 
 /**
  * Verified-step tallies for a run log, split by evidence channel and never summed into one

@@ -87,14 +87,60 @@ test("auditTaskPrompt__Passes__When__SingleIncidentalMechanicVerb", () => {
 });
 
 test("auditTaskPrompt__ReportsEveryReason__When__PromptHasMultipleHintKinds", () => {
+	// Three distinct hint kinds here: the mechanic verbs (click, press), the keystroke (cmd+a),
+	// and the driver-internal name (set_value). Each is reported separately.
 	const audit = auditTaskPrompt("Fix the title: click it, press cmd+a, then use set_value to write Hello");
 	assert.equal(audit.hinted, true);
-	assert.equal(audit.reasons.length, 2);
+	assert.equal(audit.reasons.length, 3);
+});
+
+test("auditTaskPrompt__Flags__When__DictatedClickPathRepeatsOneVerb", () => {
+	// A complete method recipe spelling "click" four times is four hints, not one — deduping
+	// them before the threshold used to pass this as goal-only.
+	const audit = auditTaskPrompt("Click Brand Kit, click Screen Clips, click Cursor Style, click Pointer-first");
+	assert.equal(audit.hinted, true);
+	assert.match(audit.reasons.join(" "), /interaction mechanics/);
+});
+
+test("auditTaskPrompt__Flags__When__PromptHandsOverACmdKeystrokeGlyph", () => {
+	// `⌘` is a non-word char, so it was dead inside the boundary-anchored verb group and a
+	// prompt naming the exact shortcut slipped through with zero hits.
+	const audit = auditTaskPrompt("Open settings with the keyboard shortcut ⌘+,");
+	assert.equal(audit.hinted, true);
+	assert.match(audit.reasons.join(" "), /keystroke/);
+});
+
+test("auditTaskPrompt__Flags__When__DriverNameIsCapitalised", () => {
+	assert.equal(auditTaskPrompt("use Set_Value on the notes field").hinted, true);
+});
+
+test("auditTaskPrompt__Passes__When__GoalContainsClickableOrPressure", () => {
+	// Both words embed a mechanic verb but describe an outcome; bounding the verbs on both
+	// sides stops them refusing a legitimate goal-only prompt.
+	assert.equal(auditTaskPrompt("Make the header clickable and fix the pressure warning").hinted, false);
 });
 
 // verify(): historical run logs showed 2-6 steps per run "verified" by expectations
 // that checked nothing, so an empty expectation must now FAIL, and a satisfied check
 // must discriminate pre-action state from post-action state.
+
+test("verify__Fails__When__TextIncludesIsBlank", () => {
+	// Every string contains "" and every screen contains " ", so a blank check passes the
+	// presence test against ANY observation. On the done path there is no prevHaystack to catch
+	// it, which made done(success, evidence:{textIncludes:[""]}) accepted anywhere. Blanks are
+	// dropped, then a check with nothing left fails as uncheckable.
+	for (const blank of ["", " ", "\t"]) {
+		const result = verify({ description: "", textIncludes: [blank] }, "a totally unrelated screen");
+		assert.equal(result.verified, false, JSON.stringify(blank));
+		assert.match(result.note, /no checkable expectation/);
+	}
+});
+
+test("verify__IgnoresBlankSubstrings__When__MixedWithRealOnes", () => {
+	// A real include alongside a blank must still be checked as if the blank were not there.
+	assert.equal(verify({ description: "", textIncludes: ["", "paris"] }, "timezone: paris").verified, true);
+	assert.equal(verify({ description: "", textIncludes: ["", "paris"] }, "timezone: new york").verified, false);
+});
 
 test("verify__Fails__When__ExpectationHasNoCheckableSubstrings", () => {
 	const result = verify({ description: "the menu should open" }, "anything at all");
@@ -477,6 +523,19 @@ test("observationBlocks__KeepsTextIdentical__When__VisionDisabled", () => {
 	assert.equal(withVision.length, 2);
 	assert.equal(withVision[1].type, "image");
 	assert.deepEqual(without[0], withVision[0]);
+});
+
+test("observationBlocks__OmitsElements__When__AxDisabled", () => {
+	// The vision-only arm: the model loses the element list but keeps the screenshot and the
+	// window title. The bundle itself is untouched — verify()/journal/teardown still read it.
+	const blocks = observationBlocks(bundle, true, false);
+	assert.equal(blocks.length, 2);
+	assert.equal(blocks[0].type, "text");
+	const text = (blocks[0] as { text: string }).text;
+	assert.match(text, /Settings/);
+	assert.doesNotMatch(text, /AXButton/);
+	assert.doesNotMatch(text, /Save/);
+	assert.equal(blocks[1].type, "image");
 });
 
 // --- pixelDelta: the cheap half of visual verification. Rendered content is absent from
