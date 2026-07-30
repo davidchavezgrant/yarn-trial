@@ -7,15 +7,56 @@
 #   ./run "<task>" "App Name" [--record]    ...against a named app, flags passed through
 #   ./run explore "App Name"                grounding pass -> docs/appmaps/
 #   ./run doctor                            check permissions, keys, deps before demoing
+#   ./run enroll                            one-time: mint the fleet key, pin host keys,
+#                                           install it on each Mac (prompts for passwords)
+#   ./run enroll --export [file]            bundle that key + the model key for teammates
+#   ./run hosts                             show the fleet and which Macs are free
+#   ./run provision [--host <name>]         push this checkout to the Macs, install the runner
+#   ./run provision --doctor                what each Mac is missing before it can run
+#   ./run provision --restart               bounce runners whose TCC grant landed too late
+#   ./run dispatch auto "<task>" "App"      run on a free Mac, follow it, pull artifacts back
+#   ./run dispatch <mac> explore "App"      grounding pass on a named Mac
+#   ./run dispatch <mac> follow <jobId>     re-attach to a run already in flight
+#   ./run dispatch <mac> pull <jobId>       fetch the artifacts of a finished run
+#   ./run install "App" <https://…|path>    put a target app on the Macs, presence-verified
+#   ./run install "App" --check             is it installed on each Mac, and where
+#   ./run signin <mac> ["App"]              screen-share to a Mac to sign an app in by hand
 #
-# Auth: reads .env / ../yarn/.env if present, else expects OPENROUTER_API_KEY or
-# ANTHROPIC_API_KEY already exported.
+# Teammates run none of that: drop team-credentials.json beside this script (or in
+# ~/.yarn-runner/, or ship it inside the .app) and the first ./run installs the fleet key and
+# the model key for them. Nothing to generate, nothing to send anyone.
+#
+# Auth: reads .env / ../yarn/.env / ~/.yarn-runner/env if present, else expects
+# OPENROUTER_API_KEY or ANTHROPIC_API_KEY already exported.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-# Keys live outside the repo (../yarn/.env is where David keeps the OpenRouter one).
+runner_dir=${YARN_RUNNER_DIR:-$HOME/.yarn-runner}
+
+# Before the bundle check below, which shells out to tsx.
+[[ -d node_modules ]] || { echo "installing dependencies…"; npm install --silent; }
+
+# A teammate's first ./run IS their enrollment. If the shipped team bundle is here and this
+# machine has no fleet key yet, install it now — otherwise the first remote command fails with
+# a missing-identity error that reads like a bug rather than a setup step. One-time: the guard
+# is the key's existence, so this costs nothing on every subsequent run.
+if [[ ! -f $runner_dir/id_ed25519 ]]; then
+	for bundle in "${YARN_TEAM_CREDENTIALS:-}" team-credentials.json "$runner_dir/team-credentials.json"; do
+		if [[ -n $bundle && -f $bundle ]]; then
+			# Braces are load-bearing: the ellipsis is multibyte UTF-8 and bash reads those
+			# bytes as part of the identifier, so "$bundle…" is an unbound variable under set -u.
+			echo "installing team credentials from ${bundle}…"
+			npx tsx src/remote/enroll.ts || true
+			break
+		fi
+	done
+fi
+
+# Keys live outside the repo (../yarn/.env is where David keeps the OpenRouter one). The
+# runner dir comes last and is the teammate case: the bundle wrote the model key there, and
+# nothing else on their machine has one.
 # `set -a` exports everything sourced so child processes inherit it.
-for env_file in .env ../yarn/.env; do
+for env_file in .env ../yarn/.env "$runner_dir/env"; do
 	if [[ -f $env_file ]]; then
 		set -a
 		# shellcheck disable=SC1090
@@ -41,8 +82,6 @@ Wait for it, or: pkill -f 'tsx src/'"
 	fi
 }
 
-[[ -d node_modules ]] || { echo "installing dependencies…"; npm install --silent; }
-
 cmd=${1:-app}
 
 case $cmd in
@@ -66,12 +105,65 @@ explore)
 	exec npx tsx src/explore.ts "$@"
 	;;
 
+enroll)
+	# Interactive by necessity: installing a public key requires already being allowed in,
+	# and the only credential that proves that is the admin password. No key needed here —
+	# this touches the fleet, not the model.
+	# "$@" is not decoration: without it --export never reaches enroll.ts, which reads it from
+	# process.argv, and the export silently does a plain enroll instead.
+	shift
+	exec npx tsx src/remote/enroll.ts "$@"
+	;;
+
+hosts)
+	exec npx tsx src/remote/fleet.ts
+	;;
+
+provision)
+	# Pushes this checkout to each Mac and installs the LaunchAgent that holds the runner
+	# socket. Must follow enroll: it reuses the pinned known_hosts and the fleet identity.
+	shift
+	exec npx tsx src/remote/provision.ts "$@"
+	;;
+
+dispatch)
+	# No assert_no_run_in_flight: that guard is about THIS machine's driver session, and the
+	# remote lease is the mutex for the target. No have_key either — the model key is read on
+	# the far side from its own ~/.yarn-runner/env, so requiring one here is a false refusal.
+	shift
+	exec npx tsx src/remote/dispatch.ts "$@"
+	;;
+
+install)
+	# Puts a target app on the Macs before a run needs it. Presence is decided by a fresh probe
+	# of the four Applications directories, never by the installer's exit code — a dmg can mount
+	# and copy cleanly and still leave nothing named what the run will try to open. Must follow
+	# enroll: it reuses the pinned known_hosts and the fleet identity.
+	shift
+	exec npx tsx src/remote/install.ts "$@"
+	;;
+
+signin)
+	# The manual half of remote auth. An app behind SSO cannot be signed in by the agent —
+	# credentials would land in observations, in the model's context and in the recording — so
+	# a human does it once per app per Mac over screen sharing and the app keeps the session.
+	# No have_key: this never talks to a model.
+	shift
+	exec npx tsx src/remote/signin.ts "$@"
+	;;
+
 doctor)
 	printf '\033[1mchecking demo prerequisites\033[0m\n'
 	ok() { printf '  \033[32m✓\033[0m %s\n' "$1"; }
 	no() { printf '  \033[31m✗\033[0m %s\n' "$1"; }
 
 	if have_key; then ok "API key present"; else no "no OPENROUTER_API_KEY / ANTHROPIC_API_KEY"; fi
+	# Fingerprint only, never the key: doctor output is the thing people paste into a message.
+	if [[ -f $runner_dir/id_ed25519 ]]; then
+		ok "fleet ssh identity ($(ssh-keygen -lf "$runner_dir/id_ed25519.pub" 2>/dev/null | awk '{print $2}' || echo 'fingerprint unavailable'))"
+	else
+		no "no fleet identity — drop team-credentials.json here, or run: ./run enroll"
+	fi
 	[[ -d node_modules ]] && ok "node_modules installed" || no "run: npm install"
 	command -v ffmpeg >/dev/null && ok "ffmpeg (video assembly)" || no "ffmpeg missing — --record cannot assemble an mp4"
 	python3 -c 'import PIL' 2>/dev/null && ok "python3 + PIL (frame QC, pixel deltas)" || no "python3/PIL missing — pixel-delta verification degrades"

@@ -326,3 +326,51 @@ Yarn nodes. Its limits:
   the run log records why.
 - Native (non-Chromium) apps have no DOM attributes at all — this buys nothing there.
 
+---
+
+## 12. Running on someone else's Mac has its own set of walls
+
+**CONSTRAINT** · found 2026-07-30 bringing up the three colo Macs
+
+Moving runs off this laptop and onto dedicated machines removed the Space and focus problems
+in §1 and §2 — nobody is sitting at those Macs to steal focus. It introduced these instead,
+each of which cost real time to diagnose because none of them reports an error.
+
+- **A run started over SSH perceives nothing, silently.** macOS attributes Accessibility and
+  Screen Recording to the *responsible* process and children inherit that attribution, so a
+  run spawned from an sshd session is asking for grants sshd does not have. The result is an
+  empty AX tree and a black screenshot with **no error on either** — indistinguishable from
+  an app that has not finished launching. This is why each Mac runs the Electron app itself
+  as a LaunchAgent (`--serve`), bootstrapped into `gui/<uid>` rather than `user/<uid>`, and
+  why every run is a child of that process. Nothing else on the fleet path can be relaxed
+  without walking back into this.
+- **The grant has to be given by a human at the machine, once per Mac.** TCC is SIP-protected;
+  there is no API, no MDM shortcut we have, and no way to copy the database. Screen Recording
+  additionally has no `+` button, so the app has to *ask* before it even appears in the list
+  to be granted (§ electron/main.ts `requestPermissions`). A new Mac is therefore never
+  zero-touch to the first run.
+- **Neither is signing an app in.** SSO with MFA is not automatable in the general case, and
+  the general case is the requirement here. `./run signin <mac> "<App>"` is the concession:
+  it opens a screen share with the app already in front, waits for the app to reach the home
+  state a run would demand, and closes the viewer itself. It is once per app per Mac, and it
+  needs a person. No credential enters the agent loop, deliberately — every observation and
+  every frame reaches the model and the recording.
+- **Screen Sharing prompts for the Mac's own login at least once per Mac**, and that prompt
+  cannot be pre-filled from here without putting a password in an argv and a printed URL. The
+  URL carries the username, which turns two prompts into one and lets the keychain answer the
+  second from then on. The first one is unavoidable.
+- **A locked screen fails runs in a way that looks like AX flakiness.** The AX tree is present
+  but empty and screenshots are the lock wallpaper. `screenIsLocked()` (via `ioreg`, so it
+  works from any runner context) now names it instead of leaving it as one more §10 dropout.
+- **One run at a time per Mac, enforced by a lease.** Not a scaling choice: §6's shared-daemon
+  problem is per-machine, so two runs on one Mac kill each other. Three Macs is three
+  concurrent runs, and that is the whole of the parallelism available today.
+- **A checkout on three machines drifts.** `provision` rsyncs and restarts the runner, and
+  `doctor` reports each Mac's checkout, grants, sidecar and runner state — but nothing
+  prevents a Mac from being behind, and a run against a stale checkout fails in whatever way
+  that checkout was broken. Check `doctor` before believing a fleet-wide result.
+- **LaunchServices can bind an app name to the wrong bundle.** Seen twice with a build that
+  ships a nested copy of itself inside `Contents/Resources`: `open -a <name>` launched the
+  inner bundle, which starts and then behaves like a different application. There is no
+  app-specific fix in the code, and a generic guard is still open (#39).
+
