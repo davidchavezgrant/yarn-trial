@@ -1,11 +1,12 @@
 import { Driver } from "./driver.js";
+import { outDir } from "./paths.js";
 
 // Usage: tsx step.mts '<json array of {name, args}>' [screenshot-name]
 // Finds Notion Calendar's main window, injects pid/window_id into each action,
 // runs them in order, then snapshots window state + screenshot.
 
 const APP = "Notion Calendar";
-const OUT = `${process.cwd()}/out`;
+const OUT = outDir();
 
 async function main(): Promise<void> {
 	const actions: Array<{ name: string; args: Record<string, unknown> }> =

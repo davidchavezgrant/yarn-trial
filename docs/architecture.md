@@ -121,10 +121,28 @@ canonical task: **"show me how to change the cursor type"**.
 
 **Deferred, with rationale on file**: recipe compilation (grounding-time thinking →
 replayable deterministic sequences, model as exception handler — justified by cost +
-determinism now that latency is moot); CDP for Electron targets (`src/dom.ts` started —
-needs a debug port we can't assume, and §5 closed most of the gap); native-AppKit
-generalization (both proven apps are Electron; the "arbitrary Mac apps" claim is
-untested).
+determinism now that latency is moot); native-AppKit generalization (out of scope per
+David 2026-07-30 — focus on Electron).
+
+## 8a. Web targets are a target KIND, not a specially-named app (2026-07-30)
+
+`Target = {kind:"app",name} | {kind:"web",url,origin}` (`src/target.ts`) replaces the bare
+app-name string. Web artifacts key on the origin (`docs/appmaps/web-www.notion.so.md`) while
+`appSlug` keeps its exact prior behaviour for Mac apps, so no existing appmap, run log or job
+id moves. `--url` is value-bearing and consumed by `parseTarget` before positionals are read;
+`buildRunArgs` is the single argv builder the shell, the fleet runner and the CLI all share.
+
+**Both backends work, and they need different things:**
+- **DOM/CDP** (`--backend dom`, the default for web) — snapshots the page, so browser chrome
+  never enters the frontier. Requires `browser_prepare`, which needs a per-call approval token
+  minted under a pty (`mintApprovalToken`; LIMITATIONS §12).
+- **AX** (`--backend ax`) — reads the window, needs no CDP and no token. Browser chrome is
+  excluded by an `AXWebArea` subtree filter (`observe(..., {webAreaOnly})`), which is the one
+  thing the AX path needs that a Mac app does not.
+
+Verified end to end 2026-07-30 on both backends. What the URL buys beyond reachability: it is
+a verification channel a native app has no equivalent of — navigation changes it, so a route
+check is discriminating by construction, which is exactly what `verify()` demands.
 
 ## 9. One shell, Electron, with the page held at arm's length
 

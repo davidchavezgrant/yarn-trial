@@ -1,7 +1,20 @@
 import { app, BrowserWindow, ipcMain, net, protocol, systemPreferences } from "electron";
 import fs from "node:fs";
-import { listApps, listRecordedRuns, readUiState, resolveVideo, RunController, writeUiState, type RunOptions } from "../src/ui-core.js";
+import { listApps, listRecordedRuns, readUiState, resolveVideo, RunController, writeUiState, type RunHandlers, type RunOptions } from "../src/ui-core.js";
 import { page } from "../src/ui-page.js";
+import { describeCredentials, provisionFromBundle } from "../src/remote/team.js";
+import {
+	annotateRuns,
+	fleetView,
+	hostChoices,
+	isRemoteHost,
+	readRemotePrefs,
+	RemoteRunController,
+	saveModelKey,
+	writeRemotePrefs,
+} from "../src/ui-remote.js";
+import { startRunner } from "../src/runner/serve.js";
+import { PACKAGED_ENV } from "../src/runner/spawn.js";
 
 /**
  * Electron shell for the demo agent.
@@ -37,6 +50,7 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 const runs = new RunController();
+const remote = new RemoteRunController();
 let win: BrowserWindow | undefined;
 
 /** Injected before the shared app script; implements the `window.__bus` contract. */
@@ -51,8 +65,17 @@ window.__bus = {
   // handler at all (symptom: a black video stuck at 0:00 and no protocol log line).
   videoUrl: (rel) => window.__videoBase + rel.split('/').map(encodeURIComponent).join('/'),
   run: (opts) => ipcRenderer.invoke('run', opts),
-  ground: (app) => ipcRenderer.invoke('ground', app),
+  ground: (app, host, url) => ipcRenderer.invoke('ground', { app, host, url }),
   stop: () => ipcRenderer.invoke('stop'),
+  // Fleet. Every one of these answers something on a "no hosts.json" machine rather than
+  // throwing, so the local-only shell needs no branch of its own.
+  loadHosts: () => ipcRenderer.invoke('hosts'),
+  loadFleet: () => ipcRenderer.invoke('fleet'),
+  attach: (host, jobId, app) => ipcRenderer.invoke('attach', { host, jobId, app }),
+  loadCreds: () => ipcRenderer.invoke('creds'),
+  saveKey: (key) => ipcRenderer.invoke('creds:save', key),
+  loadHostPref: () => ipcRenderer.invoke('host:load'),
+  saveHostPref: (host) => ipcRenderer.send('host:save', host),
   loadState: () => ipcRenderer.invoke('state:load'),
   // send, not invoke: this is also called from beforeunload, where the renderer will not
   // survive long enough to await a reply. The message is queued before teardown.
@@ -106,13 +129,18 @@ function createWindow(): void {
 	void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
 	win.on("closed", () => {
 		runs.stop();
+		// detach, not stop: a local run dies with the window because its child is ours, but a
+		// remote job is a detached process on another Mac and closing a viewer must not kill it.
+		// The fleet row keeps its id, so the next launch can offer to follow it again.
+		remote.detach();
 		win = undefined;
 	});
 }
 
 ipcMain.handle("apps", () => listApps());
 
-ipcMain.handle("runs", () => listRecordedRuns());
+/** Gallery entries, tagged with the Mac each one was pulled from. Local runs carry no tag. */
+ipcMain.handle("runs", () => annotateRuns(listRecordedRuns()));
 
 /**
  * Videos are served through a custom scheme rather than file:// — a data: document has a
@@ -159,39 +187,142 @@ function registerVideoProtocol(): void {
 	});
 }
 
-ipcMain.handle("run", (_event, opts: RunOptions) => {
-	const err = runs.start(opts, {
-		onLine: (line) => win?.webContents.send("line", line),
-		onDone: (code, elapsed) => win?.webContents.send("done", { code, elapsed }),
-	});
+const handlers: RunHandlers = {
+	onLine: (line) => win?.webContents.send("line", line),
+	onDone: (code, elapsed) => win?.webContents.send("done", { code, elapsed }),
+};
+
+/**
+ * One run at a time in this shell, local or remote.
+ *
+ * Not because two are technically impossible — a local run and a run on a colo Mac are on
+ * different machines and do not contend — but because the window has one log pane, one status
+ * line and one Stop button. Two streams into one pane is a transcript nobody can read, and a
+ * Stop button whose target is ambiguous is worse than no Stop button.
+ */
+function alreadyBusy(): string | undefined {
+	if (runs.active) return "a run is already in progress on this Mac";
+	if (remote.busy) return `already following ${remote.attached?.jobId ?? "a remote run"} on ${remote.attached?.host} — stop or detach it first`;
+
+	return undefined;
+}
+
+/** `host` rides along with the local RunOptions; `local` (or absent) takes the original path. */
+type ShellRunOptions = RunOptions & { host?: string };
+
+ipcMain.handle("run", (_event, opts: ShellRunOptions) => {
+	const busy = alreadyBusy();
+	if (busy) return busy;
+
+	// The task text is handed to whichever controller runs it and read by neither: the audit
+	// lives in agent.ts, on the machine that will execute the run (CLAUDE.md, "Measurement rule").
+	const err = isRemoteHost(opts.host)
+		? remote.start(
+				{ host: opts.host as string, app: opts.app, task: opts.task, kind: "task", record: opts.record, noVision: opts.noVision, ...(opts.url ? { url: opts.url } : {}) },
+				handlers,
+			)
+		: runs.start(opts, handlers);
 	if (!err) win?.webContents.send("started", { app: opts.app, task: opts.task });
 
 	return err;
 });
 
-ipcMain.handle("ground", (_event, app: string) => {
-	const err = runs.explore(app, {
-		onLine: (line) => win?.webContents.send("line", line),
-		onDone: (code, elapsed) => win?.webContents.send("done", { code, elapsed }),
-	});
+ipcMain.handle("ground", (_event, { app, host, url }: { app: string; host?: string; url?: string }) => {
+	const busy = alreadyBusy();
+	if (busy) return busy;
+
+	const err = isRemoteHost(host)
+		? remote.start({ host: host as string, app, task: "", kind: "explore", record: false, noVision: false, ...(url ? { url } : {}) }, handlers)
+		: runs.explore(app, handlers, url);
 	if (!err) win?.webContents.send("started", { app, task: `grounding pass — exploring ${app}` });
 
 	return err;
 });
 
-ipcMain.handle("stop", () => runs.stop());
+/**
+ * Re-attach to a run already in flight on a Mac.
+ *
+ * This is what makes closing the window survivable: the job is a detached child on the far
+ * side and its log is a file there, so the only thing a restart ever lost was the id — which
+ * the busy fleet row carries.
+ */
+ipcMain.handle("attach", async (_event, { host, jobId, app }: { host: string; jobId: string; app?: string }) => {
+	const busy = alreadyBusy();
+	if (busy) return busy;
+
+	const err = remote.attach(host, jobId, handlers);
+	if (!err) win?.webContents.send("started", { app: app || host, task: `following ${jobId} on ${host}` });
+
+	return err;
+});
+
+/** Stop means stop the RUN, wherever it is. Detaching without stopping is what a close does. */
+ipcMain.handle("stop", async () => (remote.busy ? remote.stop() : runs.stop()));
+
+ipcMain.handle("hosts", () => hostChoices());
+
+ipcMain.handle("fleet", () => fleetView());
+
+ipcMain.handle("creds", () => describeCredentials());
+
+// The key never comes back out: saveModelKey re-reads the file and answers with the same
+// present/absent boolean the panel shows on load.
+ipcMain.handle("creds:save", (_event, key: string) => saveModelKey(String(key ?? "")));
+
+ipcMain.handle("host:load", () => readRemotePrefs());
+
+ipcMain.on("host:save", (_event, host: unknown) => writeRemotePrefs({ host: String(host ?? "") }));
 
 ipcMain.handle("state:load", () => readUiState());
 
 ipcMain.on("state:save", (_event, state: unknown) => writeUiState(state));
 
 
-void app.whenReady().then(() => {
+/**
+ * Headless mode for the Macs in the fleet: hold the socket, spawn runs, show no window.
+ *
+ * It has to be THIS process rather than a node daemon because macOS attributes Accessibility
+ * and Screen Recording to the responsible process and children inherit them. A run started
+ * from an SSH session is responsible to sshd and gets an empty AX tree with no error to
+ * explain it; a run started from here inherits the grants this app already holds.
+ */
+const serveMode = process.argv.includes("--serve");
+
+void app.whenReady().then(async () => {
+	// Read before anything spawns: resolveRunCommand and childEnv both branch on it, and a
+	// packaged child needs ELECTRON_RUN_AS_NODE to behave as a node runtime.
+	process.env[PACKAGED_ENV] = app.isPackaged ? "1" : "";
+
+	// First launch on a teammate's Mac IS their enrollment: if the shipped bundle is present it
+	// installs the fleet ssh key and the model key here, so nobody has to open a terminal, run
+	// enroll, or be handed a password. Absent bundle is the normal developer case and not an
+	// error; a machine that already has an identity keeps it.
+	try {
+		const provisioned = provisionFromBundle();
+		if (provisioned) console.log(`team credentials (${provisioned.source}): identity ${provisioned.identity}, model key ${provisioned.modelKey}`);
+	} catch (err) {
+		// Never fatal. A malformed bundle must leave a usable local-only app rather than an app
+		// that will not open, which is the one failure a teammate cannot work around.
+		console.error(`team credentials ignored: ${(err as Error).message}`);
+	}
+
+	if (serveMode) {
+		// No dock icon, no window: this runs under a LaunchAgent on a machine nobody is
+		// sitting at, and a bouncing icon there is noise in a recording.
+		app.dock?.hide();
+		await startRunner(undefined, { permissions: permissionState });
+
+		return;
+	}
+
 	registerVideoProtocol();
 	createWindow();
 });
 
 app.on("window-all-closed", () => {
+	// In serve mode there never was a window, and Electron fires this once at startup on some
+	// versions — quitting here would make the runner exit the moment launchd started it.
+	if (serveMode) return;
 	runs.stop();
 	app.quit();
 });

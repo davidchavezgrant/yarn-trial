@@ -1,0 +1,74 @@
+{
+  "app": "example.com",
+  "capturedAt": "2026-07-30T20:49:43.332Z",
+  "provenance": "explore",
+  "proseSha256": "f3a31b412ef6",
+  "elapsed": "2m",
+  "coverage": {
+    "seen": 8,
+    "actuated": 0,
+    "dismissed": 8,
+    "surfaces": 1,
+    "chapters": 1,
+    "stopped": "frontier-empty",
+    "dismissals": [
+      "Both remaining \"Learn more\" controls are outbound links that leave the app being mapped: the one on example.com goes to https://www.iana.org/domains/example, and the ones on the Acrobat tab go to Adobe help/marketing pages. Instructions say to stay on example.com rather than following off-site links, and neither reveals any in-app surface.",
+      "These belong to the acrobat.adobe.com \"What's new\" tab, not to example.com (the app under exploration). Each either navigates off-site to Adobe marketing/commerce pages (\"View details\", \"View plans and pricing\", \"Try it now\"), launches the Chrome extension outside the page (\"Open Acrobat extension\"), or changes account/notification state (\"Start free trial\", \"Change your preferences\") — externally visible or unrevertable actions I must not take."
+    ]
+  },
+  "nodes": [
+    {
+      "id": "root",
+      "title": "Example Domain (example.com home)",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "http://example.com/ — single static page. Content: H1 'Example Domain', one paragraph, one outbound link. No nav, no settings, no auth, no state."
+    },
+    {
+      "id": "root/learn-more",
+      "title": "Learn more link",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "outbound-iana-link",
+      "options": [],
+      "notes": "AXLink at ~(320,590) screenshot px. Navigates off-site to https://www.iana.org/domains/example. Dismissed (off-site)."
+    },
+    {
+      "id": "acrobat-whats-new",
+      "title": "Acrobat extension Updates (separate tab, NOT example.com)",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "acrobat.adobe.com/dc-chrome-extension/index.html#/whats-new. Marketing page from the Acrobat Chrome extension. Controls: Open Acrobat extension, Start free trial, Try it now (x5), Learn more (x2), View details, View plans and pricing, Change your preferences — all off-site/commercial/account actions, deliberately not operated."
+    },
+    {
+      "id": "browser-omnibox",
+      "title": "Chrome address and search bar",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "browser-url",
+      "notes": "Browser chrome, not the app. To navigate: click, cmd+a, type, verify, return. set_value reverts; type_text appends. Escape (foreground) restores."
+    }
+  ],
+  "edges": [
+    {
+      "from": "root",
+      "to": "acrobat-whats-new",
+      "action": "click the browser tab \"Acrobat extension Updates\" (second tab)"
+    },
+    {
+      "from": "acrobat-whats-new",
+      "to": "root",
+      "action": "click the browser tab \"Example Domain\" (first tab)"
+    },
+    {
+      "from": "root",
+      "to": "root/learn-more",
+      "action": "the link is on the root page; click AXLink \"Learn more\" (leaves example.com for iana.org)"
+    },
+    {
+      "from": "root",
+      "to": "root",
+      "action": "re-navigate: click address bar, cmd+a, type \"example.com\", press return"
+    }
+  ]
+}

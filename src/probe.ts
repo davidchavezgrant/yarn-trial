@@ -1,6 +1,7 @@
 import { Driver } from "./driver.js";
 import { assertObservable } from "./harness.js";
 import { startOverlay } from "./overlay.js";
+import { outDir } from "./paths.js";
 
 function section(title: string, payload: unknown): void {
 	console.log(`\n=== ${title} ===`);
@@ -45,7 +46,7 @@ async function main(): Promise<void> {
 			args: {
 				pid: win.pid,
 				window_id: win.window_id ?? win.windowId ?? win.id,
-				screenshot_out_file: `${process.cwd()}/out/probe-window.png`,
+				screenshot_out_file: `${outDir()}/probe-window.png`,
 			},
 		});
 		const structured = JSON.parse(state.structuredJson ?? "{}");

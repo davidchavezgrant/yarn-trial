@@ -2,6 +2,8 @@ import { execFileSync, spawn as spawnProcess, type ChildProcess } from "node:chi
 import fs from "node:fs";
 import path from "node:path";
 import { appSlug, auditTaskPrompt } from "./harness.js";
+import { appmapsDir, dataRoot, outDir, resourcesRoot } from "./paths.js";
+import { buildRunArgs, isBrowserApp, type Target, webTarget } from "./target.js";
 
 /**
  * Host-side logic for the Electron shell: app enumeration, the recorded-run gallery, the
@@ -17,6 +19,46 @@ export interface AppEntry {
 	name: string;
 	running: boolean;
 	grounded: boolean;
+	/**
+	 * Absent means an installed Mac app — the only kind that existed before web targets, and
+	 * the reason this is optional rather than required: every reader treats the entry field by
+	 * field, so an absent discriminant keeps the app path byte-identical.
+	 */
+	kind?: "app" | "web";
+	/** Web entries only: what to navigate to. The name stays the host, for display and keying. */
+	url?: string;
+	/**
+	 * This app is a browser, so it needs a URL before it is a runnable target.
+	 *
+	 * Computed here rather than in the renderer, which cannot import: the browser list would
+	 * otherwise have to be duplicated into a string literal and kept in sync by hand.
+	 */
+	browser?: boolean;
+}
+
+/**
+ * Sites that have been explored, recovered from the appmaps they left behind.
+ *
+ * A web target has nothing to enumerate — there is no `/Applications` for the web, and a site
+ * is not "installed". What we can enumerate is evidence that we have *grounded* one, which is
+ * exactly the set worth offering in a picker: those runs will be grounded rather than
+ * cold-start. Anything else the operator types as a URL.
+ *
+ * The origin is reconstructed as https, which is the scheme every real target uses and the one
+ * `explore` would have been pointed at. A site only reachable over http has to be re-typed —
+ * acceptable, since the slug deliberately keeps only the host.
+ */
+function groundedWebTargets(): AppEntry[] {
+	try {
+		return fs
+			.readdirSync(appmapsDir())
+			.filter((f) => f.startsWith("web-") && f.endsWith(".md"))
+			.map((f) => f.slice("web-".length, -".md".length))
+			.filter((host) => host.length > 0)
+			.map((host) => ({ name: host, running: false, grounded: true, kind: "web" as const, url: `https://${host}` }));
+	} catch {
+		return [];
+	}
 }
 
 /**
@@ -49,19 +91,20 @@ export function listApps(): AppEntry[] {
 		} catch {}
 	}
 
-	return [...new Set([...installed, ...running])]
-		.map((name) => ({
-			name,
-			running: running.has(name),
-			grounded: fs.existsSync(`${process.cwd()}/docs/appmaps/${appSlug(name)}.md`),
-		}))
-		.sort((a, b) => {
-			// Grounded first, then running, then alphabetical: likeliest to work at the top.
-			if (a.grounded !== b.grounded) return a.grounded ? -1 : 1;
-			if (a.running !== b.running) return a.running ? -1 : 1;
+	const apps: AppEntry[] = [...new Set([...installed, ...running])].map((name) => ({
+		name,
+		running: running.has(name),
+		grounded: fs.existsSync(`${appmapsDir()}/${appSlug(name)}.md`),
+		...(isBrowserApp(name) ? { browser: true } : {}),
+	}));
 
-			return a.name.localeCompare(b.name);
-		});
+	return [...apps, ...groundedWebTargets()].sort((a, b) => {
+		// Grounded first, then running, then alphabetical: likeliest to work at the top.
+		if (a.grounded !== b.grounded) return a.grounded ? -1 : 1;
+		if (a.running !== b.running) return a.running ? -1 : 1;
+
+		return a.name.localeCompare(b.name);
+	});
 }
 
 export interface PastRun {
@@ -88,7 +131,7 @@ export interface PastRun {
  * that pairing is the whole point of showing them together.
  */
 export function listRecordedRuns(limit = 40): PastRun[] {
-	const dir = `${process.cwd()}/out/runs`;
+	const dir = `${outDir()}/runs`;
 	if (!fs.existsSync(dir)) return [];
 
 	const out: PastRun[] = [];
@@ -100,7 +143,7 @@ export function listRecordedRuns(limit = 40): PastRun[] {
 		} catch {
 			continue; // a half-written log during a live run is not an error worth surfacing
 		}
-		if (!d.video || !fs.existsSync(`${process.cwd()}/${d.video}`)) continue;
+		if (!d.video || !fs.existsSync(`${dataRoot()}/${d.video}`)) continue;
 		out.push({
 			id: f.replace(/\.json$/, ""),
 			app: d.app ?? "",
@@ -124,8 +167,8 @@ export function listRecordedRuns(limit = 40): PastRun[] {
  * The path arrives from the renderer, so it is untrusted even though the renderer is ours.
  */
 export function resolveVideo(rel: string): string | undefined {
-	const root = `${process.cwd()}/out/recording/`;
-	const full = path.resolve(process.cwd(), rel);
+	const root = `${outDir()}/recording/`;
+	const full = path.resolve(dataRoot(), rel);
 	if (!full.startsWith(root) || !full.endsWith(".mp4") || !fs.existsSync(full)) return undefined;
 
 	return full;
@@ -135,6 +178,15 @@ export function resolveVideo(rel: string): string | undefined {
 export interface AppUiState {
 	task: string;
 	log: string[];
+	/**
+	 * The site a browser target was pointed at. Only meaningful when the app is a browser.
+	 *
+	 * Needs its own branch in `pruneUiState` below, and that is the whole reason this comment
+	 * exists: prune rebuilds each entry field by field and silently drops anything it does not
+	 * know, so a field added here and forgotten there vanishes on the next save with no error —
+	 * the user would retype the URL every time they switched apps and never learn why.
+	 */
+	url?: string;
 }
 
 export interface UiState {
@@ -143,7 +195,7 @@ export interface UiState {
 	byApp: Record<string, AppUiState>;
 }
 
-const STATE_PATH = (): string => `${process.cwd()}/out/ui-state.json`;
+const STATE_PATH = (): string => `${outDir()}/ui-state.json`;
 
 /**
  * Per-app scrollback cap. A grounding pass emits a few hundred lines, so this keeps a whole
@@ -171,8 +223,11 @@ export function pruneUiState(raw: any): UiState {
 		const entry = v as Partial<AppUiState>;
 		const task = typeof entry?.task === "string" ? entry.task : "";
 		const log = (Array.isArray(entry?.log) ? entry.log : []).filter((l): l is string => typeof l === "string");
-		if (!task && !log.length) continue;
-		byApp[app] = { task, log: log.slice(-LOG_LINES_KEPT) };
+		const url = typeof entry?.url === "string" && entry.url ? entry.url : undefined;
+		// A remembered URL is worth keeping an entry alive for: it is the whole target of a
+		// browser run, and dropping it would silently clear the box on the next launch.
+		if (!task && !log.length && !url) continue;
+		byApp[app] = { task, log: log.slice(-LOG_LINES_KEPT), ...(url ? { url } : {}) };
 	}
 
 	return { ...(typeof raw?.lastApp === "string" ? { lastApp: raw.lastApp } : {}), byApp };
@@ -192,6 +247,13 @@ export interface RunOptions {
 	task: string;
 	record: boolean;
 	noVision: boolean;
+	/**
+	 * Set when the target is a website rather than an installed app. Additive on purpose: `app`
+	 * stays the display label and the `byApp` key, because the renderer uses that string as an
+	 * identity in four places and `pruneUiState` silently drops anything it does not recognise —
+	 * a `Target` object here would stop selection persisting with no error to show for it.
+	 */
+	url?: string;
 }
 
 export interface RunHandlers {
@@ -223,11 +285,14 @@ export class RunController {
 		const audit = auditTaskPrompt(task);
 		if (audit.hinted) return `prompt states method, not just the goal — ${audit.reasons.join("; ")}`;
 
-		const args = ["tsx", "src/agent.ts", task, app];
-		if (opts.record) args.push("--record");
-		if (opts.noVision) args.push("--no-vision");
+		let target: Target;
+		try {
+			target = opts.url ? webTarget(opts.url) : { kind: "app", name: app };
+		} catch (err) {
+			return err instanceof Error ? err.message : String(err);
+		}
 
-		return this.spawn(args, handlers);
+		return this.spawn(["tsx", "src/agent.ts", ...buildRunArgs(target, { task, record: opts.record, noVision: opts.noVision })], handlers);
 	}
 
 	/**
@@ -235,17 +300,26 @@ export class RunController {
 	 * drives the same driver, so running one alongside a task would kill both
 	 * (LIMITATIONS §6). Overwrites docs/appmaps/<app>.{md,json}.
 	 */
-	explore(app: string, handlers: RunHandlers): string | undefined {
+	explore(app: string, handlers: RunHandlers, url?: string): string | undefined {
 		if (this.current) return "a run is already in progress — driver sessions are not concurrent-safe (LIMITATIONS §6)";
-		if (!app.trim()) return "pick an app to ground";
+		if (!app.trim() && !url) return "pick an app to ground";
 
-		return this.spawn(["tsx", "src/explore.ts", app.trim()], handlers);
+		let target: Target;
+		try {
+			target = url ? webTarget(url) : { kind: "app", name: app.trim() };
+		} catch (err) {
+			return err instanceof Error ? err.message : String(err);
+		}
+
+		return this.spawn(["tsx", "src/explore.ts", ...buildRunArgs(target)], handlers);
 	}
 
 	/** Shared launcher for task runs and grounding passes. */
 	private spawn(args: string[], handlers: RunHandlers): undefined {
 		// No shell: task text is user input and passes through as a single argv entry.
-		const child = spawnProcess("npx", args, { cwd: process.cwd(), env: process.env });
+		// cwd is the checkout rather than ours: `src/explore.ts` in the argv is resolved
+		// relative to it, and under a LaunchAgent our own cwd is `/`.
+		const child = spawnProcess("npx", args, { cwd: resourcesRoot(), env: process.env });
 		const startedAt = Date.now();
 		this.current = { child, startedAt };
 

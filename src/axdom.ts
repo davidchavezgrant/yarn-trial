@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { nativeDir } from "./paths.js";
 
 /**
  * DOM enrichment for the AX observation, without CDP.
@@ -43,7 +44,7 @@ import fs from "node:fs";
  * DOM attributes, or a slow walk degrades to exactly the observation we had before.
  */
 
-const BIN = `${process.cwd()}/native/axdom`;
+const BIN = `${nativeDir()}/axdom`;
 
 /** Frame-keyed row from the sidecar. */
 interface DomRow {

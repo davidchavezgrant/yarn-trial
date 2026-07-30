@@ -1,10 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
 import fs from "node:fs";
 import { Driver } from "./driver.js";
-import { MAX_WAIT_MS, OUT, type ObservationBundle, type WindowRef } from "./harness.js";
+import { MAX_WAIT_MS, OUT, type ObservationBundle, refSurfaces, type WindowRef } from "./harness.js";
+import { webTarget } from "./target.js";
 import type { ActionRequest } from "./types.js";
 
-const DOM_ACTIONS = ["click", "right_click", "double_click", "hover", "type_text", "press_key", "scroll", "wait"] as const;
+const DOM_ACTIONS = ["click", "right_click", "double_click", "hover", "type_text", "press_key", "scroll", "wait", "navigate"] as const;
 
 /**
  * semantic_v2 caps each snapshot at `node_budget` nodes (300, and NOT configurable —
@@ -44,6 +45,14 @@ export interface PagedSnapshot {
 	refs: SemanticRef[];
 	contentRefs: SemanticRef[];
 	title: string;
+	/**
+	 * The tab's URL. Read from the same page payload as the title, which the repo has never
+	 * looked at — and it is the single most useful signal a web target has that a native one
+	 * does not. It goes into the verification haystack below, where it gives `verify()` a
+	 * channel that is discriminating BY CONSTRUCTION: navigation changes the URL, so a route
+	 * check cannot be satisfied by the observation taken before the action.
+	 */
+	url: string;
 	outline: string;
 	meta: SnapshotMeta;
 	pages: number;
@@ -60,32 +69,170 @@ export interface PagedSnapshot {
  * press_key stays on the AX path — OS-level keys (escape, cmd-shortcuts) have no
  * CDP equivalent that reaches the app's native layer.
  */
+/**
+ * Bindings the driver will accept mutations on.
+ *
+ * Deliberately a rejection of `heuristic` alone, NOT a requirement of `exact`. The enum also
+ * carries `embedded_single_page` and `native_cdp_window`, and an Electron app — the only DOM
+ * target that works today — reports one of those; demanding `exact` would brick it. The driver
+ * refuses mutations only on a title-only heuristic match ("mutations require an exact bounds-
+ * or cardinality-correlated binding"), so that is the one to catch here rather than at the
+ * first click.
+ */
+function assertBindable(quality: string | undefined): void {
+	if (quality === "heuristic")
+		throw new Error(
+			"CDP binding is heuristic (title-only) — the driver refuses mutations on it. " +
+				"Close duplicate windows of the target so the window can be matched exactly.",
+		);
+}
+
+/**
+ * Choose the tab to drive.
+ *
+ * Without an origin this keeps the historical behaviour exactly — the first tab, which is the
+ * right and only answer for an Electron app that has one. With one, a real browser's twenty
+ * tabs are filtered to the target site, and an ambiguous match is REFUSED rather than guessed:
+ * driving the wrong tab of the right site is worse than losing the run, because it looks like
+ * it worked. This mirrors resolveRef's treatment of an ambiguous query.
+ */
+export function pickTab(tabs: unknown, wantOrigin?: string): { tab_id: string; title?: string; url?: string } | undefined {
+	const all = (Array.isArray(tabs) ? tabs : []) as Array<{ tab_id: string; title?: string; url?: string }>;
+	if (!wantOrigin) return all[0];
+
+	const sameOrigin = all.filter((t) => {
+		try {
+			return new URL(t.url ?? "").origin === wantOrigin;
+		} catch {
+			return false;
+		}
+	});
+	// A lone tab is the answer whatever its URL says. Two measured cases need this: a
+	// driver-launched profile opens on about:blank before navigation commits, and a site that
+	// redirects across origins (notion.so -> www.notion.so, an SSO bounce) lands somewhere the
+	// requested origin does not match. Refusing there would reject the very tab we just
+	// navigated. Ambiguity among SEVERAL tabs is still refused below — that is the case where
+	// guessing could drive the wrong one.
+	if (sameOrigin.length === 0) return all.length === 1 ? all[0] : undefined;
+	if (sameOrigin.length > 1)
+		throw new Error(
+			`${sameOrigin.length} tabs are open on ${wantOrigin} and the driver cannot tell which to drive: ` +
+				`${sameOrigin.map((t) => JSON.stringify(t.title ?? t.url ?? t.tab_id)).join(", ")}. Close the spares.`,
+		);
+
+	return sameOrigin[0];
+}
+
+/**
+ * Driver errors that mean "the binding you hold is no longer the one to use". Both the codes
+ * and the driver's own prose are matched: the codes are stable identifiers, the prose covers
+ * the cases the driver reports without one, and matching either alone would silently stop
+ * working if that half were reworded.
+ */
+const STALE_BINDING =
+	/browser_binding_stale|browser_ref_stale|browser_tab_not_found|tab moved to a different browser window|connection generation changed|re-run get_browser_state/i;
+
+/**
+ * Screen-space origin of the rendered page, for converting AX frames to viewport coordinates.
+ *
+ * The AXWebArea when there is one (a real browser, where browser chrome occupies the top of
+ * the window and the page starts below it), else the window origin (Electron, where the window
+ * is the page). Returns undefined only when neither is available, which makes the caller skip
+ * the coordinate route rather than click somewhere arbitrary.
+ *
+ * The largest web area is chosen deliberately: a page with iframes reports several, and the
+ * outermost is the one whose origin the viewport is measured from.
+ */
+export function viewportOrigin(
+	elements: Array<{ role?: string; frame?: { x: number; y: number; w: number; h: number } }>,
+	windowBounds?: { x: number; y: number },
+): { x: number; y: number } | undefined {
+	const web = elements
+		.filter((e) => e.role === "AXWebArea" && e.frame && e.frame.w > 0 && e.frame.h > 0)
+		.sort((a, b) => b.frame!.w * b.frame!.h - a.frame!.w * a.frame!.h)[0];
+	if (web?.frame) return { x: web.frame.x, y: web.frame.y };
+
+	return windowBounds ? { x: windowBounds.x, y: windowBounds.y } : undefined;
+}
+
 export class DomBackend {
+	/** Times the CDP binding was re-established mid-run. Surfaced in the run log. */
+	rebinds = 0;
+	/** The tab's URL as of the last observation. Empty until the first observe(). */
+	url = "";
+
 	private constructor(
 		private driver: Driver,
 		private win: WindowRef,
 		private targetId: string,
 		private tabId: string,
 		private maxPages: number,
+		/** Origin the run is pinned to, so a rebind lands on the same site rather than tab 0. */
+		private wantOrigin?: string,
 	) {}
 
-	static async bind(driver: Driver, win: WindowRef, maxPages = DEFAULT_MAX_PAGES): Promise<DomBackend> {
+	static async bind(driver: Driver, win: WindowRef, maxPages = DEFAULT_MAX_PAGES, wantOrigin?: string): Promise<DomBackend> {
 		const r = await driver.act({
 			kind: "tool",
 			name: "get_browser_state",
 			args: { pid: win.pid, window_id: win.windowId },
 		});
 		const bs = JSON.parse(r.structuredJson ?? "{}");
-		const tab = bs.tabs?.[0];
+		const tab = pickTab(bs.tabs, wantOrigin);
 		if (!bs.target_id || !tab)
 			throw new Error(`CDP bind failed for pid=${win.pid}: ${r.text.slice(0, 200)}`);
+		assertBindable(bs.binding_quality);
 
 		console.log(
 			`DOM backend bound: ${bs.target_id} (${bs.binding_quality}) tab "${tab.title}" ` +
 				`maxPages=${maxPages === Infinity ? "exhaustive" : maxPages}`,
 		);
 
-		return new DomBackend(driver, win, bs.target_id, tab.tab_id, maxPages);
+		return new DomBackend(driver, win, bs.target_id, tab.tab_id, maxPages, wantOrigin);
+	}
+
+	/**
+	 * Re-run the bind and adopt the new ids.
+	 *
+	 * A live site invalidates a binding as a matter of course — a redirect, an OAuth bounce, a
+	 * tab dragged to another window — so this is a normal event rather than a fault, and the
+	 * same shape as the session revival in driver.ts: recover once, count it, and let a second
+	 * failure be a real error.
+	 */
+	private async rebind(): Promise<void> {
+		const r = await this.driver.act({
+			kind: "tool",
+			name: "get_browser_state",
+			args: { pid: this.win.pid, window_id: this.win.windowId },
+		});
+		const bs = JSON.parse(r.structuredJson ?? "{}");
+		const tab = pickTab(bs.tabs, this.wantOrigin);
+		if (!bs.target_id || !tab) throw new Error(`CDP rebind failed for pid=${this.win.pid}: ${r.text.slice(0, 200)}`);
+		assertBindable(bs.binding_quality);
+		this.targetId = bs.target_id;
+		this.tabId = tab.tab_id;
+		this.rebinds++;
+	}
+
+	/**
+	 * Run a call, and on a staleness error rebind and run it once more.
+	 *
+	 * Matches the thrown MESSAGE rather than an error code because `Driver.act` converts every
+	 * error result into a thrown Error (`throwIfError`), so `errorCode` never reaches a caller.
+	 * Both the codes and the driver's prose are matched: either alone would silently stop
+	 * working if the driver reworded one of them.
+	 */
+	private async withRebind<T>(fn: () => Promise<T>): Promise<T> {
+		try {
+			return await fn();
+		} catch (err) {
+			const m = String(err instanceof Error ? err.message : err);
+			if (!STALE_BINDING.test(m)) throw err;
+			console.log(`  CDP binding went stale — rebinding and retrying once`);
+			await this.rebind();
+
+			return fn();
+		}
 	}
 
 	private get target(): Record<string, unknown> {
@@ -115,6 +262,7 @@ export class DomBackend {
 		let continuation: string | undefined;
 		let meta: SnapshotMeta = {};
 		let title = "";
+	let url = "";
 		let outline = "";
 		let pages = 0;
 		let stalled = false;
@@ -135,6 +283,7 @@ export class DomBackend {
 			meta = sj.snapshot ?? {};
 			if (pages === 1) {
 				title = sj.page?.title ?? "";
+				url = sj.page?.url ?? sj.tab?.url ?? "";
 				outline = sj.outline ?? "";
 			}
 			continuation = meta.continuation ?? undefined;
@@ -152,6 +301,7 @@ export class DomBackend {
 			refs: [...byRef.values()],
 			contentRefs: [...contentByRef.values()],
 			title,
+			url,
 			outline,
 			meta,
 			pages,
@@ -199,8 +349,14 @@ export class DomBackend {
 			`${snap.exhausted ? ", chain exhausted" : `, MORE AVAILABLE — ${m.omitted?.budget ?? 0} node(s) still budget-omitted`}` +
 			`${snap.unreachable ? `; ${snap.unreachable} node(s) hidden/offscreen/occluded and unreachable by paging` : ""}` +
 			`. Elements missing here can still be reached by name with the "find" tool.)`;
+		// The URL leads, because on a web target it is the cheapest orientation the model gets:
+		// which route it is on answers "where am I" before any element list has to be read.
+		const where = snap.url ? `URL: ${snap.url}\n\n` : "";
 		const elementsText =
-			`Interactive refs:\n${lines.join("\n")}\n\nVisible text: ${shownTexts.map((t) => JSON.stringify(t.slice(0, 60))).join(", ")}${coverage}`;
+			`${where}Interactive refs:\n${lines.join("\n")}\n\nVisible text: ${shownTexts.map((t) => JSON.stringify(t.slice(0, 60))).join(", ")}${coverage}`;
+
+		const surfaces = refSurfaces(snap.refs);
+		this.url = snap.url;
 
 		const shotPath = `${OUT}/${shotName}.png`;
 		await this.driver.act({
@@ -208,6 +364,15 @@ export class DomBackend {
 			name: "get_window_state",
 			args: { pid: this.win.pid, window_id: this.win.windowId, screenshot_out_file: shotPath },
 		});
+		// The driver reports success but writes NO FILE when the window is not composited —
+		// which happens routinely here, because a navigate can leave the window mid-repaint.
+		// Measured: a Notion pass died at action 24 with ENOENT on this exact read, after
+		// mapping 27 nodes. The DOM path does not need the image (its perception is the CDP
+		// snapshot, and the pixel channel is advisory), so a missing frame degrades the
+		// observation instead of ending the run. `observe()` on the AX path throws in the same
+		// situation, and correctly: there the screenshot IS the second perception channel.
+		const shot = fs.existsSync(shotPath) ? fs.readFileSync(shotPath).toString("base64") : "";
+		if (!shot) console.log("  (no frame captured for this observation — window not composited)");
 
 		return {
 			elementsText,
@@ -221,10 +386,24 @@ export class DomBackend {
 			// reason to issue coordinate actions.
 			interactive: snap.refs
 				.filter((r) => r.actions.length > 0)
-				.map((r) => ({ handle: r.ref, role: r.role, name: r.name ?? "", surface: "", x: 0, y: 0, w: 0, h: 0 })),
-			haystack: `${snap.title}\n${haystackParts.join("\n")}`.toLowerCase(),
-			screenshotB64: fs.readFileSync(shotPath).toString("base64"),
+				.map((r) => ({
+					handle: r.ref,
+					role: r.role,
+					name: r.name ?? "",
+					// Derived geometrically from enclosing ARIA landmarks (see refSurfaces).
+					// Without it every ref is surface-less, which both collapses distinct
+					// controls in frontierKey and makes every bulk dismissal hit the
+					// unnamed-surface cap of 20 — unworkable on a page with hundreds.
+					surface: surfaces.get(r.ref) ?? "",
+					x: 0,
+					y: 0,
+					w: 0,
+					h: 0,
+				})),
+			haystack: `${snap.title}\n${snap.url}\n${haystackParts.join("\n")}`.toLowerCase(),
+			screenshotB64: shot,
 			title: snap.title,
+			url: snap.url,
 			appContent: snap.refs.length,
 			// The CDP path reads the DOM directly, so the axdom sidecar has nothing to add.
 			domEnriched: 0,
@@ -265,10 +444,22 @@ export class DomBackend {
 	 *
 	 * semantic refs carry no geometry and query_dom returns nothing for this Electron
 	 * target, so the AX tree is the only coordinate source — but AX frames are in SCREEN
-	 * space while browser_pointer wants viewport space. The difference is the window
-	 * origin: measured on Notion Calendar, the EDT label sits at AX (295,129) and DOM
-	 * (285,95.5) with the window at (0,33) — x matches within rounding, y differs by
-	 * exactly the window's y origin. Subtracting the origin converts between them.
+	 * space while browser_pointer wants viewport space. On Electron the difference is exactly
+	 * the window origin: measured on Notion Calendar, the EDT label sits at AX (295,129) and
+	 * DOM (285,95.5) with the window at (0,33) — x matches within rounding, y differs by the
+	 * window's y origin.
+	 *
+	 * That equivalence holds only because an Electron window IS its page. In a real browser
+	 * the tab strip, omnibox and bookmarks bar sit INSIDE the window, roughly 80–90px of it,
+	 * so subtracting the window origin lands every click that far too high — a silent
+	 * mis-click, the failure LIMITATIONS §4 warns about.
+	 *
+	 * The fix uses a source we already fetch rather than a guess. `viewport_x`/`viewport_y`
+	 * are NOT `get_browser_state` fields (they belong to browser_screenshot and the legacy
+	 * page tool — checked against the driver binary), but the AX tree carries the answer
+	 * directly: the AXWebArea element's own frame origin IS the top-left of the rendered page.
+	 * Prefer it, and fall back to the window origin when there is no web area, which is the
+	 * Electron case and reproduces the old behaviour exactly.
 	 */
 	private async axCentre(name: string): Promise<{ x: number; y: number } | undefined> {
 		const [st, lw] = await Promise.all([
@@ -284,11 +475,12 @@ export class DomBackend {
 
 		const bounds = (JSON.parse(lw.structuredJson ?? "{}").windows ?? [])
 			.find((w: any) => w.window_id === this.win.windowId)?.bounds;
-		if (!bounds) return undefined;
+		const origin = viewportOrigin(els, bounds);
+		if (!origin) return undefined;
 
 		return {
-			x: Math.round(hit.frame.x + hit.frame.w / 2 - bounds.x),
-			y: Math.round(hit.frame.y + hit.frame.h / 2 - bounds.y),
+			x: Math.round(hit.frame.x + hit.frame.w / 2 - origin.x),
+			y: Math.round(hit.frame.y + hit.frame.h / 2 - origin.y),
 		};
 	}
 
@@ -346,6 +538,14 @@ export class DomBackend {
 						delta_y: a.direction === "up" ? -(a.amount ?? 3) * 120 : a.direction === "down" ? (a.amount ?? 3) * 120 : 0,
 					},
 				};
+			case "navigate": {
+				// Scheme-checked by the same function the CLI uses, so "http/https only" is
+				// stated once. The driver refuses anything else anyway; failing here turns a
+				// mid-run refusal into a rejected step the model can correct.
+				const url = webTarget(String(a.url ?? "")).kind === "web" ? String(a.url) : "";
+
+				return { kind: "tool", name: "browser_navigate", args: { ...this.target, url } };
+			}
 			case "press_key":
 				return {
 					kind: "tool",
@@ -372,7 +572,10 @@ export const DOM_RULES = `Rules learned from this driver's DOM/CDP path (follow 
 - Each ref lists its capabilities: only "click" refs take click; "pointer" refs take right_click/double_click/hover/scroll; "type" refs (textboxes) take type_text directly — type_text focuses the field itself, no click needed first.
 - type_text INSERTS at the cursor. To replace existing text: type_text once to focus, then press_key cmd+a, press_key delete, then type_text the new value.
 - press_key goes through the OS, not CDP: escape to close overlays and menu shortcuts (cmd+,) need delivery_mode "foreground". Everything else runs fully backgrounded — the app never needs focus.
-- The visible-text list is your verification surface; element names come from the accessibility name, so unnamed containers appear as "".`;
+- The visible-text list is your verification surface; element names come from the accessibility name, so unnamed containers appear as "".
+- The observation opens with the page URL. It is real evidence and it is the strongest kind available here: navigation changes it, so a URL check cannot already have been true before the action.
+- "navigate" goes straight to a URL (http/https). It DISCARDS every ref you are holding — the next observation renumbers them, so never reuse a ref across a navigate.
+- OS-level keys reach the browser, not the page. Escape and plain keys are fine; anything with cmd is the BROWSER's shortcut, not the app's.`;
 
 export const FIND_TOOL: Anthropic.Tool = {
 	name: "find",
@@ -404,6 +607,7 @@ export const DOM_ACT_TOOL: Anthropic.Tool = {
 					query: { type: "string", description: "Alternative to ref: resolve the target by name at action time. Use for elements omitted from the observation. Refused if it matches more than one element." },
 					text: { type: "string", description: "For type_text." },
 					key: { type: "string", description: "For press_key: return, tab, escape, up, down, a-z, 0-9, etc." },
+					url: { type: "string", description: "For navigate: an http/https URL. Invalidates every ref from the current observation." },
 					modifiers: { type: "array", items: { type: "string" }, description: "For press_key: cmd, shift, option, ctrl." },
 					delivery_mode: { type: "string", enum: ["background", "foreground"], description: "For press_key." },
 					direction: { type: "string", enum: ["up", "down", "left", "right"], description: "For scroll." },
