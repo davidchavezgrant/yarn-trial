@@ -13,3 +13,19 @@ docs/jasper-email-yarn-trial-brief.md
 native/axdom
 tmp/
 dist-electron
+
+# Fleet credentials: the private SSH key for every Mac in hosts.json, plus the team
+# OpenRouter key. Distributed with the app, never through git.
+team-credentials.json
+*.pem
+id_ed25519*
+
+# Holds a live OpenRouter key today. Already covered by David's personal ~/.config/git/ignore,
+# which is exactly the problem: a teammate who clones this repo does not have that file, and
+# the protection would silently not exist for them.
+.claude/settings.local.json
+.env.*
+
+# Full checkouts made by agent worktrees. Several hundred MB, and each one carries its own
+# copy of everything above — including files this list exists to keep out.
+.claude/worktrees/
