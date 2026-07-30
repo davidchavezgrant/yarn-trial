@@ -13,3 +13,6 @@ docs/jasper-email-yarn-trial-brief.md
 native/axdom
 tmp/
 dist-electron
+
+# Python bytecode from the render/fit scripts.
+__pycache__/
