@@ -1,0 +1,26 @@
+{
+  "schema": "yarn-runner/hosts@1",
+  "hosts": [
+    {
+      "name": "mac1",
+      "aliases": ["Yarn Mac 1"],
+      "ssh": { "host": "208.52.168.82", "port": 22, "user": "administrator" },
+      "vnc": { "host": "208.52.168.82", "port": 5900 },
+      "hostKey": "SHA256:724od0jL8u9KOWHaFi+t710VcSUmsFnN79hdOcoOI2c"
+    },
+    {
+      "name": "mac2",
+      "aliases": ["Yarn Mac 2"],
+      "ssh": { "host": "199.7.163.252", "port": 22, "user": "administrator" },
+      "vnc": { "host": "199.7.163.252", "port": 5900 },
+      "hostKey": "SHA256:eKIXn2OBstz+gBvH2u5WqOBBKv5YWQuXdLB8cfkTBfo"
+    },
+    {
+      "name": "mac3",
+      "aliases": ["Yarn Mac 3"],
+      "ssh": { "host": "199.7.163.243", "port": 22, "user": "administrator" },
+      "vnc": { "host": "199.7.163.243", "port": 5900 },
+      "hostKey": "SHA256:XAIlCPKOkMq1HhDHDBUUl7GouiQRYUBqxrB+T6Msu58"
+    }
+  ]
+}
