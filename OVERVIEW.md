@@ -43,9 +43,11 @@ Design decisions and their reasoning live in `docs/architecture.md`.
 - **Grounding** comes in two tiers, kept separate so that measuring one doesn't
   quietly measure the other:
   - `docs/appmaps/<app>.md` — output of the autonomous exploration pass
-    (`src/explore.ts`), stamped with a provenance header. Measured ~5-6 min per app
-    (Yarn 23 actions, Notion Calendar 20). Emits a prose map plus a `<app>.json` graph
-    whose scope metadata drives the ambiguity warnings.
+    (`src/explore.ts`), stamped with a provenance header. Runs until the frontier of
+    un-operated controls empties: measured **40 min / 96 actions** on Yarn (2026-07-30).
+    The earlier "~5-6 min" figure measured a step-budget truncation, not a finished pass.
+    Emits a prose map plus a `<app>.json` graph whose scope metadata drives the ambiguity
+    warnings.
   - `docs/recipes/<app>.md` — hand-curated notes, including verified task recipes.
 
   Both are auto-loaded into the agent's prompt and the run log records which was used.
