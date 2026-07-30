@@ -72,9 +72,21 @@ export function appSlug(app: string): string {
 	return app.toLowerCase().replace(/\s+/g, "-");
 }
 
+/**
+ * The OpenRouter default is an OpenAI model, reached through OpenRouter's Anthropic-format
+ * `/api/v1/messages` endpoint — verified to carry tool use, streaming, base64 screenshots and
+ * `thinking` blocks unchanged, so the SDK and both loops need no restructuring. `sol` rather
+ * than `sol-pro`: same weights and price, but pro's `reasoning.mode=pro` buys longer thinking
+ * per turn, and these loops are long and sequential — a 96-action pass pays that cost 96
+ * times. `AGENT_MODEL` overrides, including to `openai/gpt-5.6-sol-pro` or any `anthropic/*` id.
+ *
+ * One measured consequence: OpenRouter returns a null `cache_creation_input_tokens` for OpenAI
+ * models, so the `cache_control` blocks the explore/agent prompts carry are accepted and then
+ * ignored. Nothing breaks; the per-chapter system prompt is simply billed in full each time.
+ */
 export function makeClient(): { client: Anthropic; model: string } {
 	const openrouter = process.env.OPENROUTER_API_KEY;
-	const model = process.env.AGENT_MODEL ?? (openrouter ? "anthropic/claude-opus-5" : "claude-opus-5");
+	const model = process.env.AGENT_MODEL ?? (openrouter ? "openai/gpt-5.6-sol" : "claude-opus-5");
 	const client = openrouter
 		? new Anthropic({ baseURL: "https://openrouter.ai/api", authToken: openrouter })
 		: new Anthropic();

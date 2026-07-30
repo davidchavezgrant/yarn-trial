@@ -12,7 +12,7 @@ it's worth.
 ```
 NL task
   ▼
-Agent loop (Claude Opus 5)              src/agent.ts
+Agent loop (GPT-5.6 Sol)                src/agent.ts
   observe: AX elements (+ DOM id/class via native/axdom) + window screenshot
   decide:  ONE action + a checkable expectation (tool use)
   act:     via the driver boundary

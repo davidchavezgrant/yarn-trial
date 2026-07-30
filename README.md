@@ -10,7 +10,7 @@ read **`OVERVIEW.md`**.
 |---|---|---|
 | macOS 15+, Apple Silicon | the driver's native library is per-OS/arch | yes |
 | Node 22+ | ESM + `tsx` | yes |
-| `ANTHROPIC_API_KEY` or `OPENROUTER_API_KEY` | the model (Claude Opus 5) | yes |
+| `OPENROUTER_API_KEY` (or `ANTHROPIC_API_KEY`) | the model — GPT-5.6 Sol over OpenRouter, Claude Opus 5 on a bare Anthropic key. `AGENT_MODEL` overrides. | yes |
 | `ffmpeg` | assembles `--record` frames into mp4 | only for recording |
 | `python3` + PIL (`pip install pillow`) | pixel-delta verification, frame QC | degrades without it |
 | Xcode Command Line Tools | builds the `axdom` DOM-enrichment sidecar | optional, build-time only |
