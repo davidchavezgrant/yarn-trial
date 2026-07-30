@@ -1,7 +1,23 @@
-import { app, BrowserWindow, ipcMain, net, protocol, systemPreferences } from "electron";
+import { app, BrowserWindow, desktopCapturer, ipcMain, net, protocol, shell, systemPreferences } from "electron";
 import fs from "node:fs";
-import { listApps, listRecordedRuns, readUiState, resolveVideo, RunController, writeUiState, type RunOptions } from "../src/ui-core.js";
+import { listApps, listRecordedRuns, readUiState, resolveVideo, RunController, writeUiState, type RunHandlers, type RunOptions } from "../src/ui-core.js";
 import { page } from "../src/ui-page.js";
+import { describeCredentials, provisionFromBundle } from "../src/remote/team.js";
+import {
+	annotateRuns,
+	appChoices,
+	beginSignin,
+	completeSignin,
+	fleetView,
+	hostChoices,
+	isRemoteHost,
+	readRemotePrefs,
+	RemoteRunController,
+	saveModelKey,
+	writeRemotePrefs,
+} from "../src/ui-remote.js";
+import { startRunner } from "../src/runner/serve.js";
+import { PACKAGED_ENV } from "../src/runner/spawn.js";
 
 /**
  * Electron shell for the demo agent.
@@ -37,6 +53,7 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 const runs = new RunController();
+const remote = new RemoteRunController();
 let win: BrowserWindow | undefined;
 
 /** Injected before the shared app script; implements the `window.__bus` contract. */
@@ -44,15 +61,26 @@ const BOOTSTRAP = String.raw`
 const { ipcRenderer } = require('electron');
 window.__videoBase = 'agentvideo:///';
 window.__bus = {
-  loadApps: () => ipcRenderer.invoke('apps'),
+  loadApps: (host) => ipcRenderer.invoke('apps', host),
   loadRuns: () => ipcRenderer.invoke('runs'),
   // Encode per SEGMENT: encodeURIComponent on the whole path turns every "/" into %2F,
   // leaving a standard-scheme URL with no path to route, so the request never reaches the
   // handler at all (symptom: a black video stuck at 0:00 and no protocol log line).
   videoUrl: (rel) => window.__videoBase + rel.split('/').map(encodeURIComponent).join('/'),
   run: (opts) => ipcRenderer.invoke('run', opts),
-  ground: (app) => ipcRenderer.invoke('ground', app),
+  ground: (app, host) => ipcRenderer.invoke('ground', { app, host }),
   stop: () => ipcRenderer.invoke('stop'),
+  // Fleet. Every one of these answers something on a "no hosts.json" machine rather than
+  // throwing, so the local-only shell needs no branch of its own.
+  loadHosts: () => ipcRenderer.invoke('hosts'),
+  loadFleet: () => ipcRenderer.invoke('fleet'),
+  attach: (host, jobId, app) => ipcRenderer.invoke('attach', { host, jobId, app }),
+  signin: (host, app) => ipcRenderer.invoke('signin', { host, app }),
+  signinWait: (host, app) => ipcRenderer.invoke('signin:wait', { host, app }),
+  loadCreds: () => ipcRenderer.invoke('creds'),
+  saveKey: (key) => ipcRenderer.invoke('creds:save', key),
+  loadHostPref: () => ipcRenderer.invoke('host:load'),
+  saveHostPref: (host) => ipcRenderer.send('host:save', host),
   loadState: () => ipcRenderer.invoke('state:load'),
   // send, not invoke: this is also called from beforeunload, where the renderer will not
   // survive long enough to await a reply. The message is queued before teardown.
@@ -75,6 +103,48 @@ function permissionState(): { accessibility: boolean; screenRecording: boolean }
 		accessibility: systemPreferences.isTrustedAccessibilityClient(false),
 		screenRecording: systemPreferences.getMediaAccessStatus("screen") === "granted",
 	};
+}
+
+/**
+ * ASK for the grants, as opposed to reading them.
+ *
+ * Needed because of an asymmetry in System Settings that costs an afternoon if you meet it
+ * without knowing: **Accessibility has a `+` button and Screen & System Audio Recording does
+ * not**. macOS builds the Screen Recording list out of processes that have called
+ * `CGRequestScreenCaptureAccess` — an app that never asked has no row, and there is no way to
+ * add one by browsing to the bundle. `permissionState()` above is deliberately non-prompting on
+ * both counts, so a runner installed by `provision` has asked for nothing and is invisible in
+ * exactly the pane an operator is told to go tick.
+ *
+ * The two calls below are the asking. Neither grants anything — TCC is SIP-protected and only a
+ * human at the machine can flip the switch — they put the row on screen so there is a switch to
+ * flip:
+ *
+ *   - `isTrustedAccessibilityClient(true)`: the `true` is "show the dialog", which also
+ *     registers the app in the Accessibility list.
+ *   - `desktopCapturer.getSources`: Electron has no direct binding for
+ *     `CGRequestScreenCaptureAccess`, and `askForMediaAccess` handles only microphone and
+ *     camera — never screen. Enumerating sources is what reaches it.
+ *
+ * Returns the state AFTER asking, which will normally still be false: the operator has not
+ * touched the toggle yet, and macOS does not apply a new Screen Recording grant to an already
+ * running process anyway. The caller says so rather than reporting failure.
+ */
+async function requestPermissions(): Promise<{ accessibility: boolean; screenRecording: boolean }> {
+	if (process.platform !== "darwin") return permissionState();
+
+	systemPreferences.isTrustedAccessibilityClient(true);
+	try {
+		// thumbnailSize 0: the pixels are thrown away. The call is made for the TCC registration
+		// it triggers, and capturing full-size images of every display to discard them would be
+		// slow on a multi-monitor Mac for no gain.
+		await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 0, height: 0 } });
+	} catch {
+		// Denied or unavailable. The registration happens on the ATTEMPT, so the row appears
+		// either way and there is nothing here worth failing the call over.
+	}
+
+	return permissionState();
 }
 
 function createWindow(): void {
@@ -106,13 +176,20 @@ function createWindow(): void {
 	void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
 	win.on("closed", () => {
 		runs.stop();
+		// detach, not stop: a local run dies with the window because its child is ours, but a
+		// remote job is a detached process on another Mac and closing a viewer must not kill it.
+		// The fleet row keeps its id, so the next launch can offer to follow it again.
+		remote.detach();
 		win = undefined;
 	});
 }
 
-ipcMain.handle("apps", () => listApps());
+// Answers for the SELECTED host, not for this Mac. A colo Mac's list comes from its own runner,
+// which enumerates its own /Applications and its own appmaps — see appChoices.
+ipcMain.handle("apps", (_event, host?: string) => appChoices(host, listApps));
 
-ipcMain.handle("runs", () => listRecordedRuns());
+/** Gallery entries, tagged with the Mac each one was pulled from. Local runs carry no tag. */
+ipcMain.handle("runs", () => annotateRuns(listRecordedRuns()));
 
 /**
  * Videos are served through a custom scheme rather than file:// — a data: document has a
@@ -159,39 +236,188 @@ function registerVideoProtocol(): void {
 	});
 }
 
-ipcMain.handle("run", (_event, opts: RunOptions) => {
-	const err = runs.start(opts, {
-		onLine: (line) => win?.webContents.send("line", line),
-		onDone: (code, elapsed) => win?.webContents.send("done", { code, elapsed }),
-	});
+/**
+ * What the in-flight run is against, so `done` can name a remedy that points somewhere.
+ *
+ * Set at dispatch and deliberately NOT cleared afterwards: the page needs it precisely when the
+ * run is over. The host is re-read from the controller rather than taken from here, because
+ * `auto` is not a machine and only the controller learns which one it picked.
+ */
+let dispatched: { app: string; remote: boolean } | undefined;
+
+const handlers: RunHandlers = {
+	onLine: (line) => win?.webContents.send("line", line),
+	onDone: (code, elapsed) =>
+		win?.webContents.send("done", {
+			code,
+			elapsed,
+			app: dispatched?.app ?? "",
+			host: dispatched?.remote ? (remote.lastRunHost ?? "") : "local",
+		}),
+};
+
+/**
+ * One run at a time in this shell, local or remote.
+ *
+ * Not because two are technically impossible — a local run and a run on a colo Mac are on
+ * different machines and do not contend — but because the window has one log pane, one status
+ * line and one Stop button. Two streams into one pane is a transcript nobody can read, and a
+ * Stop button whose target is ambiguous is worse than no Stop button.
+ */
+function alreadyBusy(): string | undefined {
+	if (runs.active) return "a run is already in progress on this Mac";
+	if (remote.busy) return `already following ${remote.attached?.jobId ?? "a remote run"} on ${remote.attached?.host} — stop or detach it first`;
+
+	return undefined;
+}
+
+/** `host` rides along with the local RunOptions; `local` (or absent) takes the original path. */
+type ShellRunOptions = RunOptions & { host?: string };
+
+ipcMain.handle("run", (_event, opts: ShellRunOptions) => {
+	const busy = alreadyBusy();
+	if (busy) return busy;
+
+	// The task text is handed to whichever controller runs it and read by neither: the audit
+	// lives in agent.ts, on the machine that will execute the run (CLAUDE.md, "Measurement rule").
+	dispatched = { app: opts.app, remote: isRemoteHost(opts.host) };
+	const err = isRemoteHost(opts.host)
+		? remote.start({ host: opts.host as string, app: opts.app, task: opts.task, kind: "task", record: opts.record, noVision: opts.noVision }, handlers)
+		: runs.start(opts, handlers);
 	if (!err) win?.webContents.send("started", { app: opts.app, task: opts.task });
 
 	return err;
 });
 
-ipcMain.handle("ground", (_event, app: string) => {
-	const err = runs.explore(app, {
-		onLine: (line) => win?.webContents.send("line", line),
-		onDone: (code, elapsed) => win?.webContents.send("done", { code, elapsed }),
-	});
+ipcMain.handle("ground", (_event, { app, host }: { app: string; host?: string }) => {
+	const busy = alreadyBusy();
+	if (busy) return busy;
+
+	dispatched = { app, remote: isRemoteHost(host) };
+	const err = isRemoteHost(host)
+		? remote.start({ host: host as string, app, task: "", kind: "explore", record: false, noVision: false }, handlers)
+		: runs.explore(app, handlers);
 	if (!err) win?.webContents.send("started", { app, task: `grounding pass — exploring ${app}` });
 
 	return err;
 });
 
-ipcMain.handle("stop", () => runs.stop());
+/**
+ * Re-attach to a run already in flight on a Mac.
+ *
+ * This is what makes closing the window survivable: the job is a detached child on the far
+ * side and its log is a file there, so the only thing a restart ever lost was the id — which
+ * the busy fleet row carries.
+ */
+ipcMain.handle("attach", async (_event, { host, jobId, app }: { host: string; jobId: string; app?: string }) => {
+	const busy = alreadyBusy();
+	if (busy) return busy;
+
+	dispatched = { app: app || "", remote: true };
+	const err = remote.attach(host, jobId, handlers);
+	if (!err) win?.webContents.send("started", { app: app || host, task: `following ${jobId} on ${host}` });
+
+	return err;
+});
+
+/** Stop means stop the RUN, wherever it is. Detaching without stopping is what a close does. */
+ipcMain.handle("stop", async () => (remote.busy ? remote.stop() : runs.stop()));
+
+ipcMain.handle("hosts", () => hostChoices());
+
+ipcMain.handle("fleet", () => fleetView());
+
+/**
+ * Open a screen-sharing session on a colo Mac so a human can clear a sign-in wall.
+ *
+ * `shell.openExternal` on a `vnc://` URL hands off to Screen Sharing.app, which owns the
+ * credential prompt and the keychain entry for it. That is the point: nothing in this process
+ * ever sees the operator's password for the machine or their password for the app under test.
+ *
+ * Not gated on `alreadyBusy()`. Signing in on one Mac while a run follows another is a normal
+ * thing to want, and the far side refuses by itself if that Mac in particular is mid-run —
+ * which it must, now that the app is brought to the FRONT over there rather than opened behind
+ * everything. Only the runner knows whether a recording is in flight, so only the runner decides.
+ */
+ipcMain.handle("signin", async (_event, { host, app }: { host: string; app?: string }) => {
+	const view = await beginSignin(String(host ?? ""), app);
+	if (view.url) await shell.openExternal(view.url);
+
+	return view;
+});
+
+/**
+ * The second half of a sign-in: wait for the app to reach its home screen, then close the viewer.
+ *
+ * A separate call from `signin` because of how long it takes. This resolves when a human finishes
+ * an SSO round trip — minutes, sometimes — and folding it into the handler above would leave the
+ * panel's button spinning for all of it with the screen share already open and usable in front of
+ * them. The renderer fires this after `signin` returns and lets the reply land whenever it lands.
+ */
+ipcMain.handle("signin:wait", (_event, { host, app }: { host: string; app: string }) =>
+	completeSignin(String(host ?? ""), String(app ?? "")),
+);
+
+ipcMain.handle("creds", () => describeCredentials());
+
+// The key never comes back out: saveModelKey re-reads the file and answers with the same
+// present/absent boolean the panel shows on load.
+ipcMain.handle("creds:save", (_event, key: string) => saveModelKey(String(key ?? "")));
+
+ipcMain.handle("host:load", () => readRemotePrefs());
+
+ipcMain.on("host:save", (_event, host: unknown) => writeRemotePrefs({ host: String(host ?? "") }));
 
 ipcMain.handle("state:load", () => readUiState());
 
 ipcMain.on("state:save", (_event, state: unknown) => writeUiState(state));
 
 
-void app.whenReady().then(() => {
+/**
+ * Headless mode for the Macs in the fleet: hold the socket, spawn runs, show no window.
+ *
+ * It has to be THIS process rather than a node daemon because macOS attributes Accessibility
+ * and Screen Recording to the responsible process and children inherit them. A run started
+ * from an SSH session is responsible to sshd and gets an empty AX tree with no error to
+ * explain it; a run started from here inherits the grants this app already holds.
+ */
+const serveMode = process.argv.includes("--serve");
+
+void app.whenReady().then(async () => {
+	// Read before anything spawns: resolveRunCommand and childEnv both branch on it, and a
+	// packaged child needs ELECTRON_RUN_AS_NODE to behave as a node runtime.
+	process.env[PACKAGED_ENV] = app.isPackaged ? "1" : "";
+
+	// First launch on a teammate's Mac IS their enrollment: if the shipped bundle is present it
+	// installs the fleet ssh key and the model key here, so nobody has to open a terminal, run
+	// enroll, or be handed a password. Absent bundle is the normal developer case and not an
+	// error; a machine that already has an identity keeps it.
+	try {
+		const provisioned = provisionFromBundle();
+		if (provisioned) console.log(`team credentials (${provisioned.source}): identity ${provisioned.identity}, model key ${provisioned.modelKey}`);
+	} catch (err) {
+		// Never fatal. A malformed bundle must leave a usable local-only app rather than an app
+		// that will not open, which is the one failure a teammate cannot work around.
+		console.error(`team credentials ignored: ${(err as Error).message}`);
+	}
+
+	if (serveMode) {
+		// No dock icon, no window: this runs under a LaunchAgent on a machine nobody is
+		// sitting at, and a bouncing icon there is noise in a recording.
+		app.dock?.hide();
+		await startRunner(undefined, { permissions: permissionState, requestPermissions });
+
+		return;
+	}
+
 	registerVideoProtocol();
 	createWindow();
 });
 
 app.on("window-all-closed", () => {
+	// In serve mode there never was a window, and Electron fires this once at startup on some
+	// versions — quitting here would make the runner exit the moment launchd started it.
+	if (serveMode) return;
 	runs.stop();
 	app.quit();
 });
