@@ -366,14 +366,32 @@ export function startOverlay(mode: keyof typeof MODES, text: string): Overlay {
 
 	// Belt to the script's own braces: clear it on the paths Node does get to run.
 	process.once("exit", stop);
-	process.once("SIGINT", () => {
-		stop();
-		process.exit(130);
-	});
-	process.once("SIGTERM", () => {
-		stop();
-		process.exit(143);
-	});
+
+	/**
+	 * Clear the banner on a signal, then get out of the way of whoever else is listening.
+	 *
+	 * The banner is cosmetic; the run's own SIGINT handler (`onInterrupt`, installed AFTER this
+	 * in agent/explore/cleanup) is not — it flags a graceful stop so the run log is written, the
+	 * app is put back, and the driver session is closed. This handler used to call
+	 * `process.exit()` outright, which ran FIRST (it registers first) and killed the process
+	 * before that flag was ever read: every Ctrl-C and every `runnerctl stop` skipped teardown
+	 * and orphaned the driver session for up to its 300s lifetime — and since OVERLAY is on by
+	 * default, that was the default behaviour.
+	 *
+	 * So: remove the banner, then check whether anyone else is still listening for this signal.
+	 * If so (the run's handler), do nothing more and let it own termination. If not (canvas-probe,
+	 * which runs the overlay without `onInterrupt`), restore the default action by re-raising —
+	 * a bare listener would otherwise SUPPRESS Node's default terminate and hang the probe on
+	 * Ctrl-C. `stop()` is idempotent, so the re-raise re-entering here is harmless.
+	 */
+	for (const sig of ["SIGINT", "SIGTERM"] as const) {
+		const onSignal = (): void => {
+			stop();
+			if (process.listenerCount(sig) > 0) return;
+			process.kill(process.pid, sig);
+		};
+		process.once(sig, onSignal);
+	}
 
 	return { countdown, setDriving, stop };
 }
