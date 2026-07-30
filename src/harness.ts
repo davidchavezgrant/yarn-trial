@@ -642,7 +642,12 @@ export async function visualJudge(
 	try {
 		const r = await client.messages.create({
 			model,
-			max_tokens: 700,
+			// 700 was not enough: the model spends output tokens on reasoning before it writes
+			// the verdict, and on a busy frame with a long claim it hit the cap having emitted
+			// a thinking block and no text at all — stop_reason "max_tokens", zero text blocks.
+			// The judge then looked "unavailable" on exactly the runs hardest to judge, which
+			// is the worst possible direction for the bias to run.
+			max_tokens: 2000,
 			system:
 				"You are an independent verifier for a UI automation run. You did NOT perform the actions and " +
 				"have no stake in them succeeding; your job is to be hard to fool. You are given a goal and a " +
@@ -681,7 +686,8 @@ export async function visualJudge(
 		// and it went missing on a canvas run, where it is the only check on whether the
 		// thing that moved was the thing we meant to move.
 		if (!verdict) {
-			console.log(`visual judge returned no parseable verdict: ${text.slice(0, 200).replace(/\s+/g, " ")}`);
+			const why = r.stop_reason === "max_tokens" ? "ran out of output tokens before writing one" : text.slice(0, 200).replace(/\s+/g, " ");
+			console.log(`visual judge returned no parseable verdict: ${why}`);
 
 			return undefined;
 		}
