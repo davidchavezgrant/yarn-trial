@@ -781,14 +781,31 @@ export function buildFramePlan(
 	return plan;
 }
 
-/** Map an epoch instant onto the output timeline built by buildFramePlan. */
-export function toOutputMs(plan: FramePlanEntry[], frameTimes: number[], epochMs: number): number {
+/**
+ * Map an epoch instant onto the output timeline built by buildFramePlan.
+ *
+ * `anchorToEnd` places the instant just before its frame gives way to the next one, instead of
+ * proportionally within it. Use it for clicks.
+ *
+ * Proportional placement is wrong for a click because the frame holding it is the LAST capture of
+ * the pre-click screen, and the app's response is in the NEXT frame. A click that fired early in a
+ * long real interval got mapped early in the shown span, so two seconds of pre-click state played
+ * on after the button went down — the state change visibly trailed the click. Anchoring to the end
+ * puts the response on the very next frame, which is where it actually belongs.
+ */
+export function toOutputMs(
+	plan: FramePlanEntry[],
+	frameTimes: number[],
+	epochMs: number,
+	anchorToEnd = false,
+): number {
 	if (plan.length === 0) return 0;
 	for (let i = 0; i < plan.length; i++) {
 		const start = frameTimes[i];
 		const end = i + 1 < frameTimes.length ? frameTimes[i + 1] : start + GAP_BEAT_MS;
 		if (epochMs < start) return plan[i].startMs;
 		if (epochMs <= end) {
+			if (anchorToEnd) return Math.max(plan[i].startMs, plan[i].endMs - CLICK_LEAD_MS);
 			const frac = end > start ? (epochMs - start) / (end - start) : 0;
 
 			return plan[i].startMs + frac * (plan[i].endMs - plan[i].startMs);
@@ -797,6 +814,13 @@ export function toOutputMs(plan: FramePlanEntry[], frameTimes: number[], epochMs
 
 	return plan[plan.length - 1].endMs;
 }
+
+/**
+ * How long the pressed cursor is visible before the frame showing the result.
+ *
+ * Enough to register as a click; short enough that the response feels immediate.
+ */
+export const CLICK_LEAD_MS = 220;
 
 export interface BuildTrackInput {
 	stamp: string;
@@ -961,8 +985,10 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 	cursor.push({ tMs: 0, x: at.x, y: at.y, type });
 
 	for (const { step, turn } of joined) {
-		const dispatchMs = toOutputMs(plan, keptTimes, turn.epochMs - (turn.endMs - turn.startMs));
-		const completeMs = toOutputMs(plan, keptTimes, turn.epochMs);
+		// Anchored to the end of its frame: that frame is the last capture BEFORE the action, and
+		// the app's response is the next one, so the click has to sit right against the cut.
+		const dispatchMs = toOutputMs(plan, keptTimes, turn.epochMs - (turn.endMs - turn.startMs), true);
+		const completeMs = toOutputMs(plan, keptTimes, turn.epochMs, true);
 		const raw = actionPoint(turn);
 		// Corrected against the pixels before scaling: the change box is in the same capture space
 		// the driver reported the click point in.

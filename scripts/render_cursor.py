@@ -42,6 +42,14 @@ RASTER = 64
 
 CARET_BLINK_MS = 530
 
+# The art is rasterized into a RASTER-px box representing 32 logical points, so RASTER/32 px per
+# point. Drawing it unscaled sized the cursor for an unscaled display; against a 1920pt window
+# captured at 1568px it came out ~1.5x too big and towered over the UI text beside it.
+POINTS_PER_BOX = 32.0
+
+# Click ring radius in points, scaled the same way.
+CLICK_RING_PT = 18.0
+
 # Ramp on the synthetic hover tint, so it reads as a response rather than a compositing glitch.
 HOVER_FADE_MS = 120
 
@@ -206,6 +214,11 @@ def main():
     events = track["events"]
     plan = track["framePlan"]
     hovers = track.get("hovers", [])
+    # Output pixels per logical point of the captured window. Everything drawn on top of the frame
+    # — cursor, click ring — has to shrink by the same factor the app's own UI did.
+    src = track["space"].get("sourceCapture", {})
+    frame_scale = (width / src["width"]) if src.get("width") else 1.0
+    cursor_scale = POINTS_PER_BOX / RASTER * frame_scale
 
     files = sorted(f for f in os.listdir(frames_dir) if f.startswith("f-") and f.endswith(".png"))
     index_of = set(files)
@@ -255,16 +268,19 @@ def main():
             spot = sample_cursor(samples, t_ms)
             if spot:
                 art, (hotx, hoty) = cursors.get(spot["type"], cursors["arrow"])
-                x = int(round(spot["x"] - hotx / 2))
-                y = int(round(spot["y"] - hoty / 2))
+                size = (max(1, round(art.size[0] * cursor_scale)), max(1, round(art.size[1] * cursor_scale)))
+                scaled = art.resize(size, Image.LANCZOS)
+                # The hotspot is the point the cursor is AT, so it scales with the art.
+                x = int(round(spot["x"] - hotx * cursor_scale))
+                y = int(round(spot["y"] - hoty * cursor_scale))
                 if pressed_at(events, t_ms):
+                    r = CLICK_RING_PT * frame_scale
                     ring = Image.new("RGBA", frame.size, (0, 0, 0, 0))
                     ImageDraw.Draw(ring).ellipse(
-                        [spot["x"] - 18, spot["y"] - 18, spot["x"] + 18, spot["y"] + 18],
-                        outline=(40, 110, 255, 190), width=3,
+                        [spot["x"] - r, spot["y"] - r, spot["x"] + r, spot["y"] + r],
+                        outline=(40, 110, 255, 190), width=max(1, round(2 * frame_scale)),
                     )
                     frame = Image.alpha_composite(frame.convert("RGBA"), ring).convert("RGB")
-                scaled = art.resize((art.size[0] // 2, art.size[1] // 2), Image.LANCZOS)
                 frame.paste(scaled, (x, y), scaled)
 
             out.write(frame.tobytes())

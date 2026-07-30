@@ -5,6 +5,7 @@ import {
 	buildFramePlan,
 	buildTrack,
 	correctToChange,
+	CLICK_LEAD_MS,
 	ACTION_MAX_MS,
 	GAP_BEAT_MS,
 	joinSteps,
@@ -485,6 +486,30 @@ test("buildTrack__OmitsHoverSpan__When__StepHasNoTargetRect", () => {
 		library: { fittedFrom: { dataset: "t", generatedAt: "" }, segments: [] },
 	});
 	assert.equal(track.hovers.length, 0);
+});
+
+test("toOutputMs__PlacesClickAgainstTheCut__When__AnchoredToEnd", () => {
+	// The frame holding a click is the last capture of the PRE-click screen; the response is the
+	// next one. Placing the click proportionally within a long frame left seconds of pre-click
+	// state playing after the button went down — measured at 2.1s, which read as the state change
+	// lagging the click. Anchored, it sits CLICK_LEAD_MS before the cut.
+	const base = 1_000_000;
+	const frameTimes = [base, base + 5000, base + 6000];
+	const plan = buildFramePlan(frameTimes, [{ startEpochMs: base + 500, endEpochMs: base + 700 }]);
+	const span = plan[0];
+	const proportional = toOutputMs(plan, frameTimes, base + 500);
+	const anchored = toOutputMs(plan, frameTimes, base + 500, true);
+	assert.ok(anchored > proportional, "anchoring should move the click later within its frame");
+	assert.equal(anchored, span.endMs - CLICK_LEAD_MS);
+});
+
+test("toOutputMs__StaysInsideTheFrame__When__SpanIsShorterThanTheLead", () => {
+	// A frame briefer than the lead must not push the click before its own start.
+	const base = 1_000_000;
+	const frameTimes = [base, base + 60, base + 120];
+	const plan = buildFramePlan(frameTimes, []);
+	const anchored = toOutputMs(plan, frameTimes, base + 10, true);
+	assert.ok(anchored >= plan[0].startMs && anchored <= plan[0].endMs);
 });
 
 test("samplePercentile__InterpolatesBetweenQuantiles__When__GivenUniformInput", () => {
