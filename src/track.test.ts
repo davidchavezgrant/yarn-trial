@@ -161,6 +161,39 @@ test("synthesizeMove__ProducesMidFlightNearStops__When__NoSegmentMatches", () =>
 	assert.ok(speeds.some((s) => s < mean * 0.25), "expected the pointer to visibly slow mid-flight");
 });
 
+test("synthesizeMove__DecomposesIntoSeveralSubmovements__When__NoSegmentMatches", () => {
+	// BeCAPTCHA-Mouse (arXiv:2005.00890) trains a bot detector whose most informative single
+	// feature is the number of lognormal strokes a trajectory decomposes into: a human reach is
+	// one ballistic launch plus a tail of corrections, and a smooth synthetic curve is one or two.
+	// Measured against our own corpus, real segments give a median of 7 velocity peaks and the
+	// pre-lognormal version of this function gave 2. Counting peaks approximates the decomposition.
+	const rand = makeRandom(23);
+	const counts: number[] = [];
+	for (let i = 0; i < 60; i++) {
+		const move = synthesizeMove({ x: 0, y: 0 }, { x: 400 + rand() * 600, y: 200 }, CONSTANTS, rand);
+		const speeds: number[] = [];
+		for (let k = 1; k < move.length; k++) {
+			const dt = move[k].tMs - move[k - 1].tMs;
+			if (dt > 0) speeds.push(Math.hypot(move[k].x - move[k - 1].x, move[k].y - move[k - 1].y) / dt);
+		}
+		const floor = Math.max(...speeds) * 0.1;
+		let peaks = 0;
+		for (let k = 1; k < speeds.length - 1; k++)
+			if (speeds[k] > floor && speeds[k] >= speeds[k - 1] && speeds[k] > speeds[k + 1]) peaks++;
+		counts.push(peaks);
+	}
+	counts.sort((a, b) => a - b);
+	const median = counts[Math.floor(counts.length / 2)];
+	assert.ok(median >= 4, `expected several submovements per reach, got a median of ${median}`);
+});
+
+test("synthesizeMove__EmitsWholePixelPositions__When__Generated", () => {
+	// A real pointer is quantized to the pixel grid; the corpus is mostly 0px and 1px steps between
+	// adjacent samples. Sub-pixel positions make the speed profile implausibly smooth.
+	const move = synthesizeMove({ x: 0, y: 0 }, { x: 640, y: 360 }, CONSTANTS, makeRandom(31));
+	assert.ok(move.every((p) => Number.isInteger(p.x) && Number.isInteger(p.y)));
+});
+
 test("synthesizeMove__CurvesOffTheStraightLine__When__Generated", () => {
 	const from = { x: 0, y: 0 };
 	const to = { x: 800, y: 0 };

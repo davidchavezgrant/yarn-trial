@@ -315,10 +315,40 @@ export function warpSegment(
 }
 
 /**
+ * One lognormal stroke's speed contribution at time t.
+ *
+ * From the Sigma-Lognormal model of the kinematic theory of rapid human movements, as used by
+ * Acien et al., "BeCAPTCHA-Mouse: Synthetic Mouse Trajectories and Improved Bot Detection"
+ * (arXiv:2005.00890). The motor cortex issues discrete impulses whose speed contributions are
+ * lognormal in time; a reach is their sum.
+ *
+ *   |v_i(t)| = D_i / (sqrt(2pi) * sigma_i * (t - t0_i)) * exp(-(ln(t - t0_i) - mu_i)^2 / (2 sigma_i^2))
+ *
+ * D is the distance the stroke contributes, t0 its onset, mu the log-temporal delay, sigma the
+ * neuromotor impulse response time.
+ */
+function lognormalStroke(t: number, d: number, t0: number, mu: number, sigma: number): number {
+	const dt = t - t0;
+	if (dt <= 0) return 0;
+	const z = (Math.log(dt) - mu) / sigma;
+
+	return (d / (Math.sqrt(2 * Math.PI) * sigma * dt)) * Math.exp(-0.5 * z * z);
+}
+
+/**
  * Generate a movement when the corpus has no comparable segment.
  *
- * Reproduces the three measured properties explicitly, because a plain eased interpolation fails
- * all of them: asymmetric distance profile, mid-flight near-stops, and perpendicular curvature.
+ * Built as a sum of lognormal strokes rather than one eased curve, because the count of those
+ * strokes is itself a tell. BeCAPTCHA-Mouse (arXiv:2005.00890) trains a bot detector whose single
+ * most informative feature is N, the number of lognormal components a trajectory decomposes into:
+ * a human reach is one large ballistic stroke plus a tail of small corrective ones, and a smooth
+ * synthetic curve is one or two. Measured against our own corpus, the earlier eased-curve version
+ * of this function produced a median of 2 velocity peaks where real segments give 7 — detectable,
+ * and visibly too clean beside replayed motion.
+ *
+ * The paper also reports that the velocity profile matters more than the path shape for realism,
+ * and that its most convincing synthetic profile is the one with both initial acceleration and
+ * final deceleration. A stroke sum gives that for free.
  */
 export function synthesizeMove(
 	from: { x: number; y: number },
@@ -337,35 +367,64 @@ export function synthesizeMove(
 		: samplePercentile({ p10: 330, p50: 790, p90: 1760 }, rand());
 	const ux = dx / distance;
 	const uy = dy / distance;
+
+	// One dominant stroke carrying most of the distance, then corrective strokes that land later
+	// and contribute progressively less — the agonist/antagonist activation followed by fine
+	// correction the paper describes.
+	const strokeCount = 4 + Math.floor(rand() * 4);
+	const strokes: Array<{ d: number; t0: number; mu: number; sigma: number }> = [];
+	let weight = 1;
+	let weightTotal = 0;
+	for (let i = 0; i < strokeCount; i++) {
+		const share = weight * (0.7 + rand() * 0.6);
+		strokes.push({
+			d: share,
+			// Corrections must land clearly AFTER the launch, not under it. Onsets bunched near the
+			// start sum into a single smooth bump, which is the shape this whole function exists to
+			// avoid — the strokes have to stay separable in the speed profile to read as distinct
+			// submovements.
+			t0: i === 0 ? 0 : durationMs * (0.18 + 0.62 * ((i - 0.5) / strokeCount) + rand() * 0.08),
+			// Each stroke peaks soon after its own onset; the launch is the long one.
+			mu: Math.log(durationMs * (i === 0 ? 0.2 + rand() * 0.12 : 0.03 + rand() * 0.04)),
+			// Tight sigma keeps a stroke's energy in its own window instead of smearing across
+			// its neighbours.
+			sigma: i === 0 ? 0.28 + rand() * 0.12 : 0.14 + rand() * 0.12,
+		});
+		weightTotal += share;
+		weight *= 0.45;
+	}
+	for (const s of strokes) s.d /= weightTotal;
+
+	const steps = Math.max(8, Math.round((durationMs / 1000) * constants.sampleHz));
+	// Integrate the speed profile into cumulative distance, then normalize so the movement covers
+	// exactly the distance asked for and lands exactly on target.
+	const cumulative: number[] = [0];
+	for (let i = 1; i <= steps; i++) {
+		const t = (i / steps) * durationMs;
+		let speed = 0;
+		for (const s of strokes) speed += lognormalStroke(t, s.d, s.t0, s.mu, s.sigma);
+		cumulative.push(cumulative[i - 1] + speed);
+	}
+	const total = cumulative[steps] || 1;
+
 	// Deviation peaks mid-flight and returns to zero at both ends; sign is arbitrary per movement.
 	const peak = samplePercentile(
 		{ p10: constants.perpDeviationFrac.p50 * 0.5, p50: constants.perpDeviationFrac.p50, p90: constants.perpDeviationFrac.p90 },
 		rand(),
 	) * distance * (rand() < 0.5 ? -1 : 1);
-	// Hold points scattered through the middle reproduce the measured hesitation: without them the
-	// profile is smooth, and smooth is the single most robotic-looking property.
-	const holds = 1 + Math.floor(rand() * 3);
-	const holdAt: number[] = [];
-	for (let i = 0; i < holds; i++) holdAt.push(0.45 + rand() * 0.45);
-	const steps = Math.max(8, Math.round((durationMs / 1000) * constants.sampleHz));
+
 	const out: Array<{ tMs: number; x: number; y: number }> = [];
 	for (let i = 0; i <= steps; i++) {
-		const u = i / steps;
-		// Distance fraction: measured median is 51% at t=0.2 and 90% at t=0.5, which this matches
-		// far better than a symmetric curve.
-		let progress = 1 - Math.pow(1 - u, 3.2);
-		for (const h of holdAt) {
-			// Flatten progress near each hold, so the pointer visibly stalls and resumes.
-			const d = Math.abs(u - h);
-			if (d < 0.05) progress -= (0.05 - d) * 0.35;
-		}
-		progress = Math.min(1, Math.max(0, progress));
+		const progress = Math.min(1, cumulative[i] / total);
 		const along = progress * distance;
 		const across = Math.sin(progress * Math.PI) * peak;
 		out.push({
-			tMs: u * durationMs,
-			x: from.x + ux * along - uy * across,
-			y: from.y + uy * along + ux * across,
+			tMs: (i / steps) * durationMs,
+			// Whole pixels. A real pointer is quantized to the pixel grid — the corpus is full of
+			// 0px and 1px steps between adjacent samples, which is what gives a human speed profile
+			// its jitter. Continuous sub-pixel positions produce an implausibly smooth one.
+			x: Math.round(from.x + ux * along - uy * across),
+			y: Math.round(from.y + uy * along + ux * across),
 		});
 	}
 	out[out.length - 1].x = to.x;
