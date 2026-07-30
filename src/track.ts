@@ -44,12 +44,24 @@ export const FPS = 60;
  * A thinking gap collapses to this. Most of a run's wall clock is the model deciding what to do,
  * during which the screen is frozen; Yarn's own pipeline speeds these up too, but the artifact has
  * to stand on its own.
+ *
+ * Long enough to read. Once identical gap frames are collapsed, a run reduces to about a dozen
+ * distinct screens, and at a shorter beat they went past faster than a viewer could follow — the
+ * compression stopped being invisible and became the thing you noticed.
  */
-export const GAP_BEAT_MS = 400;
+export const GAP_BEAT_MS = 900;
 
 /** Kept at real duration around each action, so the app's own response reads at true speed. */
 export const PRE_ACTION_MS = 300;
 export const POST_ACTION_MS = 500;
+
+/**
+ * How long after an action its consequences are still considered part of it.
+ *
+ * Longer than POST_ACTION_MS, which governs playback speed: this governs which captures survive at
+ * all, and an app can take a second or two to finish a navigation.
+ */
+export const THINK_SETTLE_MS = 2500;
 
 /**
  * Ceiling on an action frame's screen time.
@@ -443,6 +455,60 @@ export function springSmooth(
 	return out;
 }
 
+/**
+ * Scatter the landing point inside the control instead of hitting its exact centre.
+ *
+ * Every click resolving to a mathematical centre is the single most machine-like thing left in the
+ * output — real clicks are distributed across a target, biased slightly toward the middle but
+ * rarely on it. The offset is drawn from a triangular distribution (the average of two uniforms),
+ * so most landings sit near the centre and the occasional one is near an edge.
+ *
+ * Bounded well inside the rect: this must never move a click off the control it is meant to hit,
+ * and a click point the driver placed off-centre for its own reasons is only nudged, not recentred.
+ */
+export function jitterWithin(
+	point: { x: number; y: number },
+	rect: { x: number; y: number; w: number; h: number } | undefined,
+	rand: () => number,
+): { x: number; y: number } {
+	if (!rect || rect.w <= 0 || rect.h <= 0) return point;
+	const spread = (extent: number): number => {
+		const room = Math.max(0, extent / 2 - CLICK_EDGE_MARGIN_PX);
+
+		return (rand() + rand() - 1) * Math.min(room, extent * CLICK_JITTER_FRAC);
+	};
+	const x = point.x + spread(rect.w);
+	const y = point.y + spread(rect.h);
+
+	return {
+		x: Math.min(Math.max(x, rect.x + CLICK_EDGE_MARGIN_PX), rect.x + rect.w - CLICK_EDGE_MARGIN_PX),
+		y: Math.min(Math.max(y, rect.y + CLICK_EDGE_MARGIN_PX), rect.y + rect.h - CLICK_EDGE_MARGIN_PX),
+	};
+}
+
+/** Landing scatter, as a fraction of the control's size. */
+export const CLICK_JITTER_FRAC = 0.28;
+
+/** Never land closer than this to a control's edge. */
+export const CLICK_EDGE_MARGIN_PX = 3;
+
+/**
+ * When a movement first crosses into a rect, in ms from the movement's own start.
+ *
+ * Falls back to the movement's end if it never enters — the caller has already checked that the
+ * click point agrees with the rect, so that means the approach came in from an odd angle rather
+ * than that the rect is wrong.
+ */
+export function enterTime(
+	move: Array<{ tMs: number; x: number; y: number }>,
+	rect: { x: number; y: number; w: number; h: number },
+): number {
+	for (const p of move)
+		if (p.x >= rect.x && p.x <= rect.x + rect.w && p.y >= rect.y && p.y <= rect.y + rect.h) return p.tMs;
+
+	return move.length > 0 ? move[move.length - 1].tMs : 0;
+}
+
 /** Largest excursion off the straight line, as a fraction of the movement's distance. */
 function maxPerp(segment: MotionSegment): number {
 	let m = 0;
@@ -686,6 +752,7 @@ export function buildFramePlan(
 	frameTimes: number[],
 	actionWindows: Array<{ startEpochMs: number; endEpochMs: number }>,
 	frameFiles?: string[],
+	keepFrom?: number,
 ): FramePlanEntry[] {
 	if (frameTimes.length === 0) return [];
 	/**
@@ -700,6 +767,8 @@ export function buildFramePlan(
 	const plan: FramePlanEntry[] = [];
 	let outMs = 0;
 	for (let i = 0; i < frameTimes.length; i++) {
+		// Frames from before the take, alongside the actions that produced them.
+		if (keepFrom !== undefined && frameTimes[i] < keepFrom) continue;
 		const realMs = i + 1 < frameTimes.length ? frameTimes[i + 1] - frameTimes[i] : GAP_BEAT_MS;
 		const action = overlapsAction(frameTimes[i], frameTimes[i] + realMs);
 		const shown = action
@@ -739,6 +808,9 @@ export interface BuildTrackInput {
 	frameTimes: number[];
 	/** Epoch ms when recording actually began, so pre-take setup turns can be excluded. */
 	recordedFromMs?: number;
+	/** Content signature per frame, index-aligned with frameTimes. Identical consecutive frames in
+	 *  a thinking gap are collapsed to one. */
+	frameHashes?: string[];
 	/** Usable frame filenames, index-aligned with frameTimes. Carried into the plan so the
 	 *  renderer resolves frames by name instead of re-deriving an index from the directory. */
 	frameFiles?: string[];
@@ -759,14 +831,118 @@ export interface BuildTrackInput {
  */
 export function buildTrack(input: BuildTrackInput): MotionTrack {
 	const rand = makeRandom(input.seed ?? 0x5eed);
-	const joined = joinSteps(input.steps, input.turns);
+	const allJoined = joinSteps(input.steps, input.turns);
+
+	/**
+	 * Decide which actions the take contains BEFORE building the timeline, because dropping an
+	 * action means dropping its footage too.
+	 *
+	 * Skipping only the cursor animation left the frames in place, and those frames are the
+	 * action's consequences: a no-op press on an unlabelled image sat in the middle of an in-flight
+	 * navigation, so the video flickered between Library and Brand Kit for five seconds with no
+	 * pointer doing anything, and the next click appeared to open a page the cursor had not
+	 * touched. The frames have to go with the action that produced them.
+	 */
+	const firstFrameMs = input.frameTimes[0] ?? 0;
+	/**
+	 * Nothing before the take begins. start_recording backfills turns from earlier in the driver
+	 * session, so the home reset's own clicks — navigating out of wherever the LAST run finished —
+	 * arrive as the first turns. `recordedFromMs` is stamped by the agent when recording actually
+	 * starts; without it the first usable frame is the best available proxy.
+	 */
+	const startMs = Math.max(firstFrameMs, input.recordedFromMs ?? 0);
+	const dropped: Array<{ from: number; to: number }> = [];
+	const joined = allJoined.filter(({ step, turn }, i) => {
+		// A click the driver warned about that also failed verification is a no-op: the agent
+		// pressed something that does not advertise AXPress and the expected result never appeared.
+		const noop = turn.warned && step?.verified === false;
+		// An action that DISPATCHED before the first frame has no footage of itself, only of its
+		// aftermath. Rendering it puts a click at the timeline's very start, against a screen that
+		// already shows the result — the pointer appears to click after the fact.
+		const noFootage = turn.epochMs - (turn.endMs - turn.startMs) < startMs;
+		if (turn.epochMs >= startMs && !noop && !noFootage) return true;
+		/**
+		 * Its footage runs from dispatch until its consequences have settled — NOT until the next
+		 * action dispatches.
+		 *
+		 * Extending to the next dispatch swallows the whole thinking gap that follows, and that gap
+		 * holds the frames showing the state the NEXT action starts from. A dropped pre-recording
+		 * reset did exactly that: its window ran 14s to the first real click, taking twelve frames
+		 * with it, so the click had no frame at or before it and clamped to the timeline start.
+		 */
+		const dispatch = turn.epochMs - (turn.endMs - turn.startMs);
+		dropped.push({ from: dispatch, to: turn.epochMs + THINK_SETTLE_MS });
+
+		return false;
+	});
+
+	const keep = (t: number): boolean => t >= startMs && !dropped.some((d) => t >= d.from && t < d.to);
+	/**
+	 * Hold one frame through each think instead of playing every capture in it.
+	 *
+	 * Between actions the app is not idle: it finishes navigations, settles animations, and
+	 * sometimes repaints an earlier screen for a beat. The capture loop samples all of it, and
+	 * played back at one beat per frame the result is a flicker with no pointer doing anything —
+	 * measured on one run, the view alternated between Library and Brand Kit three times in a row,
+	 * six seconds after the last click and seven before the next.
+	 *
+	 * The LAST frame of each gap is the one to keep: it is what the screen had actually settled to
+	 * when the next action began. Frames inside an action window are all kept, because that is
+	 * where cause and effect have to stay visible.
+	 */
+	const inAction = (t: number): boolean =>
+		joined.some(({ turn }) => {
+			const dispatch = turn.epochMs - (turn.endMs - turn.startMs);
+
+			return t >= dispatch - PRE_ACTION_MS && t <= turn.epochMs + THINK_SETTLE_MS;
+		});
+	const keptTimes: number[] = [];
+	const keptFiles: string[] = [];
+	for (let i = 0; i < input.frameTimes.length; i++) {
+		const t = input.frameTimes[i];
+		if (!keep(t)) continue;
+		/**
+		 * Inside a gap, keep only frames that differ from the one before.
+		 *
+		 * The capture loop samples on a clock, so most gap frames are byte-identical repeats of a
+		 * static screen and cost a beat each for nothing. Dropping every gap frame instead was too
+		 * blunt — it removed the app's own response, which arrives seconds after the action while
+		 * the model is already thinking, and left a cut that jumped between end states.
+		 *
+		 * Requires a content signature from the caller; without one, all frames are kept.
+		 */
+		/**
+		 * Always keep the first frame, and any frame an action's dispatch falls after.
+		 *
+		 * toOutputMs maps an instant onto the plan by finding the frame it lands in, so a dispatch
+		 * with no kept frame at or before it clamps to zero — putting the click at the very start
+		 * of the video against a screen showing its own aftermath. The frames a dispatch needs are
+		 * often the very duplicates this dedup removes, so they have to be exempted explicitly.
+		 */
+		const nextKept = input.frameTimes.slice(i + 1).find((n) => keep(n));
+		const anchorsAction = joined.some(({ turn }) => {
+			const dispatch = turn.epochMs - (turn.endMs - turn.startMs);
+
+			// The next KEPT frame, not the next captured one: frames removed above are not in the
+			// plan, so a dispatch landing between this frame and a dropped one still needs this
+			// frame as its anchor.
+			return dispatch >= t && (nextKept === undefined || dispatch < nextKept);
+		});
+		if (!inAction(t) && !anchorsAction && input.frameHashes && keptTimes.length > 0) {
+			const prevIdx = input.frameTimes.indexOf(keptTimes[keptTimes.length - 1]);
+			if (prevIdx >= 0 && input.frameHashes[prevIdx] === input.frameHashes[i]) continue;
+		}
+		keptTimes.push(t);
+		if (input.frameFiles?.[i]) keptFiles.push(input.frameFiles[i]);
+	}
+
 	const plan = buildFramePlan(
-		input.frameTimes,
-		input.turns.map((t) => ({
-			startEpochMs: t.epochMs - (t.endMs - t.startMs),
-			endEpochMs: t.epochMs,
+		keptTimes,
+		joined.map(({ turn }) => ({
+			startEpochMs: turn.epochMs - (turn.endMs - turn.startMs),
+			endEpochMs: turn.epochMs,
 		})),
-		input.frameFiles,
+		keptFiles.length === keptTimes.length ? keptFiles : undefined,
 	);
 	// Per-turn capture width, falling back to the run's nominal one. A window that moves between
 	// displays mid-run changes the size of the capture its click points are expressed in, so a
@@ -784,44 +960,9 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 	let lastActionMs = 0;
 	cursor.push({ tMs: 0, x: at.x, y: at.y, type });
 
-	/**
-	 * Actions with no footage are dropped, not clamped.
-	 *
-	 * toOutputMs pins anything before the first frame to 0, so a click that happened while the
-	 * window was still settling — before any usable capture exists — lands on top of the opening
-	 * frame along with every other such click. One run stacked two clicks at 0ms against a screen
-	 * that showed neither: they read as the UI changing before the pointer arrived, because there
-	 * is genuinely no frame of them happening.
-	 */
-	const firstFrameMs = input.frameTimes[0] ?? 0;
-	/**
-	 * Nothing before the take begins.
-	 *
-	 * start_recording backfills turns from earlier in the driver session, so the home reset's own
-	 * clicks — navigating out of wherever the LAST run finished — arrive as the first turns and get
-	 * animated as though they were the task. `recordedFromMs` is stamped by the agent when
-	 * recording actually starts; without it the first usable frame is the best available proxy.
-	 */
-	const startMs = Math.max(firstFrameMs, input.recordedFromMs ?? 0);
-
 	for (const { step, turn } of joined) {
-		if (turn.epochMs < startMs) continue;
-		/**
-		 * Skip a click the driver warned about that also failed its own verification.
-		 *
-		 * Together those mean the agent pressed something that does not advertise AXPress and the
-		 * expected result did not appear — a no-op. Animating it shows the pointer making a
-		 * deliberate reach into a control that never reacts; on one run that was an unlabelled
-		 * image beside the search field, which reads as the cursor clicking the search bar for no
-		 * reason.
-		 *
-		 * Pixel delta is NOT the test, though it looks like the obvious one: that step measured
-		 * 0.49 because the previous navigation was still painting. Verification knows what the
-		 * action was supposed to achieve; a pixel count only knows that something moved.
-		 */
-		if (turn.warned && step?.verified === false) continue;
-		const dispatchMs = toOutputMs(plan, input.frameTimes, turn.epochMs - (turn.endMs - turn.startMs));
-		const completeMs = toOutputMs(plan, input.frameTimes, turn.epochMs);
+		const dispatchMs = toOutputMs(plan, keptTimes, turn.epochMs - (turn.endMs - turn.startMs));
+		const completeMs = toOutputMs(plan, keptTimes, turn.epochMs);
 		const raw = actionPoint(turn);
 		// Corrected against the pixels before scaling: the change box is in the same capture space
 		// the driver reported the click point in.
@@ -831,7 +972,7 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 					height: Math.round(((turn.captureWidth ?? input.captureSize.width) * input.frameSize.height) / input.frameSize.width),
 				})
 			: undefined;
-		const target = fixed ? toFrame(fixed, turn.captureWidth) : undefined;
+		const target = fixed ? jitterWithin(toFrame(fixed, turn.captureWidth), step?.targetRect, rand) : undefined;
 
 		if (target) {
 			const distance = Math.hypot(target.x - at.x, target.y - at.y);
@@ -895,9 +1036,15 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 				at.x <= rect.x + rect.w + HOVER_SLOP_PX &&
 				at.y >= rect.y - HOVER_SLOP_PX &&
 				at.y <= rect.y + rect.h + HOVER_SLOP_PX;
-			if (rect && agrees)
+			// From the moment the pointer ENTERS the control, not when it finishes settling. A real
+			// hover fires on the crossing, and the last stretch of a reach is the slow part —
+			// waiting for the movement to end left the highlight visibly late.
+			const hoverFrom = moveStart + enterTime(move, rect ?? { x: 0, y: 0, w: 0, h: 0 });
+			// The click can precede the pointer's arrival when an action's footage was trimmed, and
+			// a span that ends before it starts renders as a permanent highlight.
+			if (rect && agrees && completeMs > hoverFrom)
 				hovers.push({
-					startMs: moveStart + duration,
+					startMs: hoverFrom,
 					endMs: completeMs,
 					...rect,
 					stepIndex: step.index,

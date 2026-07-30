@@ -206,6 +206,16 @@ function main(): void {
 		frameTimes = frameFiles.map((f) => fs.statSync(path.join(framesDir, f)).mtimeMs);
 	}
 
+	// Cheap content signature per frame: size plus a sparse byte sample. Enough to tell a repeated
+	// static screen from a real repaint without decoding 160 PNGs.
+	const frameHashes = frameFiles.map((f) => {
+		const buf = fs.readFileSync(path.join(framesDir, f));
+		let h = 0;
+		for (let i = 0; i < buf.length; i += 4093) h = (h * 31 + buf[i]) >>> 0;
+
+		return `${buf.length}:${h}`;
+	});
+
 	const track = buildTrack({
 		stamp,
 		app,
@@ -214,6 +224,7 @@ function main(): void {
 		steps,
 		turns,
 		frameTimes,
+		frameHashes,
 		recordedFromMs,
 		frameFiles,
 		frameSize,

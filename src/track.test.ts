@@ -419,7 +419,8 @@ test("buildTrack__SkipsActions__When__TheyPrecedeTheFirstUsableFrame", () => {
 		steps: [],
 		// The first two happen before any frame was captured; only the third has footage.
 		turns: [mk(base - 18_000, 100), mk(base - 2000, 300), mk(base + 4000, 900)],
-		frameTimes: [base, base + 4000, base + 6000],
+		// Frames every second, so the third action has one at or before its dispatch to anchor to.
+		frameTimes: [base, base + 1000, base + 2000, base + 3000, base + 4000, base + 6000],
 		frameSize: { width: 1568, height: 882 },
 		captureSize: { width: 1568, height: 882 },
 		constants: CONSTANTS,
