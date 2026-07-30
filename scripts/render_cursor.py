@@ -50,6 +50,10 @@ POINTS_PER_BOX = 32.0
 # Click ring radius in points, scaled the same way.
 CLICK_RING_PT = 18.0
 
+# Shrink factor on the hand-drawn arrow profile, so its rendered height matches the system
+# cursors rasterized beside it (measured: 51/64 of the box before, 38/64 for pointinghand).
+ARROW_SPAN = 0.72
+
 # Ramp on the synthetic hover tint, so it reads as a response rather than a compositing glitch.
 HOVER_FADE_MS = 120
 
@@ -90,14 +94,19 @@ def draw_arrow():
 
     macOS does not ship it in the cursors directory alongside the others, and drawing it avoids
     committing an Apple asset to the repo along with the licensing question that raises.
+
+    Sized against the system cursors it sits beside. The outline profile below spans 25 units of a
+    32-unit box, which with its stroke rendered 51/64 of the box — against 38/64 for the real
+    pointing hand, so the arrow showed up a third larger than every other pointer in the same
+    video. ARROW_SPAN scales the profile so the drawn result matches.
     """
     image = Image.new("RGBA", (RASTER, RASTER), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    s = RASTER / 32.0
+    s = RASTER / 32.0 * ARROW_SPAN
     body = [(0, 0), (0, 21), (5, 16), (9, 25), (13, 23), (9, 15), (16, 15)]
     points = [(x * s, y * s) for x, y in body]
     # White outline under a black fill is what makes a cursor legible over any background.
-    draw.polygon(points, fill=(255, 255, 255, 255), outline=(255, 255, 255, 255), width=int(3 * s))
+    draw.polygon(points, fill=(255, 255, 255, 255), outline=(255, 255, 255, 255), width=max(1, round(2 * s)))
     draw.polygon(points, fill=(0, 0, 0, 255))
 
     return image, (0, 0)
