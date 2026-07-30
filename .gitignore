@@ -16,3 +16,9 @@ dist-electron
 
 # Python bytecode from the render/fit scripts.
 __pycache__/
+
+# Source corpora for the cursor motion fit. The render path reads only the fitted outputs
+# (data/motion-constants.json, data/motion-segments.json); these are needed solely to re-run
+# scripts/fit-motion.py. 185MB, kept out of history deliberately.
+data/cursor-keyboard-dataset-2026-07-30/
+data/cursor-smoothed-dataset/
