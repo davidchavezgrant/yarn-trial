@@ -3,6 +3,7 @@ import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { Driver } from "./driver.js";
+import { envNum } from "./env.js";
 import {
 	ACT_TOOL,
 	actionTarget,
@@ -46,7 +47,7 @@ import { parseTarget, type Target, targetLabel, targetSlug, type TargetVocabular
 import type { ActionRequest, Expectation, StepRecord } from "./types.js";
 import type { ObservationBundle, VerifyResult, VisualVerdict, WindowRef } from "./harness.js";
 
-const MAX_STEPS = Number(process.env.AGENT_STEPS ?? 15);
+const MAX_STEPS = envNum("AGENT_STEPS", 15);
 /**
  * Steps a single restore entry may spend before it is abandoned.
  *
@@ -56,7 +57,7 @@ const MAX_STEPS = Number(process.env.AGENT_STEPS ?? 15);
  * put back in ten steps is reporting that the control moved or the surface changed, which is
  * worth saying rather than grinding on.
  */
-const CLEANUP_STEPS = Number(process.env.CLEANUP_STEPS ?? 10);
+const CLEANUP_STEPS = envNum("CLEANUP_STEPS", 10);
 /**
  * Consecutive steps with nothing verified and nothing repainted before the run says so. It
  * used to abort here, and that was wrong for a whole class of target: apps with an embedded
@@ -69,7 +70,7 @@ const CLEANUP_STEPS = Number(process.env.CLEANUP_STEPS ?? 10);
  */
 const FROZEN_STEPS = 4;
 /** Free read-only page searches per run, beyond which a find costs an action. */
-const MAX_FINDS = Number(process.env.AGENT_FINDS ?? 20);
+const MAX_FINDS = envNum("AGENT_FINDS", 20);
 const SETTLE_MS = 900;
 
 /** Frame-loop cadence right after an action, while the app is repainting. */

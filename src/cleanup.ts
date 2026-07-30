@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import { Driver } from "./driver.js";
+import { envNum } from "./env.js";
 import {
 	appSlug,
 	ensureObservable,
@@ -211,7 +212,7 @@ async function main(): Promise<void> {
 			graph: loadAppMapGraph(appSlug(app)),
 			// Discarded: a standalone replay has no run log to fold step records into.
 			steps: [],
-			budget: Number(process.env.CLEANUP_STEPS ?? DEFAULT_BUDGET),
+			budget: envNum("CLEANUP_STEPS", DEFAULT_BUDGET),
 			mode: "cli",
 			vision,
 			usage,

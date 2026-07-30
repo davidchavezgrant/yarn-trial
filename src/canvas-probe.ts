@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { Driver } from "./driver.js";
+import { envNum } from "./env.js";
 import { findWindow, pixelDelta } from "./harness.js";
 import { startOverlay } from "./overlay.js";
 import * as axdom from "./axdom.js";
@@ -71,11 +72,11 @@ const WALL_CLOCK = /\b(AM|PM)\b|\b(Today|Yesterday|ago)\b/i;
  * SURVEY_X/Y is where the scroll is aimed — a point inside the canvas, in window-local
  * screenshot pixels, read off canvas-probe-0.png like every other coordinate here.
  */
-const SURVEY = Number(process.env.SURVEY ?? 0);
-const SURVEY_X = Number(process.env.SURVEY_X ?? 1000);
-const SURVEY_Y = Number(process.env.SURVEY_Y ?? 800);
+const SURVEY = envNum("SURVEY", 0);
+const SURVEY_X = envNum("SURVEY_X", 1000);
+const SURVEY_Y = envNum("SURVEY_Y", 800);
 /** Pans left before surveying, to start from the viewport's origin. Overshoot is free. */
-const HOME = Number(process.env.HOME_PANS ?? 12);
+const HOME = envNum("HOME_PANS", 12);
 /**
  * Gate 1: drag the target this many pixels right and check whether it MOVED.
  *
@@ -85,15 +86,15 @@ const HOME = Number(process.env.HOME_PANS ?? 12);
  * synthesized drag the same way. Cheaper to find out here than after building the action.
  * 0 = skip.
  */
-const DRAG_DX = Number(process.env.DRAG_DX ?? 0);
+const DRAG_DX = envNum("DRAG_DX", 0);
 /**
  * A point on the same canvas that is NOT the target — empty space beside it. Clicking here
  * first shows what any click does, so the target click's diff can be read for what is
  * specific to the target. Without it the probe cannot tell a per-target readout from a
  * global one, and it got that exact call wrong on its first run.
  */
-const DECOY_X = process.env.DECOY_X ? Number(process.env.DECOY_X) : undefined;
-const DECOY_Y = process.env.DECOY_Y ? Number(process.env.DECOY_Y) : undefined;
+const DECOY_X = process.env.DECOY_X ? envNum("DECOY_X", 0) : undefined;
+const DECOY_Y = process.env.DECOY_Y ? envNum("DECOY_Y", 0) : undefined;
 /**
  * Where to click before sending undo, and how many times to send it.
  *
@@ -103,8 +104,8 @@ const DECOY_Y = process.env.DECOY_Y ? Number(process.env.DECOY_Y) : undefined;
  * (this app's drag registered as two) and undoing past the probe's own edits is harmless:
  * the probe made every edit in the document since it opened.
  */
-const UNDO_FOCUS_X = Number(process.env.UNDO_FOCUS_X ?? 700);
-const UNDO_PRESSES = Number(process.env.UNDO_PRESSES ?? 3);
+const UNDO_FOCUS_X = envNum("UNDO_FOCUS_X", 700);
+const UNDO_PRESSES = envNum("UNDO_PRESSES", 3);
 
 interface Row {
 	index: number;

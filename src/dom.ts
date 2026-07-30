@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import fs from "node:fs";
 import { Driver } from "./driver.js";
+import { envNum } from "./env.js";
 import { MAX_WAIT_MS, OUT, type ObservationBundle, refSurfaces, type WindowRef } from "./harness.js";
 import { webTarget } from "./target.js";
 import type { ActionRequest } from "./types.js";
@@ -20,7 +21,7 @@ const DOM_ACTIONS = ["click", "right_click", "double_click", "hover", "type_text
  * one element a step actually needs (that is what `find` is for). Exploration inverts
  * the tradeoff — it runs once and wants total coverage — so it passes maxPages Infinity.
  */
-const DEFAULT_MAX_PAGES = Number(process.env.DOM_MAX_PAGES ?? 1);
+const DEFAULT_MAX_PAGES = envNum("DOM_MAX_PAGES", 1);
 
 interface SemanticRef {
 	ref: string;

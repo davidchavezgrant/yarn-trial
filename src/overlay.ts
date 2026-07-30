@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { envNum } from "./env.js";
 
 /**
  * An always-on-top banner saying the machine is being driven.
@@ -244,7 +245,7 @@ export interface Overlay {
 const NOOP: Overlay = { async countdown() {}, setDriving() {}, stop() {} };
 
 /** Seconds of warning before a run takes the pointer. COUNTDOWN=0 skips it. */
-const COUNTDOWN_SECONDS = Number(process.env.COUNTDOWN ?? 3);
+const COUNTDOWN_SECONDS = envNum("COUNTDOWN", 3);
 
 /**
  * One colour for every mode: red.

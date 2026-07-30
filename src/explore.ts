@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { Driver } from "./driver.js";
+import { envNum } from "./env.js";
 import {
 	ACT_TOOL,
 	appSlug,
@@ -56,14 +57,14 @@ import type { AppMap, AppMapEdge, AppMapHome, AppMapNode } from "./types.js";
  * ceiling either way, which is the point: reaching it means something is looping, not that
  * the app was large.
  */
-const MAX_ACTIONS = Number(process.env.EXPLORE_MAX_ACTIONS ?? 10_000);
+const MAX_ACTIONS = envNum("EXPLORE_MAX_ACTIONS", 10_000);
 /**
  * Most controls a single `dismiss` may retire when it does not name a specific surface.
  * Measured need: an uncapped pass cleared 104 unrelated top-level controls in one call and
  * declared the frontier empty at 25 actuated of 262 seen. Named panels are exempt — a list
  * of 80 identical rows is one honest decision; a hundred scattered controls are not.
  */
-const DISMISS_CAP = Number(process.env.EXPLORE_DISMISS_CAP ?? 20);
+const DISMISS_CAP = envNum("EXPLORE_DISMISS_CAP", 20);
 /** The destructive-label pre-flight. Its own switch, deliberately not tied to `guidance`. */
 const GUARD_ON = (process.env.EXPLORE_GUARD ?? "on") !== "off";
 /**
@@ -71,7 +72,7 @@ const GUARD_ON = (process.env.EXPLORE_GUARD ?? "on") !== "off";
  * text plus a screenshot), so ~12 is ~85k — comfortable, and bounded no matter how long the
  * pass runs. See the chapter comment at the reset site.
  */
-const CHAPTER_OBSERVATIONS = Number(process.env.EXPLORE_CHAPTER ?? 12);
+const CHAPTER_OBSERVATIONS = envNum("EXPLORE_CHAPTER", 12);
 const SETTLE_MS = 900;
 
 /** The payload of the "finish" tool — the pass's entire output, prose plus graph. */
