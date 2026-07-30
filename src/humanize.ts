@@ -113,10 +113,27 @@ function main(): void {
 		console.error(`no frames in ${framesDir}`);
 		process.exit(1);
 	}
-	const frameSize = pngSize(path.join(framesDir, frameFiles[0]));
+	// Modal frame size, not the first frame's. Early frames are captured while the window is still
+	// settling and come out a different shape — one run gave 23 frames at 1568x1328 before
+	// stabilising at 1568x882 for the remaining 139. Taking the first frame's size adopted the
+	// transient geometry, and since the aspect ratio was wrong (1.18 against the capture's 1.78)
+	// every click landed off target. assembleVideo picks the modal size for the same reason.
+	const sizeCounts = new Map<string, { size: { width: number; height: number }; n: number }>();
+	for (const f of frameFiles) {
+		const s = pngSize(path.join(framesDir, f));
+		const key = `${s.width}x${s.height}`;
+		const seen = sizeCounts.get(key);
+		if (seen) seen.n++;
+		else sizeCounts.set(key, { size: s, n: 1 });
+	}
+	const ranked = [...sizeCounts.values()].sort((a, b) => b.n - a.n);
+	const frameSize = ranked[0].size;
+	if (ranked.length > 1)
+		console.log(`frame sizes vary (${ranked.map((r) => `${r.size.width}x${r.size.height} x${r.n}`).join(", ")}); using the modal one`);
 
 	// The capture the driver reported click points in. before.png is the same window at its native
 	// resolution, so its width is the denominator that converts those points into frame pixels.
+	// Per-turn widths override this; it is only the fallback for a turn with no before.png.
 	const firstBefore = path.join(turns[0].dir, "before.png");
 	const captureSize = fs.existsSync(firstBefore) ? pngSize(firstBefore) : frameSize;
 

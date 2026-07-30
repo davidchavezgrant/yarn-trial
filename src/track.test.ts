@@ -81,6 +81,19 @@ test("toFramePixels__LandsOnControl__When__CaptureIsLargerThanFrame", () => {
 	assert.ok(Math.abs(p.y - 220.5) < 0.5, `y was ${p.y}`);
 });
 
+test("toFramePixels__UsesPerTurnCaptureWidth__When__WindowMovedBetweenDisplays", () => {
+	// Capture width genuinely varies WITHIN a run: a live run on 2026-07-30 produced before.png
+	// widths of 2560, 1570, 1920 and 3456 across ten turns as the window moved between displays.
+	// Scaling every turn by the first one's width put later clicks hundreds of pixels off target.
+	const onRetina = toFramePixels({ x: 214, y: 2050 }, 2560, 1568);
+	const onStandard = toFramePixels({ x: 107, y: 1021 }, 1920, 1568);
+	assert.ok(Math.abs(onRetina.x - 131) < 1 && Math.abs(onRetina.y - 1256) < 1);
+	assert.ok(Math.abs(onStandard.x - 87) < 1 && Math.abs(onStandard.y - 834) < 1);
+	// The same point under the wrong turn's scale is off by hundreds of pixels — the actual bug.
+	const wrong = toFramePixels({ x: 107, y: 1021 }, 2560, 1568);
+	assert.ok(Math.abs(wrong.y - onStandard.y) > 200);
+});
+
 test("pointerTypeForRole__ReturnsIBeam__When__TargetIsTextField", () => {
 	assert.equal(pointerTypeForRole("AXTextField"), "iBeam");
 	assert.equal(pointerTypeForRole("AXButton"), "pointingHand");

@@ -189,7 +189,15 @@ def main():
             if index != cached_index:
                 plate = Image.open(os.path.join(frames_dir, files[index])).convert("RGB")
                 if plate.size != (width, height):
-                    plate = plate.resize((width, height))
+                    # Off-size frames are captured while the window is still settling and have a
+                    # different aspect ratio, so stretching one to fit puts the whole image — and
+                    # the control the cursor is aimed at — in the wrong place. Letterbox instead,
+                    # matching what assembleVideo does with the same frames.
+                    fitted = Image.new("RGB", (width, height), (26, 26, 26))
+                    scale = min(width / plate.size[0], height / plate.size[1])
+                    scaled = plate.resize((max(1, int(plate.size[0] * scale)), max(1, int(plate.size[1] * scale))))
+                    fitted.paste(scaled, ((width - scaled.size[0]) // 2, (height - scaled.size[1]) // 2))
+                    plate = fitted
                 cached_index, cached_plate = index, plate
             frame = cached_plate.copy()
 

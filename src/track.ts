@@ -88,6 +88,14 @@ export interface TrajectoryTurn {
 	/** Unix epoch milliseconds. The file stores this as a seconds STRING, not ISO. */
 	epochMs: number;
 	dir: string;
+	/**
+	 * Width of THIS turn's before.png, the space its click_point lives in.
+	 *
+	 * Per-turn because it genuinely varies within one run: a window moved between displays mid-run
+	 * produced captures of 2560, 1570, 1920 and 3456 px wide across ten turns. Taking the first
+	 * turn's width as the run's scale put later clicks hundreds of pixels off target.
+	 */
+	captureWidth?: number;
 }
 
 /** The subset of a run log this pass reads. */
@@ -111,6 +119,17 @@ export interface JoinedAction {
  * driver's 300s absolute lifetime, so those heartbeats are interleaved with real actions and would
  * otherwise offset the join against the run log by a growing amount on any long run.
  */
+/** Width from a PNG's IHDR header, avoiding an image-decoding dependency for four bytes. */
+function pngWidth(file: string): number | undefined {
+	if (!fs.existsSync(file)) return undefined;
+	const buf = Buffer.alloc(4);
+	const fd = fs.openSync(file, "r");
+	fs.readSync(fd, buf, 0, 4, 16);
+	fs.closeSync(fd);
+
+	return buf.readUInt32BE(0) || undefined;
+}
+
 export function readTrajectory(recordingDir: string): TrajectoryTurn[] {
 	const trajectoryDir = path.join(recordingDir, "trajectory");
 	if (!fs.existsSync(trajectoryDir)) return [];
@@ -131,6 +150,7 @@ export function readTrajectory(recordingDir: string): TrajectoryTurn[] {
 			// Seconds as a string — NOT the ISO-8601 the run log's own `timestamp` field uses.
 			epochMs: Math.round(Number(raw.timestamp) * 1000),
 			dir,
+			captureWidth: pngWidth(path.join(dir, "before.png")),
 		});
 	}
 
@@ -582,8 +602,11 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 			endEpochMs: t.epochMs,
 		})),
 	);
-	const toFrame = (p: { x: number; y: number }): { x: number; y: number } =>
-		toFramePixels(p, input.captureSize.width, input.frameSize.width);
+	// Per-turn capture width, falling back to the run's nominal one. A window that moves between
+	// displays mid-run changes the size of the capture its click points are expressed in, so a
+	// single run-wide scale silently misplaces every click after the move.
+	const toFrame = (p: { x: number; y: number }, captureWidth?: number): { x: number; y: number } =>
+		toFramePixels(p, captureWidth ?? input.captureSize.width, input.frameSize.width);
 
 	const cursor: CursorSample[] = [];
 	const events: TrackEvent[] = [];
@@ -596,7 +619,7 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 		const dispatchMs = toOutputMs(plan, input.frameTimes, turn.epochMs - (turn.endMs - turn.startMs));
 		const completeMs = toOutputMs(plan, input.frameTimes, turn.epochMs);
 		const raw = actionPoint(turn);
-		const target = raw ? toFrame(raw) : undefined;
+		const target = raw ? toFrame(raw, turn.captureWidth) : undefined;
 
 		if (target) {
 			const distance = Math.hypot(target.x - at.x, target.y - at.y);
