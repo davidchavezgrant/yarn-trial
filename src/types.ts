@@ -43,6 +43,16 @@ export interface StepRecord {
 	 */
 	pixelDelta?: number;
 	modelReasoning?: string;
+	/**
+	 * AX role of the control this action operated, resolved against the PRE-action observation.
+	 * Absent when the action addressed no element (a keystroke, or a coordinate that hit no box).
+	 *
+	 * Exists for the cursor pass: a recording has no cursor in it, so the pointer is drawn in
+	 * post, and the role is what decides whether it should be an I-beam, a hand, or an arrow.
+	 */
+	targetRole?: string;
+	/** That control's bounds in SCREENSHOT PIXELS, the same space coordinate actions consume. */
+	targetRect?: { x: number; y: number; w: number; h: number };
 }
 
 /**

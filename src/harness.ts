@@ -10,6 +10,13 @@ export const OUT = `${process.cwd()}/out`;
 export interface WindowRef {
 	pid: number;
 	windowId: number;
+	/**
+	 * The window rect as list_windows reported it. Recorded so a post-pass can reconcile driver
+	 * coordinates with the captured frames without re-deriving the display scale — and, on a
+	 * natively-fullscreen app, this is the ONLY geometry available, since System Events reports
+	 * zero windows for one and stageWindowForRecording has nothing to measure.
+	 */
+	bounds?: { x?: number; y?: number; width?: number; height?: number };
 }
 
 /** AX roles a pass can actuate. The frontier ledger counts these and nothing else. */
@@ -103,7 +110,7 @@ export async function findWindow(driver: Driver, app: string): Promise<WindowRef
 		.sort((a: any, b: any) => (b.title ? 1 : 0) - (a.title ? 1 : 0) || area(b) - area(a))[0];
 	if (!win) throw new Error(`no window found for app "${app}"`);
 
-	return { pid: win.pid, windowId: win.window_id };
+	return { pid: win.pid, windowId: win.window_id, bounds: win.bounds };
 }
 
 /**
@@ -652,17 +659,34 @@ export function recoverLeakedGraph(text: string): {
 const DESTRUCTIVE_LABEL =
 	/\b(delete|remove|discard|erase|trash|publish|export|download|send|share|invite|buy|purchase|subscribe|unsubscribe|sign out|log out|revoke|deactivate|reset|restore|merge|archive)\b/i;
 
-export function destructiveTarget(action: any, obs: ObservationBundle): string | undefined {
+/**
+ * Which control an action operates, resolved against the observation the model was looking at.
+ *
+ * Two addressing modes: a handle names its element directly, while a coordinate action is matched
+ * to the smallest box containing the point — smallest because controls nest, and the innermost one
+ * is what a click actually hits.
+ *
+ * MUST be called with the PRE-action observation. Element handles are only meaningful in the
+ * snapshot that produced them (DRIVER_RULES says so), and the agent reassigns its observation to
+ * the post-action one before recording the step, so resolving late silently names a different
+ * control.
+ */
+export function actionTarget(action: any, obs: ObservationBundle): InteractiveElement | undefined {
 	const handle = action?.element_index ?? action?.ref;
+	if (handle !== undefined && handle !== null) return obs.interactive.find((e) => e.handle === handle);
+	if (typeof action?.x !== "number" || typeof action?.y !== "number") return undefined;
 	let target: InteractiveElement | undefined;
-	if (handle !== undefined && handle !== null) target = obs.interactive.find((e) => e.handle === handle);
-	else if (typeof action?.x === "number" && typeof action?.y === "number") {
-		for (const e of obs.interactive) {
-			if (e.w <= 0 || e.h <= 0) continue;
-			if (action.x < e.x || action.x >= e.x + e.w || action.y < e.y || action.y >= e.y + e.h) continue;
-			if (!target || e.w * e.h < target.w * target.h) target = e;
-		}
+	for (const e of obs.interactive) {
+		if (e.w <= 0 || e.h <= 0) continue;
+		if (action.x < e.x || action.x >= e.x + e.w || action.y < e.y || action.y >= e.y + e.h) continue;
+		if (!target || e.w * e.h < target.w * target.h) target = e;
 	}
+
+	return target;
+}
+
+export function destructiveTarget(action: any, obs: ObservationBundle): string | undefined {
+	const target = actionTarget(action, obs);
 	// Only *pressing* things is guarded. A keystroke can be destructive too, but nothing
 	// here can tell which one is, and guessing at key combinations would block the pass
 	// from typing at all.
@@ -765,6 +789,14 @@ export async function resetToHome(
 export interface StageResult {
 	staged: boolean;
 	detail: string;
+	/**
+	 * Where the window was put, and at what backing scale.
+	 *
+	 * Absent on the fullscreen path: System Events reports no windows for a natively-fullscreen
+	 * app, which is how that state is detected, so there is nothing to measure. WindowRef.bounds
+	 * is the geometry source there.
+	 */
+	geometry?: { x: number; y: number; w: number; h: number; scale: number };
 }
 
 export function stageWindowForRecording(app: string): StageResult {
@@ -825,7 +857,11 @@ else {
 
 		const lowDpi = r.scale < 2 ? " (1x display — check frames if the video looks off)" : "";
 
-		return { staged: true, detail: `filled its current display @ ${r.frame.w}x${r.frame.h}${lowDpi}` };
+		return {
+			staged: true,
+			detail: `filled its current display @ ${r.frame.w}x${r.frame.h}${lowDpi}`,
+			geometry: { x: r.frame.x, y: r.frame.y, w: r.frame.w, h: r.frame.h, scale: r.scale },
+		};
 	} catch (err: any) {
 		// osascript writes the useful diagnostic to stderr; err.message is just the echoed
 		// command, which reported "Command failed: osascript -l JavaScript -e" and hid the

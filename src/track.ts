@@ -1,0 +1,622 @@
+/**
+ * Build a humanized cursor motion track from a finished run.
+ *
+ * A recording contains no cursor. AX and foreground-CGEvent actuation never move the physical
+ * pointer — trajectory/cursor.jsonl proves it, with 1.2% of samples showing any delta at all and
+ * those being instant teleports of up to 1350px. So the cursor is drawn in post, and the raw
+ * material is what the run already wrote down: where each action landed and when.
+ *
+ * WHY REPLAY REAL MOVEMENT INSTEAD OF SYNTHESIZING IT. Measured over 913 approach movements in
+ * data/cursor-keyboard-dataset-2026-07-30, human pointer motion is wrong in three independent ways
+ * from the obvious model (symmetric minimum-jerk along a straight line):
+ *
+ *   - It is ASYMMETRIC. Median cumulative distance is 51% at t=0.2 and 90% at t=0.5 — a ballistic
+ *     launch followed by a long settle, not a smooth arc.
+ *   - It is not SMOOTH. Peak instantaneous speed is a median 9.15x the mean, and 30% of mid-flight
+ *     samples sit below 5% of mean speed. There is hesitation and micro-correction in the middle
+ *     of a single movement.
+ *   - It is not STRAIGHT. Max perpendicular deviation is a median 7.6% of the movement distance.
+ *
+ * And duration barely follows from distance: within one distance bucket, p90/p10 spreads 3-5x, so
+ * Fitts's law fits at R^2=0.09. Reproducing all of that convincingly is a lot of tuning; replaying
+ * a real segment gets it for free. Synthesis remains as the fallback for geometry the corpus does
+ * not cover, and it has to reproduce all three properties explicitly — see synthesizeMove().
+ */
+
+import fs from "node:fs";
+import path from "node:path";
+import type {
+	CursorSample,
+	CursorType,
+	FramePlanEntry,
+	MotionConstants,
+	MotionSegment,
+	MotionSegmentLibrary,
+	MotionTrack,
+	TrackEvent,
+} from "./motion-types.js";
+
+/** Output frame rate. Human motion needs far more than the ~0.9fps the capture loop achieves. */
+export const FPS = 60;
+
+/**
+ * A thinking gap collapses to this. Most of a run's wall clock is the model deciding what to do,
+ * during which the screen is frozen; Yarn's own pipeline speeds these up too, but the artifact has
+ * to stand on its own.
+ */
+export const GAP_BEAT_MS = 400;
+
+/** Kept at real duration around each action, so the app's own response reads at true speed. */
+export const PRE_ACTION_MS = 300;
+export const POST_ACTION_MS = 500;
+
+/**
+ * Ceiling on an action frame's screen time.
+ *
+ * The capture loop pauses while the driver acts, so the frame covering an action also covers the
+ * model's think leading up to it — often ten seconds or more. Without a cap, "preserve real timing
+ * around actions" silently preserves the thinking too, and the retimed cut is barely shorter than
+ * the raw one.
+ */
+export const ACTION_MAX_MS = 2500;
+
+/**
+ * Shortest movement that replays a corpus segment.
+ *
+ * scripts/fit-motion.py keeps only movements of 50px or more, so the library has nothing to say
+ * about a nudge between adjacent controls; below this, synthesis handles it.
+ */
+export const MIN_REPLAY_PX = 60;
+
+/**
+ * Reject a corpus segment that wanders further off-axis than this multiple of its own distance.
+ *
+ * 149 of 1895 fitted segments exceed it, up to 13x — they are real, but they are the user drifting
+ * across the screen and happening to click, not reaching for a target. Replayed onto a deliberate
+ * agent action they read as the pointer getting lost.
+ */
+export const MAX_REPLAY_PERP = 0.6;
+
+/** A driver turn, as recorded in trajectory/turn-NNNNN/action.json. */
+export interface TrajectoryTurn {
+	tool: string;
+	arguments: Record<string, unknown>;
+	clickPoint?: { x: number; y: number };
+	/** Milliseconds from driver session start to dispatch, and to completion. */
+	startMs: number;
+	endMs: number;
+	/** Unix epoch milliseconds. The file stores this as a seconds STRING, not ISO. */
+	epochMs: number;
+	dir: string;
+}
+
+/** The subset of a run log this pass reads. */
+export interface RunLogStep {
+	index: number;
+	timestamp: string;
+	action: { kind: string; name?: string; args?: Record<string, unknown> };
+	targetRole?: string;
+	targetRect?: { x: number; y: number; w: number; h: number };
+}
+
+export interface JoinedAction {
+	step?: RunLogStep;
+	turn: TrajectoryTurn;
+}
+
+/**
+ * Read every turn in a recording's trajectory, in order.
+ *
+ * `start_session` turns are dropped: src/driver.ts re-declares the session every 90s to outrun the
+ * driver's 300s absolute lifetime, so those heartbeats are interleaved with real actions and would
+ * otherwise offset the join against the run log by a growing amount on any long run.
+ */
+export function readTrajectory(recordingDir: string): TrajectoryTurn[] {
+	const trajectoryDir = path.join(recordingDir, "trajectory");
+	if (!fs.existsSync(trajectoryDir)) return [];
+	const turns: TrajectoryTurn[] = [];
+	for (const name of fs.readdirSync(trajectoryDir).sort()) {
+		if (!name.startsWith("turn-")) continue;
+		const dir = path.join(trajectoryDir, name);
+		const file = path.join(dir, "action.json");
+		if (!fs.existsSync(file)) continue;
+		const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+		if (raw.tool === "start_session") continue;
+		turns.push({
+			tool: raw.tool,
+			arguments: raw.arguments ?? {},
+			clickPoint: raw.click_point ? { x: raw.click_point.x, y: raw.click_point.y } : undefined,
+			startMs: raw.t_start_ms_from_session_start ?? 0,
+			endMs: raw.t_ms_from_session_start ?? 0,
+			// Seconds as a string — NOT the ISO-8601 the run log's own `timestamp` field uses.
+			epochMs: Math.round(Number(raw.timestamp) * 1000),
+			dir,
+		});
+	}
+
+	return turns;
+}
+
+/**
+ * Pair run-log steps with driver turns.
+ *
+ * Both are ordered records of the same actions, but neither is a subset of the other: the run log
+ * omits turns the driver recorded outside a step (the initial observation's window query), and a
+ * step whose driver call failed produces no turn. So this walks both in order and matches on tool
+ * name, rather than zipping by position — a single unmatched entry would otherwise shift every
+ * later pairing and silently attach each action's motion to the wrong target.
+ */
+export function joinSteps(steps: RunLogStep[], turns: TrajectoryTurn[]): JoinedAction[] {
+	const joined: JoinedAction[] = [];
+	let si = 0;
+	for (const turn of turns) {
+		let match: RunLogStep | undefined;
+		for (let probe = si; probe < steps.length; probe++) {
+			const name = steps[probe].action.name ?? steps[probe].action.kind;
+			if (name === turn.tool) {
+				match = steps[probe];
+				si = probe + 1;
+				break;
+			}
+		}
+		joined.push({ step: match, turn });
+	}
+
+	return joined;
+}
+
+/**
+ * Convert a driver click point into output-frame pixels.
+ *
+ * Measured 2026-07-30: trajectory before.png is the WINDOW at higher resolution, not a display
+ * capture. Its aspect ratio matches the polled frames within 0.06% on all 14 recordings on disk,
+ * and downscaling it to frame size differences to meanAbsDiff 0.000-0.002 on non-Retina runs. So
+ * one ratio converts, with no origin to subtract. Verified visually: (1346.5, 270) on a 1920-wide
+ * capture maps to (1100, 220) on a 1568-wide frame, landing exactly on the clicked combobox.
+ */
+export function toFramePixels(
+	point: { x: number; y: number },
+	captureWidth: number,
+	frameWidth: number,
+): { x: number; y: number } {
+	const scale = captureWidth > 0 ? frameWidth / captureWidth : 1;
+
+	return { x: point.x * scale, y: point.y * scale };
+}
+
+/** Where an action puts the pointer, in capture-space pixels. Undefined for keyboard-only actions. */
+export function actionPoint(turn: TrajectoryTurn): { x: number; y: number } | undefined {
+	if (turn.clickPoint) return turn.clickPoint;
+	// Drags carry their geometry in arguments rather than click_point; the pointer ends at the
+	// release point.
+	const a = turn.arguments;
+	if (typeof a.to_x === "number" && typeof a.to_y === "number") return { x: a.to_x, y: a.to_y };
+
+	return undefined;
+}
+
+/** Pointer type for a target, using the dataset's own cursorType vocabulary. */
+export function pointerTypeForRole(role: string | undefined): CursorType {
+	if (role === "AXTextField") return "iBeam";
+	if (role === "AXButton" || role === "AXLink" || role === "AXPopUpButton" || role === "AXMenuItem") return "pointingHand";
+	if (role === "AXCheckBox" || role === "AXRadioButton" || role === "AXComboBox") return "pointingHand";
+
+	return "arrow";
+}
+
+/** Deterministic PRNG. Runs must re-render identically, so Math.random is not an option. */
+export function makeRandom(seed: number): () => number {
+	let s = seed >>> 0 || 1;
+
+	return () => {
+		s ^= s << 13;
+		s ^= s >>> 17;
+		s ^= s << 5;
+		s >>>= 0;
+
+		return s / 0x100000000;
+	};
+}
+
+/** Sample from a p10/p50/p90 summary by piecewise-linear interpolation of the quantiles. */
+export function samplePercentile(q: { p10: number; p50: number; p90: number }, r: number): number {
+	if (r <= 0.1) return q.p10;
+	if (r >= 0.9) return q.p90;
+	if (r < 0.5) return q.p10 + ((r - 0.1) / 0.4) * (q.p50 - q.p10);
+
+	return q.p50 + ((r - 0.5) / 0.4) * (q.p90 - q.p50);
+}
+
+const TAU = Math.PI * 2;
+
+/** Direction octant 0-7, matching the bucketing scripts/fit-motion.py uses. */
+export function octantOf(dx: number, dy: number): number {
+	const angle = (Math.atan2(dy, dx) + TAU) % TAU;
+
+	return Math.floor((angle / TAU) * 8) % 8;
+}
+
+/**
+ * Pick a corpus segment for a movement, preferring the same distance scale and direction.
+ *
+ * Direction is relaxed before distance: a curve's shape is dominated by how far the hand travelled,
+ * and an octant mismatch is corrected by the rotation in warpSegment() anyway.
+ */
+export function pickSegment(
+	library: MotionSegment[],
+	distancePx: number,
+	octant: number,
+	rand: () => number,
+): MotionSegment | undefined {
+	// The corpus was filtered to movements of at least 50px, so nothing in it describes a short
+	// nudge between adjacent controls. Replaying a long reach's shape across 20px scales its
+	// wander up to many times the distance — measured at 150% on a real run, a visible loop where
+	// the pointer should barely twitch. Below the corpus floor, synthesis is the honest answer.
+	if (library.length === 0 || distancePx < MIN_REPLAY_PX) return undefined;
+	const logDistance = Math.floor(Math.log2(Math.max(distancePx, 1)));
+	const usable = library.filter((s) => maxPerp(s) <= MAX_REPLAY_PERP);
+	const tiers = [
+		usable.filter((s) => s.logDistance === logDistance && s.octant === octant),
+		usable.filter((s) => s.logDistance === logDistance),
+		usable.filter((s) => Math.abs(s.logDistance - logDistance) <= 1),
+	];
+	for (const tier of tiers) if (tier.length > 0) return tier[Math.floor(rand() * tier.length)];
+
+	return undefined;
+}
+
+/** Largest excursion off the straight line, as a fraction of the movement's distance. */
+function maxPerp(segment: MotionSegment): number {
+	let m = 0;
+	for (const v of segment.perp) m = Math.max(m, Math.abs(v));
+
+	return m;
+}
+
+/**
+ * Replay a corpus segment between two points.
+ *
+ * A similarity transform — rotate to the new direction, scale uniformly, translate — so the
+ * perpendicular deviation scales WITH the movement instead of being flattened. Scaling the two
+ * axes independently would straighten long movements and exaggerate short ones.
+ *
+ * The segment's own timing is kept. Renormalizing duration to a per-distance median is the
+ * tempting simplification and it is exactly wrong: the 3-5x spread of durations across movements
+ * of equal length is a measured property of human motion, and averaging it away makes every
+ * approach in the video move at the same speed.
+ */
+export function warpSegment(
+	segment: MotionSegment,
+	from: { x: number; y: number },
+	to: { x: number; y: number },
+): Array<{ tMs: number; x: number; y: number }> {
+	const dx = to.x - from.x;
+	const dy = to.y - from.y;
+	const distance = Math.hypot(dx, dy);
+	const ux = distance > 0 ? dx / distance : 1;
+	const uy = distance > 0 ? dy / distance : 0;
+	const out: Array<{ tMs: number; x: number; y: number }> = [];
+	for (let i = 0; i < segment.par.length; i++) {
+		const along = segment.par[i] * distance;
+		const across = segment.perp[i] * distance;
+		out.push({
+			tMs: segment.t[i],
+			x: from.x + ux * along - uy * across,
+			y: from.y + uy * along + ux * across,
+		});
+	}
+	// The corpus segment ends where its own click landed; ours must end exactly on target.
+	if (out.length > 0) {
+		out[out.length - 1].x = to.x;
+		out[out.length - 1].y = to.y;
+	}
+
+	return out;
+}
+
+/**
+ * Generate a movement when the corpus has no comparable segment.
+ *
+ * Reproduces the three measured properties explicitly, because a plain eased interpolation fails
+ * all of them: asymmetric distance profile, mid-flight near-stops, and perpendicular curvature.
+ */
+export function synthesizeMove(
+	from: { x: number; y: number },
+	to: { x: number; y: number },
+	constants: MotionConstants,
+	rand: () => number,
+): Array<{ tMs: number; x: number; y: number }> {
+	const dx = to.x - from.x;
+	const dy = to.y - from.y;
+	const distance = Math.hypot(dx, dy);
+	if (distance < 1) return [{ tMs: 0, x: to.x, y: to.y }];
+	const logDistance = String(Math.floor(Math.log2(Math.max(distance, 1))));
+	const bucket = constants.durationByLogDistance[logDistance];
+	const durationMs = bucket
+		? samplePercentile(bucket, rand())
+		: samplePercentile({ p10: 330, p50: 790, p90: 1760 }, rand());
+	const ux = dx / distance;
+	const uy = dy / distance;
+	// Deviation peaks mid-flight and returns to zero at both ends; sign is arbitrary per movement.
+	const peak = samplePercentile(
+		{ p10: constants.perpDeviationFrac.p50 * 0.5, p50: constants.perpDeviationFrac.p50, p90: constants.perpDeviationFrac.p90 },
+		rand(),
+	) * distance * (rand() < 0.5 ? -1 : 1);
+	// Hold points scattered through the middle reproduce the measured hesitation: without them the
+	// profile is smooth, and smooth is the single most robotic-looking property.
+	const holds = 1 + Math.floor(rand() * 3);
+	const holdAt: number[] = [];
+	for (let i = 0; i < holds; i++) holdAt.push(0.45 + rand() * 0.45);
+	const steps = Math.max(8, Math.round((durationMs / 1000) * constants.sampleHz));
+	const out: Array<{ tMs: number; x: number; y: number }> = [];
+	for (let i = 0; i <= steps; i++) {
+		const u = i / steps;
+		// Distance fraction: measured median is 51% at t=0.2 and 90% at t=0.5, which this matches
+		// far better than a symmetric curve.
+		let progress = 1 - Math.pow(1 - u, 3.2);
+		for (const h of holdAt) {
+			// Flatten progress near each hold, so the pointer visibly stalls and resumes.
+			const d = Math.abs(u - h);
+			if (d < 0.05) progress -= (0.05 - d) * 0.35;
+		}
+		progress = Math.min(1, Math.max(0, progress));
+		const along = progress * distance;
+		const across = Math.sin(progress * Math.PI) * peak;
+		out.push({
+			tMs: u * durationMs,
+			x: from.x + ux * along - uy * across,
+			y: from.y + uy * along + ux * across,
+		});
+	}
+	out[out.length - 1].x = to.x;
+	out[out.length - 1].y = to.y;
+
+	return out;
+}
+
+/**
+ * Per-character keystroke schedule for a typed string.
+ *
+ * The agent types atomically (one type_text call carrying the whole string), so nothing about
+ * per-key timing survives from the run and all of it is synthesized here from the corpus: a
+ * lognormal-ish draw around the measured inter-key interval, slower after a space, with occasional
+ * corrections that type a wrong character and delete it.
+ */
+export function keystrokeSchedule(
+	text: string,
+	constants: MotionConstants,
+	rand: () => number,
+): Array<{ tMs: number; keyType: string; char?: string; holdMs: number }> {
+	const out: Array<{ tMs: number; keyType: string; char?: string; holdMs: number }> = [];
+	const iki = constants.ikiMs;
+	let t = 0;
+	let previous = "";
+	for (const ch of text) {
+		const r = rand();
+		let gap: number;
+		if (r < 0.1) gap = iki.p10;
+		else if (r < 0.25) gap = iki.p10 + ((r - 0.1) / 0.15) * (iki.p25 - iki.p10);
+		else if (r < 0.5) gap = iki.p25 + ((r - 0.25) / 0.25) * (iki.p50 - iki.p25);
+		else if (r < 0.75) gap = iki.p50 + ((r - 0.5) / 0.25) * (iki.p75 - iki.p50);
+		else if (r < 0.9) gap = iki.p75 + ((r - 0.75) / 0.15) * (iki.p90 - iki.p75);
+		else gap = iki.p90 + ((r - 0.9) / 0.1) * (iki.p99 - iki.p90);
+		if (previous === " ") gap *= constants.ikiAfterSpaceMs / iki.p50;
+		t += gap;
+		// A correction types a neighbouring character, pauses, deletes it, and retypes.
+		if (rand() < constants.correctionRate && ch !== " ") {
+			out.push({ tMs: t, keyType: "character", char: wrongKeyFor(ch), holdMs: constants.keyHoldMs });
+			t += iki.p50 + iki.p75;
+			out.push({ tMs: t, keyType: "delete", holdMs: constants.keyHoldMs });
+			t += iki.p50;
+		}
+		out.push({
+			tMs: t,
+			keyType: ch === " " ? "space" : ch === "\n" ? "return" : "character",
+			char: ch === "\n" ? undefined : ch,
+			holdMs: constants.keyHoldMs,
+		});
+		previous = ch;
+	}
+
+	return out;
+}
+
+/** A plausible mistyped character: the physical neighbour on a QWERTY board. */
+function wrongKeyFor(ch: string): string {
+	const rows = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
+	const lower = ch.toLowerCase();
+	for (const row of rows) {
+		const i = row.indexOf(lower);
+		if (i < 0) continue;
+		const neighbour = row[i + 1] ?? row[i - 1] ?? lower;
+
+		return ch === lower ? neighbour : neighbour.toUpperCase();
+	}
+
+	return ch;
+}
+
+/**
+ * Map the recording's captured frames onto the output timeline.
+ *
+ * Two kinds of interval. Around an action the real duration is kept, so the app's own response
+ * plays at true speed and a viewer can see cause and effect. Everything else is the model
+ * thinking against a frozen screen, and collapses to one short beat regardless of whether it took
+ * four seconds or forty.
+ */
+export function buildFramePlan(
+	frameTimes: number[],
+	actionWindows: Array<{ startEpochMs: number; endEpochMs: number }>,
+): FramePlanEntry[] {
+	if (frameTimes.length === 0) return [];
+	/**
+	 * A frame's whole INTERVAL is tested for overlap, not just its start instant. The capture loop
+	 * pauses while the driver is busy (src/agent.ts skips polling when driverBusy), so an action
+	 * lands inside a multi-second gap between two frames rather than near either one — testing the
+	 * start instant alone marks every action frame as a thinking gap and compresses away exactly
+	 * the moments worth watching.
+	 */
+	const overlapsAction = (start: number, end: number): boolean =>
+		actionWindows.some((w) => start <= w.endEpochMs + POST_ACTION_MS && end >= w.startEpochMs - PRE_ACTION_MS);
+	const plan: FramePlanEntry[] = [];
+	let outMs = 0;
+	for (let i = 0; i < frameTimes.length; i++) {
+		const realMs = i + 1 < frameTimes.length ? frameTimes[i + 1] - frameTimes[i] : GAP_BEAT_MS;
+		const action = overlapsAction(frameTimes[i], frameTimes[i] + realMs);
+		const shown = action
+			? Math.min(Math.max(realMs, 1000 / FPS), ACTION_MAX_MS)
+			: Math.min(realMs, GAP_BEAT_MS);
+		plan.push({ frameIndex: i, startMs: outMs, endMs: outMs + shown, action });
+		outMs += shown;
+	}
+
+	return plan;
+}
+
+/** Map an epoch instant onto the output timeline built by buildFramePlan. */
+export function toOutputMs(plan: FramePlanEntry[], frameTimes: number[], epochMs: number): number {
+	if (plan.length === 0) return 0;
+	for (let i = 0; i < plan.length; i++) {
+		const start = frameTimes[i];
+		const end = i + 1 < frameTimes.length ? frameTimes[i + 1] : start + GAP_BEAT_MS;
+		if (epochMs < start) return plan[i].startMs;
+		if (epochMs <= end) {
+			const frac = end > start ? (epochMs - start) / (end - start) : 0;
+
+			return plan[i].startMs + frac * (plan[i].endMs - plan[i].startMs);
+		}
+	}
+
+	return plan[plan.length - 1].endMs;
+}
+
+export interface BuildTrackInput {
+	stamp: string;
+	app: string;
+	task: string;
+	runLog: string;
+	steps: RunLogStep[];
+	turns: TrajectoryTurn[];
+	frameTimes: number[];
+	frameSize: { width: number; height: number };
+	captureSize: { width: number; height: number };
+	constants: MotionConstants;
+	library: MotionSegmentLibrary;
+	seed?: number;
+}
+
+/**
+ * Assemble the full track: where the cursor is at every output instant, and what it does there.
+ *
+ * The cursor is placed by working backwards from each action. An action's click point is where the
+ * pointer must BE at that action's dispatch time, so the movement toward it is laid down ending at
+ * that instant — which is why the pointer arrives and clicks rather than clicking and then
+ * arriving.
+ */
+export function buildTrack(input: BuildTrackInput): MotionTrack {
+	const rand = makeRandom(input.seed ?? 0x5eed);
+	const joined = joinSteps(input.steps, input.turns);
+	const plan = buildFramePlan(
+		input.frameTimes,
+		input.turns.map((t) => ({
+			startEpochMs: t.epochMs - (t.endMs - t.startMs),
+			endEpochMs: t.epochMs,
+		})),
+	);
+	const toFrame = (p: { x: number; y: number }): { x: number; y: number } =>
+		toFramePixels(p, input.captureSize.width, input.frameSize.width);
+
+	const cursor: CursorSample[] = [];
+	const events: TrackEvent[] = [];
+	// Start off-target so the first action is a real approach rather than a jump cut.
+	let at = { x: input.frameSize.width * 0.5, y: input.frameSize.height * 0.75 };
+	let type: CursorType = "arrow";
+	cursor.push({ tMs: 0, x: at.x, y: at.y, type });
+
+	for (const { step, turn } of joined) {
+		const dispatchMs = toOutputMs(plan, input.frameTimes, turn.epochMs - (turn.endMs - turn.startMs));
+		const completeMs = toOutputMs(plan, input.frameTimes, turn.epochMs);
+		const raw = actionPoint(turn);
+		const target = raw ? toFrame(raw) : undefined;
+
+		if (target) {
+			const distance = Math.hypot(target.x - at.x, target.y - at.y);
+			const segment = pickSegment(input.library.segments, distance, octantOf(target.x - at.x, target.y - at.y), rand);
+			const move = segment
+				? warpSegment(segment, at, target)
+				: synthesizeMove(at, target, input.constants, rand);
+			const duration = move.length > 0 ? move[move.length - 1].tMs : 0;
+			// End the movement ON the action, so the arrival and the click coincide.
+			const moveStart = Math.max(0, dispatchMs - duration);
+			const nextType = pointerTypeForRole(step?.targetRole);
+			for (const m of move) cursor.push({ tMs: moveStart + m.tMs, x: m.x, y: m.y, type });
+			type = nextType;
+			at = target;
+			cursor.push({ tMs: dispatchMs, x: at.x, y: at.y, type });
+		}
+
+		if (turn.tool === "click" || turn.tool === "right_click") {
+			const dwell = samplePercentile(input.constants.clickDwellMs, rand());
+			const button = turn.tool === "right_click" ? "secondary" : "primary";
+			events.push({ tMs: dispatchMs, kind: "mousedown", button, x: at.x, y: at.y, sourceTMs: turn.startMs, stepIndex: step?.index });
+			events.push({ tMs: dispatchMs + dwell, kind: "mouseup", button, x: at.x, y: at.y, sourceTMs: turn.endMs, stepIndex: step?.index });
+		}
+
+		if (turn.tool === "type_text") {
+			const text = String(turn.arguments.text ?? "");
+			// The reveal spans the action's real duration; the schedule is synthesized because the
+			// agent types atomically and no per-key timing was ever recorded.
+			for (const k of keystrokeSchedule(text, input.constants, rand))
+				events.push({ tMs: dispatchMs + k.tMs, kind: "key", keyType: k.keyType, char: k.char, holdMs: k.holdMs, stepIndex: step?.index });
+			events.push({ tMs: dispatchMs, kind: "textReveal", reveal: "typed", text, sourceTMs: turn.startMs, stepIndex: step?.index });
+		}
+
+		if (turn.tool === "set_value") {
+			// Declared, never animated. The agent wrote this value in one shot; drawing a typing
+			// animation over it would depict something that did not happen.
+			events.push({
+				tMs: completeMs,
+				kind: "textReveal",
+				reveal: "atomic",
+				text: String(turn.arguments.value ?? ""),
+				sourceTMs: turn.startMs,
+				stepIndex: step?.index,
+			});
+		}
+
+		if (turn.tool === "press_key") {
+			events.push({
+				tMs: dispatchMs,
+				kind: "key",
+				keyType: String(turn.arguments.key ?? "key"),
+				holdMs: input.constants.keyHoldMs,
+				sourceTMs: turn.startMs,
+				stepIndex: step?.index,
+			});
+		}
+	}
+
+	cursor.sort((a, b) => a.tMs - b.tMs);
+	events.sort((a, b) => a.tMs - b.tMs);
+	const durationMs = plan.length > 0 ? plan[plan.length - 1].endMs : 0;
+
+	return {
+		schema: "yarn-motion-track/v1",
+		run: { stamp: input.stamp, app: input.app, task: input.task, runLog: input.runLog },
+		space: {
+			coords: "window-local-pixels",
+			width: input.frameSize.width,
+			height: input.frameSize.height,
+			sourceCapture: {
+				width: input.captureSize.width,
+				height: input.captureSize.height,
+				scale: input.frameSize.width / input.captureSize.width,
+			},
+		},
+		timeline: { timebase: "output", fps: FPS, durationMs, retimed: true },
+		cursor,
+		events,
+		framePlan: plan,
+		constants: input.constants,
+	};
+}

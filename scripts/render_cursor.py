@@ -1,0 +1,219 @@
+"""Composite a humanized cursor over a run's captured frames and emit raw video on stdout.
+
+Reads a motion track (yarn-motion-track/v1) plus the recording's frames/ directory, and writes
+rgb24 frames to stdout for ffmpeg to encode. Nothing is written to disk: a 60fps render of a
+several-minute run is thousands of intermediate PNGs and multiple gigabytes, and the pipe costs
+nothing.
+
+The track is the ONLY input describing what happens. This script deliberately cannot see the run
+log — if it ever needs something from there, the track schema is incomplete and that is the signal.
+
+Usage:
+    render_cursor.py <track.json> <frames-dir> [--cursors <dir>]
+"""
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+
+from PIL import Image, ImageDraw
+
+# macOS ships its cursors as PDFs with a hotspot in an adjacent plist. PIL cannot read PDF, so
+# sips rasterizes them. The standard arrow is NOT in this directory (checked) and is drawn instead.
+SYSTEM_CURSORS = (
+    "/System/Library/Frameworks/ApplicationServices.framework/Versions/A/Frameworks"
+    "/HIServices.framework/Versions/A/Resources/cursors"
+)
+
+# Track cursorType -> the system cursor directory holding it.
+CURSOR_FILES = {
+    "pointingHand": "pointinghand",
+    "iBeam": "ibeamvertical",
+    "closedHand": "closedhand",
+    "openHand": "openhand",
+    "resizeLeftRight": "resizeleftright",
+    "operationNotAllowed": "notallowed",
+}
+
+# Rasterize at 2x and downsample when pasting, so the cursor stays crisp against a scaled frame.
+RASTER = 64
+
+CARET_BLINK_MS = 530
+
+
+def load_system_cursor(name, tmpdir):
+    """Rasterize one system cursor, returning (image, hotspot) or None when unavailable."""
+    src = os.path.join(SYSTEM_CURSORS, name)
+    pdf = os.path.join(src, "cursor.pdf")
+    plist = os.path.join(src, "info.plist")
+    if not os.path.exists(pdf):
+        return None
+    out = os.path.join(tmpdir, name + ".png")
+    try:
+        subprocess.run(
+            ["sips", "-s", "format", "png", "-Z", str(RASTER), pdf, "--out", out],
+            check=True, capture_output=True,
+        )
+        image = Image.open(out).convert("RGBA")
+    except (subprocess.CalledProcessError, OSError):
+        return None
+    # Hotspots in the plist are in the cursor's native 32pt space.
+    hotx, hoty = 0, 0
+    try:
+        raw = subprocess.run(["plutil", "-convert", "json", "-o", "-", plist],
+                             check=True, capture_output=True).stdout
+        info = json.loads(raw)
+        scale = image.size[0] / 32.0
+        hotx = int(info.get("hotx", 0) * scale)
+        hoty = int(info.get("hoty", 0) * scale)
+    except (subprocess.CalledProcessError, OSError, ValueError):
+        pass
+
+    return image, (hotx, hoty)
+
+
+def draw_arrow():
+    """The standard arrow, drawn rather than loaded.
+
+    macOS does not ship it in the cursors directory alongside the others, and drawing it avoids
+    committing an Apple asset to the repo along with the licensing question that raises.
+    """
+    image = Image.new("RGBA", (RASTER, RASTER), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    s = RASTER / 32.0
+    body = [(0, 0), (0, 21), (5, 16), (9, 25), (13, 23), (9, 15), (16, 15)]
+    points = [(x * s, y * s) for x, y in body]
+    # White outline under a black fill is what makes a cursor legible over any background.
+    draw.polygon(points, fill=(255, 255, 255, 255), outline=(255, 255, 255, 255), width=int(3 * s))
+    draw.polygon(points, fill=(0, 0, 0, 255))
+
+    return image, (0, 0)
+
+
+def load_cursors(tmpdir):
+    cursors = {"arrow": draw_arrow()}
+    for kind, name in CURSOR_FILES.items():
+        loaded = load_system_cursor(name, tmpdir)
+        # A missing system cursor degrades to the arrow rather than failing the render.
+        cursors[kind] = loaded if loaded else cursors["arrow"]
+
+    return cursors
+
+
+def sample_cursor(samples, t_ms):
+    """Cursor position at an output instant, interpolated between track samples."""
+    if not samples:
+        return None
+    if t_ms <= samples[0]["tMs"]:
+        return samples[0]
+    lo, hi = 0, len(samples) - 1
+    while lo < hi - 1:
+        mid = (lo + hi) // 2
+        if samples[mid]["tMs"] <= t_ms:
+            lo = mid
+        else:
+            hi = mid
+    a, b = samples[lo], samples[hi]
+    span = b["tMs"] - a["tMs"]
+    if span <= 0:
+        return b
+    f = (t_ms - a["tMs"]) / span
+
+    return {
+        "x": a["x"] + (b["x"] - a["x"]) * f,
+        "y": a["y"] + (b["y"] - a["y"]) * f,
+        "type": a["type"],
+    }
+
+
+def frame_at(plan, t_ms):
+    """Which captured frame is held at an output instant."""
+    for entry in plan:
+        if entry["startMs"] <= t_ms < entry["endMs"]:
+            return entry["frameIndex"]
+
+    return plan[-1]["frameIndex"] if plan else 0
+
+
+def pressed_at(events, t_ms):
+    """Is a mouse button down? Drives the click ring."""
+    down = False
+    for e in events:
+        if e["tMs"] > t_ms:
+            break
+        if e["kind"] == "mousedown":
+            down = True
+        elif e["kind"] == "mouseup":
+            down = False
+
+    return down
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if len(args) < 2:
+        print(__doc__, file=sys.stderr)
+
+        return 2
+    track = json.load(open(args[0]))
+    frames_dir = args[1]
+
+    fps = track["timeline"]["fps"]
+    duration = track["timeline"]["durationMs"]
+    width = track["space"]["width"]
+    height = track["space"]["height"]
+    samples = track["cursor"]
+    events = track["events"]
+    plan = track["framePlan"]
+
+    files = sorted(f for f in os.listdir(frames_dir) if f.startswith("f-") and f.endswith(".png"))
+    if not files:
+        print("no frames to render", file=sys.stderr)
+
+        return 1
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cursors = load_cursors(tmpdir)
+        total = int(duration / 1000.0 * fps)
+        cached_index, cached_plate = None, None
+        out = sys.stdout.buffer
+
+        for n in range(total):
+            t_ms = n * 1000.0 / fps
+            index = frame_at(plan, t_ms)
+            index = min(index, len(files) - 1)
+            # Consecutive output frames almost always share a plate at ~1fps capture, so decoding
+            # once per source frame rather than per output frame is the whole cost of the render.
+            if index != cached_index:
+                plate = Image.open(os.path.join(frames_dir, files[index])).convert("RGB")
+                if plate.size != (width, height):
+                    plate = plate.resize((width, height))
+                cached_index, cached_plate = index, plate
+            frame = cached_plate.copy()
+
+            spot = sample_cursor(samples, t_ms)
+            if spot:
+                art, (hotx, hoty) = cursors.get(spot["type"], cursors["arrow"])
+                x = int(round(spot["x"] - hotx / 2))
+                y = int(round(spot["y"] - hoty / 2))
+                if pressed_at(events, t_ms):
+                    ring = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+                    ImageDraw.Draw(ring).ellipse(
+                        [spot["x"] - 18, spot["y"] - 18, spot["x"] + 18, spot["y"] + 18],
+                        outline=(40, 110, 255, 190), width=3,
+                    )
+                    frame = Image.alpha_composite(frame.convert("RGBA"), ring).convert("RGB")
+                scaled = art.resize((art.size[0] // 2, art.size[1] // 2), Image.LANCZOS)
+                frame.paste(scaled, (x, y), scaled)
+
+            out.write(frame.tobytes())
+
+        out.flush()
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

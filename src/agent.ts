@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { Driver } from "./driver.js";
 import {
 	ACT_TOOL,
+	actionTarget,
 	appSlug,
 	auditTaskPrompt,
 	dragMoved,
@@ -272,6 +273,12 @@ async function main(): Promise<void> {
 	// Whether the axdom sidecar supplied DOM id/class this run. Recorded so a run's
 	// element quality is legible from its log rather than inferred.
 	let domEnrichment: { frames: number; unavailable?: string } = { frames: 0, unavailable: "not observed" };
+	/**
+	 * Window geometry, for a post-pass reconciling driver coordinates against the captured frames.
+	 * Declared out here because `win` and the staging result are scoped to the try below, and the
+	 * run log is written from the finally — the same reason homeReset above lives at this level.
+	 */
+	let windowGeometry: Record<string, unknown> | undefined;
 	let expectationRejections = 0;
 	let findCalls = 0;
 	let malformedStreak = 0;
@@ -303,6 +310,7 @@ async function main(): Promise<void> {
 					hintReasons: audit.reasons,
 					homeReset,
 					domEnrichment,
+					windowGeometry,
 					sessionRevivals: driver.revivals,
 					expectationRejections,
 					findCalls,
@@ -409,6 +417,7 @@ async function main(): Promise<void> {
 			try {
 				const stage = stageWindowForRecording(app);
 				console.log(`recording stage: ${stage.detail}`);
+				windowGeometry = { ...(win.bounds ? { bounds: win.bounds } : {}), ...(stage.geometry ? { staged: stage.geometry } : {}) };
 				await new Promise((r) => setTimeout(r, 1500));
 			} catch {
 				console.log("could not stage window for recording; recording may be degraded");
@@ -736,6 +745,10 @@ async function main(): Promise<void> {
 
 			const prevHaystack = obs.haystack;
 			const prevFrames = obs.frames;
+			// Resolved HERE, against the observation the model actually chose from: `obs` is
+			// reassigned to the post-action observation below, and element handles are only
+			// meaningful in the snapshot that produced them.
+			const target = actionTarget(input.action, obs);
 			const prevShot = `${OUT}/agent-step-${step - 1}.png`;
 			while (driverBusy) await new Promise((r) => setTimeout(r, 50));
 			driverBusy = true;
@@ -831,6 +844,7 @@ async function main(): Promise<void> {
 				screenshotFile: `agent-step-${step}.png`,
 				pixelDelta: delta,
 				modelReasoning: input.reasoning,
+				...(target ? { targetRole: target.role, targetRect: { x: target.x, y: target.y, w: target.w, h: target.h } } : {}),
 			});
 
 			// Advisory only — see FROZEN_STEPS. Printed at the crossing rather than every step
@@ -878,6 +892,18 @@ async function main(): Promise<void> {
 			try {
 				await driver.act({ kind: "tool", name: "stop_recording", args: {} });
 			} catch {}
+			// Before assembly, so a failed encode still leaves usable timing. These are the only
+			// record of WHEN each frame was captured: list.txt clamps every gap to five seconds,
+			// which erases exactly the long thinking pauses a post-pass needs to compress.
+			// Keyed by filename rather than position, so a stray png in the directory cannot
+			// silently shift every timestamp by one.
+			try {
+				const times: Record<string, number> = {};
+				for (let i = 0; i < frameTimes.length; i++) times[`f-${String(i).padStart(5, "0")}.png`] = frameTimes[i];
+				fs.writeFileSync(`${framesDir}/times.json`, JSON.stringify(times));
+			} catch (err) {
+				console.error("could not write frame times:", err);
+			}
 			try {
 				assembleVideo(framesDir, frameTimes, videoPath);
 			} catch (err) {

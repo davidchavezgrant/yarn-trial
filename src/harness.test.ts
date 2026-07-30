@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { Driver } from "./driver.js";
 import {
 	auditTaskPrompt,
+	actionTarget,
 	destructiveTarget,
 	findScopeAmbiguities,
 	framesShifted,
@@ -515,6 +516,28 @@ const ie = (name: string, surface = "", box: Partial<InteractiveElement> = {}): 
 	({ handle: 0, role: "AXButton", name, surface, x: 0, y: 0, w: 0, h: 0, ...box });
 
 const obsWith = (interactive: InteractiveElement[]): ObservationBundle => ({ ...bundle, interactive });
+
+test("actionTarget__ResolvesByHandle__When__ActionAddressesAnElement", () => {
+	const obs = obsWith([ie("Save", "Toolbar", { handle: 3 }), ie("Cancel", "Toolbar", { handle: 4 })]);
+	assert.equal(actionTarget({ name: "click", element_index: 3 }, obs)?.name, "Save");
+	assert.equal(actionTarget({ name: "click", element_index: 99 }, obs), undefined);
+});
+
+test("actionTarget__ResolvesInnermostBox__When__ActionIsCoordinateAddressed", () => {
+	// Boxes nest, so a point inside a button is also inside its panel. The innermost one is what
+	// the click actually hits, and what the cursor pass must name to pick a pointer type.
+	const obs = obsWith([
+		ie("Panel", "", { x: 0, y: 0, w: 500, h: 500 }),
+		ie("Save", "Panel", { x: 10, y: 10, w: 60, h: 20 }),
+	]);
+	assert.equal(actionTarget({ name: "click", x: 20, y: 15 }, obs)?.name, "Save");
+	assert.equal(actionTarget({ name: "click", x: 300, y: 300 }, obs)?.name, "Panel");
+});
+
+test("actionTarget__ReturnsUndefined__When__ActionHasNoTarget", () => {
+	const obs = obsWith([ie("Save", "Toolbar", { handle: 3 })]);
+	assert.equal(actionTarget({ name: "press_key", key: "escape" }, obs), undefined);
+});
 
 test("frontier__ExcludesControl__When__ActionAddressesItsHandle", () => {
 	const ledger = newFrontier();
