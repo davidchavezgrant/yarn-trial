@@ -3,6 +3,7 @@ import test from "node:test";
 import type { MotionConstants, MotionSegment } from "./motion-types.js";
 import {
 	buildFramePlan,
+	buildTrack,
 	ACTION_MAX_MS,
 	GAP_BEAT_MS,
 	joinSteps,
@@ -323,6 +324,95 @@ test("toOutputMs__MapsIntoCompressedTimeline__When__GapPrecedesAction", () => {
 		"the action should land within the compressed lead-in plus its own capped span",
 	);
 	assert.equal(toOutputMs(plan, frameTimes, base - 5000), 0);
+});
+
+/** A minimal two-click run: enough to observe where the pointer waits between actions. */
+const twoClickTrack = (): ReturnType<typeof buildTrack> => {
+	const base = 1_000_000;
+	const mk = (epochMs: number, x: number, y: number): TrajectoryTurn => ({
+		tool: "click",
+		arguments: {},
+		clickPoint: { x, y },
+		startMs: 0,
+		endMs: 200,
+		epochMs,
+		dir: "",
+		captureWidth: 1568,
+	});
+
+	return buildTrack({
+		stamp: "t",
+		app: "Yarn",
+		task: "t",
+		runLog: "",
+		steps: [
+			{ index: 1, timestamp: "", action: { kind: "tool", name: "click" }, targetRole: "AXButton", targetRect: { x: 90, y: 780, w: 150, h: 30 } },
+			{ index: 2, timestamp: "", action: { kind: "tool", name: "click" }, targetRole: "AXButton", targetRect: { x: 1050, y: 60, w: 120, h: 30 } },
+		],
+		// Ten seconds of model thinking between the two clicks.
+		turns: [mk(base + 2000, 100, 800), mk(base + 12_000, 1100, 70)],
+		frameTimes: [base, base + 2000, base + 12_000, base + 13_000],
+		frameSize: { width: 1568, height: 882 },
+		captureSize: { width: 1568, height: 882 },
+		constants: CONSTANTS,
+		library: { fittedFrom: { dataset: "t", generatedAt: "" }, segments: [] },
+	});
+};
+
+test("buildTrack__WaitsAtTheNextTarget__When__ModelThinksBetweenActions", () => {
+	// The pointer used to sit on the control it had just clicked for the whole thinking gap. At 23s
+	// of a real run the app had navigated to Workflows while the cursor still hovered "Brand Kit"
+	// in the sidebar. The idle belongs at the DESTINATION — "about to click this", not "stuck on
+	// that" — so the longest hold must be at the second target, not the first.
+	const track = twoClickTrack();
+	const clicks = track.events.filter((e) => e.kind === "mousedown");
+	assert.equal(clicks.length, 2);
+	let longest = { hold: 0, x: 0 };
+	for (let i = 1; i < track.cursor.length; i++) {
+		const hold = track.cursor[i].tMs - track.cursor[i - 1].tMs;
+		if (hold > longest.hold) longest = { hold, x: track.cursor[i - 1].x };
+	}
+	const second = clicks[1] as { x: number };
+	assert.ok(longest.hold > 1000, "a long think should still produce a long hold somewhere");
+	assert.ok(
+		Math.abs(longest.x - second.x) < 50,
+		`the longest wait should be at the NEXT target (x=${second.x}), not at x=${longest.x}`,
+	);
+});
+
+test("buildTrack__EmitsHoverSpans__When__StepsCarryTargetRects", () => {
+	// The app paints no hover of its own: AX actuation leaves the physical pointer elsewhere, so no
+	// mouseover fires — measured at 12 of 164 frames on a real run. Without a synthesized highlight
+	// the cursor rests on a control that never lights up.
+	const track = twoClickTrack();
+	assert.equal(track.hovers.length, 2);
+	for (const h of track.hovers) {
+		assert.ok(h.endMs > h.startMs, "a hover span must have duration");
+		assert.ok(h.w > 0 && h.h > 0);
+	}
+	// Each span ends at its own click, so the highlight is up while the pointer waits.
+	const clicks = track.events.filter((e) => e.kind === "mousedown");
+	assert.ok(track.hovers[0].endMs <= clicks[1].tMs);
+});
+
+test("buildTrack__OmitsHoverSpan__When__StepHasNoTargetRect", () => {
+	// Inferring a box from the cursor position would highlight whatever the pointer overlaps,
+	// including nothing at all.
+	const base = 1_000_000;
+	const track = buildTrack({
+		stamp: "t",
+		app: "Yarn",
+		task: "t",
+		runLog: "",
+		steps: [{ index: 1, timestamp: "", action: { kind: "tool", name: "click" } }],
+		turns: [{ tool: "click", arguments: {}, clickPoint: { x: 100, y: 800 }, startMs: 0, endMs: 200, epochMs: base + 2000, dir: "", captureWidth: 1568 }],
+		frameTimes: [base, base + 2000, base + 3000],
+		frameSize: { width: 1568, height: 882 },
+		captureSize: { width: 1568, height: 882 },
+		constants: CONSTANTS,
+		library: { fittedFrom: { dataset: "t", generatedAt: "" }, segments: [] },
+	});
+	assert.equal(track.hovers.length, 0);
 });
 
 test("samplePercentile__InterpolatesBetweenQuantiles__When__GivenUniformInput", () => {

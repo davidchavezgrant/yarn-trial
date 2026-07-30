@@ -42,6 +42,9 @@ RASTER = 64
 
 CARET_BLINK_MS = 530
 
+# Ramp on the synthetic hover tint, so it reads as a response rather than a compositing glitch.
+HOVER_FADE_MS = 120
+
 
 def load_system_cursor(name, tmpdir):
     """Rasterize one system cursor, returning (image, hotspot) or None when unavailable."""
@@ -137,6 +140,36 @@ def frame_at(plan, t_ms):
     return plan[-1]["frameIndex"] if plan else 0
 
 
+def hover_at(hovers, t_ms):
+    """The control the cursor is resting on right now, if any."""
+    for h in hovers:
+        if h["startMs"] <= t_ms < h["endMs"]:
+            return h
+
+    return None
+
+
+def draw_hover(frame, box, strength):
+    """Tint a control to look hovered.
+
+    The app never painted one: AX actuation leaves the physical pointer elsewhere, so no mouseover
+    fires. Multiplicative darkening rather than a flat grey fill, so text and icons inside the
+    control stay legible instead of being washed over — the same thing a CSS hover background does.
+    """
+    pad = 4
+    x0 = max(0, int(box["x"]) - pad)
+    y0 = max(0, int(box["y"]) - pad)
+    x1 = min(frame.size[0], int(box["x"] + box["w"]) + pad)
+    y1 = min(frame.size[1], int(box["y"] + box["h"]) + pad)
+    if x1 <= x0 or y1 <= y0:
+        return frame
+    region = frame.crop((x0, y0, x1, y1))
+    factor = 1.0 - 0.06 * strength
+    frame.paste(region.point(lambda p: int(p * factor)), (x0, y0))
+
+    return frame
+
+
 def pressed_at(events, t_ms):
     """Is a mouse button down? Drives the click ring."""
     down = False
@@ -167,6 +200,7 @@ def main():
     samples = track["cursor"]
     events = track["events"]
     plan = track["framePlan"]
+    hovers = track.get("hovers", [])
 
     files = sorted(f for f in os.listdir(frames_dir) if f.startswith("f-") and f.endswith(".png"))
     if not files:
@@ -200,6 +234,16 @@ def main():
                     plate = fitted
                 cached_index, cached_plate = index, plate
             frame = cached_plate.copy()
+
+            hover = hover_at(hovers, t_ms)
+            if hover:
+                # Fade in and out rather than snapping: an instant tint on a held frame looks like
+                # a compositing glitch, where a ramp reads as the control responding to the pointer.
+                since = t_ms - hover["startMs"]
+                until = hover["endMs"] - t_ms
+                strength = min(1.0, since / HOVER_FADE_MS, max(0.0, until / HOVER_FADE_MS))
+                if strength > 0:
+                    frame = draw_hover(frame, hover, strength)
 
             spot = sample_cursor(samples, t_ms)
             if spot:

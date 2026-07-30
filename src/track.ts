@@ -29,6 +29,7 @@ import type {
 	CursorSample,
 	CursorType,
 	FramePlanEntry,
+	HoverSpan,
 	MotionConstants,
 	MotionSegment,
 	MotionSegmentLibrary,
@@ -299,6 +300,18 @@ export const DECIMATION = 3;
 
 /** Frames over which the lagging spring is eased onto the exact click point. */
 const SETTLE_FRAMES = 6;
+
+/**
+ * How soon after finishing an action the pointer starts moving to the next target.
+ *
+ * The pointer should not sit on a control it has already clicked while the app navigates away
+ * from it. Long enough to read as a deliberate pause, short enough that the idle time lands at
+ * the destination instead.
+ */
+export const DEPART_AFTER_MS = 250;
+
+/** Ceiling on how long the pointer waits at its destination before clicking. */
+export const MAX_LINGER_MS = 900;
 
 /** Below this a frame counts as motionless, for trimming the spring's spin-up. Pixels. */
 const STILL_PX = 0.5;
@@ -691,9 +704,12 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 
 	const cursor: CursorSample[] = [];
 	const events: TrackEvent[] = [];
+	const hovers: HoverSpan[] = [];
 	// Start off-target so the first action is a real approach rather than a jump cut.
 	let at = { x: input.frameSize.width * 0.5, y: input.frameSize.height * 0.75 };
 	let type: CursorType = "arrow";
+	/** End of the previous action, so the pointer can leave it rather than linger. */
+	let lastActionMs = 0;
 	cursor.push({ tMs: 0, x: at.x, y: at.y, type });
 
 	for (const { step, turn } of joined) {
@@ -709,14 +725,51 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 				? warpSegment(segment, at, target)
 				: synthesizeMove(at, target, input.constants, rand);
 			const duration = move.length > 0 ? move[move.length - 1].tMs : 0;
-			// End the movement ON the action, so the arrival and the click coincide.
-			const moveStart = Math.max(0, dispatchMs - duration);
+			/**
+			 * Leave the last control SOON after clicking it, then wait at the next one — rather
+			 * than lingering on the old target until it is time to move.
+			 *
+			 * Anchoring the movement's end to the click meant the pointer sat on the previous
+			 * control for the whole model-thinking gap, which reads as broken in two ways: at 23s
+			 * of one run the app had navigated to Workflows while the cursor still hovered "Brand
+			 * Kit" in the sidebar, and any hover highlight the app HAD painted has long since been
+			 * repainted away under a cursor that is still sitting there.
+			 *
+			 * A person moves when they have decided, then pauses before committing. Departing
+			 * shortly after the previous click puts the idle time at the destination, where a
+			 * viewer reads it as "about to click this" instead of "stuck on that".
+			 */
+			const earliest = lastActionMs + DEPART_AFTER_MS;
+			// Depart as soon as allowed, and only start later if the move would otherwise overshoot
+			// the click. Clamping toward the click instead leaves the whole gap on the OLD control.
+			const latest = dispatchMs - duration;
+			const moveStart = Math.max(0, Math.min(earliest, Math.max(latest, 0)));
 			const nextType = pointerTypeForRole(step?.targetRole);
 			for (const m of move) cursor.push({ tMs: moveStart + m.tMs, x: m.x, y: m.y, type });
 			type = nextType;
 			at = target;
 			cursor.push({ tMs: dispatchMs, x: at.x, y: at.y, type });
+			/**
+			 * Light the control up while the pointer waits on it.
+			 *
+			 * The app itself almost never does: AX actuation leaves the physical pointer wherever
+			 * it was, so no mouseover fires and no highlight is painted — on one run the real
+			 * pointer was inside the window for 12 of 164 frames. A cursor resting on a control
+			 * that stays inert reads as not really being there.
+			 *
+			 * Only when the step recorded the control's own rect. Inferring a box from the cursor
+			 * position would put a highlight on whatever the pointer happens to overlap, including
+			 * nothing at all.
+			 */
+			if (step?.targetRect && step.targetRect.w > 0 && step.targetRect.h > 0)
+				hovers.push({
+					startMs: moveStart + duration,
+					endMs: completeMs,
+					...step.targetRect,
+					stepIndex: step.index,
+				});
 		}
+		lastActionMs = Math.max(lastActionMs, completeMs);
 
 		if (turn.tool === "click" || turn.tool === "right_click") {
 			const dwell = samplePercentile(input.constants.clickDwellMs, rand());
@@ -780,6 +833,7 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 		cursor,
 		events,
 		framePlan: plan,
+		hovers,
 		constants: input.constants,
 	};
 }

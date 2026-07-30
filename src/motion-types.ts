@@ -85,6 +85,29 @@ export interface FramePlanEntry {
 	action: boolean;
 }
 
+/**
+ * A control the cursor is resting on, and the span it should look hovered for.
+ *
+ * The recording almost never contains a real hover: the agent actuates through the accessibility
+ * API, which does not move the physical pointer, so the app receives no mouseover and paints no
+ * highlight. Measured on one run, the real pointer was inside the app window in 12 of 164 frames.
+ * Left alone, the rendered cursor sits on a control that never lights up, which reads as the
+ * cursor not really being there.
+ *
+ * Bounds come from the step's own `targetRect`, so this highlights the control the agent actually
+ * addressed rather than guessing from the cursor position.
+ */
+export interface HoverSpan {
+	startMs: number;
+	endMs: number;
+	/** Control bounds in the same window-local pixels as everything else in the track. */
+	x: number;
+	y: number;
+	w: number;
+	h: number;
+	stepIndex?: number;
+}
+
 export interface MotionTrack {
 	schema: "yarn-motion-track/v1";
 	run: { stamp: string; app: string; task: string; runLog: string };
@@ -93,6 +116,8 @@ export interface MotionTrack {
 	cursor: CursorSample[];
 	events: TrackEvent[];
 	framePlan: FramePlanEntry[];
+	/** Where a hover highlight should be painted, because the app did not paint one itself. */
+	hovers: HoverSpan[];
 	/** The fitted constants used to build this track, embedded verbatim for provenance. */
 	constants: MotionConstants;
 }
