@@ -21,13 +21,14 @@ import {
 	mergeGraph,
 	newFrontier,
 	observationBlocks,
+	type ObservationBundle,
 	observe,
 	OUT,
 	recoverLeakedGraph,
 	retryTransient,
+	settleMsFor,
 	TargetNotObservableError,
 	toActionRequest,
-	type ObservationBundle,
 } from "./harness.js";
 import { DOM_ACT_TOOL, DOM_RULES, DomBackend, FIND_TOOL } from "./dom.js";
 import { startOverlay } from "./overlay.js";
@@ -39,8 +40,14 @@ import type { AppMap, AppMapEdge, AppMapNode } from "./types.js";
  * out a five-minute think is legitimate exploration that a clock cannot distinguish from a
  * hang. Actions are the honest unit — a pass that is stuck is stuck at some count, however
  * long each one took. What ends a pass normally is the frontier emptying (see harness.ts).
+ *
+ * Sized so it cannot be what ends a long pass. An action is a model call plus a driver call
+ * plus an observation, which has never measured under ~10s (Yarn's finished pass ran ~25s),
+ * so 24 hours is at most ~8,600 actions and realistically a third of that. 10,000 clears the
+ * ceiling either way, which is the point: reaching it means something is looping, not that
+ * the app was large.
  */
-const MAX_ACTIONS = Number(process.env.EXPLORE_MAX_ACTIONS ?? 4000);
+const MAX_ACTIONS = Number(process.env.EXPLORE_MAX_ACTIONS ?? 10_000);
 /**
  * Most controls a single `dismiss` may retire when it does not name a specific surface.
  * Measured need: an uncapped pass cleared 104 unrelated top-level controls in one call and
@@ -78,7 +85,9 @@ Use the "record" tool whenever you learn something a task agent would need: wher
 
 # How this run ends
 
-There is no step budget. After every action you are told the FRONTIER: interactive controls that have been seen in some observation but never operated. The run ends when that list is empty, and "finish" is refused while it is not.
+There is no step budget and no time limit. After every action you are told the FRONTIER: interactive controls that have been seen in some observation but never operated. The run ends when that list is empty, and "finish" is refused while it is not.
+
+Because there is no clock, a slow surface is worth waiting for rather than abandoning — a long render, an upload, an assistant of the app's own thinking. Call wait with a generous "seconds" (a whole minute or several is fine; one long wait costs one action, many short ones cost many) instead of poking at an unchanged screen. A surface you gave up on early is a hole in the map that reads exactly like a surface that does not exist.
 
 So you have two ways to shrink it, and both are legitimate:
 - Operate the control (this is the default: it is how surfaces get discovered — opening one panel adds everything inside it to the frontier).
@@ -630,7 +639,9 @@ async function main(): Promise<void> {
 					isError = true;
 				}
 
-				await new Promise((r) => setTimeout(r, SETTLE_MS));
+				const settleMs = settleMsFor(input.action, SETTLE_MS);
+				if (settleMs > SETTLE_MS) console.log(`    waiting ${Math.round(settleMs / 1000)}s before re-observing`);
+				await new Promise((r) => setTimeout(r, settleMs));
 				obs = await doObserve(`explore-step-${actions}`);
 			} finally {
 				// finally, not a trailing call: a throw from doObserve (a collapsed AX tree is

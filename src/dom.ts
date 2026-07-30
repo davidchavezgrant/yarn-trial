@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import fs from "node:fs";
 import { Driver } from "./driver.js";
-import { OUT, type ObservationBundle, type WindowRef } from "./harness.js";
+import { MAX_WAIT_MS, OUT, type ObservationBundle, type WindowRef } from "./harness.js";
 import type { ActionRequest } from "./types.js";
 
 const DOM_ACTIONS = ["click", "right_click", "double_click", "hover", "type_text", "press_key", "scroll", "wait"] as const;
@@ -408,6 +408,7 @@ export const DOM_ACT_TOOL: Anthropic.Tool = {
 					delivery_mode: { type: "string", enum: ["background", "foreground"], description: "For press_key." },
 					direction: { type: "string", enum: ["up", "down", "left", "right"], description: "For scroll." },
 					amount: { type: "integer", description: "For scroll: wheel notches." },
+					seconds: { type: "integer", description: `For wait: how long to wait before re-observing, up to ${MAX_WAIT_MS / 1000}. One wait of 120 costs a single step; 120 waits of 1 cost 120. Use it whenever the app is working on something slow.` },
 				},
 				required: ["name"],
 			},

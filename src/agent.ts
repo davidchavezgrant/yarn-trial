@@ -8,23 +8,24 @@ import {
 	appSlug,
 	auditTaskPrompt,
 	dragMoved,
-	ensureObservable,
-	framesShifted,
 	DRIVER_RULES,
+	ensureObservable,
 	findScopeAmbiguities,
 	findWindow,
+	framesShifted,
 	loadAppMapGraph,
 	makeClient,
 	observationBlocks,
 	observe,
 	OUT,
 	pixelDelta,
-	unpaintedStreak,
 	resetToHome,
 	scopeWarnings,
+	settleMsFor,
 	stageWindowForRecording,
 	TargetNotObservableError,
 	toActionRequest,
+	unpaintedStreak,
 	verificationTallies,
 	verify,
 	visualJudge,
@@ -56,6 +57,7 @@ ${rules}
 - Set a concrete, checkable expectation for every action: textIncludes and/or textExcludes, literal substrings checked against the window title plus all element labels and values in the NEXT observation. This is MANDATORY — an act call carrying only a prose description is rejected and NOT executed, costing you a turn. Supply it even when you are certain the action will work.
 - Expectations must DISCRIMINATE: at least one substring that appears (or disappears) BECAUSE of the action. A check that was already true before the action is rejected as evidence — in particular, text you typed earlier does not verify a later action.
 - If verification fails, do not repeat the same action blindly — re-read the observation, diagnose, and recover.
+- There is no time limit, so when the app is working on something slow — a long render, an upload, an assistant of its own thinking — do not treat the unchanged screen as failure and do not poke at it. Call wait with a generous "seconds" (a whole minute or several is fine; one long wait costs one step, many short ones cost many) and set the expectation to the finished state you are waiting for.
 
 DEMONSTRATE BY DOING. Your runs are recorded as product demos, so the video must show the outcome, not a tour of where the buttons are. Phrasings like "show me how to X", "walk me through X", "demo X" are requests to PERFORM X, end to end, leaving the app in the changed state. Navigating to a control, opening a dropdown, and describing the remaining steps in your summary is a FAILED run, however accurate the description.
 
@@ -753,7 +755,9 @@ async function main(): Promise<void> {
 					}
 				}
 
-				await new Promise((r) => setTimeout(r, SETTLE_MS));
+				const settleMs = settleMsFor(input.action, SETTLE_MS);
+				if (settleMs > SETTLE_MS) console.log(`    waiting ${Math.round(settleMs / 1000)}s before re-observing`);
+				await new Promise((r) => setTimeout(r, settleMs));
 				obs = await doObserve(`agent-step-${step}`);
 				if (obs.appContent === 0) {
 					// AX tree collapsed (e.g. a modal/other window took over). Acting now means

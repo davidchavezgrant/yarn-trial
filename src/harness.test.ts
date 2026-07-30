@@ -13,16 +13,18 @@ import {
 	frontierMatches,
 	frontierRemaining,
 	frontierSummary,
-	isVagueSurface,
 	isTransientApiError,
+	isVagueSurface,
+	MAX_WAIT_MS,
 	mergeGraph,
 	newFrontier,
-	observe,
 	observationBlocks,
+	observe,
 	pixelDelta,
 	recoverLeakedGraph,
 	retryTransient,
 	scopeWarnings,
+	settleMsFor,
 	toActionRequest,
 	unpaintedStreak,
 	verificationTallies,
@@ -154,6 +156,30 @@ test("toActionRequest__PrefersElementIndex__When__BothGiven", () => {
 	const tool = toActionRequest({ name: "click", element_index: 12, x: 880, y: 610 }, win) as { args: Record<string, unknown> };
 	assert.equal(tool.args.element_index, 12);
 	assert.equal(tool.args.x, undefined);
+});
+
+// settleMsFor: the whole point is that ONE wait can cover a multi-minute operation. Before
+// it existed the longest pause the agent could express was the settle delay, so waiting out
+// an app's own agent cost hundreds of turns and hit the step budget instead.
+
+test("settleMsFor__ReturnsTheDefault__When__ActionIsNotAWait", () => {
+	assert.equal(settleMsFor({ name: "click", element_index: 3, seconds: 300 }, 900), 900);
+});
+
+test("settleMsFor__SleepsTheRequestedSpan__When__WaitCarriesSeconds", () => {
+	assert.equal(settleMsFor({ name: "wait", seconds: 300 }, 900), 300_000);
+});
+
+test("settleMsFor__ClampsToTheMaximum__When__SecondsIsAbsurd", () => {
+	// A model that means 100 and writes 100000 must cost one long step, not a hung run.
+	assert.equal(settleMsFor({ name: "wait", seconds: 100_000 }, 900), MAX_WAIT_MS);
+});
+
+test("settleMsFor__FallsBackToTheDefault__When__SecondsIsMissingOrUnusable", () => {
+	// `wait` predates the argument, so a bare wait must keep meaning a short settle rather
+	// than becoming a zero-length no-op that re-observes before the app has redrawn.
+	for (const seconds of [undefined, 0, -5, "soon", NaN])
+		assert.equal(settleMsFor({ name: "wait", seconds }, 900), 900, `seconds=${String(seconds)}`);
 });
 
 test("verify__ReportsTextChannel__When__SubstringEvidenceSatisfied", () => {

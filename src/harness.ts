@@ -1271,6 +1271,35 @@ export const SUPPORTED_ACTIONS = [
 	"wait",
 ] as const;
 
+/**
+ * Longest a single `wait` may sleep. Not a budget — `wait` can be called again — but a bound
+ * on one mistake: `seconds: 100000` from a model that meant 100 would otherwise hang a run
+ * for a day with nothing on the console to explain it.
+ */
+export const MAX_WAIT_MS = 600_000;
+
+/**
+ * How long to let the app settle after an action. Everything takes the caller's short
+ * default; `wait` takes the seconds it asked for, clamped.
+ *
+ * This exists because `wait` used to be indistinguishable from any other action: it issues no
+ * driver call, so the whole action WAS the settle delay, and the longest pause the agent could
+ * express was ~900ms. That is fine for a menu opening and useless for the growing class of
+ * target that embeds an agent of its own and takes minutes to answer — reaching five minutes
+ * meant ~330 turns, each a full model round-trip, against a 15-step budget. Waiting is now
+ * one step.
+ */
+export function settleMsFor(action: unknown, defaultMs: number): number {
+	const a = action as { name?: string; seconds?: unknown } | null | undefined;
+	if (a?.name !== "wait") return defaultMs;
+	const seconds = Number(a.seconds);
+	// Absent, unparseable, or non-positive: an ordinary short wait, which is what `wait`
+	// meant before it took an argument. Never shorter than the default settle.
+	if (!Number.isFinite(seconds) || seconds <= 0) return defaultMs;
+
+	return Math.min(Math.max(seconds * 1000, defaultMs), MAX_WAIT_MS);
+}
+
 export class UnsupportedActionError extends Error {
 	constructor(name: string) {
 		super(`unsupported action "${name}" — supported actions are: ${SUPPORTED_ACTIONS.join(", ")}`);
@@ -1388,6 +1417,7 @@ export const ACT_TOOL: Anthropic.Tool = {
 					delivery_mode: { type: "string", enum: ["background", "foreground"] },
 					direction: { type: "string", enum: ["up", "down", "left", "right"], description: "For scroll." },
 					amount: { type: "integer", description: "For scroll: wheel notches." },
+					seconds: { type: "integer", description: `For wait: how long to wait before re-observing, up to ${MAX_WAIT_MS / 1000}. One wait of 120 costs a single step; 120 waits of 1 cost 120. Use it whenever the app is working on something slow.` },
 				},
 				required: ["name"],
 			},
