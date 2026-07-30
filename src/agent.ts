@@ -35,7 +35,16 @@ import type { ActionRequest, Expectation, StepRecord } from "./types.js";
 import type { ObservationBundle, VerifyResult, VisualVerdict } from "./harness.js";
 
 const MAX_STEPS = Number(process.env.AGENT_STEPS ?? 15);
-/** Consecutive steps with nothing verified and nothing repainted before the run is abandoned. */
+/**
+ * Consecutive steps with nothing verified and nothing repainted before the run says so. It
+ * used to abort here, and that was wrong for a whole class of target: apps with an embedded
+ * agent of their own, where waiting on a think that runs for minutes produces exactly this
+ * signature — nothing verified, no pixels moved — and is the correct thing to be doing. A
+ * frozen window and a working one waiting on a slow model are indistinguishable from
+ * outside, so the run no longer decides between them. The diagnosis stays: the case that
+ * motivated it (a run that held a full AX tree while saving 247 byte-identical frames)
+ * looked healthy on every channel except this one.
+ */
 const FROZEN_STEPS = 4;
 /** Free read-only page searches per run, beyond which a find costs an action. */
 const MAX_FINDS = Number(process.env.AGENT_FINDS ?? 20);
@@ -820,15 +829,14 @@ async function main(): Promise<void> {
 				modelReasoning: input.reasoning,
 			});
 
-			// The window stopped repainting. Acting on further is pointless — the remaining
-			// steps produce a stale tree and the recording produces one frame repeated — so
-			// stop here rather than spend the whole budget proving it again.
-			if (unpaintedStreak(records) >= FROZEN_STEPS)
-				throw new TargetNotObservableError(
-					app,
-					`${FROZEN_STEPS} consecutive steps verified nothing and changed no pixels — the window is not `
-						+ `repainting. Usual cause: the target app is off the active Space or minimized, where `
-						+ `Chromium suspends it while every driver call still reports success`,
+			// Advisory only — see FROZEN_STEPS. Printed at the crossing rather than every step
+			// after it, so a long legitimate wait says this once instead of filling the log.
+			const frozen = unpaintedStreak(records);
+			if (frozen === FROZEN_STEPS)
+				console.log(
+					`    NOTE: ${FROZEN_STEPS} consecutive steps verified nothing and changed no pixels. Fine if you `
+						+ "are waiting on the app to think; otherwise the window may not be repainting (target off the "
+						+ "active Space or minimized, where Chromium suspends it while every driver call still reports success).",
 				);
 
 			messages.push({

@@ -94,13 +94,17 @@ produces the deliverable. Both runs burned their whole step budget and assembled
 a still image.
 
 **Detection** (`unpaintedStreak()` in `src/harness.ts`): count trailing steps that verified
-nothing *and* moved no pixels; at 4, abort with this diagnosis. It can only abort, never
-pass — a verified step proves the app is alive and clears the streak, and an unknown delta
-(`--no-vision`, no prior frame) clears it too. Replayed over all 48 historical run logs it
-fires on exactly these two, at step 4 instead of 15.
+nothing *and* moved no pixels. A verified step proves the app is alive and clears the streak,
+and an unknown delta (`--no-vision`, no prior frame) clears it too. Replayed over all 48
+historical run logs it fires on exactly these two, at step 4 instead of 15.
 
-This is the first thing the advisory pixel channel decides rather than merely records. The
-signal was already sitting in both logs; nothing consumed it.
+**It reports, it does not stop the run** (changed 2026-07-30). It briefly aborted at 4, and
+that was wrong for a target class we care about: apps with an embedded agent of their own.
+Yarn's takes up to five minutes to think, during which the correct behaviour is to wait —
+and waiting produces this exact signature, nothing verified and no pixels moved. A frozen
+window and a working one waiting on a slow model cannot be told apart from outside, so the
+run no longer tries; the streak prints a note at 4 and the operator decides. Still
+unsolved: a genuinely dead window now burns the full step budget again, as it did before.
 
 ---
 

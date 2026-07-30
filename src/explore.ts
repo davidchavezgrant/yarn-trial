@@ -34,13 +34,12 @@ import { startOverlay } from "./overlay.js";
 import type { AppMap, AppMapEdge, AppMapNode } from "./types.js";
 
 /**
- * Wall-clock cap, the only hard budget left. A step budget was the wrong instrument: it
- * ended passes that still had surfaces to open and let passes that had genuinely finished
- * keep going. What ends a run now is the frontier emptying (see harness.ts); this is the
- * backstop for an app whose frontier never does.
+ * The only backstop, and it counts actions rather than seconds on purpose. A wall-clock cap
+ * used to sit beside it and was removed: some apps embed an agent of their own, and waiting
+ * out a five-minute think is legitimate exploration that a clock cannot distinguish from a
+ * hang. Actions are the honest unit — a pass that is stuck is stuck at some count, however
+ * long each one took. What ends a pass normally is the frontier emptying (see harness.ts).
  */
-const EXPLORE_HOURS = Number(process.env.EXPLORE_HOURS ?? 12);
-/** Pure runaway guard. At ~20s/action, 12h is ~2000 actions, so this is slack, not a budget. */
 const MAX_ACTIONS = Number(process.env.EXPLORE_MAX_ACTIONS ?? 4000);
 /**
  * Most controls a single `dismiss` may retire when it does not name a specific surface.
@@ -62,7 +61,7 @@ const SETTLE_MS = 900;
 /** The payload of the "finish" tool — the pass's entire output, prose plus graph. */
 type FinishInput = { document: string; nodes?: AppMapNode[]; edges?: AppMapEdge[] };
 type GraphInput = { nodes?: AppMapNode[]; edges?: AppMapEdge[] };
-type StopReason = "frontier-empty" | "time-cap" | "action-ceiling" | "frontier-conceded" | "error";
+type StopReason = "frontier-empty" | "action-ceiling" | "frontier-conceded" | "error";
 
 const systemPrompt = (rules: string): string => `You are an exploration agent building grounding notes for a macOS app, so a future task-running agent can navigate it directly without dead ends. You drive the app through a UI driver: each turn you receive the window's elements (addressing handle, role, label/value) and a screenshot, and you perform ONE action via the "act" tool.
 
@@ -250,7 +249,6 @@ async function main(): Promise<void> {
 	let chapters = 1;
 	let refusals = 0;
 	const startedAt = Date.now();
-	const deadline = startedAt + EXPLORE_HOURS * 3_600_000;
 	const ledger = newFrontier();
 
 	/**
@@ -345,7 +343,7 @@ async function main(): Promise<void> {
 
 	/**
 	 * Ask for the map when the loop ends for a reason other than the model choosing to
-	 * finish (time cap, action ceiling, dead session). One model call, tool_choice pinned,
+	 * finish (action ceiling, dead session). One model call, tool_choice pinned,
 	 * no driver needed — everything required is already in the transcript and the graph.
 	 */
 	const requestFinish = async (why: string, stopped: StopReason, salvaged: boolean): Promise<void> => {
@@ -388,7 +386,7 @@ async function main(): Promise<void> {
 		tools = dom ? [DOM_ACT_TOOL, FIND_TOOL, ...EXTRA_TOOLS] : [ACT_TOOL, ...EXTRA_TOOLS];
 		basePrompt = systemPrompt(dom ? DOM_RULES : DRIVER_RULES);
 		console.log(`exploring ${app} pid=${win.pid} window=${win.windowId} backend=${backendKind}`);
-		console.log(`ends when the frontier empties; hard cap ${EXPLORE_HOURS}h\n`);
+		console.log(`ends when the frontier empties; no time cap, action backstop ${MAX_ACTIONS}\n`);
 
 		let blindStreak = 0;
 		// Same handoff as the loop below: the banner starts visible and only a setDriving(false)
@@ -408,7 +406,8 @@ async function main(): Promise<void> {
 				{
 					type: "text",
 					text:
-						`Explore "${app}". There is no step budget: this run ends when the frontier of un-operated controls is empty (hard cap ${EXPLORE_HOURS}h).\n\n` +
+						`Explore "${app}". There is no step budget and no time limit: this run ends when the frontier of un-operated controls is empty. ` +
+						"If a surface takes minutes to respond — some apps embed an agent of their own — wait for it rather than moving on.\n\n" +
 						`${frontierSummary(ledger)}\n\nInitial observation follows.`,
 				},
 				...observationBlocks(obs),
@@ -419,24 +418,13 @@ async function main(): Promise<void> {
 		 * Consecutive finish attempts refused for a non-empty frontier. The refusal is
 		 * evidence rather than badgering — it hands back the actual list — so unlike the
 		 * one-shot self-audit it replaced it can repeat. But a model that keeps calling
-		 * finish and never acts would otherwise spin against the wall-clock cap burning
+		 * finish and never acts would otherwise spin until the action backstop burning
 		 * tokens, so after three the concession is taken and recorded as the stop reason.
 		 */
 		let finishRefusals = 0;
 		let obsThisChapter = 1;
 
 		for (;;) {
-			if (Date.now() >= deadline) {
-				console.log(`\n${EXPLORE_HOURS}h cap reached after ${actions} actions — asking for the map now`);
-				await requestFinish(
-					`The ${EXPLORE_HOURS}h time cap for this run has been reached, so no further actions are possible. Call finish NOW with the best map you can from what you saw. ` +
-						`${frontierRemaining(ledger).length} control(s) were never operated — do not describe surfaces you never opened.`,
-					"time-cap",
-					false,
-				);
-
-				return;
-			}
 			if (actions >= MAX_ACTIONS) {
 				console.log(`\naction ceiling (${MAX_ACTIONS}) reached — asking for the map now`);
 				await requestFinish(`The action ceiling of ${MAX_ACTIONS} has been reached. Call finish NOW with the map you have.`, "action-ceiling", false);
@@ -480,7 +468,7 @@ async function main(): Promise<void> {
 								type: "tool_result",
 								tool_use_id: toolUse.id,
 								content:
-									`Not yet — the frontier is not empty, and ${hm(deadline - Date.now())} of the time cap remain.\n\n${frontierSummary(ledger)}\n\n` +
+									`Not yet — the frontier is not empty, and there is no time limit on this pass.\n\n${frontierSummary(ledger)}\n\n` +
 									"Operate the ones that could open a surface you have not mapped. Dismiss the ones that are content rather than navigation, or that you must not touch — with a reason. " +
 									"Then finish will be accepted.",
 							},
@@ -661,7 +649,7 @@ async function main(): Promise<void> {
 			const rest = frontierRemaining(ledger);
 			const discovered = ledger.seen.size - before;
 			console.log(
-				`    -> ${credited.length} credited, ${discovered > 0 ? `+${discovered} new, ` : ""}${rest.length} on frontier, ${hm(deadline - Date.now())} left`,
+				`    -> ${credited.length} credited, ${discovered > 0 ? `+${discovered} new, ` : ""}${rest.length} on frontier, ${hm(Date.now() - startedAt)} elapsed`,
 			);
 
 			const frontierNote =
@@ -688,7 +676,7 @@ async function main(): Promise<void> {
 			 *
 			 * Context, not step count, was the real ceiling — each observation is ~7k tokens
 			 * and they all accumulate, so a 25-action pass was already ~175k. A sliding
-			 * window would not survive a 12-hour run either: the assistant turns and tool
+			 * window would not survive a long run either: the assistant turns and tool
 			 * results keep piling up over ~2000 actions, and pruning per turn would
 			 * invalidate the prompt cache every single turn.
 			 *
@@ -717,7 +705,7 @@ async function main(): Promise<void> {
 								`# Findings so far (${findings.length}${findings.length > 120 ? ", most recent 120 shown" : ""})\n${noteList}\n\n` +
 								`# Graph so far (${graphNodes.size} nodes, ${graphEdges.size} edges)\n${nodeList || "(none recorded yet — start recording nodes as you go)"}\n\n` +
 								`# ${frontierSummary(ledger)}\n\n` +
-								`${hm(deadline - Date.now())} of the time cap remain. Current observation follows.`,
+								"There is no time limit on this pass — take as long as a surface needs. Current observation follows.",
 						},
 						...observationBlocks(obs),
 					],

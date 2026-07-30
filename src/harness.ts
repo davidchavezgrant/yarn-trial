@@ -1460,11 +1460,13 @@ export const REPAINT_EPSILON = 0.001;
  * a few hundred times. Two Notion Calendar runs burned ~5 minutes each that way and
  * assembled a 247-identical-frame mp4.
  *
- * The pixel channel had already seen it — every step read 0.0% — but it is advisory and
- * nothing consumed it. This is the single decision it is allowed to drive, and it can
- * only ever ABORT. It cannot discard a real success: a verified step proves the app is
- * alive and clears the streak, and an unknown delta (vision off, no prior frame) is not
- * evidence either way, so it clears the streak too.
+ * The pixel channel had already seen it — every step read 0.0% — but nothing consumed it.
+ * A verified step proves the app is alive and clears the streak, and an unknown delta
+ * (vision off, no prior frame) is not evidence either way, so it clears the streak too.
+ *
+ * Reporting only: the caller prints it and keeps going. It aborted runs for a day and had
+ * to stop, because an app with an embedded agent produces the same signature while waiting
+ * out a multi-minute think — see FROZEN_STEPS in agent.ts.
  */
 export function unpaintedStreak(steps: StepRecord[]): number {
 	let n = 0;

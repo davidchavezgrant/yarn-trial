@@ -110,7 +110,7 @@ export interface AppMapCoverage {
 	surfaces: number;
 	/** Context resets. See the chapter logic in src/explore.ts. */
 	chapters: number;
-	/** frontier-empty | time-cap | action-ceiling | frontier-conceded | error */
+	/** frontier-empty | action-ceiling | frontier-conceded | error */
 	stopped: string;
 	/** Deduped reasons given for dismissals — why the skipped controls were skipped. */
 	dismissals?: string[];
