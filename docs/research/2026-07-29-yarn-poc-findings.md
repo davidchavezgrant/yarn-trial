@@ -620,6 +620,88 @@ that way. The first sampler therefore reported "banner up 0% of the run", which 
 like a broken feature rather than a broken instrument. Sampling the pause-file handshake
 directly is what produced the table above.
 
+## Canvas manipulation: the tiger task, and what actually proved it
+
+The first task whose target is not an AX-addressable element. Yarn's **sync points** are
+unlabeled dots on a timeline clip; you re-time a demo beat by dragging one. Task, goal-only:
+*"The tiger appears before I mention tigers — line them up."*
+
+Run `out/runs/2026-07-29T23-48-35-yarn.json` — grounded, `hintedPrompt: false`,
+`homeReset: reset`, video in `out/recording/2026-07-29T23-48-35-yarn/window.mp4`:
+
+| | |
+|---|---|
+| success | true, final goal check PASSED by text |
+| actions | 13 in **394s** |
+| verified | 6/13 — 5 text, 1 geometry, 0 pixel-only |
+| unverified | 7 (mostly menu-opens and escapes whose expectations didn't discriminate) |
+| rejections | 1 (an act call with no checkable expectation, refused unexecuted) |
+| sessionRevivals | 0 |
+
+394s matters on its own: before the heartbeat fix this run could not have existed. The
+driver's 300s absolute session lifetime would have killed it around action 10.
+
+The drag itself — step 13, `{from_x:1271, from_y:818, to_x:1362, to_y:818}`, foreground,
+600ms/40 steps — came back `verified, channel: "text"`, which reads better than it is. The
+expectation was `textExcludes: ["00:29:16"]`: proof the old timecode left the readout. A bare
+playhead move would satisfy that too. **The text channel was thin here and the run log does
+not say so.**
+
+### What actually established the sync point moved
+
+Not the harness — the recorded frames, read back afterwards. Diffing the clip row
+(y 806–832) across all 325 frames isolates one change at f-00262, 381 pixels:
+
+| | dot at x≈1271 | dot at x≈1362 | four downstream dots |
+|---|---|---|---|
+| f-00255 (pre-drag) | present | absent | at 1372/1412/1452/1497 |
+| f-00265 (post-drag) | **gone** | **present** | all shifted right |
+
+A dot vanished from the drag origin, appeared at the destination, and the rest of the clip
+re-timed around it. That is the sync point moving, and it is exactly the evidence class the
+text channel cannot produce.
+
+### The visual judge FAILED this run, and the judge was wrong
+
+Layer 3, run against the final frame with the agent's claim attached, returned **FAIL** on two
+grounds. Both are instructive:
+
+1. *"At the playhead there is no sync dot."* **Factually wrong.** The dot is there; it renders
+   white while selected and the black playhead line runs straight through its centre, so at
+   1568px-wide 1× it reads as a thickening of the line. The 2× crop above shows it plainly.
+   The judge is a vision model looking at an 8px feature occluded by a 2px line.
+2. *"The preview still shows three blank grey squares under the 'a tiger' caption."* **True
+   but over-strict.** The playhead is parked *at* the sync instant, so the reveal it triggers
+   has not played yet. Absence of a tiger at exactly t=sync is the expected frame, not a
+   contradiction.
+
+So the judge produced a **false negative** on a run that frame evidence supports. This is
+the argument for keeping it advisory (`VISUAL_JUDGE=block` is opt-in): on canvas targets it
+is reasoning about features near its perceptual floor, and it fails toward FAIL. It got the
+*scope* right — it correctly identified the outer project timeline rather than the nested
+Yarn window inside the preview, which is a real trap on this frame.
+
+### Why the judge had been silent until now
+
+It had returned nothing at all on earlier runs, and `if (!verdict) return undefined` logged
+nothing — **an absent advisory gate printed identically to a passing one.** Instrumenting the
+raw call: `stop_reason: max_tokens`, all 700 output tokens spent, 95 of them thinking, and the
+single content block was a `thinking` block with zero text. The model reasons about the frame
+before writing its verdict and never reached the verdict line.
+
+The bias ran the worst possible direction — the judge disappeared on precisely the frames
+hardest to judge. `max_tokens` is now 2000 and a budget-exhausted judge says so out loud.
+
+### Standing caveats on this task
+
+- 7 of 13 steps unverified. Unverified ≠ failed, but that is the number.
+- Text evidence proves the readout reads 00:31:12 and not 00:29:16. It does not by itself
+  prove the *dot* moved rather than the playhead — the frame diff does, and that is post-hoc
+  analysis, not something the harness checked at the time.
+- Whether the moved dot is the *tiger* beat rather than the monkey or elephant rests on the
+  agent's own scrubbing at steps 11–12. Unconfirmed independently.
+- n=1. No ungrounded control arm yet.
+
 ## Harness bugs found (all fixed today)
 
 1. **`set_value` sent `text` where the driver expects `value`** — every direct field write
