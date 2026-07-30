@@ -214,6 +214,14 @@ export class DomBackend {
 			// The geometry channel is an AX-frame comparison and this backend reports no
 			// frames, so it simply never fires here — an empty map degrades it silently.
 			frames: new Map(),
+			// Frontier ledger input. "Advertises an action" is this backend's equivalent of
+			// the AX role list; geometry is zero because CDP refs carry no box here, so the
+			// ledger's coordinate-containment path never credits anything and the ref path
+			// carries it alone. That is correct rather than degraded: this backend has no
+			// reason to issue coordinate actions.
+			interactive: snap.refs
+				.filter((r) => r.actions.length > 0)
+				.map((r) => ({ handle: r.ref, role: r.role, name: r.name ?? "", surface: "", x: 0, y: 0, w: 0, h: 0 })),
 			haystack: `${snap.title}\n${haystackParts.join("\n")}`.toLowerCase(),
 			screenshotB64: fs.readFileSync(shotPath).toString("base64"),
 			title: snap.title,

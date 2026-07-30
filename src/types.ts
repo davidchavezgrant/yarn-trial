@@ -89,6 +89,33 @@ export interface ScopeAmbiguity {
 	nodes: Array<{ id: string; scope: SurfaceScope }>;
 }
 
+/**
+ * What the exploration pass actually touched, counted by code rather than reported by the
+ * model. Its predecessor was a sentence in the prose map saying coverage was good.
+ *
+ * `actuated / seen` is a LOWER BOUND ON BREADTH, not a percentage of the app. Three reasons
+ * it is not a coverage figure: a control can only be seen once some surface exposing it has
+ * been opened, so the denominator itself grows with exploration and closed panels contribute
+ * nothing; operating a control is not the same as understanding it; and controls that share
+ * a role, label and surface collapse into one entry.
+ */
+export interface AppMapCoverage {
+	/** Distinct interactive controls observed across the pass. */
+	seen: number;
+	/** ...that the pass operated at least once. */
+	actuated: number;
+	/** ...that it deliberately declined to operate. */
+	dismissed: number;
+	/** Distinct containing surfaces those controls were found in. */
+	surfaces: number;
+	/** Context resets. See the chapter logic in src/explore.ts. */
+	chapters: number;
+	/** frontier-empty | time-cap | action-ceiling | frontier-conceded | error */
+	stopped: string;
+	/** Deduped reasons given for dismissals — why the skipped controls were skipped. */
+	dismissals?: string[];
+}
+
 export interface AppMap {
 	app: string;
 	capturedAt: string;
@@ -96,6 +123,7 @@ export interface AppMap {
 	provenance: "explore";
 	/** sha256 prefix of the prose map written in the same pass, pairing the two artifacts. */
 	proseSha256?: string;
+	coverage?: AppMapCoverage;
 	nodes: AppMapNode[];
 	edges: AppMapEdge[];
 }

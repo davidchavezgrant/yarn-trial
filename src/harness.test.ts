@@ -1,9 +1,28 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";
-import { auditTaskPrompt, findScopeAmbiguities, framesShifted, observationBlocks, pixelDelta, scopeWarnings, toActionRequest, verify } from "./harness.js";
-import type { ObservationBundle } from "./harness.js";
-import type { AppMap } from "./types.js";
+import { Driver } from "./driver.js";
+import {
+	auditTaskPrompt,
+	destructiveTarget,
+	findScopeAmbiguities,
+	framesShifted,
+	frontierCredit,
+	frontierDismiss,
+	frontierIngest,
+	frontierRemaining,
+	frontierSummary,
+	mergeGraph,
+	newFrontier,
+	observe,
+	observationBlocks,
+	pixelDelta,
+	scopeWarnings,
+	toActionRequest,
+	verify,
+} from "./harness.js";
+import type { InteractiveElement, ObservationBundle } from "./harness.js";
+import type { AppMap, AppMapEdge, AppMapNode } from "./types.js";
 import { EMPTY, bestClass, descriptorFor, lookup } from "./axdom.js";
 import { overlayEnv, scriptEnvKeys } from "./overlay.js";
 
@@ -302,6 +321,7 @@ const bundle: ObservationBundle = {
 	haystack: "save",
 	screenshotB64: "aGk=",
 	title: "Settings",
+	interactive: [{ handle: 3, role: "AXButton", name: "Save", surface: "", x: 10, y: 20, w: 80, h: 30 }],
 	appContent: 1,
 	domEnriched: 0,
 };
@@ -389,6 +409,223 @@ test("descriptorFor__ReturnsEmpty__When__NothingUseful", () => {
 
 test("lookup__ReturnsEmpty__When__ElementHasNoFrame", () => {
 	assert.equal(lookup(EMPTY, undefined), "");
+});
+
+// --- observe(): the frontier's only input. AX frames are screen-global LOGICAL POINTS while
+// coordinate actions consume SCREENSHOT PIXELS, so observe() converts — and if that conversion
+// is wrong the ledger silently credits the wrong control, which nothing downstream can detect.
+// Measured on Yarn: a 1920-wide window shot at 1568 (scale 0.81667) on a display left of the
+// primary, hence the negative origin in this fixture.
+
+const fakeDriver = (payload: Record<string, unknown>, shotPath: string): Driver =>
+	({
+		act: async () => {
+			fs.mkdirSync(shotPath.replace(/\/[^/]+$/, ""), { recursive: true });
+			fs.writeFileSync(shotPath, "png");
+
+			return { text: "", structuredJson: JSON.stringify(payload) };
+		},
+	}) as unknown as Driver;
+
+const axWindow = { element_index: 0, role: "AXWindow", label: "", frame: { x: -2181, y: 763, w: 1920, h: 1080 } };
+
+const observeFixture = async (elements: unknown[]): Promise<ObservationBundle> => {
+	const shot = `${process.cwd()}/out/test-observe.png`;
+	const prev = process.env.AXDOM;
+	process.env.AXDOM = "0"; // the sidecar needs a live app; this test is about the join-free path
+	try {
+		return await observe(fakeDriver({ elements, screenshot_width: 1568, screenshot_height: 882 }, shot), { pid: 1, windowId: 1 }, "test-observe");
+	} finally {
+		if (prev === undefined) delete process.env.AXDOM;
+		else process.env.AXDOM = prev;
+	}
+};
+
+test("observe__ReportsInteractiveElements__When__ElementsAreClickable", async () => {
+	const obs = await observeFixture([
+		axWindow,
+		{ element_index: 1, role: "AXGroup", label: "Toolbar", parent_index: 0, frame: { x: -2181, y: 763, w: 400, h: 60 } },
+		{ element_index: 2, role: "AXButton", label: "Save", parent_index: 1, frame: { x: -2081, y: 823, w: 120, h: 40 } },
+		{ element_index: 3, role: "AXStaticText", label: "Untitled", parent_index: 1, frame: { x: -2000, y: 900, w: 80, h: 20 } },
+	]);
+	// Static text is not actuatable, so it never joins the frontier however well-labelled.
+	assert.deepEqual(obs.interactive.map((e) => e.name), ["Save"]);
+	assert.equal(obs.interactive[0].surface, "Toolbar");
+	// (-2081 - -2181) * 1568/1920 = 81.67 -> 82; (823 - 763) * 0.81667 = 49; 120 -> 98.
+	assert.deepEqual([obs.interactive[0].x, obs.interactive[0].y, obs.interactive[0].w], [82, 49, 98]);
+});
+
+test("observe__OmitsControl__When__ItIsDisabled", async () => {
+	// A disabled control cannot be actuated, so a frontier entry for it is one nothing can
+	// ever clear — the run would then always end on the time cap.
+	const obs = await observeFixture([
+		axWindow,
+		{ element_index: 1, role: "AXButton", label: "Publish", parent_index: 0, enabled: false, frame: { x: -2181, y: 763, w: 10, h: 10 } },
+	]);
+	assert.deepEqual(obs.interactive, []);
+});
+
+test("observe__ReportsZeroGeometry__When__WindowFrameIsUnavailable", async () => {
+	// No AXWindow means no scale and no origin. Zeroing is what makes the ledger's
+	// containment test MISS rather than match wrongly.
+	const obs = await observeFixture([{ element_index: 1, role: "AXButton", label: "Save", frame: { x: 10, y: 20, w: 30, h: 40 } }]);
+	assert.deepEqual([obs.interactive[0].x, obs.interactive[0].y, obs.interactive[0].w, obs.interactive[0].h], [0, 0, 0, 0]);
+});
+
+// --- frontier ledger: the mechanical answer to "did the pass map the whole app?". Its
+// predecessor was the model auditing its own coverage from a transcript that, by
+// construction, contains only the surfaces it visited. These tests pin the two credit paths
+// (handle and coordinate), the dismissal escape hatch, and the guards that stop one click
+// from draining a panel it never touched.
+
+const ie = (name: string, surface = "", box: Partial<InteractiveElement> = {}): InteractiveElement =>
+	({ handle: 0, role: "AXButton", name, surface, x: 0, y: 0, w: 0, h: 0, ...box });
+
+const obsWith = (interactive: InteractiveElement[]): ObservationBundle => ({ ...bundle, interactive });
+
+test("frontier__ExcludesControl__When__ActionAddressesItsHandle", () => {
+	const ledger = newFrontier();
+	const obs = obsWith([ie("Save", "Toolbar", { handle: 3 }), ie("Cancel", "Toolbar", { handle: 4 })]);
+	frontierIngest(ledger, obs);
+	frontierCredit(ledger, { name: "click", element_index: 3 }, obs);
+	assert.deepEqual(frontierRemaining(ledger).map((e) => e.name), ["Cancel"]);
+});
+
+test("frontier__ExcludesControl__When__CoordinateClickLandsInItsFrame", () => {
+	// The path that matters for apps whose rail only answers pixel clicks: there is no
+	// handle in the action at all, so containment is the only way the ledger learns anything.
+	const ledger = newFrontier();
+	const obs = obsWith([ie("Library", "Rail", { x: 0, y: 0, w: 100, h: 40 }), ie("Drafts", "Rail", { x: 0, y: 40, w: 100, h: 40 })]);
+	frontierIngest(ledger, obs);
+	frontierCredit(ledger, { name: "click", x: 50, y: 60 }, obs);
+	assert.deepEqual(frontierRemaining(ledger).map((e) => e.name), ["Library"]);
+});
+
+test("frontier__CreditsInnermostOnly__When__BoxesNest", () => {
+	// Boxes nest, so a point inside a button is also inside its panel and the window. Crediting
+	// every container would let one click drain a panel's worth of controls it never touched.
+	const ledger = newFrontier();
+	const obs = obsWith([
+		ie("Panel", "", { x: 0, y: 0, w: 500, h: 500 }),
+		ie("Save", "Panel", { x: 10, y: 10, w: 60, h: 20 }),
+	]);
+	frontierIngest(ledger, obs);
+	frontierCredit(ledger, { name: "click", x: 20, y: 15 }, obs);
+	assert.deepEqual(frontierRemaining(ledger).map((e) => e.name), ["Panel"]);
+});
+
+test("frontier__CreditsNothing__When__GeometryIsUnavailable", () => {
+	// A backend that reports no boxes (DOM/CDP) must MISS rather than match wrongly — zero-size
+	// entries would otherwise all contain the origin and be credited by any click at (0,0).
+	const ledger = newFrontier();
+	const obs = obsWith([ie("Save", "Toolbar"), ie("Cancel", "Toolbar")]);
+	frontierIngest(ledger, obs);
+	assert.deepEqual(frontierCredit(ledger, { name: "click", x: 0, y: 0 }, obs), []);
+	assert.equal(frontierRemaining(ledger).length, 2);
+});
+
+test("frontier__ExcludesControl__When__DismissedBySurface", () => {
+	// A panel of 80 repetitive rows must be clearable in one turn, or the frontier never
+	// empties and every run burns the full time cap being nagged.
+	const ledger = newFrontier();
+	frontierIngest(ledger, obsWith([ie("Row 1", "Transcript"), ie("Row 2", "Transcript"), ie("Save", "Toolbar")]));
+	const gone = frontierDismiss(ledger, { surface: "Transcript", reason: "transcript content, not navigation" });
+	assert.equal(gone.length, 2);
+	assert.deepEqual(frontierRemaining(ledger).map((e) => e.name), ["Save"]);
+});
+
+test("frontierDismiss__ClearsTopLevel__When__SurfaceIsThePrintedPlaceholder", () => {
+	// Top-level controls have surface "", which the listing must print as something. Observed
+	// on a live run: four consecutive dismisses for "<top level>", "top level" and the
+	// HTML-escaped form, each matching nothing and each costing a turn.
+	for (const spelling of ["<top level>", "top level", "&lt;top level&gt;", "Top-Level", ""]) {
+		const ledger = newFrontier();
+		frontierIngest(ledger, obsWith([ie("Search", ""), ie("Save", "Toolbar")]));
+		assert.equal(frontierDismiss(ledger, { surface: spelling, reason: "r" }).length, 1, spelling);
+	}
+});
+
+test("frontierDismiss__Throws__When__NeitherNamesNorSurfaceGiven", () => {
+	// An argument-less dismiss would silently clear the entire frontier and end the run.
+	assert.throws(() => frontierDismiss(newFrontier(), { reason: "everything" }), /needs names/);
+});
+
+test("frontier__ReAddsControl__When__SeenAgainAfterDismissal", () => {
+	// Re-observing must not resurrect a dismissal, or a control in a panel visited twice
+	// can never be got rid of.
+	const ledger = newFrontier();
+	const obs = obsWith([ie("Row 1", "Transcript")]);
+	frontierIngest(ledger, obs);
+	frontierDismiss(ledger, { names: ["Row 1"], reason: "content" });
+	frontierIngest(ledger, obs);
+	assert.equal(frontierRemaining(ledger).length, 0);
+});
+
+test("frontierSummary__CountsAnonymousEntries__When__ControlsHaveNoLabel", () => {
+	// Unnamed controls are the bulk on icon-heavy apps; listing them by empty string is noise,
+	// but hiding them entirely would make the count unreconcilable with the listing.
+	const ledger = newFrontier();
+	frontierIngest(ledger, obsWith([ie("", "Rail", { role: "AXButton" }), ie("", "Rail", { role: "AXLink" }), ie("Save", "Rail")]));
+	const s = frontierSummary(ledger);
+	assert.match(s, /"Save"/);
+	assert.match(s, /2 unnamed/);
+});
+
+test("frontier__CollapsesEntries__When__RoleNameAndSurfaceAllMatch", () => {
+	// Deliberate under-count. Handles renumber on every redraw, so keying on them would make
+	// the frontier regrow forever and the run never converge; identical role+name+surface
+	// controls therefore share one entry, and operating either clears both.
+	const ledger = newFrontier();
+	frontierIngest(ledger, obsWith([ie("", "Rail", { handle: 1 }), ie("", "Rail", { handle: 2 })]));
+	assert.equal(frontierRemaining(ledger).length, 1);
+});
+
+test("mergeGraph__OverwritesNode__When__SameIdRecordedTwice", () => {
+	// The pass records a surface when it first sees the link to it and again with real detail
+	// once inside; the later sighting is the better one.
+	const nodes = new Map<string, AppMapNode>();
+	const edges = new Map<string, AppMapEdge>();
+	mergeGraph(nodes, edges, { nodes: [{ id: "brand-kit", title: "Brand Kit", kind: "surface", scope: "brand" }] });
+	mergeGraph(nodes, edges, { nodes: [{ id: "brand-kit", title: "Brand Kit", kind: "surface", scope: "brand", notes: "nine tabs" }] });
+	assert.equal(nodes.size, 1);
+	assert.equal(nodes.get("brand-kit")?.notes, "nine tabs");
+});
+
+test("mergeGraph__DeduplicatesEdge__When__SameTraversalRecordedTwice", () => {
+	const nodes = new Map<string, AppMapNode>();
+	const edges = new Map<string, AppMapEdge>();
+	const e = { from: "root", to: "brand-kit", action: 'click "Brand Kit"' };
+	mergeGraph(nodes, edges, { edges: [e] });
+	mergeGraph(nodes, edges, { edges: [e, { ...e, action: "cmd+2" }] });
+	assert.equal(edges.size, 2);
+});
+
+// --- unattended-safety guard. A 12h pass on a real workspace is a different risk profile
+// from a 5-minute one, and the prior protection was a paragraph in a system prompt.
+
+test("guard__RefusesAction__When__TargetLabelIsDestructive", () => {
+	const obs = obsWith([ie("Delete draft", "Menu", { handle: 9 })]);
+	assert.equal(destructiveTarget({ name: "click", element_index: 9 }, obs), "Delete draft");
+});
+
+test("guard__RefusesAction__When__CoordinateClickLandsOnDestructiveControl", () => {
+	// Coordinates are how the guard would otherwise be trivially bypassed.
+	const obs = obsWith([ie("Publish", "Menu", { x: 0, y: 0, w: 100, h: 30 })]);
+	assert.equal(destructiveTarget({ name: "click", x: 10, y: 10 }, obs), "Publish");
+});
+
+test("guard__AllowsAction__When__LabelMerelyContainsTheVerbInsideAWord", () => {
+	// Word-boundary matching: "Undelete" and "Shareable" are not the verbs, and an
+	// over-eager guard that blocks ordinary navigation makes the pass useless.
+	const obs = obsWith([ie("Sharepoint sync status", "Menu", { handle: 9 })]);
+	assert.equal(destructiveTarget({ name: "click", element_index: 9 }, obs), undefined);
+});
+
+test("guard__AllowsAction__When__ActionIsNotAClick", () => {
+	// Hovering or scrolling over a Delete row actuates nothing; refusing those would block
+	// the pass from reading a menu it is allowed to look at.
+	const obs = obsWith([ie("Delete draft", "Menu", { handle: 9 })]);
+	assert.equal(destructiveTarget({ name: "hover", element_index: 9 }, obs), undefined);
 });
 
 // overlay: the parent hands the JXA child a hand-built env, and a key the script reads but

@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import * as axdom from "./axdom.js";
 import { Driver } from "./driver.js";
-import type { ActionRequest, AppMap, Expectation, ScopeAmbiguity, SurfaceScope } from "./types.js";
+import type { ActionRequest, AppMap, AppMapEdge, AppMapNode, Expectation, ScopeAmbiguity, StepRecord, SurfaceScope } from "./types.js";
 
 export const OUT = `${process.cwd()}/out`;
 
@@ -12,11 +12,44 @@ export interface WindowRef {
 	windowId: number;
 }
 
+/** AX roles a pass can actuate. The frontier ledger counts these and nothing else. */
+export const INTERACTIVE_ROLES = ["AXButton", "AXTextField", "AXPopUpButton", "AXMenuItem", "AXCheckBox", "AXRadioButton", "AXComboBox", "AXLink"];
+
+/**
+ * One actuatable control, extracted from an observation so callers can track which controls
+ * they have operated versus merely looked at (see the frontier ledger in src/explore.ts).
+ *
+ * This is the same data already rendered into `elementsText` for the model; pulling it out
+ * as structure is what lets code, rather than the model's self-report, say what was covered.
+ */
+export interface InteractiveElement {
+	/** Addressing handle from THIS observation only — element_index (AX) or ref (DOM). */
+	handle: number | string;
+	role: string;
+	/** Label, or the DOM descriptor when the control is anonymous. "" when it has neither. */
+	name: string;
+	/** Nearest named ancestor: which panel or menu this sits in. "" at top level. */
+	surface: string;
+	/**
+	 * Bounds in SCREENSHOT PIXELS — the space coordinate actions consume, NOT the logical
+	 * points AX reports and `frames` below carries. Converted here, once, so a click point
+	 * can be tested against a control's box without every caller re-deriving the display
+	 * scale. All zero when the scale could not be derived (no AXWindow element, DOM backend),
+	 * which makes containment tests MISS rather than match wrongly.
+	 */
+	x: number;
+	y: number;
+	w: number;
+	h: number;
+}
+
 export interface ObservationBundle {
 	elementsText: string;
 	haystack: string;
 	screenshotB64: string;
 	title: string;
+	/** Every actuatable control in this observation. See InteractiveElement. */
+	interactive: InteractiveElement[];
 	/** Count of non-menu-bar AX elements. 0 means the app is not addressable right now. */
 	appContent: number;
 	/** Frames for which the axdom sidecar supplied DOM id/class/tooltip. 0 = no enrichment. */
@@ -191,8 +224,32 @@ export async function observe(driver: Driver, win: WindowRef, shotName: string):
 	// the useful one (`.icon--name--chevronDown`).
 	const CHROMIUM_IMAGE_PLACEHOLDER = "To get missing image descriptions";
 
+	/**
+	 * Screenshot pixels and AX frames are different spaces — DRIVER_RULES says so, loudly,
+	 * because feeding one to the other is a silent mis-click. The window element carries the
+	 * window rect in points and the driver reports the screenshot's size in pixels, so a
+	 * single ratio converts between them (measured: a 1920x1080 window shot at 1568x882).
+	 *
+	 * Origin matters as much as scale: AX frames are screen-global, so a window on a display
+	 * left of the primary has negative x. Without the window's own origin every box would
+	 * land off-image.
+	 */
+	const winEl = elements.find((e) => e.role === "AXWindow" && (e.frame?.w ?? 0) > 0);
+	const shotW = Number(structured.screenshot_width ?? 0);
+	const scale = winEl && shotW ? shotW / winEl.frame.w : 0;
+	const toPixels = (f: any): { x: number; y: number; w: number; h: number } =>
+		scale && f
+			? {
+					x: Math.round((f.x - winEl.frame.x) * scale),
+					y: Math.round((f.y - winEl.frame.y) * scale),
+					w: Math.round(f.w * scale),
+					h: Math.round(f.h * scale),
+				}
+			: { x: 0, y: 0, w: 0, h: 0 };
+
 	const lines: string[] = [];
 	const haystackParts: string[] = [];
+	const interactive: InteractiveElement[] = [];
 	const frames = new Map<string, { x: number; y: number }>();
 	for (const e of elements) {
 		let label = (e.label ?? "").toString().replace(/\s+/g, " ");
@@ -201,9 +258,7 @@ export async function observe(driver: Driver, win: WindowRef, shotName: string):
 		if (label) haystackParts.push(label);
 		if (value) haystackParts.push(value);
 		const descriptor = axdom.lookup(dom, e.frame);
-		const interesting =
-			label || value || descriptor ||
-			["AXButton", "AXTextField", "AXPopUpButton", "AXMenuItem", "AXCheckBox", "AXRadioButton", "AXComboBox", "AXLink"].includes(e.role);
+		const interesting = label || value || descriptor || INTERACTIVE_ROLES.includes(e.role);
 		if (!interesting) continue;
 		const f = e.frame ? ` @(${e.frame.x},${e.frame.y} ${e.frame.w}x${e.frame.h})` : "";
 		const val = value && value !== label ? ` value="${value.slice(0, 80)}"` : "";
@@ -223,6 +278,10 @@ export async function observe(driver: Driver, win: WindowRef, shotName: string):
 			else frames.set(key, { x: e.frame.x, y: e.frame.y });
 		}
 		const parent = ancestorOf(e);
+		// A disabled control cannot be actuated, so listing it in the frontier would leave an
+		// entry nothing can ever clear. It re-enters the moment the app enables it.
+		if (INTERACTIVE_ROLES.includes(e.role) && e.enabled !== false)
+			interactive.push({ handle: e.element_index, role: e.role, name: key ?? "", surface: parent, ...toPixels(e.frame) });
 		const inWhat = parent && !label.slice(0, 40).startsWith(parent) ? ` in="${parent}"` : "";
 		lines.push(`[${e.element_index}] ${e.role} "${label.slice(0, 80)}"${val}${dsc}${inWhat}${f}${e.selected ? " SELECTED" : ""}${e.enabled === false ? " DISABLED" : ""}`);
 	}
@@ -238,6 +297,7 @@ export async function observe(driver: Driver, win: WindowRef, shotName: string):
 		haystack: `${title}\n${haystackParts.join("\n")}`.toLowerCase(),
 		screenshotB64: fs.readFileSync(shotPath).toString("base64"),
 		title,
+		interactive,
 		appContent: elements.filter(isAppContent).length,
 		domEnriched: dom.byFrame.size,
 		domUnavailable: dom.unavailable,
@@ -290,6 +350,205 @@ export function framesShifted(
 	}
 
 	return { shifted: movers.length > 0, movers };
+}
+
+/**
+ * The frontier ledger: which controls a pass has SEEN versus which it has OPERATED.
+ *
+ * Coverage used to be the model's own answer to "did you cover the app?", reached from
+ * inside a transcript that by construction contains only the surfaces it visited. This is
+ * the mechanical replacement — every observation already lists the app's interactive
+ * elements, so the difference between the two sets is computable and needs no self-report.
+ *
+ * Frontier = seen − actuated − dismissed. It is a moving target rather than a fixed
+ * denominator: a closed popover contributes zero elements, so opening one surface can add
+ * twenty entries. That is the point. The pass ends when nothing is left, not when a step
+ * budget runs out.
+ *
+ * Nothing here knows anything about any particular app.
+ */
+export interface FrontierLedger {
+	seen: Map<string, InteractiveElement>;
+	actuated: Set<string>;
+	/** key -> the reason given for skipping it. */
+	dismissed: Map<string, string>;
+}
+
+export const newFrontier = (): FrontierLedger => ({ seen: new Map(), actuated: new Set(), dismissed: new Map() });
+
+/**
+ * Identity of a control across observations. Deliberately NOT the addressing handle, which
+ * is a walk order that renumbers on every redraw. Controls sharing a role, label and
+ * containing surface collapse into one entry — an under-count of distinct controls, taken
+ * on purpose so the frontier converges instead of regrowing whenever the tree reshuffles.
+ */
+export const frontierKey = (e: { role: string; name: string; surface: string }): string => `${e.role}|${e.name}|${e.surface}`;
+
+export function frontierIngest(ledger: FrontierLedger, obs: ObservationBundle): void {
+	// Overwrite rather than skip: geometry and handle must track the LATEST observation,
+	// since that is the one any credit will be resolved against.
+	for (const e of obs.interactive) ledger.seen.set(frontierKey(e), e);
+}
+
+/**
+ * Mark whatever an action operated as actuated, resolved against the observation the model
+ * was looking at when it chose the action. Returns the keys credited.
+ */
+export function frontierCredit(ledger: FrontierLedger, action: any, before: ObservationBundle): string[] {
+	const hits = new Set<string>();
+	const handle = action?.element_index ?? action?.ref;
+	if (handle !== undefined && handle !== null)
+		for (const e of before.interactive) if (e.handle === handle) hits.add(frontierKey(e));
+
+	// Coordinate actions name no element, so credit whatever box the point lands in — needed
+	// because some controls only respond to pixel clicks, and painted surfaces have no
+	// element at all. Smallest containing box only: boxes nest, and crediting every
+	// container under the point would let one click drain a panel's worth of entries it
+	// never touched.
+	for (const [x, y] of [
+		[action?.x, action?.y],
+		[action?.from_x, action?.from_y],
+	]) {
+		if (typeof x !== "number" || typeof y !== "number") continue;
+		let best: InteractiveElement | undefined;
+		for (const e of before.interactive) {
+			if (e.w <= 0 || e.h <= 0) continue; // no geometry -> never matches, never wrongly credits
+			if (x < e.x || x >= e.x + e.w || y < e.y || y >= e.y + e.h) continue;
+			if (!best || e.w * e.h < best.w * best.h) best = e;
+		}
+		if (best) hits.add(frontierKey(best));
+	}
+	for (const k of hits) ledger.actuated.add(k);
+
+	return [...hits];
+}
+
+export function frontierRemaining(ledger: FrontierLedger): InteractiveElement[] {
+	return [...ledger.seen]
+		.filter(([k]) => !ledger.actuated.has(k) && !ledger.dismissed.has(k))
+		.map(([, e]) => e)
+		.sort((a, b) => a.surface.localeCompare(b.surface) || a.name.localeCompare(b.name));
+}
+
+/**
+ * Deliberately skip frontier entries, by name and/or by whole surface.
+ *
+ * Without this the frontier can never empty and every run burns its full wall-clock cap:
+ * most unactuated controls are content, not navigation — transcript chunks, list rows, the
+ * eight hundredth item in a library. The escape has to exist, but it is recorded and
+ * reported rather than silent, so "we skipped 240 controls, here is why" survives into the
+ * artifact instead of looking like coverage.
+ */
+/**
+ * Round-trip the summary's name for the unnamed surface.
+ *
+ * Top-level controls have `surface: ""`, which the listing has to render as something
+ * printable — and the model then quotes that placeholder straight back. Observed: four
+ * consecutive dismiss calls for "<top level>", "top level" and the HTML-escaped
+ * "&lt;top level&gt;", each matching nothing and each costing a turn, while the frontier
+ * sat unchanged. Whatever the listing prints must resolve back to the empty surface.
+ */
+const normSurface = (s: string): string =>
+	s
+		.trim()
+		.toLowerCase()
+		.replace(/&lt;|&gt;|[<>]/g, "")
+		.replace(/^(top[- ]?level|none|root|unnamed)$/, "");
+
+export function frontierDismiss(
+	ledger: FrontierLedger,
+	opts: { names?: string[]; surface?: string; reason: string },
+): InteractiveElement[] {
+	if (!opts.names?.length && opts.surface === undefined) throw new Error("dismiss needs names, a surface, or both");
+	const norm = (s: string) => s.trim().toLowerCase();
+	const wanted = opts.names?.map(norm);
+	const gone: InteractiveElement[] = [];
+	for (const e of frontierRemaining(ledger)) {
+		if (opts.surface !== undefined && normSurface(e.surface) !== normSurface(opts.surface)) continue;
+		if (wanted && !wanted.includes(norm(e.name))) continue;
+		ledger.dismissed.set(frontierKey(e), opts.reason);
+		gone.push(e);
+	}
+
+	return gone;
+}
+
+/** The frontier as the model sees it: grouped by surface, capped, unnamed entries counted. */
+export function frontierSummary(ledger: FrontierLedger, maxSurfaces = 12, maxPerSurface = 14): string {
+	const rest = frontierRemaining(ledger);
+	if (rest.length === 0) return "The frontier is empty: every interactive control seen so far has been operated or dismissed.";
+
+	const bySurface = new Map<string, InteractiveElement[]>();
+	for (const e of rest) bySurface.set(e.surface, [...(bySurface.get(e.surface) ?? []), e]);
+	// Biggest groups first: they are where the unexplored bulk is.
+	const groups = [...bySurface].sort((a, b) => b[1].length - a[1].length);
+	const lines = groups.slice(0, maxSurfaces).map(([surface, items]) => {
+		const named = items.filter((e) => e.name);
+		const anon = items.length - named.length;
+		const shown = named.slice(0, maxPerSurface).map((e) => `"${e.name}"`).join(", ");
+		const more = named.length > maxPerSurface ? `, +${named.length - maxPerSurface} more` : "";
+		const unnamed = anon ? `${named.length ? "; " : ""}${anon} unnamed (dismiss by surface, or click them to find out)` : "";
+
+		return `  in ${surface ? `"${surface}"` : "<top level>"} (${items.length}): ${shown}${more}${unnamed}`;
+	});
+	const hidden = groups.length > maxSurfaces ? `\n  ...and ${groups.length - maxSurfaces} more surface(s).` : "";
+
+	return `${rest.length} control(s) seen but never operated, across ${groups.length} surface(s):\n${lines.join("\n")}${hidden}`;
+}
+
+/**
+ * Fold a batch of nodes/edges into the accumulating graph, last write winning.
+ *
+ * Overwrite rather than merge-fields because a later sighting is a better one: the pass
+ * records a surface when it first sees the link to it, then again with real detail once
+ * inside. Nodes key on `id` and edges on the whole triple, so re-recording is idempotent
+ * and the model can re-emit freely rather than having to remember what it already sent.
+ * Returns how many entries were written, for the tool_result.
+ */
+export function mergeGraph(
+	nodes: Map<string, AppMapNode>,
+	edges: Map<string, AppMapEdge>,
+	g: { nodes?: AppMapNode[]; edges?: AppMapEdge[] },
+): number {
+	let n = 0;
+	for (const node of g.nodes ?? []) if (node?.id) (nodes.set(node.id, node), n++);
+	for (const e of g.edges ?? []) if (e?.from && e?.to) (edges.set(`${e.from}|${e.to}|${e.action}`, e), n++);
+
+	return n;
+}
+
+/**
+ * Would this action operate a control whose label reads destructive?
+ *
+ * An exploration pass can now run unattended for hours against a real workspace, and the
+ * only thing standing between it and a deleted document was a paragraph in a system prompt.
+ * This is the mechanical backstop: a label check over a fixed verb set, blind to which app
+ * it is running against. Returns the offending label, or undefined.
+ *
+ * It over-refuses by design — "Reset zoom" is harmless and gets blocked. A refusal costs one
+ * turn and is handed back as a tool result, so the pass reads it and moves on; the reverse
+ * mistake is not recoverable.
+ */
+const DESTRUCTIVE_LABEL =
+	/\b(delete|remove|discard|erase|trash|publish|export|download|send|share|invite|buy|purchase|subscribe|unsubscribe|sign out|log out|revoke|deactivate|reset|restore|merge|archive)\b/i;
+
+export function destructiveTarget(action: any, obs: ObservationBundle): string | undefined {
+	const handle = action?.element_index ?? action?.ref;
+	let target: InteractiveElement | undefined;
+	if (handle !== undefined && handle !== null) target = obs.interactive.find((e) => e.handle === handle);
+	else if (typeof action?.x === "number" && typeof action?.y === "number") {
+		for (const e of obs.interactive) {
+			if (e.w <= 0 || e.h <= 0) continue;
+			if (action.x < e.x || action.x >= e.x + e.w || action.y < e.y || action.y >= e.y + e.h) continue;
+			if (!target || e.w * e.h < target.w * target.h) target = e;
+		}
+	}
+	// Only *pressing* things is guarded. A keystroke can be destructive too, but nothing
+	// here can tell which one is, and guessing at key combinations would block the pass
+	// from typing at all.
+	if (!target || !["click", "double_click", "right_click"].includes(String(action?.name))) return undefined;
+
+	return DESTRUCTIVE_LABEL.test(target.name) ? target.name : undefined;
 }
 
 export function observationBlocks(obs: ObservationBundle, vision = true): Array<Anthropic.TextBlockParam | Anthropic.ImageBlockParam> {
