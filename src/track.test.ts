@@ -12,6 +12,7 @@ import {
 	pickSegment,
 	pointerTypeForRole,
 	samplePercentile,
+	springSmooth,
 	synthesizeMove,
 	toFramePixels,
 	toOutputMs,
@@ -20,23 +21,29 @@ import {
 	type TrajectoryTurn,
 } from "./track.js";
 
-/** The measured corpus values, small enough to inline so tests do not depend on the fitted file. */
+/**
+ * Corpus values, inlined so tests do not depend on the fitted file.
+ *
+ * These are the SMOOTHED (rendered) figures — what a viewer sees after Yarn's editor springs the
+ * raw input. The raw numbers are very different (peak/mean 10.4 rather than 2.5, 30% of samples
+ * near-stopped rather than none) and fitting against them was a real bug, so do not restore them.
+ */
 const CONSTANTS: MotionConstants = {
 	fittedFrom: { dataset: "test", recordings: 0, movementEvents: 0, generatedAt: "" },
 	durationByLogDistance: {
-		"6": { p10: 240, p50: 540, p90: 1250, n: 96 },
-		"8": { p10: 360, p50: 780, p90: 1600, n: 163 },
-		"10": { p10: 550, p50: 930, p90: 1540, n: 215 },
+		"6": { p10: 258, p50: 466, p90: 950, n: 158 },
+		"8": { p10: 300, p50: 566, p90: 1116, n: 321 },
+		"10": { p10: 383, p50: 700, p90: 1300, n: 449 },
 	},
-	clickDwellMs: { p10: 8, p50: 101, p90: 464 },
-	ikiMs: { p10: 45, p25: 69, p50: 108, p75: 160, p90: 283, p99: 1324 },
+	clickDwellMs: { p10: 16.2, p50: 110.5, p90: 590.1 },
+	ikiMs: { p10: 45, p25: 69, p50: 108, p75: 160, p90: 283, p99: 1322 },
 	ikiAfterSpaceMs: 144,
 	keyHoldMs: 92,
 	correctionRate: 0.037,
-	perpDeviationFrac: { p50: 0.076, p75: 0.152, p90: 0.393 },
-	peakSpeedRatio: { p10: 3.57, p50: 9.15, p90: 27.0 },
-	nearStoppedFrac: { p50: 0.3, p90: 0.68 },
-	sampleHz: 123,
+	perpDeviationFrac: { p50: 0.0583, p75: 0.144, p90: 0.4045 },
+	peakSpeedRatio: { p10: 1.65, p50: 2.45, p90: 3.96 },
+	nearStoppedFrac: { p50: 0.0, p90: 0.117 },
+	sampleHz: 60,
 };
 
 const turn = (tool: string, over: Partial<TrajectoryTurn> = {}): TrajectoryTurn => ({
@@ -160,9 +167,10 @@ test("buildTrack__VariesDurationAcrossEqualDistances__When__ManyMovesAreGenerate
 	assert.ok(spread > 2.5 && spread < 8, `expected a 3-5x duration spread, got ${spread.toFixed(2)}x`);
 });
 
-test("synthesizeMove__ProducesMidFlightNearStops__When__NoSegmentMatches", () => {
-	// Smoothness is the most robotic-looking property; the measured corpus has 30% of mid-flight
-	// samples below 5% of mean speed.
+test("synthesizeMove__MovesContinuously__When__NoSegmentMatches", () => {
+	// The raw corpus has 30% of mid-flight samples nearly stopped, but the rendered corpus has
+	// essentially none — the spring carries the pointer through the hand's hesitations. A reach
+	// that stalls mid-flight in the OUTPUT is now the bug, the inverse of what this once asserted.
 	const move = synthesizeMove({ x: 0, y: 0 }, { x: 900, y: 200 }, CONSTANTS, makeRandom(3));
 	const speeds: number[] = [];
 	for (let i = 1; i < move.length; i++) {
@@ -170,18 +178,20 @@ test("synthesizeMove__ProducesMidFlightNearStops__When__NoSegmentMatches", () =>
 		if (dt > 0) speeds.push(Math.hypot(move[i].x - move[i - 1].x, move[i].y - move[i - 1].y) / dt);
 	}
 	const mean = speeds.reduce((a, b) => a + b, 0) / speeds.length;
-	assert.ok(Math.max(...speeds) / mean > 2, "expected a peaky speed profile, not a constant glide");
-	assert.ok(speeds.some((s) => s < mean * 0.25), "expected the pointer to visibly slow mid-flight");
+	const stalled = speeds.filter((s) => s < mean * 0.05).length / speeds.length;
+	assert.ok(stalled < 0.1, `rendered motion barely stalls; ${(stalled * 100).toFixed(0)}% of samples did`);
+	assert.ok(Math.max(...speeds) / mean > 1.5, "expected acceleration and deceleration, not a constant glide");
 });
 
-test("synthesizeMove__DecomposesIntoSeveralSubmovements__When__NoSegmentMatches", () => {
-	// BeCAPTCHA-Mouse (arXiv:2005.00890) trains a bot detector whose most informative single
-	// feature is the number of lognormal strokes a trajectory decomposes into: a human reach is
-	// one ballistic launch plus a tail of corrections, and a smooth synthetic curve is one or two.
-	// Measured against our own corpus, real segments give a median of 7 velocity peaks and the
-	// pre-lognormal version of this function gave 2. Counting peaks approximates the decomposition.
+test("synthesizeMove__MatchesRenderedSpeedProfile__When__NoSegmentMatches", () => {
+	// Fitted against the SMOOTHED corpus, which is the motion a viewer sees. Yarn's editor
+	// decimates raw input and springs toward it, which absorbs most of the hand's structure:
+	// submovement peaks fall from a median of 7 raw to 2 rendered, and peak/mean speed from 10.4
+	// to 2.5. Synthesis feeds lognormal strokes IN and runs the same spring, so what comes out
+	// should look rendered, not raw — this catches a regression back to the raw-fitted profile.
 	const rand = makeRandom(23);
-	const counts: number[] = [];
+	const peaks: number[] = [];
+	const ratios: number[] = [];
 	for (let i = 0; i < 60; i++) {
 		const move = synthesizeMove({ x: 0, y: 0 }, { x: 400 + rand() * 600, y: 200 }, CONSTANTS, rand);
 		const speeds: number[] = [];
@@ -189,22 +199,46 @@ test("synthesizeMove__DecomposesIntoSeveralSubmovements__When__NoSegmentMatches"
 			const dt = move[k].tMs - move[k - 1].tMs;
 			if (dt > 0) speeds.push(Math.hypot(move[k].x - move[k - 1].x, move[k].y - move[k - 1].y) / dt);
 		}
-		const floor = Math.max(...speeds) * 0.1;
-		let peaks = 0;
+		const max = Math.max(...speeds);
+		const mean = speeds.reduce((a, b) => a + b, 0) / speeds.length;
+		let n = 0;
 		for (let k = 1; k < speeds.length - 1; k++)
-			if (speeds[k] > floor && speeds[k] >= speeds[k - 1] && speeds[k] > speeds[k + 1]) peaks++;
-		counts.push(peaks);
+			if (speeds[k] > max * 0.1 && speeds[k] >= speeds[k - 1] && speeds[k] > speeds[k + 1]) n++;
+		peaks.push(n);
+		ratios.push(max / mean);
 	}
-	counts.sort((a, b) => a - b);
-	const median = counts[Math.floor(counts.length / 2)];
-	assert.ok(median >= 4, `expected several submovements per reach, got a median of ${median}`);
+	const median = (a: number[]): number => [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)];
+	assert.ok(median(peaks) <= 4, `rendered motion has ~2 submovement peaks, got ${median(peaks)}`);
+	assert.ok(median(ratios) < 4, `rendered peak/mean is ~2.5, got ${median(ratios).toFixed(2)}`);
 });
 
-test("synthesizeMove__EmitsWholePixelPositions__When__Generated", () => {
-	// A real pointer is quantized to the pixel grid; the corpus is mostly 0px and 1px steps between
-	// adjacent samples. Sub-pixel positions make the speed profile implausibly smooth.
-	const move = synthesizeMove({ x: 0, y: 0 }, { x: 640, y: 360 }, CONSTANTS, makeRandom(31));
-	assert.ok(move.every((p) => Number.isInteger(p.x) && Number.isInteger(p.y)));
+test("springSmooth__RemovesJitter__When__InputReversesEveryStep", () => {
+	// The spring is the whole difference between input-shaped and rendered motion. Direction
+	// reversals are the honest measure of the jitter it removes: a speed-ratio comparison is not,
+	// because the output is resampled to 60fps and no longer cancels adjacent opposing steps.
+	const spiky: Array<{ tMs: number; x: number; y: number }> = [];
+	for (let i = 0; i <= 60; i++) spiky.push({ tMs: i * 8, x: i % 2 === 0 ? i * 10 : i * 10 + 40, y: 0 });
+	const reversals = (pts: typeof spiky): number => {
+		let n = 0;
+		for (let i = 2; i < pts.length; i++)
+			if ((pts[i - 1].x - pts[i - 2].x) * (pts[i].x - pts[i - 1].x) < 0) n++;
+
+		return n;
+	};
+	assert.ok(reversals(spiky) > 50, "fixture should be jittery");
+	assert.equal(reversals(springSmooth(spiky, 60)), 0);
+});
+
+test("springSmooth__EndsExactlyOnTarget__When__SpringStillLagging", () => {
+	// The spring lags by design, so without the settle the click would land short of the control.
+	const path = [
+		{ tMs: 0, x: 0, y: 0 },
+		{ tMs: 200, x: 300, y: 120 },
+		{ tMs: 400, x: 640, y: 360 },
+	];
+	const out = springSmooth(path, 60);
+	assert.equal(out[out.length - 1].x, 640);
+	assert.equal(out[out.length - 1].y, 360);
 });
 
 test("synthesizeMove__CurvesOffTheStraightLine__When__Generated", () => {

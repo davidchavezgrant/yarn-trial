@@ -285,6 +285,86 @@ export function pickSegment(
 	return undefined;
 }
 
+/**
+ * Yarn's editor cursor pipeline, replicated.
+ *
+ * `getSmoothedCursorData.js` keeps every third raw sample and drives a position spring toward each
+ * survivor at mass 1 / stiffness 170 / damping 26 — critically damped, zeta ~= 1.0. These are the
+ * default brand values and are configurable per brand
+ * (`orgBrand.screenVideoStyle.cursorSmoothingConfig`), so a customer with different values gets
+ * different rendered motion from identical input.
+ */
+export const SPRING = { mass: 1, stiffness: 170, damping: 26 };
+export const DECIMATION = 3;
+
+/** Frames over which the lagging spring is eased onto the exact click point. */
+const SETTLE_FRAMES = 6;
+
+/** Below this a frame counts as motionless, for trimming the spring's spin-up. Pixels. */
+const STILL_PX = 0.5;
+
+/**
+ * Run a path through the editor's decimate-then-spring pipeline, resampled to `fps`.
+ *
+ * This is what turns input-shaped motion into what a viewer sees. Integrated with a fixed
+ * sub-step rather than one step per output frame, because a 60fps step at stiffness 170 is close
+ * enough to the stability limit that the result visibly depends on frame rate.
+ */
+export function springSmooth(
+	path: Array<{ tMs: number; x: number; y: number }>,
+	fps: number,
+): Array<{ tMs: number; x: number; y: number }> {
+	if (path.length < 2) return path;
+	const targets = path.filter((_, i) => i % DECIMATION === 0 || i === path.length - 1);
+	const durationMs = path[path.length - 1].tMs;
+	const stepMs = 1;
+	const out: Array<{ tMs: number; x: number; y: number }> = [];
+	let x = targets[0].x;
+	let y = targets[0].y;
+	let vx = 0;
+	let vy = 0;
+	let next = 0;
+	const frameMs = 1000 / fps;
+	for (let t = 0; t <= durationMs; t += stepMs) {
+		while (next + 1 < targets.length && targets[next + 1].tMs <= t) next++;
+		const tx = targets[next].x;
+		const ty = targets[next].y;
+		const dt = stepMs / 1000;
+		const ax = (SPRING.stiffness * (tx - x) - SPRING.damping * vx) / SPRING.mass;
+		const ay = (SPRING.stiffness * (ty - y) - SPRING.damping * vy) / SPRING.mass;
+		vx += ax * dt;
+		vy += ay * dt;
+		x += vx * dt;
+		y += vy * dt;
+		if (out.length === 0 || t - out[out.length - 1].tMs >= frameMs) out.push({ tMs: t, x, y });
+	}
+	// Drop the spin-up. The spring starts at rest and takes a few frames to reach the first
+	// target, which shows up as a handful of near-motionless frames at the head of every reach —
+	// 18% of samples against 0% in the corpus, because a real segment is cut from a pointer
+	// already in motion, not launched from a standstill.
+	while (out.length > 2 && Math.hypot(out[1].x - out[0].x, out[1].y - out[0].y) < STILL_PX) out.shift();
+	const t0 = out.length > 0 ? out[0].tMs : 0;
+	for (const s of out) s.tMs -= t0;
+	// The spring lags its target by design, so it is still short of the goal when the input path
+	// ends. The click must land on the control, so the tail is eased onto it across the last few
+	// frames. Snapping the final sample instead leaves a one-frame jump that reads as a speed
+	// spike — it put peak/mean at 3.4 against the corpus's 2.5.
+	const end = path[path.length - 1];
+	const tail = Math.min(SETTLE_FRAMES, out.length);
+	for (let i = 0; i < tail; i++) {
+		const s = out[out.length - tail + i];
+		const w = (i + 1) / tail;
+		s.x += (end.x - s.x) * w;
+		s.y += (end.y - s.y) * w;
+	}
+	if (out.length > 0) {
+		out[out.length - 1].x = end.x;
+		out[out.length - 1].y = end.y;
+	}
+
+	return out;
+}
+
 /** Largest excursion off the straight line, as a fraction of the movement's distance. */
 function maxPerp(segment: MotionSegment): number {
 	let m = 0;
@@ -358,17 +438,18 @@ function lognormalStroke(t: number, d: number, t0: number, mu: number, sigma: nu
 /**
  * Generate a movement when the corpus has no comparable segment.
  *
- * Built as a sum of lognormal strokes rather than one eased curve, because the count of those
- * strokes is itself a tell. BeCAPTCHA-Mouse (arXiv:2005.00890) trains a bot detector whose single
- * most informative feature is N, the number of lognormal components a trajectory decomposes into:
- * a human reach is one large ballistic stroke plus a tail of small corrective ones, and a smooth
- * synthetic curve is one or two. Measured against our own corpus, the earlier eased-curve version
- * of this function produced a median of 2 velocity peaks where real segments give 7 — detectable,
- * and visibly too clean beside replayed motion.
+ * Built as a sum of lognormal strokes, then run through the same spring the editor applies.
  *
- * The paper also reports that the velocity profile matters more than the path shape for realism,
- * and that its most convincing synthetic profile is the one with both initial acceleration and
- * final deceleration. A stroke sum gives that for free.
+ * The stroke sum comes from BeCAPTCHA-Mouse (arXiv:2005.00890), whose bot detector's most
+ * informative feature is N, the number of lognormal components a trajectory decomposes into: a
+ * human reach is one ballistic stroke plus a tail of corrections, not a single eased curve. That
+ * structure is what a human hand produces — so it is what belongs on the INPUT side.
+ *
+ * But the input is not what anyone sees. Yarn's editor decimates to every third sample and drives
+ * a critically-damped spring toward the rest, which absorbs most of that structure: measured
+ * across the same gestures, submovement peaks fall from a median of 7 raw to 2 rendered, and
+ * peak speed from 10.4x the mean to 2.5x. So the strokes go in, the spring takes them out, and
+ * what survives is what the viewer gets — matching the smoothed corpus this is fitted against.
  */
 export function synthesizeMove(
 	from: { x: number; y: number },
@@ -440,9 +521,9 @@ export function synthesizeMove(
 		const across = Math.sin(progress * Math.PI) * peak;
 		out.push({
 			tMs: (i / steps) * durationMs,
-			// Whole pixels. A real pointer is quantized to the pixel grid — the corpus is full of
-			// 0px and 1px steps between adjacent samples, which is what gives a human speed profile
-			// its jitter. Continuous sub-pixel positions produce an implausibly smooth one.
+			// Whole pixels on the INPUT side: a physical pointer is quantized to the grid, and the
+			// corpus of raw events is full of 0px and 1px steps. The spring below turns that back
+			// into continuous motion, which is what the rendered corpus actually contains.
 			x: Math.round(from.x + ux * along - uy * across),
 			y: Math.round(from.y + uy * along + ux * across),
 		});
@@ -450,7 +531,7 @@ export function synthesizeMove(
 	out[out.length - 1].x = to.x;
 	out[out.length - 1].y = to.y;
 
-	return out;
+	return springSmooth(out, constants.sampleHz);
 }
 
 /**

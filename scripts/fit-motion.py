@@ -1,20 +1,26 @@
-"""Fit cursor and keystroke constants from the human input corpus.
+"""Fit cursor and keystroke constants from the Yarn corpus.
 
-Reads data/cursor-keyboard-dataset-2026-07-30/ (113 recordings, 4.6 hours, 365k events from 8
-creators, captured by Yarn's own app) and writes two files the render path consumes:
+Motion is fitted from data/cursor-smoothed-dataset/ — the same 113 recordings AFTER Yarn's
+editor cursor pipeline, which is the motion a viewer actually sees. Keystroke statistics still
+come from the raw data/cursor-keyboard-dataset-2026-07-30/, which is the only place key events
+exist. Writes two files the render path consumes:
 
     data/motion-constants.json   the fitted statistics
     data/motion-segments.json    real approach movements, replayable onto new endpoints
 
-Both are committed so rendering never needs the 82MB corpus.
+Both are committed so rendering never needs either corpus.
 
-WHY A SEGMENT LIBRARY AND NOT JUST CONSTANTS. Human pointer motion is wrong in three independent
-ways from the obvious model of a smooth symmetric glide along a straight line: it is asymmetric
-(median 90% of distance covered in the first half of the time), it is not smooth (peak speed ~10x
-the mean, with a third of mid-flight samples nearly stopped), and it is not straight (median
-deviation ~9% of the distance). Duration barely follows from distance either — within one distance
-bucket the p10-to-p90 spread is 3-5x, which is why Fitts's law fits at R^2=0.09. Replaying a real
-segment reproduces all of that for free.
+FIT AGAINST RENDERED MOTION, NOT RAW EVENTS. Yarn's editor decimates raw input to every third
+sample and drives a critically-damped spring (mass 1, stiffness 170, damping 26) toward what
+remains. That transformation is large enough to invert conclusions, and it did: measured on the
+same gestures, raw motion covers 51% of its distance by t=0.2 and rendered covers 18%; peak speed
+falls from 10.4x the mean to 2.5x; submovement peaks drop from a median of 7 to 2. An earlier
+version of this script fitted the raw events and taught the synthesizer to reproduce a jitter the
+viewer never sees.
+
+WHY A SEGMENT LIBRARY AND NOT JUST CONSTANTS. Even smoothed, the motion is asymmetric (18% of
+distance by t=0.2, 67% by t=0.5) and curved (median deviation 5.5% of distance), and duration
+barely follows from distance. Replaying a real segment reproduces all of it for free.
 
 Run: python3 scripts/fit-motion.py
 """
@@ -26,17 +32,28 @@ import statistics
 import sys
 from collections import Counter, defaultdict
 
+# Motion comes from the smoothed (rendered) corpus; keystrokes from the raw one, which is the
+# only place key events exist — the cursor pipeline does not carry them.
+SMOOTHED = "data/cursor-smoothed-dataset"
 DATASET = "data/cursor-keyboard-dataset-2026-07-30"
 OUT_CONSTANTS = "data/motion-constants.json"
 OUT_SEGMENTS = "data/motion-segments.json"
 
 # Segmentation. An "approach" is the motion burst that terminates in a click: walk back from each
-# mouse `down` until the trail goes idle or the movement has been running too long to be one reach.
+# press until the pointer has been parked, or the movement is too long to be one reach.
 IDLE_GAP_S = 0.25
 MAX_APPROACH_S = 2.5
 MIN_SAMPLES = 12
 MIN_DISTANCE_PX = 50
 MIN_DURATION_S = 0.15
+
+# Below this the spring has settled and the pointer counts as parked. Smoothed frames are a
+# continuous 60fps stream with no gaps, so idleness is a distance test, not a timestamp gap.
+STILL_PX = 0.5
+
+# The click-squash scale rests at 1.0 and springs toward 0.85 while a button is down, so a dip
+# below this marks a press. The smoothed corpus carries no button events of its own.
+SQUASH_THRESHOLD = 0.995
 
 # Inter-key gaps above this are the user stopping to think, not typing rhythm. Uncapped, the p99
 # lands at 36 seconds and describes idle time rather than the distribution we want to reproduce.
@@ -92,53 +109,43 @@ def decimate(indices, limit):
     return sorted(set(picked))
 
 
-def extract(path, width, height):
-    """Pull approach segments and typing/click statistics out of one recording."""
+def extract_motion(path):
+    """Pull approach segments and click dwells out of one SMOOTHED recording.
+
+    Frames are already dense and uniform at 60fps, and a click is marked by the squash scale
+    dipping below 1 rather than by a `down` event — the cursor pipeline carries the animation,
+    not the input events.
+    """
     with open(path) as f:
-        events = json.load(f)
+        doc = json.load(f)
+    frames = doc["frames"]
+    pts = [(f["time"], f["x"], f["y"], f.get("scale", 1.0), f.get("cursorType", "arrow")) for f in frames]
 
     segments = []
-    dwells = []
-    ikis = []
-    holds = []
-    key_types = Counter()
-    move_dts = []
 
-    # Mouse samples in pixels, keeping `down`/`up` so an approach can terminate on its click.
-    mouse = [
-        (e["time"]["seconds"], e["x"] * width, e["y"] * height, e["mouseEventType"],
-         e.get("cursorType", "arrow"))
-        for e in events
-        if e.get("type") == "mouse" and e.get("mouseEventType") in ("moved", "dragged", "down", "up")
-    ]
+    # A press is a contiguous run of squashed frames. Its LENGTH is not the dwell: the squash
+    # animation has a 12-frame minimum hold and its own spring, so runs quantize to the animation
+    # (18 of 20 presses in one recording are exactly 20 frames) rather than tracking how long the
+    # button was really down. Dwell still comes from raw button events; this only locates presses.
+    press_start = None
+    presses = []
+    for i, p in enumerate(pts):
+        squashed = p[3] < SQUASH_THRESHOLD
+        if squashed and press_start is None:
+            press_start = i
+        elif not squashed and press_start is not None:
+            presses.append(press_start)
+            press_start = None
 
-    for a, b in zip(mouse, mouse[1:]):
-        if a[3] in ("moved", "dragged") and b[3] in ("moved", "dragged"):
-            dt = b[0] - a[0]
-            if 0 < dt < 1:
-                move_dts.append(dt)
-
-    # Press-to-release. Drags are kept: excluding them collapses the p90 and the renderer draws a
-    # held button the same way regardless of whether the pointer moved during it.
-    pending_down = None
-    for t, x, y, kind, _cursor in mouse:
-        if kind == "down":
-            pending_down = t
-        elif kind == "up" and pending_down is not None:
-            d = t - pending_down
-            if 0 < d < 2:
-                dwells.append(d * 1000)
-            pending_down = None
-
-    for i, (t, x, y, kind, cursor) in enumerate(mouse):
-        if kind != "down":
-            continue
+    for i in presses:
+        # Walk back through continuous motion, stopping where the pointer has been parked.
         j = i - 1
-        while j > 0 and t - mouse[j][0] < MAX_APPROACH_S and mouse[j][0] - mouse[j - 1][0] < IDLE_GAP_S:
+        while j > 1 and pts[i][0] - pts[j][0] < MAX_APPROACH_S:
+            step = math.hypot(pts[j][1] - pts[j - 1][1], pts[j][2] - pts[j - 1][2])
+            if step < STILL_PX and pts[i][0] - pts[j][0] > IDLE_GAP_S:
+                break
             j -= 1
-        # The `down` itself is the segment's terminal sample; without it the approach is truncated
-        # short of the target and every fitted duration reads ~20% low.
-        seg = mouse[j:i + 1]
+        seg = pts[j:i + 1]
         if len(seg) < MIN_SAMPLES:
             continue
         x0, y0 = seg[0][1], seg[0][2]
@@ -159,6 +166,7 @@ def extract(path, width, height):
             perp.append((-dx * uy + dy * ux) / distance)
             times.append((seg[k][0] - seg[0][0]) * 1000)
 
+        cursor = seg[-1][4]
         segments.append({
             "logDistance": int(math.floor(math.log2(max(distance, 1)))),
             "octant": octant_of(x1 - x0, y1 - y0),
@@ -169,6 +177,38 @@ def extract(path, width, height):
             "t": [round(v, 2) for v in times],
             "cursorType": cursor if cursor in KNOWN_CURSORS else "arrow",
         })
+
+    return segments
+
+
+def extract_keys(path):
+    """Pull keystroke stats and click dwells out of one RAW recording.
+
+    Both live here for the same reason: the smoothed corpus carries neither button events nor key
+    events, only the rendered cursor and its squash animation.
+    """
+    with open(path) as f:
+        events = json.load(f)
+
+    ikis = []
+    holds = []
+    dwells = []
+    key_types = Counter()
+
+    # Press-to-release. Drags are kept: excluding them collapses the p90 and the renderer draws a
+    # held button the same way regardless of whether the pointer moved during it.
+    pending_down = None
+    for e in events:
+        if e.get("type") != "mouse":
+            continue
+        kind = e.get("mouseEventType")
+        if kind == "down":
+            pending_down = e["time"]["seconds"]
+        elif kind == "up" and pending_down is not None:
+            d = e["time"]["seconds"] - pending_down
+            if 0 < d < 2:
+                dwells.append(d * 1000)
+            pending_down = None
 
     keys = [e for e in events if e.get("type") == "keyboard"]
     downs = [e for e in keys if e.get("keyboardEventType") == "down" and not e.get("isARepeat")]
@@ -191,32 +231,38 @@ def extract(path, width, height):
             if 0 < held < 1:
                 holds.append(held * 1000)
 
-    return segments, dwells, ikis, holds, key_types, move_dts
+    return ikis, holds, key_types, dwells
 
 
 def main():
-    if not os.path.isdir(DATASET):
-        print(f"missing {DATASET}", file=sys.stderr)
+    for d in (DATASET, SMOOTHED):
+        if not os.path.isdir(d):
+            print(f"missing {d}", file=sys.stderr)
 
-        return 1
+            return 1
 
     manifest = load_manifest()
+    smoothed_manifest = json.load(open(os.path.join(SMOOTHED, "manifest.json")))
     all_segments = []
-    dwells, holds, move_dts = [], [], []
+    dwells, holds = [], []
     ikis = []
     key_types = Counter()
+
+    for record in smoothed_manifest["recordings"]:
+        path = os.path.join(SMOOTHED, record["file"])
+        if not os.path.exists(path):
+            continue
+        all_segments.extend(extract_motion(path))
 
     for record in manifest["recordings"]:
         path = os.path.join(DATASET, record["file"])
         if not os.path.exists(path):
             continue
-        s, d, i, h, kt, dts = extract(path, record["width"], record["height"])
-        all_segments.extend(s)
-        dwells.extend(d)
+        i, h, kt, d = extract_keys(path)
         ikis.extend(i)
         holds.extend(h)
         key_types.update(kt)
-        move_dts.extend(dts)
+        dwells.extend(d)
 
     # Speed metrics use the UNWEIGHTED mean of instantaneous speeds. Time-weighting (path length
     # over duration) gives a peak ratio near 221 and a near-stopped fraction of 0.06, because 19% of
@@ -253,9 +299,9 @@ def main():
 
     constants = {
         "fittedFrom": {
-            "dataset": os.path.basename(DATASET),
-            "recordings": len(manifest["recordings"]),
-            "movementEvents": sum(r["movement_event_count"] for r in manifest["recordings"]),
+            "dataset": f"{os.path.basename(SMOOTHED)} (motion) + {os.path.basename(DATASET)} (keys)",
+            "recordings": len(smoothed_manifest["recordings"]),
+            "movementEvents": sum(r["frames"] for r in smoothed_manifest["recordings"]),
             "generatedAt": manifest["generated_at"],
         },
         "durationByLogDistance": {
@@ -297,7 +343,9 @@ def main():
             "p50": round(percentile(near_stopped, 0.50), 3),
             "p90": round(percentile(near_stopped, 0.90), 3),
         },
-        "sampleHz": round(1 / statistics.median(move_dts), 1) if move_dts else 0,
+        # The rendered pipeline's own rate. Generating at anything else and resampling to 60fps
+        # would reintroduce interpolation the spring already decided.
+        "sampleHz": smoothed_manifest["fps"],
     }
 
     with open(OUT_CONSTANTS, "w") as f:
