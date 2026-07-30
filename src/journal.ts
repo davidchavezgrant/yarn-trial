@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { type ObservationBundle, resolveTarget, routeTo } from "./harness.js";
+import { type ObservationBundle, actionTarget, routeTo } from "./harness.js";
 import type { AppMap, SurfaceScope } from "./types.js";
 
 /**
@@ -116,7 +116,7 @@ export function detectMutation(
 	graph: AppMap | undefined,
 	step: number,
 ): Mutation | undefined {
-	const target = resolveTarget(action, prevObs);
+	const target = actionTarget(action, prevObs);
 	if (!target) return undefined;
 
 	const after = nextObs.interactive.find((e) => e.name === target.name && e.surface === target.surface);

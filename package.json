@@ -13,6 +13,7 @@
     "explore": "tsx src/explore.ts",
     "cleanup": "tsx src/cleanup.ts",
     "home": "tsx src/home.ts",
+    "humanize": "tsx src/humanize.ts",
     "build:native": "swiftc -O native/axdom.swift -o native/axdom",
     "app": "tsc -p tsconfig.electron.json && electron dist-electron/electron/main.js"
   },

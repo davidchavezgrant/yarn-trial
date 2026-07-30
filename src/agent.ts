@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { Driver } from "./driver.js";
 import {
 	ACT_TOOL,
+	actionTarget,
 	appSlug,
 	auditTaskPrompt,
 	dragMoved,
@@ -68,6 +69,17 @@ const FROZEN_STEPS = 4;
 /** Free read-only page searches per run, beyond which a find costs an action. */
 const MAX_FINDS = Number(process.env.AGENT_FINDS ?? 20);
 const SETTLE_MS = 900;
+
+/** Frame-loop cadence right after an action, while the app is repainting. */
+const RESPONSE_POLL_MS = 120;
+/** ...and between actions, where the screen is static and extra frames are duplicates. */
+const IDLE_POLL_MS = 400;
+/** How long after an action counts as "responding". */
+const RESPONSE_WINDOW_MS = 4000;
+
+/** Window-size probes that must agree before recording starts, and the ceiling on waiting. */
+const STAGE_SETTLE_HITS = 3;
+const STAGE_SETTLE_MAX_MS = 12_000;
 
 const systemPrompt = (rules: string, vision: boolean): string => `You are a UI automation agent driving a macOS app through a UI driver. Each turn you receive an observation: the target window's interactive elements (addressing handle, role, label/value)${vision ? " and a screenshot" : "; element frames give positions — there is no screenshot"}. You perform ONE action per turn by calling the "act" tool, then the harness executes it, waits, re-observes, and reports back.
 
@@ -324,10 +336,18 @@ async function main(): Promise<void> {
 	fs.mkdirSync(`${OUT}/runs`, { recursive: true });
 	const runLog = `${OUT}/runs/${stamp}.json`;
 	let driverBusy = false;
+	/** When an action last finished, so the frame loop can sample its response densely. */
+	let lastActionAt = 0;
 	let homeReset: string = noReset ? "skipped" : "pending";
 	// Whether the axdom sidecar supplied DOM id/class this run. Recorded so a run's
 	// element quality is legible from its log rather than inferred.
 	let domEnrichment: { frames: number; unavailable?: string } = { frames: 0, unavailable: "not observed" };
+	/**
+	 * Window geometry, for a post-pass reconciling driver coordinates against the captured frames.
+	 * Declared out here because `win` and the staging result are scoped to the try below, and the
+	 * run log is written from the finally — the same reason homeReset above lives at this level.
+	 */
+	let windowGeometry: Record<string, unknown> | undefined;
 	let expectationRejections = 0;
 	let findCalls = 0;
 	let malformedStreak = 0;
@@ -379,6 +399,7 @@ async function main(): Promise<void> {
 					hintReasons: audit.reasons,
 					homeReset,
 					domEnrichment,
+					windowGeometry,
 					sessionRevivals: driver.revivals,
 					expectationRejections,
 					findCalls,
@@ -508,6 +529,7 @@ async function main(): Promise<void> {
 			try {
 				const stage = stageWindowForRecording(app);
 				console.log(`recording stage: ${stage.detail}`);
+				windowGeometry = { ...(win.bounds ? { bounds: win.bounds } : {}), ...(stage.geometry ? { staged: stage.geometry } : {}) };
 				await new Promise((r) => setTimeout(r, 1500));
 			} catch {
 				console.log("could not stage window for recording; recording may be degraded");
@@ -515,8 +537,48 @@ async function main(): Promise<void> {
 				overlay.setDriving(false);
 			}
 			fs.mkdirSync(framesDir, { recursive: true });
+			/**
+			 * Wait for the window to hold one size before recording anything.
+			 *
+			 * Staging resizes the window, and the capture surface follows some time later. Starting
+			 * immediately produced 25 opening frames at the wrong size on one run — and worse, at
+			 * the wrong ASPECT RATIO, so they were not merely mis-shaped but showed the previous
+			 * run's screen. Everything downstream then had to detect and discard them.
+			 */
+			const settleStart = Date.now();
+			let lastSize = "";
+			let stable = 0;
+			while (Date.now() - settleStart < STAGE_SETTLE_MAX_MS && stable < STAGE_SETTLE_HITS) {
+				const probe = `${framesDir}/.settle.png`;
+				try {
+					await driver.act({
+						kind: "tool",
+						name: "get_window_state",
+						args: { pid: win.pid, window_id: win.windowId, screenshot_out_file: probe },
+					});
+					const s = pngSize(probe);
+					const key = `${s.w}x${s.h}`;
+					stable = key === lastSize ? stable + 1 : 0;
+					lastSize = key;
+				} catch {
+					stable = 0;
+				}
+				await new Promise((r) => setTimeout(r, 300));
+			}
+			fs.rmSync(`${framesDir}/.settle.png`, { force: true });
+			console.log(
+				stable >= STAGE_SETTLE_HITS
+					? `window settled at ${lastSize} after ${((Date.now() - settleStart) / 1000).toFixed(1)}s`
+					: `window never settled (last ${lastSize || "unknown"}); recording anyway`,
+			);
 			await driver.act({ kind: "tool", name: "start_recording", args: { output_dir: `${recordingDir}/trajectory` } });
 			recordingActive = true;
+			// Record the run, not the setup. start_recording backfills turns from earlier in the
+			// driver session — the home reset's own clicks land in trajectory/ as turn-00001 and
+			// friends, and the humanize pass then animates a cursor navigating out of wherever the
+			// last run finished, before the task has begun. Marked here rather than filtered later
+			// so the artifact says which turns predate the take.
+			fs.writeFileSync(`${recordingDir}/recording-started.json`, JSON.stringify({ epochMs: Date.now() }));
 			frameLoop = (async () => {
 				while (recordingActive) {
 					if (!driverBusy) {
@@ -539,7 +601,19 @@ async function main(): Promise<void> {
 							driverBusy = false;
 						}
 					}
-					await new Promise((r) => setTimeout(r, 250));
+					/**
+					 * Poll fast for a moment after each action, slowly otherwise.
+					 *
+					 * The app's response is the only part of a run worth watching frame by frame,
+					 * and it arrives within a second or two. At a flat 250ms — which the driver
+					 * stretches to about a second in practice — a repaint could fall entirely
+					 * between two captures: one run's Screen Clips click took 2.1s to render with
+					 * no frame in between, so the video jumped from before to after with nothing
+					 * showing the transition. Between actions the screen is static and extra
+					 * frames are pure duplicates, so the slow rate costs nothing there.
+					 */
+					const sinceAction = Date.now() - lastActionAt;
+					await new Promise((r) => setTimeout(r, sinceAction < RESPONSE_WINDOW_MS ? RESPONSE_POLL_MS : IDLE_POLL_MS));
 				}
 			})();
 			console.log(`recording window-scoped frames -> ${framesDir}\n`);
@@ -886,6 +960,10 @@ async function main(): Promise<void> {
 			// before anything downstream could read them back.
 			const prevObs = obs;
 			const prevFrames = obs.frames;
+			// Resolved HERE, against the observation the model actually chose from: `obs` is
+			// reassigned to the post-action observation below, and element handles are only
+			// meaningful in the snapshot that produced them.
+			const target = actionTarget(input.action, obs);
 			const prevShot = `${OUT}/agent-step-${step - 1}.png`;
 			while (driverBusy) await new Promise((r) => setTimeout(r, 50));
 			driverBusy = true;
@@ -917,6 +995,7 @@ async function main(): Promise<void> {
 				} else blindStreak = 0;
 			} finally {
 				driverBusy = false;
+				lastActionAt = Date.now();
 				overlay.setDriving(false);
 			}
 			// `wait` legitimately changes nothing, so exempt it from the discrimination
@@ -981,6 +1060,7 @@ async function main(): Promise<void> {
 				screenshotFile: `agent-step-${step}.png`,
 				pixelDelta: delta,
 				modelReasoning: input.reasoning,
+				...(target ? { targetRole: target.role, targetRect: { x: target.x, y: target.y, w: target.w, h: target.h } } : {}),
 			});
 
 			// Journal what this step CHANGED, as opposed to what it was aimed at. Detection is
@@ -1044,6 +1124,18 @@ async function main(): Promise<void> {
 			try {
 				await driver.act({ kind: "tool", name: "stop_recording", args: {} });
 			} catch {}
+			// Before assembly, so a failed encode still leaves usable timing. These are the only
+			// record of WHEN each frame was captured: list.txt clamps every gap to five seconds,
+			// which erases exactly the long thinking pauses a post-pass needs to compress.
+			// Keyed by filename rather than position, so a stray png in the directory cannot
+			// silently shift every timestamp by one.
+			try {
+				const times: Record<string, number> = {};
+				for (let i = 0; i < frameTimes.length; i++) times[`f-${String(i).padStart(5, "0")}.png`] = frameTimes[i];
+				fs.writeFileSync(`${framesDir}/times.json`, JSON.stringify(times));
+			} catch (err) {
+				console.error("could not write frame times:", err);
+			}
 			try {
 				assembleVideo(framesDir, frameTimes, videoPath);
 			} catch (err) {

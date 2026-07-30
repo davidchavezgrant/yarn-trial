@@ -27,6 +27,13 @@ export const UNREADY_EXIT = 3;
 export interface WindowRef {
 	pid: number;
 	windowId: number;
+	/**
+	 * The window rect as list_windows reported it. Recorded so a post-pass can reconcile driver
+	 * coordinates with the captured frames without re-deriving the display scale — and, on a
+	 * natively-fullscreen app, this is the ONLY geometry available, since System Events reports
+	 * zero windows for one and stageWindowForRecording has nothing to measure.
+	 */
+	bounds?: { x?: number; y?: number; width?: number; height?: number };
 }
 
 /** AX roles a pass can actuate. The frontier ledger counts these and nothing else. */
@@ -193,7 +200,7 @@ export async function findWindow(driver: Driver, app: string): Promise<WindowRef
 		.sort((a: any, b: any) => (b.title ? 1 : 0) - (a.title ? 1 : 0) || area(b) - area(a))[0];
 	if (!win) throw new Error(`no window found for app "${app}"`);
 
-	return { pid: win.pid, windowId: win.window_id };
+	return { pid: win.pid, windowId: win.window_id, bounds: win.bounds };
 }
 
 /**
@@ -901,18 +908,22 @@ const DESTRUCTIVE_LABEL =
 	/\b(delete|remove|discard|erase|trash|publish|export|download|send|share|invite|buy|purchase|subscribe|unsubscribe|sign out|log out|revoke|deactivate|reset|restore|merge|archive)\b/i;
 
 /**
- * Which control does this action operate?
+ * Which control an action operates, resolved against the observation the model was looking at.
  *
- * Two addressing modes because the model has two: a handle when the target is a real element,
- * and a coordinate when it is painted. On the coordinate path the SMALLEST containing box
- * wins — boxes nest, so a click inside a button is also inside its panel, and the panel is
- * never the thing being pressed.
+ * Two addressing modes because the model has two: a handle names its element directly, and a
+ * coordinate action is matched to the SMALLEST box containing the point — boxes nest, so a click
+ * inside a button is also inside its panel, and the panel is never the thing being pressed.
  *
- * Shared by the destructive-label guard and the mutation journal, which ask different
- * questions of the same answer. Two copies would be two chances to disagree about what the
- * agent just touched.
+ * MUST be called with the PRE-action observation. Element handles are only meaningful in the
+ * snapshot that produced them (DRIVER_RULES says so), and the agent reassigns its observation to
+ * the post-action one before recording the step, so resolving late silently names a different
+ * control.
+ *
+ * Shared by the destructive-label guard and the mutation journal, which ask different questions
+ * of the same answer. Two copies would be two chances to disagree about what the agent just
+ * touched.
  */
-export function resolveTarget(action: any, obs: ObservationBundle): InteractiveElement | undefined {
+export function actionTarget(action: any, obs: ObservationBundle): InteractiveElement | undefined {
 	const handle = action?.element_index ?? action?.ref;
 	if (handle !== undefined && handle !== null) return obs.interactive.find((e) => e.handle === handle);
 	if (typeof action?.x !== "number" || typeof action?.y !== "number") return undefined;
@@ -928,7 +939,7 @@ export function resolveTarget(action: any, obs: ObservationBundle): InteractiveE
 }
 
 export function destructiveTarget(action: any, obs: ObservationBundle): string | undefined {
-	const target = resolveTarget(action, obs);
+	const target = actionTarget(action, obs);
 	// Only *pressing* things is guarded. A keystroke can be destructive too, but nothing
 	// here can tell which one is, and guessing at key combinations would block the pass
 	// from typing at all.
@@ -1216,6 +1227,14 @@ export async function resetToHome(
 export interface StageResult {
 	staged: boolean;
 	detail: string;
+	/**
+	 * Where the window was put, and at what backing scale.
+	 *
+	 * Absent on the fullscreen path: System Events reports no windows for a natively-fullscreen
+	 * app, which is how that state is detected, so there is nothing to measure. WindowRef.bounds
+	 * is the geometry source there.
+	 */
+	geometry?: { x: number; y: number; w: number; h: number; scale: number };
 }
 
 export function stageWindowForRecording(app: string): StageResult {
@@ -1276,7 +1295,11 @@ else {
 
 		const lowDpi = r.scale < 2 ? " (1x display — check frames if the video looks off)" : "";
 
-		return { staged: true, detail: `filled its current display @ ${r.frame.w}x${r.frame.h}${lowDpi}` };
+		return {
+			staged: true,
+			detail: `filled its current display @ ${r.frame.w}x${r.frame.h}${lowDpi}`,
+			geometry: { x: r.frame.x, y: r.frame.y, w: r.frame.w, h: r.frame.h, scale: r.scale },
+		};
 	} catch (err: any) {
 		// osascript writes the useful diagnostic to stderr; err.message is just the echoed
 		// command, which reported "Command failed: osascript -l JavaScript -e" and hid the
