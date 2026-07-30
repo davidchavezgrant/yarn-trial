@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, net, protocol, systemPreferences } from "electron";
 import fs from "node:fs";
-import { listApps, listRecordedRuns, resolveVideo, RunController, type RunOptions } from "../src/ui-core.js";
+import { listApps, listRecordedRuns, readUiState, resolveVideo, RunController, writeUiState, type RunOptions } from "../src/ui-core.js";
 import { page } from "../src/ui-page.js";
 
 /**
@@ -52,6 +52,10 @@ window.__bus = {
   run: (opts) => ipcRenderer.invoke('run', opts),
   ground: (app) => ipcRenderer.invoke('ground', app),
   stop: () => ipcRenderer.invoke('stop'),
+  loadState: () => ipcRenderer.invoke('state:load'),
+  // send, not invoke: this is also called from beforeunload, where the renderer will not
+  // survive long enough to await a reply. The message is queued before teardown.
+  saveState: (s) => ipcRenderer.send('state:save', s),
   onStarted: (cb) => ipcRenderer.on('started', (_e, d) => cb(d)),
   onLine: (cb) => ipcRenderer.on('line', (_e, t) => cb(t)),
   onDone: (cb) => ipcRenderer.on('done', (_e, d) => cb(d)),
@@ -175,6 +179,10 @@ ipcMain.handle("ground", (_event, app: string) => {
 });
 
 ipcMain.handle("stop", () => runs.stop());
+
+ipcMain.handle("state:load", () => readUiState());
+
+ipcMain.on("state:save", (_event, state: unknown) => writeUiState(state));
 
 
 void app.whenReady().then(() => {

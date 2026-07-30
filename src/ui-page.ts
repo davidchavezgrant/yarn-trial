@@ -16,6 +16,10 @@ export interface UiBus {
 	ground(app: string): Promise<string | undefined>;
 	run(opts: { app: string; task: string; record: boolean; noVision: boolean }): Promise<string | undefined>;
 	stop(): void;
+	/** Per-app task text + log scrollback, and the app selected last. */
+	loadState(): Promise<{ lastApp?: string; byApp: Record<string, { task: string; log: string[] }> }>;
+	/** Fire-and-forget so it can also run from `beforeunload`, where a round trip would not finish. */
+	saveState(state: { lastApp?: string; byApp: Record<string, { task: string; log: string[] }> }): void;
 	onStarted(cb: (d: { app: string; task: string }) => void): void;
 	onLine(cb: (line: string) => void): void;
 	onDone(cb: (d: { code: number | null; elapsed: number }) => void): void;
@@ -109,11 +113,64 @@ export const CHROME = String.raw`<meta charset="utf-8">
 
 export const APP_JS = String.raw`let apps = [], sel = null, running = false;
 
+// Log lines belong to the app whose run produced them, not to whatever happens to be
+// selected when they arrive: switching targets mid-run must not splice this run's output
+// into another app's terminal.
+let runningApp = null;
+let uiState = { byApp: {} };
+
 const el = (id) => document.getElementById(id);
+
+function stateFor(app) {
+  return uiState.byApp[app] || (uiState.byApp[app] = { task: '', log: [] });
+}
+
+// Mirrors LOG_LINES_KEPT in ui-core.ts, which re-caps on write. Duplicated because this
+// script crosses the process boundary as a string and cannot import it; the host is
+// authoritative, this bound just keeps the in-memory buffer and each save small.
+const LOG_LINES_KEPT = 400;
+
+// saveState is fire-and-forget, so coalesce bursts — a run emits lines continuously —
+// into one write per second, and flush at the moments that would otherwise lose state.
+let saveTimer = null;
+function saveSoon() {
+  if (!saveTimer) saveTimer = setTimeout(() => { saveTimer = null; flush(); }, 1000);
+}
+function flush() {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  // The textarea is the source of truth for the selected app's task; snapshot it here so
+  // every caller gets that for free rather than remembering to copy it.
+  if (sel) { stateFor(sel).task = el('task').value; uiState.lastApp = sel; }
+  bus.saveState(uiState);
+}
 
 async function loadApps() {
   apps = await bus.loadApps();
   render();
+}
+
+/** Reselect the last app and repopulate its task + terminal before the first paint. */
+async function restore() {
+  const saved = await bus.loadState();
+  uiState = saved && saved.byApp ? saved : { byApp: {} };
+  if (uiState.lastApp) {
+    sel = uiState.lastApp;
+    el('task').value = stateFor(sel).task;
+  }
+  renderLog(sel);
+  render();
+  check();
+}
+
+function selectApp(name) {
+  if (name === sel) return;
+  if (sel) stateFor(sel).task = el('task').value;   // keep what was typed for the app being left
+  sel = name;
+  el('task').value = stateFor(name).task;
+  renderLog(name);
+  render();
+  check();
+  flush();
 }
 
 function render() {
@@ -125,7 +182,7 @@ function render() {
     (a.grounded ? '<span class="badge g">grounded</span>' : '') +
     (a.running ? '<span class="badge r">open</span>' : '') + '</li>').join('');
   for (const li of el('apps').children) {
-    li.onclick = () => { sel = decodeURIComponent(li.dataset.n); render(); check(); };
+    li.onclick = () => selectApp(decodeURIComponent(li.dataset.n));
   }
 }
 
@@ -170,7 +227,9 @@ function foldable(text) {
   log.scrollTop = log.scrollHeight;
 }
 
-function line(text) {
+// DOM only. Split out from line() because replaying a stored terminal must paint the same
+// way without re-appending to the buffer it is being replayed from.
+function appendLine(text) {
   // Only the scope-ambiguity dump is folded; everything else stays inline.
   if (/^\s+scope ambiguity:/.test(text)) return foldable(text);
   const d = document.createElement('div');
@@ -187,12 +246,37 @@ function line(text) {
   log.scrollTop = log.scrollHeight;
 }
 
-const bus = window.__bus;   // {onStarted,onLine,onDone,loadApps,run,stop}
+/** Repaint the terminal from an app's stored scrollback. */
+function renderLog(app) {
+  const log = el('log');
+  log.innerHTML = '';
+  foldEl = null; foldCount = 0;
+  const lines = app ? stateFor(app).log : [];
+  if (!lines.length) { log.innerHTML = '<span class="empty">Output appears here.</span>'; return; }
+  for (const t of lines) appendLine(t);
+}
+
+function line(text) {
+  const owner = runningApp || sel;
+  if (owner) {
+    const buf = stateFor(owner).log;
+    buf.push(text);
+    if (buf.length > LOG_LINES_KEPT) buf.splice(0, buf.length - LOG_LINES_KEPT);
+  }
+  // Paint only if the line belongs to what is on screen. Output for a background run is
+  // still captured; it appears when you select that app again.
+  if (!owner || owner === sel) appendLine(text);
+  saveSoon();
+}
+
+const bus = window.__bus;   // {onStarted,onLine,onDone,loadApps,loadState,saveState,run,stop}
 bus.onStarted((d) => {
-  running = true; check();
+  running = true; runningApp = d.app; check();
   el('stop').style.display = 'block';
   el('status').textContent = 'running: ' + d.app;
-  el('log').innerHTML = ''; foldEl = null; foldCount = 0;
+  // A new run replaces that app's terminal rather than appending to the last one.
+  stateFor(d.app).log = [];
+  if (d.app === sel) { el('log').innerHTML = ''; foldEl = null; foldCount = 0; }
   line('▶ ' + d.task + '  —  ' + d.app);
 });
 bus.onLine((t) => line(t));
@@ -200,7 +284,10 @@ bus.onDone((d) => {
   running = false; check();
   el('stop').style.display = 'none';
   el('status').textContent = 'idle';
+  // Before clearing runningApp: this line belongs to the run's terminal, not the selection's.
   line((d.code === 0 ? '■ finished' : '■ exited with code ' + d.code) + ' after ' + d.elapsed + 's');
+  runningApp = null;
+  flush();
   loadApps();
   loadRuns();
 });
@@ -258,7 +345,7 @@ el('q').addEventListener('input', render);
 // 'input' alone misses programmatic setValue and some IME/paste paths, which left the
 // Run button enabled next to a visible "this will be refused" warning. 'change' catches
 // the stragglers; the server re-checks regardless.
-for (const ev of ['input', 'change', 'keyup', 'paste']) el('task').addEventListener(ev, () => setTimeout(check, 0));
+for (const ev of ['input', 'change', 'keyup', 'paste']) el('task').addEventListener(ev, () => setTimeout(() => { check(); saveSoon(); }, 0));
 el('go').onclick = async () => {
   const err = await bus.run({ app: sel, task: el('task').value.trim(), record: el('record').checked, noVision: el('novision').checked });
   if (err) line('✗ ' + err);
@@ -275,9 +362,14 @@ el('ground').onclick = async () => {
 // redraws when the set of run ids changes, so this is a directory stat most ticks.
 setInterval(() => loadRuns(false), 4000);
 
-loadApps();
+// Last chance to persist: a pending saveSoon() would die with the window. saveState is
+// send-not-invoke precisely so it survives being called here.
+window.addEventListener('beforeunload', flush);
+
+// Restore first so the shell opens on the app you were last driving; loadApps() either way,
+// since an unreadable state file must not leave the list empty.
+restore().then(loadApps, loadApps);
 loadRuns();
-check();
 </script>`;
 
 /** Full standalone document; `bootstrap` installs window.__bus before the app script runs. */

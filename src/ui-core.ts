@@ -131,6 +131,62 @@ export function resolveVideo(rel: string): string | undefined {
 	return full;
 }
 
+/** What the middle column held for one app: the typed task, and the log pane's scrollback. */
+export interface AppUiState {
+	task: string;
+	log: string[];
+}
+
+export interface UiState {
+	/** App selected when the shell last closed, reselected on launch. */
+	lastApp?: string;
+	byApp: Record<string, AppUiState>;
+}
+
+const STATE_PATH = (): string => `${process.cwd()}/out/ui-state.json`;
+
+/**
+ * Per-app scrollback cap. A grounding pass emits a few hundred lines, so this keeps a whole
+ * recent run while bounding the file — the alternative is a state blob that grows for the
+ * life of the checkout.
+ */
+const LOG_LINES_KEPT = 400;
+
+/**
+ * Read persisted UI state. Every field is re-validated rather than trusted: the file is
+ * hand-editable and a malformed one must degrade to "no memory", never break the shell.
+ */
+export function readUiState(): UiState {
+	try {
+		return pruneUiState(JSON.parse(fs.readFileSync(STATE_PATH(), "utf8")));
+	} catch {
+		return { byApp: {} };
+	}
+}
+
+/** Coerce untrusted input to the shape, cap scrollback, and drop entries holding nothing. */
+export function pruneUiState(raw: any): UiState {
+	const byApp: Record<string, AppUiState> = {};
+	for (const [app, v] of Object.entries(raw?.byApp ?? {})) {
+		const entry = v as Partial<AppUiState>;
+		const task = typeof entry?.task === "string" ? entry.task : "";
+		const log = (Array.isArray(entry?.log) ? entry.log : []).filter((l): l is string => typeof l === "string");
+		if (!task && !log.length) continue;
+		byApp[app] = { task, log: log.slice(-LOG_LINES_KEPT) };
+	}
+
+	return { ...(typeof raw?.lastApp === "string" ? { lastApp: raw.lastApp } : {}), byApp };
+}
+
+export function writeUiState(raw: unknown): void {
+	try {
+		fs.mkdirSync(path.dirname(STATE_PATH()), { recursive: true });
+		fs.writeFileSync(STATE_PATH(), JSON.stringify(pruneUiState(raw), null, 2));
+	} catch {
+		// Losing UI memory is not worth interrupting a run for.
+	}
+}
+
 export interface RunOptions {
 	app: string;
 	task: string;
