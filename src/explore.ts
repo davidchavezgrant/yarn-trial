@@ -13,14 +13,18 @@ import {
 	frontierCredit,
 	frontierDismiss,
 	frontierIngest,
+	frontierMatches,
 	frontierRemaining,
 	frontierSummary,
+	isVagueSurface,
 	makeClient,
 	mergeGraph,
 	newFrontier,
 	observationBlocks,
 	observe,
 	OUT,
+	recoverLeakedGraph,
+	retryTransient,
 	TargetNotObservableError,
 	toActionRequest,
 	type ObservationBundle,
@@ -38,6 +42,15 @@ import type { AppMap, AppMapEdge, AppMapNode } from "./types.js";
 const EXPLORE_HOURS = Number(process.env.EXPLORE_HOURS ?? 12);
 /** Pure runaway guard. At ~20s/action, 12h is ~2000 actions, so this is slack, not a budget. */
 const MAX_ACTIONS = Number(process.env.EXPLORE_MAX_ACTIONS ?? 4000);
+/**
+ * Most controls a single `dismiss` may retire when it does not name a specific surface.
+ * Measured need: an uncapped pass cleared 104 unrelated top-level controls in one call and
+ * declared the frontier empty at 25 actuated of 262 seen. Named panels are exempt — a list
+ * of 80 identical rows is one honest decision; a hundred scattered controls are not.
+ */
+const DISMISS_CAP = Number(process.env.EXPLORE_DISMISS_CAP ?? 20);
+/** The destructive-label pre-flight. Its own switch, deliberately not tied to `guidance`. */
+const GUARD_ON = (process.env.EXPLORE_GUARD ?? "on") !== "off";
 /**
  * Observations kept in one context window before it is reset. Each costs ~7k tokens (AX
  * text plus a screenshot), so ~12 is ~85k — comfortable, and bounded no matter how long the
@@ -71,6 +84,8 @@ There is no step budget. After every action you are told the FRONTIER: interacti
 So you have two ways to shrink it, and both are legitimate:
 - Operate the control (this is the default: it is how surfaces get discovered — opening one panel adds everything inside it to the frontier).
 - Call "dismiss" for controls you have deliberately decided not to operate — content rather than navigation (list rows, transcript chunks, individual documents), destructive things, or anything that would leave the app changed. Dismiss by surface to clear a whole panel of repetitive items at once. Dismissals are recorded and published with the map, so give a real reason; they are the honest way to say "I chose not to", which silence is not.
+
+Dismissal is bounded on purpose: a single call that does not name a specific surface may retire at most ${DISMISS_CAP} controls, because one sentence cannot honestly justify a hundred unrelated decisions. Scattered top-level controls must be dismissed in groups small enough to each have a real reason — or opened. A named panel of repetitive rows is exempt.
 
 Breadth before depth. A map with one richly-detailed region and whole panels never opened is worse than an even one, because the task agent cannot tell the difference between "not in this app" and "not visited". Prefer a frontier entry that opens a new surface over one more control in a surface you have already mapped.
 
@@ -176,6 +191,7 @@ const EXTRA_TOOLS: Anthropic.Tool[] = [
 const provenanceHeader = (p: {
 	app: string;
 	actions: number;
+	elapsed: string;
 	findings: number;
 	backend: string;
 	findCalls: number;
@@ -188,7 +204,7 @@ const provenanceHeader = (p: {
 	surfaces: number;
 	chapters: number;
 }): string =>
-	`<!-- provenance: explore | app: ${p.app} | date: ${new Date().toISOString().slice(0, 10)} | backend: ${p.backend} | actions: ${p.actions} | findings: ${p.findings} | finds: ${p.findCalls}` +
+	`<!-- provenance: explore | app: ${p.app} | date: ${new Date().toISOString().slice(0, 10)} | backend: ${p.backend} | actions: ${p.actions} | elapsed: ${p.elapsed} | findings: ${p.findings} | finds: ${p.findCalls}` +
 	` | controls: ${p.actuated} actuated / ${p.dismissed} dismissed / ${p.seen} seen | surfaces: ${p.surfaces} | chapters: ${p.chapters} | stopped: ${p.stopped}` +
 	`${p.guidance ? " | operator-guidance: yes" : ""}${p.salvaged ? " | salvaged: session died before finish" : ""} -->\n` +
 	"<!-- controls actuated/seen is a LOWER BOUND ON BREADTH, not a coverage percentage: the denominator only grows as surfaces are opened, and operating a control is not understanding it. -->\n" +
@@ -291,12 +307,18 @@ async function main(): Promise<void> {
 
 	const writeArtifacts = (out: FinishInput, stopped: StopReason, salvaged = false): void => {
 		merge(out);
+		// The finish payload is the largest single generation of the run, so it is the most
+		// likely place for nodes/edges to be serialised into the prose instead of alongside it.
+		// Recovering here also strips the markup from the document that goes into the prompt.
+		const recovered = recoverLeakedGraph(out.document);
+		merge(recovered);
 		const cov = coverageNow(stopped);
+		const elapsed = hm(Date.now() - startedAt);
 		const prose =
-			provenanceHeader({ app, actions, findings: findings.length, backend: backendKind, findCalls, guidance, salvaged, ...cov }) +
-			out.document;
+			provenanceHeader({ app, actions, elapsed, findings: findings.length, backend: backendKind, findCalls, guidance, salvaged, ...cov }) +
+			recovered.cleaned;
 		fs.writeFileSync(outPath, prose);
-		console.log(`\n=== exploration ${salvaged ? "SALVAGED" : "finished"} after ${actions} actions, ${hm(Date.now() - startedAt)}, ${findings.length} findings ===`);
+		console.log(`\n=== exploration ${salvaged ? "SALVAGED" : "finished"} after ${actions} actions, ${elapsed}, ${findings.length} findings ===`);
 		console.log(`stopped: ${stopped} | controls: ${cov.actuated} actuated / ${cov.dismissed} dismissed / ${cov.seen} seen across ${cov.surfaces} surfaces | chapters: ${chapters}`);
 		if (refusals > 0) console.log(`safety guard refused ${refusals} action(s) on destructive-looking labels`);
 		console.log(`grounding notes: ${outPath}`);
@@ -306,6 +328,7 @@ async function main(): Promise<void> {
 			capturedAt: new Date().toISOString(),
 			provenance: "explore",
 			proseSha256: createHash("sha256").update(prose).digest("hex").slice(0, 12),
+			elapsed,
 			coverage: cov,
 			nodes: [...graphNodes.values()],
 			edges: [...graphEdges.values()],
@@ -330,16 +353,20 @@ async function main(): Promise<void> {
 		// Streamed, like the loop call: the SDK refuses a non-streaming request whose
 		// max_tokens could exceed a 10-minute generation, and the finish payload is the
 		// largest thing this program asks for.
-		const rescue = await client.messages
-			.stream({
-				model,
-				max_tokens: 32000,
-				system: guidance ? `${basePrompt}\n\n# Operator guidance for this run\n${guidance}` : basePrompt,
-				tools,
-				tool_choice: { type: "tool", name: "finish" },
-				messages,
-			})
-			.finalMessage();
+		const rescue = await retryTransient(
+			() =>
+				client.messages
+					.stream({
+						model,
+						max_tokens: 32000,
+						system: guidance ? `${basePrompt}\n\n# Operator guidance for this run\n${guidance}` : basePrompt,
+						tools,
+						tool_choice: { type: "tool", name: "finish" },
+						messages,
+					})
+					.finalMessage(),
+			{ onRetry: (n, e) => console.log(`  retry ${n} after transient API error: ${(e as Error).message}`) },
+		);
 		const out = rescue.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
 		if (!out) throw new Error("model did not emit finish");
 		writeArtifacts(out.input as FinishInput, stopped, salvaged);
@@ -417,16 +444,20 @@ async function main(): Promise<void> {
 				return;
 			}
 
-			const response = await client.messages
-				.stream({
-					model,
-					max_tokens: 32000,
-					system: guidance ? `${basePrompt}\n\n# Operator guidance for this run\n${guidance}` : basePrompt,
-					tools,
-					cache_control: { type: "ephemeral" },
-					messages,
-				})
-				.finalMessage();
+			const response = await retryTransient(
+				() =>
+					client.messages
+						.stream({
+							model,
+							max_tokens: 32000,
+							system: guidance ? `${basePrompt}\n\n# Operator guidance for this run\n${guidance}` : basePrompt,
+							tools,
+							cache_control: { type: "ephemeral" },
+							messages,
+						})
+						.finalMessage(),
+				{ onRetry: (n, e) => console.log(`  retry ${n} after transient API error: ${(e as Error).message}`) },
+			);
 
 			if (response.stop_reason === "refusal") throw new Error("model refused");
 
@@ -464,9 +495,17 @@ async function main(): Promise<void> {
 
 			if (toolUse.name === "record") {
 				const input = toolUse.input as { finding: string; nodes?: AppMapNode[]; edges?: AppMapEdge[] };
-				findings.push(input.finding);
-				const merged = merge(input);
-				console.log(`  note: ${input.finding}${merged ? ` (+${merged} graph)` : ""}`);
+				// The model sometimes writes its nodes/edges INTO the finding string as literal
+				// tool-call markup. Recover them before storing, or the graph silently stalls
+				// while the prose keeps growing. See recoverLeakedGraph().
+				const leaked = recoverLeakedGraph(input.finding);
+				findings.push(leaked.cleaned);
+				const merged =
+					merge(input) + (leaked.nodes.length || leaked.edges.length ? merge(leaked) : 0);
+				const salvaged = leaked.nodes.length + leaked.edges.length;
+				console.log(
+					`  note: ${leaked.cleaned}${merged ? ` (+${merged} graph${salvaged ? `, ${salvaged} recovered` : ""})` : ""}`,
+				);
 				// Every record, not every Nth: the write is a few KB of local JSON, and batching
 				// it only buys the chance to lose the nine findings since the last flush.
 				checkpoint();
@@ -487,6 +526,30 @@ async function main(): Promise<void> {
 				const input = toolUse.input as { names?: string[]; surface?: string; reason: string };
 				let text: string;
 				try {
+					// A sweep this wide is one sentence of justification standing in for a hundred
+					// separate decisions, and it is how a pass reaches "frontier-empty" cheaply.
+					// Refused only when the surface is vague: a genuinely repetitive named panel
+					// (80 identical list rows) is exactly what bulk dismissal is for.
+					const matches = frontierMatches(ledger, input);
+					if (matches.length > DISMISS_CAP && isVagueSurface(input.surface)) {
+						const surfaces = [...new Set(matches.map((e) => e.surface || "<top level>"))].slice(0, 12);
+						console.log(`  dismiss REFUSED: ${matches.length} controls across ${surfaces.length} surface(s), no specific surface named`);
+						messages.push({
+							role: "user",
+							content: [
+								{
+									type: "tool_result",
+									tool_use_id: toolUse.id,
+									is_error: true,
+									content:
+										`Refused: that would dismiss ${matches.length} controls at once (cap ${DISMISS_CAP}) without naming a specific surface. ` +
+										"Nothing was dismissed. These are not one decision — dismiss them in groups you can each give a real reason for, " +
+										`naming the surface, or open the surface and operate them. Surfaces in that match: ${surfaces.join(", ")}.`,
+								},
+							],
+						});
+						continue;
+					}
 					const gone = frontierDismiss(ledger, input);
 					const rest = frontierRemaining(ledger);
 					// A silent zero match reads as "done" and the model moves on leaving the
@@ -531,8 +594,9 @@ async function main(): Promise<void> {
 			const input = toolUse.input as { reasoning?: string; action: any };
 
 			// Unattended-safety pre-flight. A label check over a fixed verb set — it knows
-			// nothing about this app, and the operator can turn it off per-run with guidance.
-			const danger = guidance ? undefined : destructiveTarget(input.action, obs);
+			// nothing about this app. Opting out is its OWN switch (EXPLORE_GUARD=off): this
+			// used to ride on `guidance`, so steering the pass silently disarmed the guard.
+			const danger = GUARD_ON ? destructiveTarget(input.action, obs) : undefined;
 			if (danger) {
 				refusals++;
 				console.log(`  REFUSED: "${danger}" reads destructive and this run is unattended`);
@@ -709,6 +773,7 @@ async function main(): Promise<void> {
 				provenanceHeader({
 					app,
 					actions,
+					elapsed: hm(Date.now() - startedAt),
 					findings: findings.length,
 					backend: backendKind,
 					findCalls,

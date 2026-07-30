@@ -455,20 +455,39 @@ const normSurface = (s: string): string =>
 		.replace(/&lt;|&gt;|[<>]/g, "")
 		.replace(/^(top[- ]?level|none|root|unnamed)$/, "");
 
-export function frontierDismiss(
+/**
+ * What a dismiss WOULD clear, without clearing it. Separate from frontierDismiss so the
+ * caller can size a sweep before committing to it: one call that retires a hundred
+ * heterogeneous controls under a single sentence is how a pass reaches "frontier-empty"
+ * without having looked at much, and the count is the only signal available beforehand.
+ */
+export function frontierMatches(
 	ledger: FrontierLedger,
-	opts: { names?: string[]; surface?: string; reason: string },
+	opts: { names?: string[]; surface?: string },
 ): InteractiveElement[] {
 	if (!opts.names?.length && opts.surface === undefined) throw new Error("dismiss needs names, a surface, or both");
 	const norm = (s: string) => s.trim().toLowerCase();
 	const wanted = opts.names?.map(norm);
-	const gone: InteractiveElement[] = [];
-	for (const e of frontierRemaining(ledger)) {
-		if (opts.surface !== undefined && normSurface(e.surface) !== normSurface(opts.surface)) continue;
-		if (wanted && !wanted.includes(norm(e.name))) continue;
-		ledger.dismissed.set(frontierKey(e), opts.reason);
-		gone.push(e);
-	}
+
+	return frontierRemaining(ledger).filter(
+		(e) =>
+			(opts.surface === undefined || normSurface(e.surface) === normSurface(opts.surface)) &&
+			(!wanted || wanted.includes(norm(e.name))),
+	);
+}
+
+/**
+ * True when a surface name does not identify a real panel — the top-level scatter, where a
+ * bulk dismissal is a sweep across unrelated controls rather than "this list is repetitive".
+ */
+export const isVagueSurface = (surface?: string): boolean => surface === undefined || normSurface(surface) === "";
+
+export function frontierDismiss(
+	ledger: FrontierLedger,
+	opts: { names?: string[]; surface?: string; reason: string },
+): InteractiveElement[] {
+	const gone = frontierMatches(ledger, opts);
+	for (const e of gone) ledger.dismissed.set(frontierKey(e), opts.reason);
 
 	return gone;
 }
@@ -515,6 +534,95 @@ export function mergeGraph(
 	for (const e of g.edges ?? []) if (e?.from && e?.to) (edges.set(`${e.from}|${e.to}|${e.action}`, e), n++);
 
 	return n;
+}
+
+/**
+ * Is this error worth trying again, or is retrying it just a slower failure?
+ *
+ * Transient here means the request never got a verdict: the connection dropped, the body
+ * stalled, the server was busy. A 400 or an auth failure will fail identically forever and
+ * must surface immediately.
+ *
+ * Matching on message text as well as status because a mid-stream failure arrives wrapped —
+ * the observed one was `AnthropicError: terminated` with a `BodyTimeoutError` cause and no
+ * status at all, since the headers had already come back 200.
+ */
+export function isTransientApiError(err: unknown): boolean {
+	const status = (err as { status?: number })?.status;
+	if (typeof status === "number") return status === 408 || status === 429 || status >= 500;
+	const text = `${(err as Error)?.message ?? ""} ${String((err as { cause?: unknown })?.cause ?? "")}`.toLowerCase();
+
+	return /terminated|timeout|econnreset|econnrefused|enotfound|socket hang up|network|overloaded|fetch failed/.test(text);
+}
+
+/**
+ * Retry a model call through transient network failures.
+ *
+ * Added after a 12-hour unattended pass died two minutes in on a single `BodyTimeoutError`
+ * mid-stream, having recorded nothing and so leaving nothing to salvage. The SDK's own retries
+ * do not cover a stream that fails after headers, which is exactly the failure long
+ * generations are most exposed to.
+ *
+ * Delays are a parameter rather than a constant so tests do not have to sleep through them.
+ */
+export async function retryTransient<T>(
+	run: () => Promise<T>,
+	opts: { delaysMs?: number[]; onRetry?: (attempt: number, err: unknown) => void } = {},
+): Promise<T> {
+	const delays = opts.delaysMs ?? [2000, 8000, 20000];
+	for (let attempt = 0; ; attempt++) {
+		try {
+			return await run();
+		} catch (err) {
+			if (attempt >= delays.length || !isTransientApiError(err)) throw err;
+			opts.onRetry?.(attempt + 1, err);
+			await new Promise((r) => setTimeout(r, delays[attempt]));
+		}
+	}
+}
+
+/**
+ * Recover graph entries the model serialised into a STRING argument instead of the structured
+ * `nodes`/`edges` arrays.
+ *
+ * Observed live on 2026-07-30: a `record` call arrives with its finding text ending in a
+ * literal `<parameter name="nodes">[{"id":"editor/captions-toolbar",...}]` — tool-call markup
+ * emitted as prose. The payload is well-formed JSON, so the knowledge is intact; only its
+ * envelope is wrong, and without this it lands in the appmap as narrative rather than as
+ * queryable nodes. 15 of 28 findings in that run leaked this way, carrying 73 entries.
+ *
+ * That matters beyond tidiness: `findScopeAmbiguities()` reads nodes, so a scope pair recorded
+ * only as prose produces no warning for the task agent — the exact failure the graph exists to
+ * prevent.
+ *
+ * Deliberately permissive about the closing tag (a truncated generation often has none) and
+ * silent on unparseable blocks: this is salvage, and a half-written array should cost its own
+ * entries, not the whole finding. Returns the cleaned text so the leaked markup does not also
+ * end up quoted in the prose map.
+ */
+export function recoverLeakedGraph(text: string): {
+	cleaned: string;
+	nodes: AppMapNode[];
+	edges: AppMapEdge[];
+} {
+	const nodes: AppMapNode[] = [];
+	const edges: AppMapEdge[] = [];
+	let cleaned = text;
+	const pattern = /<parameter\s+name="(nodes|edges)">\s*(\[[\s\S]*?\])\s*(?:<\/parameter>|$)/g;
+	for (const match of text.matchAll(pattern)) {
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(match[2]);
+		} catch {
+			continue; // Truncated mid-array; the rest of the finding is still worth keeping.
+		}
+		if (!Array.isArray(parsed)) continue;
+		if (match[1] === "nodes") nodes.push(...(parsed as AppMapNode[]));
+		else edges.push(...(parsed as AppMapEdge[]));
+		cleaned = cleaned.replace(match[0], "");
+	}
+
+	return { cleaned: cleaned.trimEnd(), nodes, edges };
 }
 
 /**

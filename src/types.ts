@@ -123,6 +123,9 @@ export interface AppMap {
 	provenance: "explore";
 	/** sha256 prefix of the prose map written in the same pass, pairing the two artifacts. */
 	proseSha256?: string;
+	/** Wall-clock the pass took, e.g. "1h07m". The grounding budget is per-app, so the cost
+	 *  of producing this map has to travel with it rather than living only in a console log. */
+	elapsed?: string;
 	coverage?: AppMapCoverage;
 	nodes: AppMapNode[];
 	edges: AppMapEdge[];
