@@ -132,12 +132,17 @@ def sample_cursor(samples, t_ms):
 
 
 def frame_at(plan, t_ms):
-    """Which captured frame is held at an output instant."""
+    """Which captured frame is held at an output instant.
+
+    Returns the plan entry so the caller can prefer `frameFile`. Resolving by index would require
+    this script to filter the directory exactly as the track builder did — it did not, and every
+    entry pointed at the wrong frame once malformed captures were dropped.
+    """
     for entry in plan:
         if entry["startMs"] <= t_ms < entry["endMs"]:
-            return entry["frameIndex"]
+            return entry
 
-    return plan[-1]["frameIndex"] if plan else 0
+    return plan[-1] if plan else None
 
 
 def hover_at(hovers, t_ms):
@@ -203,6 +208,7 @@ def main():
     hovers = track.get("hovers", [])
 
     files = sorted(f for f in os.listdir(frames_dir) if f.startswith("f-") and f.endswith(".png"))
+    index_of = set(files)
     if not files:
         print("no frames to render", file=sys.stderr)
 
@@ -216,8 +222,9 @@ def main():
 
         for n in range(total):
             t_ms = n * 1000.0 / fps
-            index = frame_at(plan, t_ms)
-            index = min(index, len(files) - 1)
+            entry = frame_at(plan, t_ms)
+            name = (entry or {}).get("frameFile")
+            index = files.index(name) if name in index_of else min((entry or {}).get("frameIndex", 0), len(files) - 1)
             # Consecutive output frames almost always share a plate at ~1fps capture, so decoding
             # once per source frame rather than per output frame is the whole cost of the render.
             if index != cached_index:

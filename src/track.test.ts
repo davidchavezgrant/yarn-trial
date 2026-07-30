@@ -395,6 +395,51 @@ test("buildTrack__EmitsHoverSpans__When__StepsCarryTargetRects", () => {
 	assert.ok(track.hovers[0].endMs <= clicks[1].tMs);
 });
 
+test("buildTrack__SkipsActions__When__TheyPrecedeTheFirstUsableFrame", () => {
+	// toOutputMs pins anything earlier than the first frame to 0, so actions from before the
+	// window settled all stacked at 0ms on the opening frame — two clicks at once, against a
+	// screen showing neither, which reads as the UI changing before the pointer gets there.
+	const base = 1_000_000;
+	const mk = (epochMs: number, x: number): TrajectoryTurn => ({
+		tool: "click",
+		arguments: {},
+		clickPoint: { x, y: 400 },
+		startMs: 0,
+		endMs: 200,
+		epochMs,
+		dir: "",
+		captureWidth: 1568,
+	});
+	const track = buildTrack({
+		stamp: "t",
+		app: "Yarn",
+		task: "t",
+		runLog: "",
+		steps: [],
+		// The first two happen before any frame was captured; only the third has footage.
+		turns: [mk(base - 18_000, 100), mk(base - 2000, 300), mk(base + 4000, 900)],
+		frameTimes: [base, base + 4000, base + 6000],
+		frameSize: { width: 1568, height: 882 },
+		captureSize: { width: 1568, height: 882 },
+		constants: CONSTANTS,
+		library: { fittedFrom: { dataset: "t", generatedAt: "" }, segments: [] },
+	});
+	const clicks = track.events.filter((e) => e.kind === "mousedown");
+	assert.equal(clicks.length, 1, "only the action with footage should be rendered");
+	assert.ok(clicks[0].tMs > 0, "and it must not be pinned to the timeline start");
+});
+
+test("buildFramePlan__NamesEveryFrame__When__FileListIsGiven", () => {
+	// The renderer resolves by filename. Resolving by index required it to filter the frames
+	// directory exactly as the track builder did — it did not, so after malformed frames were
+	// dropped every plan entry pointed at the wrong capture.
+	const base = 1_000_000;
+	const plan = buildFramePlan([base, base + 1000, base + 2000], [], ["f-00025.png", "f-00026.png", "f-00027.png"]);
+	assert.deepEqual(plan.map((p) => p.frameFile), ["f-00025.png", "f-00026.png", "f-00027.png"]);
+	// Indices stay relative to the FILTERED list, so they must not be read as directory positions.
+	assert.deepEqual(plan.map((p) => p.frameIndex), [0, 1, 2]);
+});
+
 test("buildTrack__OmitsHoverSpan__When__StepHasNoTargetRect", () => {
 	// Inferring a box from the cursor position would highlight whatever the pointer overlaps,
 	// including nothing at all.

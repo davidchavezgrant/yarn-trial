@@ -106,20 +106,21 @@ function main(): void {
 		console.log(`no run log at ${runLogPath} — pointer types will default to arrow`);
 	}
 
-	const frameFiles = fs.existsSync(framesDir)
+	const allFrames = fs.existsSync(framesDir)
 		? fs.readdirSync(framesDir).filter((f) => f.startsWith("f-") && f.endsWith(".png")).sort()
 		: [];
-	if (frameFiles.length === 0) {
+	if (allFrames.length === 0) {
 		console.error(`no frames in ${framesDir}`);
 		process.exit(1);
 	}
-	// Modal frame size, not the first frame's. Early frames are captured while the window is still
-	// settling and come out a different shape — one run gave 23 frames at 1568x1328 before
-	// stabilising at 1568x882 for the remaining 139. Taking the first frame's size adopted the
-	// transient geometry, and since the aspect ratio was wrong (1.18 against the capture's 1.78)
-	// every click landed off target. assembleVideo picks the modal size for the same reason.
+	// Modal frame size, then DROP everything that is not it — the same majority vote and the same
+	// discard that assembleVideo does. Off-size frames are captured while the window is still
+	// settling: one run opened with 25 of them, showing a completely different screen (the previous
+	// run's editor, before the home reset landed) at a 1.18 aspect ratio against the capture's 1.78.
+	// Letterboxing those into the output was the source of the black bars and false starts — they
+	// are not merely mis-shaped, they are frames of the wrong moment.
 	const sizeCounts = new Map<string, { size: { width: number; height: number }; n: number }>();
-	for (const f of frameFiles) {
+	for (const f of allFrames) {
 		const s = pngSize(path.join(framesDir, f));
 		const key = `${s.width}x${s.height}`;
 		const seen = sizeCounts.get(key);
@@ -128,8 +129,20 @@ function main(): void {
 	}
 	const ranked = [...sizeCounts.values()].sort((a, b) => b.n - a.n);
 	const frameSize = ranked[0].size;
-	if (ranked.length > 1)
-		console.log(`frame sizes vary (${ranked.map((r) => `${r.size.width}x${r.size.height} x${r.n}`).join(", ")}); using the modal one`);
+	const frameFiles = allFrames.filter((f) => {
+		const s = pngSize(path.join(framesDir, f));
+
+		return s.width === frameSize.width && s.height === frameSize.height;
+	});
+	if (frameFiles.length < allFrames.length)
+		console.log(
+			`dropping ${allFrames.length - frameFiles.length} malformed frame(s) ` +
+				`(modal size ${frameSize.width}x${frameSize.height}; saw ${ranked.map((r) => `${r.size.width}x${r.size.height} x${r.n}`).join(", ")})`,
+		);
+	if (frameFiles.length < 2) {
+		console.error("not enough usable frames to render");
+		process.exit(1);
+	}
 
 	// The capture the driver reported click points in. before.png is the same window at its native
 	// resolution, so its width is the denominator that converts those points into frame pixels.
@@ -153,6 +166,7 @@ function main(): void {
 		steps,
 		turns,
 		frameTimes,
+		frameFiles,
 		frameSize,
 		captureSize,
 		constants,

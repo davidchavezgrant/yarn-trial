@@ -76,8 +76,16 @@ export interface TrackTimeline {
 
 /** Which source frame is held over which span of the output timeline. */
 export interface FramePlanEntry {
-	/** Index into the recording's frames/ directory listing. */
+	/**
+	 * Index into the USABLE frame list, after malformed frames are dropped.
+	 *
+	 * `frameFile` is the authoritative reference — a bare index only agrees with the renderer if it
+	 * filters the directory identically, and it did not: the renderer re-listed every png while the
+	 * plan was built from the filtered set, so each entry pointed at the wrong frame.
+	 */
 	frameIndex: number;
+	/** Filename within frames/, e.g. "f-00042.png". */
+	frameFile?: string;
 	/** Output-timeline span this frame is displayed for. */
 	startMs: number;
 	endMs: number;

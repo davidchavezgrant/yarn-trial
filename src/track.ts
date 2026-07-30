@@ -620,6 +620,7 @@ function wrongKeyFor(ch: string): string {
 export function buildFramePlan(
 	frameTimes: number[],
 	actionWindows: Array<{ startEpochMs: number; endEpochMs: number }>,
+	frameFiles?: string[],
 ): FramePlanEntry[] {
 	if (frameTimes.length === 0) return [];
 	/**
@@ -639,7 +640,7 @@ export function buildFramePlan(
 		const shown = action
 			? Math.min(Math.max(realMs, 1000 / FPS), ACTION_MAX_MS)
 			: Math.min(realMs, GAP_BEAT_MS);
-		plan.push({ frameIndex: i, startMs: outMs, endMs: outMs + shown, action });
+		plan.push({ frameIndex: i, ...(frameFiles?.[i] ? { frameFile: frameFiles[i] } : {}), startMs: outMs, endMs: outMs + shown, action });
 		outMs += shown;
 	}
 
@@ -671,6 +672,9 @@ export interface BuildTrackInput {
 	steps: RunLogStep[];
 	turns: TrajectoryTurn[];
 	frameTimes: number[];
+	/** Usable frame filenames, index-aligned with frameTimes. Carried into the plan so the
+	 *  renderer resolves frames by name instead of re-deriving an index from the directory. */
+	frameFiles?: string[];
 	frameSize: { width: number; height: number };
 	captureSize: { width: number; height: number };
 	constants: MotionConstants;
@@ -695,6 +699,7 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 			startEpochMs: t.epochMs - (t.endMs - t.startMs),
 			endEpochMs: t.epochMs,
 		})),
+		input.frameFiles,
 	);
 	// Per-turn capture width, falling back to the run's nominal one. A window that moves between
 	// displays mid-run changes the size of the capture its click points are expressed in, so a
@@ -712,7 +717,19 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 	let lastActionMs = 0;
 	cursor.push({ tMs: 0, x: at.x, y: at.y, type });
 
+	/**
+	 * Actions with no footage are dropped, not clamped.
+	 *
+	 * toOutputMs pins anything before the first frame to 0, so a click that happened while the
+	 * window was still settling — before any usable capture exists — lands on top of the opening
+	 * frame along with every other such click. One run stacked two clicks at 0ms against a screen
+	 * that showed neither: they read as the UI changing before the pointer arrived, because there
+	 * is genuinely no frame of them happening.
+	 */
+	const firstFrameMs = input.frameTimes[0] ?? 0;
+
 	for (const { step, turn } of joined) {
+		if (turn.epochMs < firstFrameMs) continue;
 		const dispatchMs = toOutputMs(plan, input.frameTimes, turn.epochMs - (turn.endMs - turn.startMs));
 		const completeMs = toOutputMs(plan, input.frameTimes, turn.epochMs);
 		const raw = actionPoint(turn);
