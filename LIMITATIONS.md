@@ -80,6 +80,28 @@ being a screen-recording product, and favorable for agent perception.
 target is frontmost on the current Space. This is a deployment precondition to state
 explicitly, not an edge case.
 
+### 1a. The half-suspended variant: AX alive, rendering dead (found 2026-07-30)
+
+The detection rule above — "AX windows == 0, fail fast" — assumes perception and rendering
+die together. They do not always. Two Notion Calendar runs (`2026-07-30T00-27-43`,
+`T01-00-53`) kept a **full AX tree** the whole way through: 15 steps executed, elements
+addressable, `verify()` grepping a plausible haystack. Nothing repainted. Every step logged
+`pixelDelta: 0.000`, and the recorder saved **247 byte-identical frames** — the same view,
+current-time line frozen at 2:27 AM, for 316 seconds of video.
+
+So the run looked healthy on the channel that gates it and was dead on the channel that
+produces the deliverable. Both runs burned their whole step budget and assembled an mp4 of
+a still image.
+
+**Detection** (`unpaintedStreak()` in `src/harness.ts`): count trailing steps that verified
+nothing *and* moved no pixels; at 4, abort with this diagnosis. It can only abort, never
+pass — a verified step proves the app is alive and clears the streak, and an unknown delta
+(`--no-vision`, no prior frame) clears it too. Replayed over all 48 historical run logs it
+fires on exactly these two, at step 4 instead of 15.
+
+This is the first thing the advisory pixel channel decides rather than merely records. The
+signal was already sitting in both logs; nothing consumed it.
+
 ---
 
 ## 2. Electron AX tree degrades under focus churn

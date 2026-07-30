@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { pruneUiState, readUiState, writeUiState } from "./ui-core.js";
+import { listRecordedRuns, pruneUiState, readUiState, writeUiState } from "./ui-core.js";
 
 /**
  * State is keyed off process.cwd(), so each test runs in its own temp dir rather than
@@ -71,4 +71,49 @@ test("pruneUiState__Coerces__When__FieldsAreWrongType", () => {
 	const pruned = pruneUiState({ lastApp: 42, byApp: { Yarn: { task: null, log: ["ok", 7, null] } } });
 	assert.equal(pruned.lastApp, undefined);
 	assert.deepEqual(pruned.byApp.Yarn, { task: "", log: ["ok"] });
+});
+
+/** Writes the pair of artifacts a recorded run leaves behind: a log and an mp4 on disk. */
+function fakeRun(id: string, log: Record<string, unknown>, withVideo = true): void {
+	fs.mkdirSync("out/runs", { recursive: true });
+	const video = `out/recording/${id}/window.mp4`;
+	if (withVideo) {
+		fs.mkdirSync(path.dirname(video), { recursive: true });
+		fs.writeFileSync(video, "");
+	}
+	fs.writeFileSync(`out/runs/${id}.json`, JSON.stringify({ ...(withVideo ? { video } : {}), ...log }));
+}
+
+test("listRecordedRuns__ListsTheRun__When__RunFailedButRecordedAVideo", () => {
+	// The bug this pins: the two exits in agent.ts wrote the log independently and the
+	// step-limit path omitted `video` — the one field this filter keys on. Runs that ran
+	// out of steps vanished from the gallery even with a finished mp4 beside them.
+	inTempCwd(() => {
+		fakeRun("2026-07-30T01-00-53-notion-calendar", {
+			app: "Notion Calendar", task: "change my timezone", success: false,
+			summary: "step limit reached", steps: [{ timestamp: "t0" }, { timestamp: "t1" }],
+		});
+		const runs = listRecordedRuns();
+		assert.equal(runs.length, 1);
+		assert.equal(runs[0].success, false);
+		assert.equal(runs[0].actions, 2);
+	});
+});
+
+test("listRecordedRuns__SkipsTheRun__When__LogDeclaresNoVideo", () => {
+	// The filter itself stays strict: a run with no recording is not a gallery entry.
+	inTempCwd(() => {
+		fakeRun("2026-07-30T02-00-00-yarn", { app: "Yarn", success: true, steps: [] }, false);
+		assert.deepEqual(listRecordedRuns(), []);
+	});
+});
+
+test("listRecordedRuns__SkipsTheRun__When__DeclaredVideoIsGone", () => {
+	// Logs outlive out/recording/, which gets cleaned. A dead <video> src is worse than
+	// an absent card, so existence on disk is checked rather than trusted.
+	inTempCwd(() => {
+		fakeRun("2026-07-30T03-00-00-yarn", { app: "Yarn", success: true, steps: [] });
+		fs.rmSync("out/recording/2026-07-30T03-00-00-yarn/window.mp4");
+		assert.deepEqual(listRecordedRuns(), []);
+	});
 });

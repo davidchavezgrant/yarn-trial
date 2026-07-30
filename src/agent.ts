@@ -19,11 +19,13 @@ import {
 	observe,
 	OUT,
 	pixelDelta,
+	unpaintedStreak,
 	resetToHome,
 	scopeWarnings,
 	stageWindowForRecording,
 	TargetNotObservableError,
 	toActionRequest,
+	verificationTallies,
 	verify,
 	visualJudge,
 } from "./harness.js";
@@ -33,6 +35,8 @@ import type { ActionRequest, Expectation, StepRecord } from "./types.js";
 import type { ObservationBundle, VerifyResult, VisualVerdict } from "./harness.js";
 
 const MAX_STEPS = Number(process.env.AGENT_STEPS ?? 15);
+/** Consecutive steps with nothing verified and nothing repainted before the run is abandoned. */
+const FROZEN_STEPS = 4;
 /** Free read-only page searches per run, beyond which a find costs an action. */
 const MAX_FINDS = Number(process.env.AGENT_FINDS ?? 20);
 const SETTLE_MS = 900;
@@ -260,6 +264,50 @@ async function main(): Promise<void> {
 	let expectationRejections = 0;
 	let findCalls = 0;
 	let malformedStreak = 0;
+	let aborted: unknown;
+	let outcome: Record<string, unknown> | undefined;
+
+	/**
+	 * The one place a run log is written. Every exit — done(), the step limit, an abort —
+	 * sets `outcome` and this runs once from the finally, because the exits assembled the
+	 * log independently and drifted: the step-limit path omitted `video`, and the gallery
+	 * lists only runs that declare one. Runs that ran out of steps never appeared in the
+	 * feed even though their mp4 had assembled normally.
+	 *
+	 * `result` carries what only the exiting path knows (success, summary, the final
+	 * checks); everything derivable from the run itself is filled in here so it cannot go
+	 * missing from one path again.
+	 */
+	const writeRunLog = (result: Record<string, unknown>): void => {
+		fs.writeFileSync(
+			runLog,
+			JSON.stringify(
+				{
+					task,
+					app,
+					backend: backendKind,
+					vision,
+					grounding: groundingMeta,
+					hintedPrompt: audit.hinted,
+					hintReasons: audit.reasons,
+					homeReset,
+					domEnrichment,
+					sessionRevivals: driver.revivals,
+					expectationRejections,
+					findCalls,
+					elapsedSec: Math.round((Date.now() - startedAt) / 1000),
+					usage,
+					...verificationTallies(records),
+					...result,
+					...(record ? { video: videoPath.replace(`${process.cwd()}/`, "") } : {}),
+					steps: records,
+				},
+				null,
+				2,
+			),
+		);
+		console.log(`run log: ${runLog}`);
+	};
 
 	// Window-scoped recording: poll the driver's window snapshots (which work even
 	// when the window is occluded, backgrounded, or on another Space) and assemble
@@ -607,16 +655,8 @@ async function main(): Promise<void> {
 					}
 				}
 
-				const unverified = records.filter((r) => !r.verified).length;
-				/**
-				 * Verified steps split by evidence channel, never summed into one number.
-				 * A pixel step proves something moved where the action was aimed; a text step
-				 * proves WHAT changed. Reporting "8/8 verified" over a run carried by pixels
-				 * would overstate it by exactly the distinction this whole layer exists to keep.
-				 */
-				const textSteps = records.filter((r) => r.verificationChannel === "text").length;
-				const geometrySteps = records.filter((r) => r.verificationChannel === "geometry").length;
-				const pixelSteps = records.filter((r) => r.verificationChannel === "pixel").length;
+				const { unverifiedSteps: unverified, verifiedByChannel } = verificationTallies(records);
+				const { text: textSteps, geometry: geometrySteps, pixel: pixelSteps } = verifiedByChannel;
 				const verdict = !input.success
 					? "failure"
 					: unverified === 0
@@ -625,13 +665,13 @@ async function main(): Promise<void> {
 				console.log(`\n=== DONE (${verdict}) after ${records.length} actions ===`);
 				console.log(input.summary);
 				const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
-				fs.writeFileSync(runLog, JSON.stringify({ task, app, backend: backendKind, vision, grounding: groundingMeta, hintedPrompt: audit.hinted, hintReasons: audit.reasons, homeReset, domEnrichment, sessionRevivals: driver.revivals, success: input.success, finalCheck, visualCheck: visual, verifiedSteps: records.length - unverified, verifiedByChannel: { text: textSteps, geometry: geometrySteps, pixel: pixelSteps }, unverifiedSteps: unverified, expectationRejections, findCalls, summary: input.summary, elapsedSec, usage, ...(record ? { video: videoPath.replace(`${process.cwd()}/`, "") } : {}), steps: records }, null, 2));
 				console.log(`stats: ${records.length} actions, ${elapsedSec}s, ${usage.modelCalls} model calls, ${usage.outputTokens} output tokens, grounding=${groundingMeta.provenance}, vision=${vision}, hintedPrompt=${audit.hinted}, homeReset=${homeReset}`);
 				console.log(`verification: ${records.length - unverified}/${records.length} steps verified (${textSteps} by text, ${geometrySteps} by geometry, ${pixelSteps} by pixels only)${expectationRejections ? `, ${expectationRejections} call(s) rejected for missing checks` : ""}${finalCheck ? `; final goal check: ${finalCheck.verified ? "PASSED" : "failed"} (${finalCheck.evidence?.textIncludes?.join(", ") ?? ""})` : ""}`);
 				if (visual && visual.verdict !== "PASS")
 					console.log(`NOTE: visual judge returned ${visual.verdict} — text evidence passed, but the final frame did not independently confirm the goal.`);
 				if (audit.hinted) console.log("NOTE: prompt contained method hints — NOT a clean autonomy result.");
-				console.log(`run log: ${runLog}`);
+				outcome = { success: input.success, finalCheck, visualCheck: visual, summary: input.summary };
+
 				return;
 			}
 
@@ -780,6 +820,17 @@ async function main(): Promise<void> {
 				modelReasoning: input.reasoning,
 			});
 
+			// The window stopped repainting. Acting on further is pointless — the remaining
+			// steps produce a stale tree and the recording produces one frame repeated — so
+			// stop here rather than spend the whole budget proving it again.
+			if (unpaintedStreak(records) >= FROZEN_STEPS)
+				throw new TargetNotObservableError(
+					app,
+					`${FROZEN_STEPS} consecutive steps verified nothing and changed no pixels — the window is not `
+						+ `repainting. Usual cause: the target app is off the active Space or minimized, where `
+						+ `Chromium suspends it while every driver call still reports success`,
+				);
+
 			messages.push({
 				role: "user",
 				content: [
@@ -800,8 +851,9 @@ async function main(): Promise<void> {
 		}
 
 		console.log(`\n=== step limit (${MAX_STEPS}) reached without done ===`);
-		fs.writeFileSync(runLog, JSON.stringify({ task, app, backend: backendKind, vision, grounding: groundingMeta, hintedPrompt: audit.hinted, hintReasons: audit.reasons, homeReset, domEnrichment, sessionRevivals: driver.revivals, success: false, expectationRejections, findCalls, summary: "step limit reached", elapsedSec: Math.round((Date.now() - startedAt) / 1000), usage, steps: records }, null, 2));
-		console.log(`run log: ${runLog}`);
+		outcome = { success: false, summary: "step limit reached" };
+	} catch (err) {
+		aborted = err;
 	} finally {
 		if (record) {
 			recordingActive = false;
@@ -822,7 +874,30 @@ async function main(): Promise<void> {
 		}
 		await driver.close();
 		overlay.stop();
+
+		/**
+		 * The only place the log is written, and it is here — inside the finally, below the
+		 * assembly — for two reasons.
+		 *
+		 * It catches every exit. An aborted run used to leave frames, an assembled mp4, and
+		 * no log at all, so it was invisible to the gallery and, worse, invisible to any
+		 * count of how often runs fail: every reliability figure we quoted was conditional
+		 * on the run surviving long enough to write its own obituary.
+		 *
+		 * And it lands after the mp4 exists. The gallery lists a run only once the file its
+		 * log names is really on disk, so writing the log first meant a finished run sat out
+		 * a poll before appearing.
+		 */
+		if (aborted !== undefined)
+			outcome = {
+				success: false,
+				summary: `aborted: ${aborted instanceof Error ? aborted.message : String(aborted)}`,
+				aborted: true,
+			};
+		if (outcome) writeRunLog(outcome);
 	}
+
+	if (aborted !== undefined) throw aborted;
 }
 
 main().catch((err) => {

@@ -19,10 +19,12 @@ import {
 	pixelDelta,
 	scopeWarnings,
 	toActionRequest,
+	unpaintedStreak,
+	verificationTallies,
 	verify,
 } from "./harness.js";
 import type { InteractiveElement, ObservationBundle } from "./harness.js";
-import type { AppMap, AppMapEdge, AppMapNode } from "./types.js";
+import type { AppMap, AppMapEdge, AppMapNode, StepRecord } from "./types.js";
 import { EMPTY, bestClass, descriptorFor, lookup } from "./axdom.js";
 import { overlayEnv, scriptEnvKeys } from "./overlay.js";
 
@@ -644,4 +646,72 @@ test("overlayEnv__CarriesPauseFile__When__Built", () => {
 	// Named explicitly rather than left to the scrape: this is the one that was missing, and
 	// a regression here silently un-fixes the banner rather than failing anything.
 	assert.equal(overlayEnv("drive", "t", 1, "/tmp/go", "/tmp/pause").OVERLAY_PAUSE, "/tmp/pause");
+});
+
+// verificationTallies exists because the run log used to be assembled independently at each
+// exit path, and the two drifted. Keeping the counts in one function is half the fix; the
+// other half is that both paths now write through a single writer in agent.ts.
+
+function step(verified: boolean, channel?: StepRecord["verificationChannel"]): StepRecord {
+	return {
+		index: 0,
+		timestamp: "",
+		action: { kind: "tool", name: "click", args: {} },
+		expectation: { textIncludes: ["x"] },
+		verified,
+		...(channel ? { verificationChannel: channel } : {}),
+	} as StepRecord;
+}
+
+test("verificationTallies__SplitsByChannel__When__StepsUsedDifferentEvidence", () => {
+	// Never summed into one number: a run carried by pixels must not read like one proven
+	// by text. The split is the whole point of tracking a channel per step.
+	const t = verificationTallies([step(true, "text"), step(true, "pixel"), step(true, "geometry"), step(false)]);
+	assert.equal(t.verifiedSteps, 3);
+	assert.equal(t.unverifiedSteps, 1);
+	assert.deepEqual(t.verifiedByChannel, { text: 1, geometry: 1, pixel: 1 });
+});
+
+test("verificationTallies__ReportsZeroes__When__RunRecordedNoSteps", () => {
+	// The step-limit path can log a run with nothing verified; it must still produce the
+	// same shape rather than omitting the fields.
+	assert.deepEqual(verificationTallies([]), {
+		verifiedSteps: 0,
+		unverifiedSteps: 0,
+		verifiedByChannel: { text: 0, geometry: 0, pixel: 0 },
+	});
+});
+
+// unpaintedStreak: the dead-window detector. Its whole safety argument is that it can only
+// ever abort, so these pin the two ways the streak must break.
+
+function paintStep(verified: boolean, pixelDelta?: number): StepRecord {
+	return { ...step(verified), pixelDelta } as StepRecord;
+}
+
+test("unpaintedStreak__CountsEveryStep__When__NothingVerifiedAndNothingRepainted", () => {
+	// The exact signature of the two frozen Notion runs: 0.0% on every step, nothing verified.
+	assert.equal(unpaintedStreak([0, 0, 0, 0].map((d) => paintStep(false, d))), 4);
+});
+
+test("unpaintedStreak__Resets__When__AStepVerified", () => {
+	// A verified step proves the app is alive even if it did not repaint, so a real run
+	// can never be aborted by this.
+	const steps = [paintStep(false, 0), paintStep(true, 0), paintStep(false, 0)];
+	assert.equal(unpaintedStreak(steps), 1);
+});
+
+test("unpaintedStreak__Resets__When__PixelsMoved", () => {
+	assert.equal(unpaintedStreak([paintStep(false, 0), paintStep(false, 0.4), paintStep(false, 0)]), 1);
+});
+
+test("unpaintedStreak__CountsNothing__When__DeltaIsUnknown", () => {
+	// --no-vision captures no frames at all, so the delta is undefined every step. Absence
+	// of evidence must not read as evidence of a frozen window.
+	assert.equal(unpaintedStreak([paintStep(false), paintStep(false), paintStep(false)]), 0);
+});
+
+test("unpaintedStreak__CountsFromTheEnd__When__TheFreezeStartedMidRun", () => {
+	const steps = [paintStep(true, 0.5), paintStep(false, 0.2), paintStep(false, 0), paintStep(false, 0)];
+	assert.equal(unpaintedStreak(steps), 2);
 });

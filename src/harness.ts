@@ -1300,3 +1300,59 @@ Painted targets (canvases, timelines, image regions):
 - Prefer element_index whenever an element covers what you mean. Coordinates cannot be verified by the harness the way labels can, so they are the fallback, not the default.
 - Dragging a thing puts it under wherever you released. If a pointer indicator follows your press, it now sits on top of the thing you just dropped, so pressing there again grabs the indicator instead — a reverse drag is NOT an undo.
 - A canvas usually reacts to ANY press (scrubbing, selecting, deselecting). Text appearing after you act on a canvas may just be that reaction, not proof you hit the target.`;
+
+/**
+ * Verified-step tallies for a run log, split by evidence channel and never summed into one
+ * number: a pixel step proves something moved where the action was aimed, a text step proves
+ * WHAT changed. Reporting "8/8 verified" over a run carried by pixels would overstate it by
+ * exactly the distinction the verification layers exist to keep.
+ *
+ * Shared so that every exit path — done() and the step limit alike — reports the same shape.
+ */
+export function verificationTallies(steps: StepRecord[]): {
+	verifiedSteps: number;
+	unverifiedSteps: number;
+	verifiedByChannel: { text: number; geometry: number; pixel: number };
+} {
+	const unverified = steps.filter((s) => !s.verified).length;
+
+	return {
+		verifiedSteps: steps.length - unverified,
+		unverifiedSteps: unverified,
+		verifiedByChannel: {
+			text: steps.filter((s) => s.verificationChannel === "text").length,
+			geometry: steps.filter((s) => s.verificationChannel === "geometry").length,
+			pixel: steps.filter((s) => s.verificationChannel === "pixel").length,
+		},
+	};
+}
+
+/** Below this fraction of pixels changed, a frame is treated as not having repainted. */
+export const REPAINT_EPSILON = 0.001;
+
+/**
+ * How many trailing steps produced no evidence of a live app: nothing verified, nothing
+ * repainted. `unpainted` because it counts the absence of a repaint, not a failure.
+ *
+ * A suspended Chromium window (off the active Space, or minimized) keeps answering AX
+ * calls with its last tree, so nothing else in the loop notices it went dark: the agent
+ * acts, verify() greps a stale-but-valid haystack, and the recorder saves the same frame
+ * a few hundred times. Two Notion Calendar runs burned ~5 minutes each that way and
+ * assembled a 247-identical-frame mp4.
+ *
+ * The pixel channel had already seen it — every step read 0.0% — but it is advisory and
+ * nothing consumed it. This is the single decision it is allowed to drive, and it can
+ * only ever ABORT. It cannot discard a real success: a verified step proves the app is
+ * alive and clears the streak, and an unknown delta (vision off, no prior frame) is not
+ * evidence either way, so it clears the streak too.
+ */
+export function unpaintedStreak(steps: StepRecord[]): number {
+	let n = 0;
+	for (let i = steps.length - 1; i >= 0; i--) {
+		const s = steps[i];
+		if (s.verified || s.pixelDelta === undefined || s.pixelDelta >= REPAINT_EPSILON) break;
+		n++;
+	}
+
+	return n;
+}
