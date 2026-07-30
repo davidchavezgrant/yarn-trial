@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { nativeDir } from "./paths.js";
 
 /**
  * DOM enrichment for the AX observation, without CDP.
@@ -43,7 +44,7 @@ import fs from "node:fs";
  * DOM attributes, or a slow walk degrades to exactly the observation we had before.
  */
 
-const BIN = `${process.cwd()}/native/axdom`;
+const BIN = `${nativeDir()}/axdom`;
 
 /** Frame-keyed row from the sidecar. */
 interface DomRow {
@@ -119,6 +120,50 @@ export function descriptorFor(row: DomRow): string {
 	if (row.uRL) parts.push(`url="${row.uRL.slice(0, 60)}"`);
 
 	return parts.join(" ");
+}
+
+export interface SidecarStatus {
+	path: string;
+	/** The binary is present AND this machine can execute it. */
+	usable: boolean;
+	/** Why not, or why it is switched off. Absent when usable. */
+	problem?: string;
+}
+
+/**
+ * Whether this machine can actually run the sidecar — asked by `doctor`, not by the agent.
+ *
+ * `collect()` deliberately swallows all of this, because a run without enrichment is still a
+ * run. The cost of that kindness is that a host missing the sidecar looks identical to a host
+ * that has it: the only trace is `domEnrichment.unavailable` buried in a run log nobody grades.
+ * On the fleet the binary arrives purely as an rsync'd build artifact from whichever checkout
+ * provisioned it, so "never built" and "built for the other architecture" are both live, and
+ * both cost 37 of 64 anonymous interactive controls on the app we measured.
+ *
+ * Executes it rather than stat'ing it or parsing `file` output, because the question is
+ * whether it RUNS here — an arm64 binary on an Intel Mac, or one whose linkage is broken,
+ * passes every test that does not try. With no arguments it prints usage and exits 2, so any
+ * numeric exit status is proof it ran; only a failure to spawn at all is disqualifying.
+ */
+export function sidecarStatus(bin: string = BIN, exec: (b: string) => void = probeSidecar): SidecarStatus {
+	if (process.env.AXDOM === "0") return { path: bin, usable: false, problem: "disabled by AXDOM=0" };
+	if (!fs.existsSync(bin))
+		return { path: bin, usable: false, problem: "not built — run npm run build:native, then re-provision" };
+
+	try {
+		exec(bin);
+	} catch (e) {
+		const err = e as { status?: number; code?: string; message?: string };
+		if (typeof err.status === "number") return { path: bin, usable: true };
+
+		return { path: bin, usable: false, problem: `present but will not run here (${err.code ?? err.message}) — rebuild it on this machine's architecture` };
+	}
+
+	return { path: bin, usable: true };
+}
+
+function probeSidecar(bin: string): void {
+	execFileSync(bin, [], { timeout: 5000, stdio: "ignore" });
 }
 
 /**

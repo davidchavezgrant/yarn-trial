@@ -1,11 +1,28 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { quitApp } from "./appctl.js";
 import * as axdom from "./axdom.js";
 import { Driver } from "./driver.js";
+import { appmapsDir, appSlug, outDir } from "./paths.js";
 import type { ActionRequest, AppMap, AppMapEdge, AppMapNode, Expectation, ScopeAmbiguity, StepRecord, SurfaceScope } from "./types.js";
 
-export const OUT = `${process.cwd()}/out`;
+/**
+ * Snapshot at load, unlike the accessors in paths.ts: this is a CLI process whose data root
+ * is fixed before it starts (by `run`, or by the LaunchAgent plist), and dozens of call
+ * sites interpolate it as a plain string.
+ */
+export const OUT = outDir();
+
+/**
+ * What agent.ts exits with when the app is not at its declared home state.
+ *
+ * A CROSS-MACHINE contract, like the codes in runner/ctl.ts: the agent exits with it on a colo
+ * Mac and the client on the laptop reads the number to decide whether to offer a sign-in. Two
+ * independent copies of the literal is a protocol that drifts the first time one of them moves,
+ * so there is one and both ends import it.
+ */
+export const UNREADY_EXIT = 3;
 
 export interface WindowRef {
 	pid: number;
@@ -68,8 +85,71 @@ export interface ObservationBundle {
 	frames: Map<string, { x: number; y: number }>;
 }
 
-export function appSlug(app: string): string {
-	return app.toLowerCase().replace(/\s+/g, "-");
+// Re-exported, not defined here: the runner needs it and must not import this module, which
+// loads the Anthropic SDK and the driver. Every existing call site keeps working.
+export { appSlug };
+
+/**
+ * The key every artifact of one run shares: `out/runs/<key>.json`, `out/recording/<key>/`,
+ * and — when the run was dispatched rather than started by hand — `out/jobs/<key>/`.
+ *
+ * `RUN_STAMP` exists so a dispatcher can decide the key BEFORE the child exists. Without it
+ * the runner would have to guess which log a spawned process went on to write, and guessing
+ * by "newest file in out/runs" is wrong the moment two runs land in the same second or a
+ * previous run failed before writing anything. The child still owns the format; the caller
+ * only pre-commits to a value.
+ */
+export function runKey(prefix: string, app: string): string {
+	const override = process.env.RUN_STAMP?.trim();
+	if (override) return override;
+
+	return mintRunKey(prefix, app);
+}
+
+/**
+ * The same key, minted rather than inherited. Separate from `runKey` because the runner is a
+ * long-lived process that mints an id per job and then hands it to the child as `RUN_STAMP`:
+ * if it ever read that variable out of its own environment — a launchd plist, a shell that
+ * exported it once — every job it started would share one id, one job directory and one log.
+ */
+export function mintRunKey(prefix: string, app: string): string {
+	return `${prefix}${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}-${appSlug(app)}`;
+}
+
+/**
+ * Make SIGINT and SIGTERM a clean stop instead of an instant kill, and report whether one
+ * has arrived.
+ *
+ * Node's default action for both is to terminate the process on the spot, so every `finally`
+ * in the script is skipped: the driver session stays open until its own 300-second lifetime
+ * expires, and the run writes no log at all. That is not hypothetical — `runnerctl stop`
+ * signals the whole process group, so under the default a stopped run would be both invisible
+ * to the gallery and a hazard to whichever job started next on that Mac.
+ *
+ * The handler only sets a flag. The caller reads it between actions and leaves through its
+ * ordinary cleanup path, which is what keeps the run log. `graceMs` covers the case the flag
+ * cannot: a signal landing in the middle of a model call, where nothing will read it for
+ * several seconds. At that deadline the session is closed directly and the process exits —
+ * the value sits below the runner's own SIGINT→SIGKILL interval so that this, and not
+ * SIGKILL, is what ends the run.
+ */
+export function onInterrupt(closeDriver: () => Promise<void>, graceMs = 8000): () => boolean {
+	let interrupted = false;
+
+	for (const sig of ["SIGINT", "SIGTERM"] as const) {
+		process.on(sig, () => {
+			// A second signal is an operator saying the first one did not work. Honour it.
+			if (interrupted) process.exit(130);
+			interrupted = true;
+			console.log(`\n=== ${sig} received — finishing the current action and stopping ===`);
+			setTimeout(() => {
+				console.log("=== cleanup did not finish in time; closing the driver session ===");
+				closeDriver().finally(() => process.exit(130));
+			}, graceMs).unref();
+		});
+	}
+
+	return () => interrupted;
 }
 
 /**
@@ -107,25 +187,66 @@ export async function findWindow(driver: Driver, app: string): Promise<WindowRef
 }
 
 /**
- * A window on an inactive macOS Space (e.g. because another app is fullscreen) still
- * appears in the window list and every driver call still succeeds — but Chromium has
- * suspended the app: no app-content AX elements, no screenshot. The failure looks
- * like a healthy app, so detect it explicitly instead of letting the caller flail
- * against a menu-bar-only tree. See LIMITATIONS.md §1.
+ * An app that is running, answers every driver call, and shows nothing but its menu bar.
+ *
+ * Two different causes produce the identical symptom, and the message has to name the right
+ * one or it sends the operator somewhere useless:
+ *
+ * 1. THE SCREEN IS LOCKED. The login window owns the display, so app windows are not
+ *    composited and AX exposes only the menu bar. Measured on mac2 and mac3, 2026-07-30:
+ *    1974 elements, every one of them `AXMenu*`, `screencapture` refusing with "could not
+ *    create image from display", and `CGSSessionScreenIsLocked` true on exactly the two
+ *    hosts that failed. This is the common case on a colo Mac nobody sits at.
+ * 2. The window is on an inactive Space (another app is fullscreen). Chromium suspends the
+ *    app and produces the same empty tree. See LIMITATIONS.md §1.
+ *
+ * Only (1) is cheaply detectable, so it is checked and the rest is left as the fallback
+ * rather than asserted. Until 2026-07-30 this class named (2) unconditionally, which is how
+ * two locked Macs were read as a Spaces problem and answered with a relaunch that could not
+ * possibly have helped — nothing relaunches its way out of a lock screen.
  */
 export class TargetNotObservableError extends Error {
-	constructor(app: string, detail: string) {
+	constructor(app: string, detail: string, locked = false) {
 		super(
-			`"${app}" is running but not observable (${detail}), and foregrounding it did not help.\n` +
-				`Most likely it is on an inactive macOS Space — another app is fullscreen, or the\n` +
-				`window is on a different desktop. Programmatic activation cannot fix that; bring the\n` +
-				`app onto the active Space (click it in the Dock or ⌘-Tab to it), then re-run.`,
+			locked
+				? `"${app}" is running but not observable (${detail}) because THE SCREEN IS LOCKED.\n` +
+						`A locked Mac composites no app windows, so the accessibility tree contains the\n` +
+						`menu bar and nothing else. No amount of foregrounding or relaunching changes this.\n` +
+						`Unlock it — screen-share in (./run signin <host>) and log in once — then re-run.\n` +
+						`To stop it recurring on a machine that exists to be driven, turn off the screen\n` +
+						`lock and display sleep on that host.`
+				: `"${app}" is running but not observable (${detail}), and neither foregrounding nor\n` +
+						`relaunching it helped. The screen is unlocked, so most likely it is on an inactive\n` +
+						`macOS Space that it keeps restoring itself onto — another app is fullscreen, or the\n` +
+						`window belongs to a different desktop. Bring the app onto the active Space (click it\n` +
+						`in the Dock or ⌘-Tab to it), then re-run.`,
 		);
 		this.name = "TargetNotObservableError";
 	}
 }
 
 const isAppContent = (e: any) => !String(e.role ?? "").startsWith("AXMenu");
+
+/**
+ * Whether the login window currently owns the display.
+ *
+ * `ioreg` rather than a Quartz call because this has to work from whatever context the runner
+ * is in, including one that cannot link CoreGraphics. The key is absent — not false — on an
+ * unlocked machine, so absence is the unlocked answer.
+ *
+ * Answers false on any failure. This only ever refines an error message; a diagnostic that
+ * could itself fail a run would be worse than the wrong message.
+ */
+export function screenIsLocked(): boolean {
+	try {
+		const out = execFileSync("ioreg", ["-n", "Root", "-d1", "-a"], { encoding: "utf8", timeout: 5000 });
+		const at = out.indexOf("CGSSessionScreenIsLocked");
+
+		return at >= 0 && out.slice(at, at + 120).includes("<true/>");
+	} catch {
+		return false;
+	}
+}
 
 export async function assertObservable(driver: Driver, win: WindowRef, app: string): Promise<void> {
 	const state = await driver.act({
@@ -136,7 +257,7 @@ export async function assertObservable(driver: Driver, win: WindowRef, app: stri
 	const elements: any[] = JSON.parse(state.structuredJson ?? "{}").elements ?? [];
 	const content = elements.filter(isAppContent).length;
 	if (content === 0)
-		throw new TargetNotObservableError(app, `${elements.length} AX elements, none of them app content`);
+		throw new TargetNotObservableError(app, `${elements.length} AX elements, none of them app content`, screenIsLocked());
 }
 
 /**
@@ -176,10 +297,42 @@ async function foregroundApp(driver: Driver, app: string, pid: number): Promise<
 }
 
 /**
- * Observability with one recovery attempt: an unobservable target is foregrounded and
- * re-probed before the run is abandoned. Returns the window to use — possibly a NEW one,
- * because an app that was running with no open windows gets a fresh window id from the
- * relaunch, and the id probed a moment earlier then belongs to nothing.
+ * Quit the app and start it again, then wait for a window.
+ *
+ * This is the escalation that actually reaches the off-Space case. `foregroundApp` cannot:
+ * macOS refuses background-initiated Space switches, so every nudge in it returns success while
+ * the window stays on the desktop it is on. But a process that has EXITED has no window to
+ * leave anywhere, and the one it opens on next launch opens on the ACTIVE Space. Quitting is
+ * therefore not a bigger hammer for the same nail — it is the only move that changes the thing
+ * that is wrong.
+ *
+ * The cost is the app's unsaved state, which is why it is second and not first. In this repo
+ * that cost is close to zero: a run is supposed to start from a general state anyway, and the
+ * alternative on offer is a refused run.
+ *
+ * An app that restores its windows onto the Space they were on will defeat even this. That is
+ * the case `TargetNotObservableError` is left for.
+ */
+async function relaunchApp(driver: Driver, app: string): Promise<void> {
+	await quitApp(app).catch(() => {});
+	try {
+		await driver.act({ kind: "tool", name: "launch_app", args: { name: app } });
+	} catch {
+		// LaunchServices may still consider the app to be terminating. `open -a` again below.
+	}
+	try {
+		execFileSync("open", ["-a", app], { timeout: 10_000, stdio: "ignore" });
+	} catch {}
+	// A cold Electron launch is slow, and a window that exists but has not painted yet still
+	// reports zero app content — which is the very symptom being recovered from.
+	await new Promise((r) => setTimeout(r, 6000));
+}
+
+/**
+ * Observability with two recovery attempts, cheapest first: foreground the app, and failing
+ * that quit and relaunch it. Returns the window to use — possibly a NEW one, because an app
+ * that was restarted, or that was running with no open windows, gets a fresh window id and the
+ * one probed a moment earlier then belongs to nothing.
  */
 export async function ensureObservable(driver: Driver, win: WindowRef, app: string): Promise<WindowRef> {
 	try {
@@ -188,18 +341,47 @@ export async function ensureObservable(driver: Driver, win: WindowRef, app: stri
 		return win;
 	} catch (err) {
 		if (!(err instanceof TargetNotObservableError)) throw err;
+		// Neither recovery below can survive a lock screen — a locked Mac composites no app
+		// windows at all — and both are slow: the relaunch alone costs a quit, a cold Electron
+		// start and a 6s settle, then fails anyway. Worse, it would discard the app's state to
+		// buy nothing. Report the real reason immediately.
+		if (screenIsLocked()) throw err;
 	}
 
 	console.log(`"${app}" is not observable — foregrounding it and retrying`);
 	await foregroundApp(driver, app, win.pid);
+	const settled = await recheck(driver, app, win);
+	if (settled) return settled;
+
+	console.log(`"${app}" is still not observable — relaunching it so its window opens on the active Space`);
+	await relaunchApp(driver, app);
+	// findWindow throws if the app came back with no window at all; assertObservable throws the
+	// TargetNotObservableError whose message tells the operator what is left to do by hand.
 	const fresh = await findWindow(driver, app);
-	// Throws TargetNotObservableError again if foregrounding did not help — which is the
-	// off-Space case, and its message says so.
 	await assertObservable(driver, fresh, app);
-	if (fresh.windowId !== win.windowId || fresh.pid !== win.pid)
-		console.log(`recovered on a different window: pid=${fresh.pid} window=${fresh.windowId}`);
+	announceMove(fresh, win);
 
 	return fresh;
+}
+
+/** Re-probe after a recovery nudge. Answers the usable window, or nothing if it did not take. */
+async function recheck(driver: Driver, app: string, before: WindowRef): Promise<WindowRef | undefined> {
+	try {
+		const fresh = await findWindow(driver, app);
+		await assertObservable(driver, fresh, app);
+		announceMove(fresh, before);
+
+		return fresh;
+	} catch {
+		// Anything other than "still not observable" — the app having no window at all, say — is
+		// also worth escalating to a relaunch, so nothing is rethrown here.
+		return undefined;
+	}
+}
+
+function announceMove(fresh: WindowRef, before: WindowRef): void {
+	if (fresh.windowId !== before.windowId || fresh.pid !== before.pid)
+		console.log(`recovered on a different window: pid=${fresh.pid} window=${fresh.windowId}`);
 }
 
 export async function observe(driver: Driver, win: WindowRef, shotName: string): Promise<ObservationBundle> {
@@ -549,6 +731,46 @@ export function mergeGraph(
 }
 
 /**
+ * The upstream provider OpenRouter blamed for a failed request, if it named one.
+ *
+ * OpenRouter is a router: one model id fans out to several hosts, and a request that fails
+ * because ONE of them is broken carries that host's name in `error.metadata.provider_name`.
+ * Reading it is what makes the retry different from the attempt that just failed — see
+ * providerRouting below.
+ *
+ * Both shapes are handled because both were observed from the same incident: the SDK attaches
+ * the parsed body as `.error` on an APIError, but a failure that arrives wrapped (or from
+ * `.stream()`) only has the JSON inside the message string.
+ */
+export function failedProvider(err: unknown): string | undefined {
+	const body = (err as { error?: { error?: { metadata?: { provider_name?: unknown } } } })?.error;
+	const named = body?.error?.metadata?.provider_name;
+	if (typeof named === "string" && named.trim()) return named.trim();
+
+	const m = /"provider_name"\s*:\s*"([^"]+)"/.exec(`${(err as Error)?.message ?? ""}`);
+
+	return m?.[1]?.trim() || undefined;
+}
+
+/**
+ * Tell OpenRouter to route around providers this run has already watched fail.
+ *
+ * The bug this closes: a run died with five consecutive 404 DeploymentNotFound while the same
+ * key on the same host got a 200 for the same model seconds later. OpenRouter was routing some
+ * requests to a broken Azure-backed provider, and the retry loop — which backed off correctly —
+ * re-asked the identical route each time, so one bad provider consumed the whole allowance.
+ * Backoff cannot help when the fault is not load.
+ *
+ * Empty when nothing has failed, so the normal request is byte-for-byte what it was and
+ * OpenRouter's own ranking is untouched. Non-OpenRouter clients ignore the field.
+ */
+export function providerRouting(ignore: Iterable<string>): Record<string, unknown> {
+	const list = [...new Set(ignore)];
+
+	return list.length ? { provider: { ignore: list } } : {};
+}
+
+/**
  * Is this error worth trying again, or is retrying it just a slower failure?
  *
  * Transient here means the request never got a verdict: the connection dropped, the body
@@ -558,8 +780,15 @@ export function mergeGraph(
  * Matching on message text as well as status because a mid-stream failure arrives wrapped —
  * the observed one was `AnthropicError: terminated` with a `BodyTimeoutError` cause and no
  * status at all, since the headers had already come back 200.
+ *
+ * A provider-attributed error is transient WHATEVER its status. That is not a general claim
+ * about 404s — it is specific to a router: the code came from one upstream host, the next
+ * attempt can be sent somewhere else (providerRouting makes sure it is), and "this provider
+ * has no such deployment" says nothing about the others.
  */
 export function isTransientApiError(err: unknown): boolean {
+	if (failedProvider(err)) return true;
+
 	const status = (err as { status?: number })?.status;
 	if (typeof status === "number") return status === 408 || status === 429 || status >= 500;
 	const text = `${(err as Error)?.message ?? ""} ${String((err as { cause?: unknown })?.cause ?? "")}`.toLowerCase();
@@ -934,7 +1163,7 @@ export function scopeWarnings(map: AppMap): string {
 }
 
 export function loadAppMapGraph(app: string): AppMap | undefined {
-	const path = `${process.cwd()}/docs/appmaps/${appSlug(app)}.json`;
+	const path = `${appmapsDir()}/${appSlug(app)}.json`;
 	if (!fs.existsSync(path)) return undefined;
 
 	try {
