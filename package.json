@@ -12,7 +12,6 @@
     "agent": "tsx src/agent.ts",
     "explore": "tsx src/explore.ts",
     "build:native": "swiftc -O native/axdom.swift -o native/axdom",
-    "ui": "tsx src/ui.ts",
     "app": "tsc -p tsconfig.electron.json && electron dist-electron/electron/main.js"
   },
   "keywords": [],

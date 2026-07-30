@@ -55,7 +55,7 @@ the model). Measured value (2 samples/condition, all verification holes closed):
 grounded runs use ≈2–2.5× fewer actions/tokens, and — more importantly — grounding buys
 **correctness**: on dual-scope settings (global default vs per-document override) all
 ungrounded runs picked the wrong scope. `findScopeAmbiguities()`/`scopeWarnings()` turn
-the graph into prompt warnings (14 collisions caught on Yarn). Exploration costs ~5–6
+the graph into prompt warnings (16 collisions caught on Yarn). Exploration costs ~5–6
 min/app against Jasper's ~24h/app budget.
 
 **Revisit if**: exploration stops paying for itself on some app class, or recipe
@@ -125,3 +125,27 @@ determinism now that latency is moot); CDP for Electron targets (`src/dom.ts` st
 needs a debug port we can't assume, and §5 closed most of the gap); native-AppKit
 generalization (both proven apps are Electron; the "arbitrary Mac apps" claim is
 untested).
+
+## 9. One shell, Electron, with the page held at arm's length
+
+`./run` launches an Electron app (`electron/main.ts`) that renders markup and script from
+`src/ui-page.ts` against host logic in `src/ui-core.ts`. Electron rather than a native app
+or a browser page: Yarn's product *is* Electron, the driver has first-party support for
+that host, and a signed bundle escapes the ScreenCaptureKit limit that pins recording at
+~4fps today (`docs/research/2026-07-29-packaging-native-vs-electron.md`). A browser-based
+shell existed earlier and was dropped — two transports for one UI was not worth the
+maintenance.
+
+The page reaches its host **only** through `window.__bus`, injected by the main process.
+That seam survives the second shell it was built for because it is what keeps the renderer
+free of Electron imports, and therefore testable in plain Node.
+
+Per-app UI state (the typed task and the log scrollback) persists to `out/ui-state.json`
+via IPC rather than `localStorage`: the renderer loads from a `data:` URL, which has an
+opaque origin and no storage. Log lines are attributed to the app that is *running*, not
+the app currently selected, so switching targets mid-run cannot splice one run's output
+into another app's terminal.
+
+**Revisit if**: we package for distribution (signing/notarization is not done), or the
+shell needs to host more than one concurrent run — today `RunController` refuses a second,
+per LIMITATIONS §6.

@@ -24,8 +24,9 @@ import { page } from "../src/ui-page.js";
  * Packaging note for later: `cua-driver` must ship OUTSIDE ASAR with its executable bit
  * preserved, and be signed before the enclosing app is signed and notarized.
  *
- * The renderer is the same markup and script the web shell serves (src/ui-page.ts); only
- * the transport differs — ipcRenderer here, fetch + EventSource there.
+ * The renderer's markup and script live in src/ui-page.ts and reach this process only
+ * through `window.__bus`, injected below. That seam is why the page carries no Electron
+ * import: the host is swappable and the page's logic stays testable without one.
  */
 
 // Must be declared BEFORE app.whenReady(): a scheme registered later is not treated as

@@ -78,14 +78,15 @@ The agent needs an appmap for the app it is driving. One pass, ~5–6 min, once 
 Appmaps for Yarn and Notion Calendar are committed, so you can skip `explore` for those.
 Run logs land in `out/runs/<stamp>-<app>.json`.
 
-Other entry points: `./run` (Electron shell), `./run web` (browser UI on :4319),
-`npm test` (harness unit tests), `./run --help`.
+Other entry points: `./run` (Electron shell), `npm test` (harness unit tests),
+`./run --help`.
 
 ## Gotchas that look like bugs
 
-- **The target app must be on the active Space and not occluded.** Off-Space, Chromium
-  suspends it while every driver call still reports success. Don't demo on a machine with
-  another app in fullscreen. (LIMITATIONS §1)
+- **The target app must be on the active Space.** Off-Space, Chromium suspends it while
+  every driver call still reports success. Don't switch Spaces during a run, and don't
+  demo on a machine with another app in fullscreen. Plain occlusion is fine — perception
+  and window capture both see through covering windows. (LIMITATIONS §1)
 - **One run at a time.** A second driver session shuts down the shared daemon and kills
   both. `./run` refuses to start one; `pkill -f 'tsx src/'` clears a stuck run.
   (LIMITATIONS §6)

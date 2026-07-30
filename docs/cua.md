@@ -16,6 +16,19 @@ no VM. It drives real macOS apps through two channels:
 
 Lifecycle: `CuaDriver.create()` → `isAvailable()` → `startSession({session})` → tools →
 `endSession` → `shutdown()` → `uniffiDestroy()`. Every call carries the session name.
+
+Two lifecycle facts that cost us runs before we understood them:
+
+- **A session has a 300-second ABSOLUTE lifetime from `start_session` — not an idle TTL.**
+  A session kept busy with an action every 5s still died at 300.1s. This killed two
+  exploration passes at action 15 and looked exactly like a step limit, because it
+  reproduced at the same action every time. `src/driver.ts` re-declares the session every
+  90s (`start_session` is idempotent and refreshes the clock); verified 130 actions over
+  650s. **Any run longer than five minutes needs this heartbeat.**
+- **`shutdown()` kills the shared native driver, not just your session.** A second process
+  that opens and closes a driver session takes down any run already in flight — the victim
+  fails mid-action with `tool failed (session_ended)`. Never run two driver-using scripts
+  at once (`pgrep -fl "src/(agent|explore).ts"` first); `./run` enforces this.
 Generic input methods (`click`, `typeText`, `pressKey`, `hotkey`, `scroll`) take a
 `DesktopScope`; the richer window-scoped operations are **dynamic tools** invoked by
 name via `callTool(name, jsonArgs)` — discover them with `listToolsJson()`.
@@ -44,6 +57,16 @@ the SDK — the actuator can be swapped without touching the agent loop.
 - **Element indices are per-snapshot.** They change every observation. Never cache an
   index across actions — re-observe, then resolve by role + label/value substring
   against the fresh snapshot.
+- **The driver's element projection discards attributes the AX tree actually has.** It
+  keeps role/label/value/frame, so a Chromium icon button with no `aria-label` arrives as
+  `AXButton ""` — unaddressable. But Chromium's Mac bridge still exposes the source DOM
+  node as nonstandard AX attributes (`AXDOMIdentifier`, `AXDOMClassList`, plus `AXHelp`/
+  `AXDescription`/`AXPlaceholderValue`/`AXURL`) and the driver simply never reads them.
+  `native/axdom` (Swift, ~120 lines) walks the same tree and `src/axdom.ts` joins the
+  result on by **frame geometry** — element indices come from two independent walks and
+  are not comparable. Measured on Yarn: 955/1044 anonymous nodes named, including 37 of
+  64 anonymous *interactive* controls, ~0.5s per observation. Buys nothing on native
+  AppKit apps (no DOM) and nothing for canvas content (no DOM node either).
 - **Window picking needs care**: `list_windows` includes placeholder windows (untitled,
   500×500) and tooltips/panels. Filter by `app_name`, require area > ~50k px, prefer
   titled then largest. (`findWindow` in `src/harness.ts`.)
@@ -90,13 +113,22 @@ the SDK — the actuator can be swapped without touching the agent loop.
 
 - `start_recording`/`stop_recording` capture **the whole main display** plus a
   trajectory (`action.json`: click point + ISO timestamp per action — exactly the data
-  a post-render cursor pipeline wants). Window-scoped *video* capture is a driver gap.
+  a post-render cursor pipeline wants). The driver has no window-scoped *video* mode; we
+  keep `start_recording` running purely for that trajectory feed, not for its video.
+- **Our own capture IS window-scoped** — worth stating plainly, because "window-scoped
+  capture is a gap" was written here once and was wrong. The polled `get_window_state`
+  loop below is window-local by construction. Unrelated to this: the `capture_scope=window`
+  string in the driver governs how input coordinates are interpreted, not what the
+  recorder records.
 - **Display capture leaks unrelated content** (it happened to us in testing). Our
   workaround: window-scoped recording by polling `get_window_state` screenshots
   (~4fps) and assembling with ffmpeg — physically cannot contain other windows.
 - Window-snapshot bugs to defend against (`assembleVideo` in `src/agent.ts`):
-  - Snapshots **composite incorrectly for windows on non-retina (1x) displays**
-    (upstream bug) — stage the window onto the main/retina display first.
+  - ~~Snapshots composite incorrectly for windows on non-retina (1x) displays.~~
+    **Retracted 2026-07-29 — not reproducible.** Yarn fullscreen on a 1920×1080 1x panel
+    captured cleanly (1568×882, no bands, no offset). The claim had justified moving the
+    user's window between monitors; staging now fills the window's *current* display and
+    only warns on 1x. The frame gates below catch it if it ever reappears.
   - During Space/display transitions the driver composites the window **at an offset**
     inside a correctly-sized canvas. We filter frames by majority-vote on frame size
     plus a leading-black-band content check.
@@ -211,11 +243,19 @@ read/act on the **DOM directly**, bypassing the AX layer. Two surfaces:
 - ~~Is the semantic_v2 node budget configurable?~~ ANSWERED: no. Output-only field.
 - Does `scope_ref` (subtree reads) beat paging for cost? Untested — with exhaustive
   paging measured at ~2s, the motivation is context size, not latency.
-- Verification is the weak link, not actuation. Two DOM runs claimed success on the
-  timezone task with `textIncludes ['GMT+2']` while the app sat in travel mode showing
-  GMT+2 *beside* an unchanged EDT. The harness now pushes state-REPLACEMENT goals to
-  pair includes with `textExcludes` on the old value, but nothing enforces it — a
-  presence-only check still passes. Worth a structural fix (e.g. require textExcludes
-  when the task reads as a change) rather than prompt guidance alone.
-- Does grounding + the agent loop transfer to a second app unchanged? (Untested.)
+- ~~Verification is the weak link: a presence-only check still passes.~~ **Structurally
+  fixed 2026-07-29.** The origin was two DOM runs claiming success on the timezone task
+  with `textIncludes ['GMT+2']` while the app sat in travel mode showing GMT+2 *beside* an
+  unchanged EDT. `verify()` now rejects an expectation that is not **discriminating** —
+  one already satisfied by the observation taken *before* the action never counts — and an
+  act call with no checkable substrings is refused unexecuted. Two advisory layers sit
+  behind it: per-step pixel delta (canvas content is invisible to AX, so "nothing
+  repainted" is otherwise undetectable) and a visual judge at `done`.
+- ~~Does grounding + the agent loop transfer to a second app unchanged?~~ **Yes** — Yarn,
+  2026-07-29, no harness changes needed. But the honest caveat: both proven apps are
+  Chromium/Electron. What transferred is untested on a native AppKit AX tree.
+- **What verification still cannot do**: prove it verified the *right* control. It greps a
+  flattened bag of labels and values, so a per-project override and a brand-wide default
+  reading the same value are indistinguishable to it. Yarn has 16 settings in exactly that
+  shape. Appmap scope warnings and the visual judge mitigate; nothing proves it.
 - Is there a driver-native way to get window-scoped *video* (vs our snapshot polling)?

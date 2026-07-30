@@ -1,6 +1,8 @@
 # Self-driving demos — product status & open questions
 
-*2026-07-29. Non-technical. Written for the onsite conversation about prototype direction.*
+*2026-07-29, updated 2026-07-30. Non-technical. Written for the onsite conversation about
+prototype direction. The 07-30 pass folds in the clean re-measurement that was still running
+when this was first written, and marks Q1 as decided.*
 
 ---
 
@@ -12,19 +14,21 @@ keeps going until the task is done — recording video the whole time. It has co
 multi-step work on two different apps, including a 17-step task that created a document,
 wrote content into it, and changed a setting. It recovers from its own mistakes without
 help — including on an app where it was given no notes at all. **The core bet is validated.**
-What's unproven is breadth and consistency: two apps, a handful of tasks, one run each, and
-no measured failure rate. The remaining risk is not "does this work" but "how often does it
-work, and what does it cost per app."
+Across 46 logged runs it completed the task in 45; the one failure ran out of steps rather
+than doing something wrong. What's unproven is breadth: two apps, and both are built on the
+same web technology underneath. The remaining risk is not "does this work" but "does it work
+on an app unlike these two, and how often does it get through a run without the environment
+tripping it."
 
 ---
 
 ## What is actually proven
 
 A note on how to read this: the numbers below come from `docs/research/`, which carries
-correction notes where a measurement turned out to be contaminated. Where a figure is
-disputed by its own source, it is marked **pending** here rather than quoted as fact. The
-short version: **what the agent can do is well established; how much our per-app setup pass
-contributes is currently being re-measured.**
+correction notes where a measurement turned out to be contaminated. Everything once marked
+*pending* here has since been re-measured cleanly, with the contaminated inputs removed and
+the loopholes closed in code. The short version: **what the agent can do is well established,
+and the per-app setup pass now has a defensible number behind it.**
 
 | Claim | Status | Evidence |
 |---|---|---|
@@ -36,9 +40,9 @@ contributes is currently being re-measured.**
 | Produces a clean recording | **Proven** | `out/demo-goalonly-grounded.mp4` |
 | Every action is checkable after the fact | **Proven** | Each step logs what was attempted, what was expected, whether it happened, and a screenshot |
 | Every action *was* checked | **Recently true** | The check used to be lenient enough to pass steps that claimed nothing. Fixed; runs before that fix report optimistic pass counts |
-| The per-app setup pass is worth its cost | **Pending re-measurement** | The comparison was run against setup notes that had been hand-edited to include the very tasks being tested. Re-running now |
-| Works on arbitrary apps | **Not proven** | Two apps. This is the headline open risk |
-| Works *reliably* — same task, many times | **Not measured** | One run per condition. We have no failure rate |
+| The per-app setup pass is worth its cost | **Proven** | Clean re-measure, contaminated notes removed: roughly half the steps and half the cost (2–2.5×). More importantly it fixes *which* control gets changed — see item 2 |
+| Works on arbitrary apps | **Not proven** | Two apps, and both are web technology in a Mac wrapper. This is the headline open risk |
+| Works *reliably* — same task, many times | **Partly measured** | 45 of 46 logged runs completed their task. But a run that dies on environment flakiness never writes a log, and roughly one attempt in three does exactly that — so this is a task-completion rate, not an end-to-end success rate |
 
 ---
 
@@ -51,15 +55,26 @@ entirely, recovered, and found the right page. That is genuine search with a rea
 and a real recovery, and it is the result we're most confident in because nothing was
 handed to it.
 
-**2. How much our setup pass adds is honestly unknown right now.**
-We give each app a one-time "scouting" pass that writes down where things live. Early
-comparisons suggested it saved anywhere from 20% to 3×, but those comparisons were
-invalid: the notes had been hand-edited over time to include step-by-step recipes for the
-exact tasks we were measuring. So we were partly measuring "does telling the agent the
-answer help" — which is not a question. Clean passes are running now, and the pipeline has
-been split so the two can't be confused again: machine-written notes and hand-written
-recipes are separate tiers, and each run records which it used. **Treat any per-app setup
-figure as pending.**
+**2. The setup pass pays for itself — and what it really buys is correctness, not speed.**
+We give each app a one-time "scouting" pass that writes down where things live. The early
+comparisons were invalid: the notes had been hand-edited over time to include step-by-step
+recipes for the exact tasks we were measuring, so we were partly measuring "does telling the
+agent the answer help" — not a question. The pipeline has since been split so the two can't
+be confused again (machine-written notes and hand-written recipes are separate tiers, and
+each run records which it used), and the comparison was re-run clean.
+
+Result: with scouting, roughly **half the steps and half the cost** — 4 steps vs 10 on the
+Yarn task, 5 vs 7–10 on Notion. Useful, but not the important part.
+
+The important part is that **the ungrounded runs were changing the wrong setting.** Yarn
+exposes 16 of its recording settings in two places: a brand-wide default and a per-project
+override that quietly wins for that one project. Asked to change the cursor style, every
+single run without scouting notes edited the per-project override — and then correctly
+reported success, because the setting it touched really did now read the new value. The
+scouted runs changed the brand-wide default. Both pass every check we have; only one is
+what a person meant. Any app with global defaults plus per-document overrides — editors,
+IDEs, design tools, browsers — has this failure mode waiting in it. That is the argument
+for scouting, and it is a correctness argument, not a cost one.
 
 **3. The single biggest cost lever is remembering *how*, not *where*.**
 One task was accidentally run with the method handed to the agent instead of discovered,
@@ -102,22 +117,24 @@ None of these changed what the agent can do. Several changed the numbers, downwa
 These need a decision from Yarn, not more engineering. Roughly in order of how much they
 change the build.
 
-### Q1. "Show me how to X" — do we perform X, or point at it?
+### Q1. "Show me how to X" — do we perform X, or point at it? — **decided: perform**
 
-The two apps split on this. Notion **changed** the timezone. Yarn **opened** the cursor-style
-menu to reveal the options and deliberately left the setting alone, explaining that the user
-had only asked to be shown.
+The two apps used to split on this. Notion **changed** the timezone; Yarn **opened** the
+cursor-style menu and politely left the setting alone. The brief already answered it —
+*"you can say 'Show me how to change my timezone to Paris' and the agent will perform the
+action"* — so the polite version was a defect, and it has been fixed.
 
-The brief already answers it — *"you can say 'Show me how to change my timezone to Paris' and
-the agent will perform the action"* — so **perform** is the intent, and Yarn's polite version
-is a defect. But it needs to be settled deliberately, because it has real consequences:
+Settled 2026-07-29 and now built in: the agent performs the task end to end and leaves the
+app in the changed state. If the request doesn't say which value to pick, it picks one and
+says which. Changes have to be saved and confirmed to have stuck.
 
-- Performing means demos **mutate the customer's real workspace**. Whose account are these
-  demos recorded in? Q2.
-- Some requests shouldn't be performed on a live account at all ("show me how to delete my
-  workspace"). There will need to be a category of task that gets demonstrated, not done.
+**With one carve-out, also built in and verified:** anything irreversible or visible to other
+people — delete, publish, export, send, share, purchase, account changes — is taken as far as
+the final confirmation dialog and stopped there, saying so. Tested on "show me how to delete
+a draft": it opens the menu showing Delete and never clicks. 12 drafts before, 12 after.
 
-**Recommendation:** perform by default, with a small deny-list of destructive verbs.
+What this leaves open is Q2, not Q1: performing means demos **mutate a real workspace**, so
+whose workspace it is becomes the live question.
 
 ### Q2. Whose account, and whose data, appears in the demo?
 
@@ -145,11 +162,18 @@ questions are commercial rather than technical:
 
 ### Q4. What reliability bar counts as shippable?
 
-We currently have **no failure rate** — one run per condition. Before this ships, someone has
-to name the bar: is 8 in 10 good enough with a retry, or does it need 99 with a human
-reviewing rejects? This determines whether the next block of work is "more apps" (breadth)
-or "same tasks many times" (reliability). **I'd argue reliability first** — breadth on a
-flaky base just multiplies the flakiness.
+Two different numbers, and the gap between them is the whole answer. Of runs that got
+started, **45 of 46 completed the task**. But roughly **one attempt in three never gets that
+far** — the app's accessibility layer goes dark, focus jumps to another window, the driver
+session dies — and those attempts write no log at all. Retrying has worked every time, so
+today this is a throughput cost rather than a capability limit. It is also the single
+biggest obstacle to running unattended.
+
+So someone has to name the bar, and say which number it applies to: is a 1-in-3 retry rate
+acceptable if the demo that comes out is right, or does it need to be right first time? That
+determines whether the next block of work is "more apps" (breadth) or "same tasks many times"
+(reliability). **I'd argue reliability first** — breadth on a flaky base just multiplies the
+flakiness.
 
 ### Q5. What happens when the agent can't do it?
 
@@ -180,13 +204,13 @@ or Electron apps like Yarn itself.
 
 | Risk | Severity | Note |
 |---|---|---|
-| Doesn't generalize past two apps | **High** | Biggest unknown. Nothing so far suggests it won't, but nothing proves it will |
-| No known failure rate | **High** | Cannot promise reliability we haven't measured. Cheap to fix: repeat runs |
+| Doesn't generalize past two apps | **High** | Biggest unknown. Both proven apps are web technology in a Mac wrapper; a true native Mac app is untested. Nothing so far suggests it won't work, but nothing proves it will |
+| Runs abort on environment flakiness ~1 in 3 | **High** | The task itself succeeds 45 times in 46 once it starts. Getting it started reliably is the gap. Retries are clean, so it's throughput today — but it blocks unattended operation. Q4 |
 | Recordings contain real workspace data | **High** | Product/legal, not technical. Q2 |
 | Demos change the customer's live state | Medium | Follows directly from "perform, don't point at." Needs a deny-list and a reset story |
 | Some app surfaces can't be driven at all | Medium | Yarn's own screen recorder is invisible to our automation. Every app will have a few of these; they need to be found during scouting, not during a demo |
 | Per-app setup doesn't scale | Medium | Fine at ten apps, unclear at hundreds. Q3 |
-| Per-app setup may be worth less than we thought | Medium | Its measured value is currently withdrawn pending clean re-measurement (item 2). Note the zero-notes run succeeded anyway, so this is a cost question, not a capability one |
+| Demos change the wrong setting and still look correct | **High** | Re-measured and confirmed: without scouting notes, every run edited a per-project override instead of the global default, and reported success truthfully. Scouting fixes it; nothing verifies it independently (item 2) |
 | Cost per demo | Low–Medium | Real but small today, and recipes should cut it hard |
 | Latency | **Resolved** | Yarn's post pipeline absorbs it |
 
@@ -194,16 +218,18 @@ or Electron apps like Yarn itself.
 
 ## What I'd do next, in order
 
-1. **Measure reliability.** Same handful of tasks, repeated, both apps. Converts "it worked"
-   into a number we can put in front of a customer. Cheapest high-value work available, and
-   it's what the strengthened checks now make trustworthy.
-2. **Finish the clean setup-pass measurement.** Already running. Turns the one figure
-   currently withdrawn back into something quotable.
-3. **Third app, chosen by Yarn.** Directly attacks the generalization risk. Ideally something
-   unlike the first two — a browser app, or something visually driven.
-4. **Recipes.** The cost and determinism story for production, on the strength of the
+1. **Attack the 1-in-3 abort rate.** Not the task logic — the environment around it: the
+   accessibility layer going dark, focus loss, dead driver sessions. This is now the gap
+   between "the task works" and "we can leave it running." Cheapest high-value work
+   available, and on Yarn's own app there's a shortcut: they control it, so they can force
+   accessibility on or expose a debug port and skip the flaky channel entirely.
+2. **Third app, chosen by Yarn.** Directly attacks the generalization risk. Ideally something
+   unlike the first two — a real native Mac app, or something visually driven, rather than
+   another web app in a wrapper.
+3. **Recipes.** The cost and determinism story for production, on the strength of the
    17-steps-to-6 direction rather than that specific number.
-5. **Settle Q1 and Q2.** Both are cheap to decide and both block anything customer-facing.
+4. **Settle Q2.** Whose workspace the demos run in. Q1 is decided; this one is cheap to
+   decide and blocks anything customer-facing.
 
 ---
 

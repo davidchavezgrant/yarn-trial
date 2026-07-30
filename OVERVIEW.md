@@ -71,7 +71,6 @@ per-app grounding pass step by step.
 ```sh
 ./run doctor                         # preflight: keys, permissions, deps, appmaps
 ./run                                # packaged Electron app (the deployment target)
-./run web                            # zero-install browser UI on :4319
 ./run "show me how to change the cursor type" "Yarn" [--record]
 ./run explore "Yarn"                 # grounding pass -> docs/appmaps/
 ```
@@ -85,17 +84,18 @@ npm install
 npm run build:native                 # optional: DOM enrichment sidecar (needs Xcode CLT)
 npm run probe "Notion Calendar"      # permissions + perception smoke test
 npm run explore -- "Notion Calendar" # grounding pass -> docs/appmaps/
-npm test                             # harness unit tests (34)
+npm test                             # harness unit tests (55)
 npm run agent -- "Show me how to change my timezone to Paris" "Notion Calendar" --record
 npm run app                          # Electron shell
 ```
 
-**Two shells, one implementation.** `src/ui-core.ts` (app list, single-run guard, spawn,
-hygiene gate) and `src/ui-page.ts` (markup + browser script) are shared; the page reaches
-its host through `window.__bus`, which the web shell binds to fetch + EventSource and the
-Electron shell binds to ipcRenderer. Electron is the one that matters for shipping —
-Yarn's product is Electron, the driver has first-party support for that host, and a signed
-bundle escapes the ScreenCaptureKit limit that caps recording at ~4fps today. Packaging
+**The shell.** `src/ui-core.ts` holds the host logic (app list, single-run guard, spawn,
+hygiene gate, per-app UI state in `out/ui-state.json`) and `src/ui-page.ts` the markup +
+browser script; the page reaches its host only through `window.__bus`, which
+`electron/main.ts` binds to ipcRenderer. Keeping that seam means the host is swappable and
+the page stays testable without Electron. Electron is what matters for shipping — Yarn's
+product is Electron, the driver has first-party support for that host, and a signed bundle
+escapes the ScreenCaptureKit limit that caps recording at ~4fps today. Packaging
 (electron-builder, signing, notarization) is not done yet; see
 `docs/research/2026-07-29-packaging-native-vs-electron.md`.
 

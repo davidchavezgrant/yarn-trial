@@ -363,7 +363,7 @@ plus a `scope`; two nodes sharing a settingKey across scopes are a detected ambi
 the harness appends an explicit warning to the prompt naming both candidates.
 
 Re-running exploration with this schema found the problem is **much wider than cursor style**:
-**14 Screen Clip settings** are dual-scope (brand default vs per-project override) — shadow,
+**16 Screen Clip settings** are dual-scope (brand default vs per-project override) — shadow,
 zoom, motion blur, sound effects, cursor scale, and more. The graph even recorded the
 evidence unaided: *"Observed Arrow-first while the brand default was Pointer-first - separate
 stores."*
