@@ -118,6 +118,14 @@ export function detectMutation(
 ): Mutation | undefined {
 	const target = actionTarget(action, prevObs);
 	if (!target) return undefined;
+	// A control with no label cannot be matched across observations: `find` below would pair it
+	// with the FIRST anonymous element on the surface, which is routinely a different control,
+	// and teardown would then hunt a control named "" — which `controlReads` matches against
+	// EVERY anonymous element. A coordinate click into a canvas or an unlabeled icon resolves to
+	// exactly such a target (actionTarget returns the smallest box under the point). No name, no
+	// journaled mutation: an unrestorable change is better left unclaimed than fabricated against
+	// the wrong control.
+	if (!target.name) return undefined;
 
 	const after = nextObs.interactive.find((e) => e.name === target.name && e.surface === target.surface);
 	if (!after || after.value === target.value) return undefined;

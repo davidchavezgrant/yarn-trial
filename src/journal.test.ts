@@ -61,6 +61,15 @@ test("detectMutation__RecordsChange__When__ComboboxValueDiffers", () => {
 	assert.equal(m?.step, 3);
 });
 
+test("detectMutation__ReturnsUndefined__When__TargetHasNoName", () => {
+	// A coordinate click resolves to the smallest box under the point, which can be an
+	// unlabeled control. Matching it across observations by name "" would pair it with the first
+	// anonymous element on the surface — routinely a different control — fabricating a mutation.
+	const prev = obsWith([ie("", "Canvas", { handle: 0, value: "0:00", x: 100, y: 100, w: 50, h: 20 })]);
+	const next = obsWith([ie("", "Canvas", { handle: 0, value: "0:05", x: 100, y: 100, w: 50, h: 20 })]);
+	assert.equal(detectMutation({ name: "click", x: 120, y: 110 }, prev, next, undefined, 1), undefined);
+});
+
 test("detectMutation__ReturnsUndefined__When__ClickOnlyNavigates", () => {
 	// The false positive that matters: most clicks in a run open a panel and change nothing,
 	// and a teardown trying to "restore" one would fight the app.

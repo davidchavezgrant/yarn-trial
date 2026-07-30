@@ -45,15 +45,25 @@ const SETTLE_MS = 900;
  * changed is the one that says it changed back.
  */
 export function controlReads(obs: ObservationBundle, control: string, surface: string, value: string): boolean {
-	const want = value.toLowerCase();
+	const want = value.trim().toLowerCase();
+	// Surface leniency applies only when the JOURNAL did not record a surface. When it did, an
+	// element whose own surface is blank must NOT match it: `surface: ""` is common (the nearest
+	// named ancestor was unlabeled) and letting it wildcard-match reopens the exact brand-vs-
+	// document hole the scope machinery exists to close — a document-scope twin rendering under
+	// an unlabeled container would satisfy a brand-scope restore.
 	const matches = obs.interactive.filter(
-		(e) => e.name === control && (!surface || !e.surface || e.surface === surface),
+		(e) => e.name === control && (!surface || e.surface === surface),
 	);
 	// Restoring a field to blank is a real target, and substring containment cannot express
 	// it — every string contains "". Exact emptiness is the check there.
-	if (want === "") return matches.length > 0 && matches.some((e) => e.value === "");
+	if (want === "") return matches.length > 0 && matches.some((e) => e.value.trim() === "");
 
-	return matches.some((e) => e.value.toLowerCase().includes(want));
+	// Whole-value equality, not substring containment. Detection (journal.ts) compares values
+	// with `===`; restoration must ask the same question or the two stop being symmetric. A
+	// substring match reports success on a prefix-overlapping neighbour — restoring "Auto" is
+	// satisfied by the control reading "Auto-hide" — and Yarn's own settings carry exactly such
+	// pairs. Case is folded (the app may re-render "ARROW-FIRST") but nothing wider.
+	return matches.some((e) => e.value.trim().toLowerCase() === want);
 }
 
 const SYSTEM = `You are undoing changes a UI automation run made to a macOS app, one at a time, so the app is left as it was found.
@@ -135,7 +145,10 @@ export function collapseJournal(journal: Mutation[]): Mutation[] {
 	const byControl = new Map<string, Mutation>();
 	for (const m of journal) {
 		if (m.kind !== "setting") continue;
-		const key = `${m.surface} ${m.control}`;
+		// JSON, not `${surface} ${control}`: a space join makes surface "Screen Clip" + control
+		// "Style" collide with surface "Screen" + control "Clip Style", silently merging two
+		// different controls' mutations — and space-containing names are the norm here.
+		const key = JSON.stringify([m.surface, m.control]);
 		const seen = byControl.get(key);
 		if (seen) byControl.set(key, { ...seen, after: m.after });
 		else byControl.set(key, m);
@@ -288,7 +301,24 @@ export async function runTeardown(a: TeardownArgs): Promise<Record<string, unkno
 	console.log(`\n=== cleanup: ${settings.length} changed setting(s) ===`);
 	const entries: TeardownEntry[] = [];
 	for (const [i, m] of settings.entries()) {
-		const entry = await restoreOne(a, m, i);
+		// Per-entry isolation. restoreOne guards `driver.act` but not `findWindow`, `observe`, or
+		// the model call, so one transient TargetNotObservableError on entry 1 of 5 would abandon
+		// entries 2-5 — and in the CLI it propagates all the way to main().catch, reporting 0/0.
+		// A thrown entry is recorded as dirty and the loop continues to the rest.
+		let entry: TeardownEntry;
+		try {
+			entry = await restoreOne(a, m, i);
+		} catch (err) {
+			entry = {
+				control: m.control,
+				surface: m.surface,
+				scope: m.scope,
+				wanted: m.before,
+				leftAt: m.after,
+				restored: false,
+				why: `restore threw: ${err instanceof Error ? err.message : String(err)}`,
+			};
+		}
 		entries.push(entry);
 		// "–" rather than a tick or a cross for an entry that was never attempted: it neither
 		// succeeded nor failed, and either mark would assert something about a restore that

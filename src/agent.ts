@@ -1293,12 +1293,26 @@ async function main(): Promise<void> {
 		// CLEANUP=block makes a dirty exit a failed run. Opt-in, mirroring VISUAL_JUDGE: the
 		// default keeps "did the task succeed" and "was the app left tidy" as separate
 		// questions, because a demo that achieved its goal achieved it either way.
-		if (outcome && cleanupMode === "block" && Number(cleanupReport?.failed ?? 0) > 0)
-			outcome = {
-				...outcome,
-				success: false,
-				summary: `${outcome.summary} — but cleanup left ${cleanupReport!.failed} change(s) in place (CLEANUP=block)`,
-			};
+		// A teardown that THREW left `cleanupReport = { error }` with no `failed` count — the
+		// maximally-dirty exit (nothing was restored) reading as zero failures. Block mode must
+		// treat that as a dirty exit too, or CLEANUP=block passes exactly the run it exists to
+		// fail.
+		if (outcome && cleanupMode === "block") {
+			const failedCount = Number(cleanupReport?.failed ?? 0);
+			const crashed = cleanupReport?.error !== undefined;
+			if (failedCount > 0)
+				outcome = {
+					...outcome,
+					success: false,
+					summary: `${outcome.summary} — but cleanup left ${failedCount} change(s) in place (CLEANUP=block)`,
+				};
+			else if (crashed)
+				outcome = {
+					...outcome,
+					success: false,
+					summary: `${outcome.summary} — but cleanup failed to run, so the app may be left modified (CLEANUP=block): ${cleanupReport!.error}`,
+				};
+		}
 		if (outcome) writeRunLog(outcome);
 	}
 

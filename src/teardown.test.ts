@@ -93,6 +93,36 @@ test("controlReads__MatchesCaseInsensitively__When__AppRendersDifferentCasing", 
 	assert.equal(controlReads(obs, "Cursor Style", "Screen Clip Settings", "Arrow-first"), true);
 });
 
+test("controlReads__ReturnsFalse__When__ValueIsAPrefixOfWhatTheControlReads", () => {
+	// Detection compares with ===, so restoration must too. A substring test would report
+	// restoring "Auto" as satisfied by the control reading "Auto-hide" — and Yarn's settings
+	// carry exactly such prefix-overlapping options.
+	const obs = obsWith([el("Cursor Mode", "Auto-hide")]);
+	assert.equal(controlReads(obs, "Cursor Mode", "Screen Clip Settings", "Auto"), false);
+});
+
+test("controlReads__IgnoresABlankSurfacedTwin__When__TheJournalRecordedASurface", () => {
+	// A document-scope twin whose nearest named ancestor is unlabeled renders with surface "".
+	// It must not wildcard-match a brand-scope restore whose surface WAS recorded — that is the
+	// dual-scope confusion the whole scope machinery exists to prevent.
+	const obs = obsWith([
+		el("Cursor Style", "Pointer-first", "Screen Clip Settings"),
+		el("Cursor Style", "Arrow-first", ""),
+	]);
+	assert.equal(controlReads(obs, "Cursor Style", "Screen Clip Settings", "Arrow-first"), false);
+});
+
+test("collapseJournal__KeepsControlsApart__When__SurfaceAndControlWordsWouldJoinAmbiguously", () => {
+	// "Screen Clip" + "Style" and "Screen" + "Clip Style" both space-join to "Screen Clip Style".
+	// A JSON key keeps them distinct so one control's mutation is not silently merged into the
+	// other's.
+	const out = collapseJournal([
+		mut("Style", "Arrow-first", "Hand", 1, "Screen Clip"),
+		mut("Clip Style", "On", "Off", 2, "Screen"),
+	]);
+	assert.equal(out.length, 2);
+});
+
 // --- collapseJournal: one entry per control, earliest `before`, latest `after`.
 //
 // A run that cycles a combobox writes an entry per change. Replaying all of them walks the
