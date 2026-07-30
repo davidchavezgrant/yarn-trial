@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import { test } from "node:test";
 import { Driver } from "./driver.js";
 import {
 	auditTaskPrompt,
+	checkHome,
 	destructiveTarget,
+	failedProvider,
 	findScopeAmbiguities,
 	framesShifted,
 	frontierCredit,
@@ -21,18 +24,25 @@ import {
 	observationBlocks,
 	observe,
 	pixelDelta,
+	providerRouting,
 	recoverLeakedGraph,
+	resetToHome,
 	retryTransient,
+	rootControlLabels,
+	rootSurface,
+	runKey,
 	scopeWarnings,
+	screenIsLocked,
 	settleMsFor,
+	TargetNotObservableError,
 	toActionRequest,
 	unpaintedStreak,
 	verificationTallies,
 	verify,
 } from "./harness.js";
 import type { InteractiveElement, ObservationBundle } from "./harness.js";
-import type { AppMap, AppMapEdge, AppMapNode, StepRecord } from "./types.js";
-import { EMPTY, bestClass, descriptorFor, lookup } from "./axdom.js";
+import type { ActionRequest, AppMap, AppMapEdge, AppMapNode, StepRecord } from "./types.js";
+import { EMPTY, bestClass, descriptorFor, lookup, sidecarStatus } from "./axdom.js";
 import { overlayEnv, scriptEnvKeys } from "./overlay.js";
 
 // Fixtures are synthetic, describing the CLASS of prompt rather than any specific
@@ -345,6 +355,100 @@ test("scopeWarnings__ReturnsEmpty__When__NoAmbiguities", () => {
 	assert.equal(scopeWarnings({ ...yarnish, nodes: [yarnish.nodes[3]] }), "");
 });
 
+// --- Landing surface. Used to answer "is this app usable right now, or sitting at a login
+// wall" for any app with a map — the weaker of resetToHome's two tiers, and the one that does
+// not need the appmap to declare a home. It never decides where to click.
+
+/** yarnish plus the surfaces an exploration pass records around its starting point. */
+const rooted: AppMap = {
+	...yarnish,
+	nodes: [
+		...yarnish.nodes,
+		{ id: "root", title: "Yarn", kind: "surface", scope: "app" },
+		{ id: "library", title: "Library", kind: "surface", scope: "workspace" },
+	],
+	edges: [
+		...yarnish.edges,
+		{ from: "root", to: "library", action: 'click "Library" in the left rail' },
+		{ from: "library", to: "editor", action: 'double-click a draft row' },
+	],
+};
+
+test("rootSurface__FindsStartingPoint__When__OneSurfaceIsNeverAnEdgeTarget", () => {
+	// Structural, not a lookup for an id called "root": that spelling is a convention of one
+	// exploration pass rather than part of the schema.
+	assert.equal(rootSurface(rooted)?.id, "root");
+});
+
+test("rootSurface__ReturnsUndefined__When__SeveralSurfacesQualify", () => {
+	// A disconnected graph has no single landing state, and picking between candidates would
+	// silently pin every future run's start to whichever one sorted first.
+	const split: AppMap = { ...rooted, nodes: [...rooted.nodes, { id: "orphan", title: "Orphan", kind: "surface", scope: "app" }] };
+	assert.equal(rootSurface(split), undefined);
+});
+
+test("rootSurface__ReturnsUndefined__When__EverySurfaceIsReachable", () => {
+	const cyclic: AppMap = { ...rooted, edges: [...rooted.edges, { from: "library", to: "root", action: 'click "Home"' }] };
+	assert.equal(rootSurface(cyclic), undefined);
+});
+
+test("rootControlLabels__QuotesFromOutboundEdges__When__RootIsIdentifiable", () => {
+	// The quoted span in an edge action is the label the walk actually observed, so it is the
+	// one string in the graph that can be matched against a live observation.
+	assert.deepEqual(rootControlLabels(rooted), ["Brand Kit", "Library"]);
+});
+
+test("rootControlLabels__IgnoresEdgesLeavingOtherSurfaces__When__CollectingLabels", () => {
+	// A label only proves the app is on its landing surface if it LIVES there; a control reached
+	// two screens in would report "ready" from wherever the last run happened to stop.
+	const deeper: AppMap = { ...rooted, edges: [...rooted.edges, { from: "library", to: "editor", action: 'click "Rename"' }] };
+	assert.equal(rootControlLabels(deeper).includes("Rename"), false);
+});
+
+test("rootControlLabels__Dedupes__When__TheSameControlAppearsOnSeveralEdges", () => {
+	const twice: AppMap = { ...rooted, edges: [...rooted.edges, { from: "root", to: "library", action: 'click "Library" again' }] };
+	assert.deepEqual(twice.edges.filter((e) => e.action.includes("Library")).length, 2);
+	assert.deepEqual(rootControlLabels(twice), ["Brand Kit", "Library"]);
+});
+
+test("rootControlLabels__ReturnsEmpty__When__NoRootCanBeIdentified", () => {
+	assert.deepEqual(rootControlLabels(yarnish), []);
+});
+
+// --- checkHome(). The declared home is written once by an exploration pass and then governs
+// the start state of every later run, with nothing downstream able to tell a wrong label from
+// an app that genuinely moved on. So it is checked against the pass's own evidence at write
+// time, and discarded rather than trusted — losing normalisation, keeping the readiness check.
+
+const HOME = { surface: "library", control: "Library", description: "left-rail Library view" };
+
+test("checkHome__Accepts__When__SurfaceIsANodeAndControlWasOperated", () => {
+	assert.deepEqual(checkHome(HOME, rooted.nodes, rooted.edges), { home: HOME });
+});
+
+test("checkHome__Rejects__When__SurfaceIsNotInTheGraph", () => {
+	const { home, problem } = checkHome({ ...HOME, surface: "dashboard" }, rooted.nodes, rooted.edges);
+	assert.equal(home, undefined);
+	assert.match(problem ?? "", /"dashboard" is not a node/);
+});
+
+test("checkHome__Rejects__When__NoEdgeActionEverQuotedTheControl", () => {
+	// The realistic failure: a plausible label recalled at the end of a long, context-reset
+	// transcript rather than read off an observation.
+	const { home, problem } = checkHome({ ...HOME, control: "Home" }, rooted.nodes, rooted.edges);
+	assert.equal(home, undefined);
+	assert.match(problem ?? "", /never recorded operating it/);
+});
+
+test("checkHome__Rejects__When__FieldsAreBlank", () => {
+	assert.match(checkHome({ ...HOME, control: "  " }, rooted.nodes, rooted.edges).problem ?? "", /both required/);
+});
+
+test("checkHome__StaysSilent__When__ThePassDeclaredNoHome", () => {
+	// Not an error. Older maps have no home at all, and resetToHome degrades to `root-visible`.
+	assert.deepEqual(checkHome(undefined, rooted.nodes, rooted.edges), {});
+});
+
 // --no-vision A/B arm: the text block must be identical across arms so the only
 // difference the model sees is the presence of the image.
 
@@ -354,7 +458,7 @@ const bundle: ObservationBundle = {
 	haystack: "save",
 	screenshotB64: "aGk=",
 	title: "Settings",
-	interactive: [{ handle: 3, role: "AXButton", name: "Save", surface: "", x: 10, y: 20, w: 80, h: 30 }],
+	interactive: [{ handle: 3, role: "AXButton", name: "Save", surface: "", value: "", x: 10, y: 20, w: 80, h: 30 }],
 	appContent: 1,
 	domEnriched: 0,
 };
@@ -444,6 +548,60 @@ test("lookup__ReturnsEmpty__When__ElementHasNoFrame", () => {
 	assert.equal(lookup(EMPTY, undefined), "");
 });
 
+// --- sidecarStatus(). collect() swallows every one of these so a run can proceed without
+// enrichment; the price is that a host with no sidecar is indistinguishable from a healthy one.
+// On the fleet the binary is an rsync'd build artifact, so "never built" is a real state — all
+// three Macs happened to have it, from whichever checkout provisioned them.
+
+test("sidecarStatus__ReportsNotBuilt__When__TheBinaryIsAbsent", () => {
+	const s = sidecarStatus(`${os.tmpdir()}/definitely-not-here-axdom`, () => {
+		throw new Error("must not be executed");
+	});
+	assert.equal(s.usable, false);
+	assert.match(s.problem ?? "", /build:native/);
+});
+
+test("sidecarStatus__ReportsUsable__When__ItRunsAndExitsWithUsage", () => {
+	// No arguments means usage and exit 2, so execFileSync throws with a numeric status. That
+	// throw is the success signal: a process that reported an exit code is a process that ran.
+	const s = sidecarStatus(existingFile(), () => {
+		throw Object.assign(new Error("Command failed"), { status: 2 });
+	});
+	assert.equal(s.usable, true);
+	assert.equal(s.problem, undefined);
+});
+
+test("sidecarStatus__ReportsWrongArchitecture__When__TheBinaryCannotSpawn", () => {
+	// The case a stat or an `ls` cannot see: the file is right there and this machine cannot
+	// execute it. Provisioning from an Intel checkout onto arm64 Macs produces exactly this.
+	const s = sidecarStatus(existingFile(), () => {
+		throw Object.assign(new Error("spawnSync ENOEXEC"), { code: "ENOEXEC" });
+	});
+	assert.equal(s.usable, false);
+	assert.match(s.problem ?? "", /ENOEXEC/);
+	assert.match(s.problem ?? "", /architecture/);
+});
+
+test("sidecarStatus__SaysItIsSwitchedOff__When__AxdomIsZero", () => {
+	// Distinct from broken: someone chose this, and doctor should not send them hunting for a
+	// build problem that does not exist.
+	const prev = process.env.AXDOM;
+	process.env.AXDOM = "0";
+	try {
+		const s = sidecarStatus(existingFile(), () => {});
+		assert.equal(s.usable, false);
+		assert.match(s.problem ?? "", /AXDOM=0/);
+	} finally {
+		if (prev === undefined) delete process.env.AXDOM;
+		else process.env.AXDOM = prev;
+	}
+});
+
+/** Any real path will do — these tests are about the probe's outcome, not the file's contents. */
+function existingFile(): string {
+	return new URL(import.meta.url).pathname;
+}
+
 // --- observe(): the frontier's only input. AX frames are screen-global LOGICAL POINTS while
 // coordinate actions consume SCREENSHOT PIXELS, so observe() converts — and if that conversion
 // is wrong the ledger silently credits the wrong control, which nothing downstream can detect.
@@ -505,6 +663,109 @@ test("observe__ReportsZeroGeometry__When__WindowFrameIsUnavailable", async () =>
 	assert.deepEqual([obs.interactive[0].x, obs.interactive[0].y, obs.interactive[0].w, obs.interactive[0].h], [0, 0, 0, 0]);
 });
 
+// --- resetToHome(). Two tiers, because the strong one needs a map that declares a home and the
+// weak one has to work for every app that does not. The weak tier normalises nothing; it only
+// answers "can the app's own landing state be seen", which is what catches a sign-in wall
+// without this file knowing what a sign-in wall looks like.
+
+/** Serves one AX payload per observation, in order, and records every act for inspection. */
+const scriptedDriver = (screens: unknown[][], acts: ActionRequest[]): Driver => {
+	let shown = 0;
+
+	return {
+		act: async (req: ActionRequest) => {
+			acts.push(req);
+			if (req.kind !== "tool" || req.name !== "get_window_state") return { text: "" };
+			// Write the file observe() will actually look for. The driver names the screenshot
+			// from its own argument, so a fixture writing some other path only passed here
+			// because a real run had left a same-named PNG in out/ — these tests failed on any
+			// clean checkout, and passed locally for a reason unrelated to what they assert.
+			const shot = String((req.args as Record<string, unknown>).screenshot_out_file);
+			fs.mkdirSync(shot.replace(/\/[^/]+$/, ""), { recursive: true });
+			fs.writeFileSync(shot, "png");
+			const elements = screens[Math.min(shown++, screens.length - 1)];
+
+			return { text: "", structuredJson: JSON.stringify({ elements, screenshot_width: 1920, screenshot_height: 1080 }) };
+		},
+	} as unknown as Driver;
+};
+
+const railButton = (label: string) => [
+	{ element_index: 0, role: "AXWindow", label: "", frame: { x: 0, y: 0, w: 1920, h: 1080 } },
+	{ element_index: 7, role: "AXButton", label, parent_index: 0, frame: { x: 20, y: 100, w: 160, h: 40 } },
+];
+
+const withHome: AppMap = { ...rooted, home: HOME };
+
+/**
+ * The graph is passed explicitly in all but one case. Omitting it is not the same as passing
+ * `undefined` — the parameter defaults to loading the app's real appmap off disk, which is the
+ * production path and the only way to test the no-map branch honestly.
+ */
+const resetIn = async (screens: unknown[][], graph?: AppMap, app = "Yarn") => {
+	const acts: ActionRequest[] = [];
+	const driver = scriptedDriver(screens, acts);
+	const win = { pid: 1, windowId: 1 };
+	const prev = process.env.AXDOM;
+	process.env.AXDOM = "0"; // the sidecar needs a live app
+	try {
+		const r = graph ? await resetToHome(driver, win, app, graph) : await resetToHome(driver, win, app);
+
+		return { ...r, acts };
+	} finally {
+		if (prev === undefined) delete process.env.AXDOM;
+		else process.env.AXDOM = prev;
+	}
+};
+
+test("resetToHome__ClicksTheDeclaredControl__When__TheMapNamesAHome", async () => {
+	const { result, detail, acts } = await resetIn([railButton("Library")], withHome);
+	assert.equal(result, "reset");
+	assert.match(detail, /left-rail Library view/);
+	// By element index parsed out of the observation, not by coordinate: the index is the only
+	// addressing that survives the window being on a differently-scaled display.
+	const click = acts.find((a) => a.kind === "tool" && a.name === "click");
+	assert.deepEqual((click as { args: Record<string, unknown> }).args.element_index, 7);
+});
+
+test("resetToHome__ReportsRootVisible__When__TheMapHasNoHomeButItsLandingControlsShow", async () => {
+	// Deliberately NOT "reset": one of root's controls being on screen proves the app is past
+	// its login wall, and proves nothing at all about which surface the run will start on.
+	const { result, detail, acts } = await resetIn([railButton("Brand Kit")], rooted);
+	assert.equal(result, "root-visible");
+	assert.match(detail, /not normalised/);
+	assert.equal(acts.some((a) => a.kind === "tool" && a.name === "click"), false);
+});
+
+test("resetToHome__Fails__When__NothingFromTheLandingSurfaceIsOnScreen", async () => {
+	// What a sign-in wall looks like from here. agent.ts turns this into a refusal to run,
+	// which before #28 only fired for the two apps that happened to be in a hardcoded table.
+	const { result, detail, acts } = await resetIn([railButton("Sign in with Google")], rooted);
+	assert.equal(result, "failed");
+	assert.match(detail, /nothing from the landing surface/);
+	// One escape first: an overlay left open by a previous run hides the rail from the AX tree
+	// entirely, and that used to read as "app is unusable".
+	assert.equal(acts.filter((a) => a.kind === "tool" && a.name === "press_key").length, 1);
+});
+
+test("resetToHome__RecoversAfterEscape__When__AnOverlayHidTheHomeControl", async () => {
+	const { result, detail } = await resetIn([railButton("Cancel"), railButton("Library")], withHome);
+	assert.equal(result, "reset");
+	assert.match(detail, /escaped a leftover overlay/);
+});
+
+test("resetToHome__ReportsNone__When__TheAppHasNoMapAtAll", async () => {
+	const { result, detail, acts } = await resetIn([railButton("Library")], undefined, "No Such App");
+	assert.equal(result, "none");
+	assert.match(detail, /npm run explore/);
+	assert.deepEqual(acts, [], "an app with no map is not probed at all");
+});
+
+test("resetToHome__ReportsNone__When__TheMapHasNoHomeAndNoIdentifiableRoot", async () => {
+	// yarnish's only surface is an edge target, so there is no landing state to look for.
+	assert.equal((await resetIn([railButton("Library")], yarnish)).result, "none");
+});
+
 // --- frontier ledger: the mechanical answer to "did the pass map the whole app?". Its
 // predecessor was the model auditing its own coverage from a transcript that, by
 // construction, contains only the surfaces it visited. These tests pin the two credit paths
@@ -512,7 +773,7 @@ test("observe__ReportsZeroGeometry__When__WindowFrameIsUnavailable", async () =>
 // from draining a panel it never touched.
 
 const ie = (name: string, surface = "", box: Partial<InteractiveElement> = {}): InteractiveElement =>
-	({ handle: 0, role: "AXButton", name, surface, x: 0, y: 0, w: 0, h: 0, ...box });
+	({ handle: 0, role: "AXButton", name, surface, value: "", x: 0, y: 0, w: 0, h: 0, ...box });
 
 const obsWith = (interactive: InteractiveElement[]): ObservationBundle => ({ ...bundle, interactive });
 
@@ -586,6 +847,22 @@ test("isVagueSurface__ReturnsTrue__When__SurfaceIsTheTopLevelPlaceholder", () =>
 	// dismissal against them is a scatter, not a repetitive list.
 	for (const s of [undefined, "<top level>", "&lt;top level&gt;", "  Top-Level  ", "none", "root", "unnamed"])
 		assert.equal(isVagueSurface(s), true, `expected ${String(s)} to read as vague`);
+});
+
+test("isVagueSurface__StillReadsAsVague__When__TheBracketsArriveInAnotherEscaping", () => {
+	// The named entities above are the forms we happened to observe; nothing guarantees they
+	// are the only ones. Each spelling that slips through is a bulk dismissal that passes the
+	// vagueness guard and sweeps unrelated controls — the exact failure EXPLORE_DISMISS_CAP
+	// exists to stop (CLAUDE.md: 104 unrelated controls cleared in one call).
+	for (const s of ["&#60;top level&#62;", "&#x3c;top level&#x3e;", "&amp;lt;top level&amp;gt;", "< top level >"])
+		assert.equal(isVagueSurface(s), true, `expected ${s} to read as vague`);
+});
+
+test("isVagueSurface__ReturnsFalse__When__ARealPanelNameMerelyContainsAPlaceholderWord", () => {
+	// The placeholder match is anchored, and must stay anchored: a panel genuinely called
+	// "Root folder" is a specific surface, and reading it as the top-level scatter would let a
+	// legitimate dismissal be refused — or a vague one be allowed.
+	for (const s of ["Root folder", "Unnamed layers", "Top-Level Settings"]) assert.equal(isVagueSurface(s), false, s);
 });
 
 test("isVagueSurface__ReturnsFalse__When__SurfaceNamesARealPanel", () => {
@@ -676,6 +953,46 @@ test("isTransientApiError__ReturnsFalse__When__RequestIsMalformed", () => {
 	// A 400 fails identically forever; retrying it only makes the failure slower.
 	assert.equal(isTransientApiError(Object.assign(new Error("bad request"), { status: 400 })), false);
 	assert.equal(isTransientApiError(Object.assign(new Error("unauthorized"), { status: 401 })), false);
+});
+
+// --- routing around a broken upstream. OpenRouter fans one model id out to several hosts, so a
+// failure can belong to the route rather than to the request. Five consecutive 404
+// DeploymentNotFound burned a run while the same key got 200s seconds later.
+
+test("failedProvider__NamesTheUpstream__When__TheRouterAttributesTheError", () => {
+	const err = { error: { error: { metadata: { provider_name: "Azure" } } } };
+	assert.equal(failedProvider(err), "Azure");
+});
+
+test("failedProvider__NamesTheUpstream__When__ItOnlySurvivesInTheMessage", () => {
+	// The SDK stringifies the body into the message for some error classes; that is the only
+	// copy left by the time it reaches the catch.
+	const err = new Error(`404 {"error":{"metadata":{"provider_name":"Google Vertex"}}}`);
+	assert.equal(failedProvider(err), "Google Vertex");
+});
+
+test("failedProvider__ReturnsUndefined__When__NothingIsAttributed", () => {
+	assert.equal(failedProvider(new Error("terminated")), undefined);
+	assert.equal(failedProvider(undefined), undefined);
+	assert.equal(failedProvider({ error: { error: { metadata: { provider_name: "  " } } } }), undefined);
+});
+
+test("isTransientApiError__ReturnsTrue__When__AProviderIsNamed", () => {
+	// Not a general claim about 404s — a 404 from OUR request stays fatal. It is specific to a
+	// router: if the upstream named itself, a different upstream may well answer.
+	const err = Object.assign(new Error("no deployment"), { status: 404, error: { error: { metadata: { provider_name: "Azure" } } } });
+	assert.equal(isTransientApiError(err), true);
+	assert.equal(isTransientApiError(Object.assign(new Error("no such model"), { status: 404 })), false);
+});
+
+test("providerRouting__SendsNothing__When__NoProviderHasFailed", () => {
+	// An empty ignore list must not appear in the body at all: it would pin routing decisions
+	// for every healthy run, which is the overwhelming majority of them.
+	assert.deepEqual(providerRouting([]), {});
+});
+
+test("providerRouting__ListsEachProviderOnce__When__OneFailedRepeatedly", () => {
+	assert.deepEqual(providerRouting(["Azure", "Azure", "Fireworks"]), { provider: { ignore: ["Azure", "Fireworks"] } });
 });
 
 test("retryTransient__ReturnsResult__When__SecondAttemptSucceeds", async () => {
@@ -891,4 +1208,142 @@ test("unpaintedStreak__CountsNothing__When__DeltaIsUnknown", () => {
 test("unpaintedStreak__CountsFromTheEnd__When__TheFreezeStartedMidRun", () => {
 	const steps = [paintStep(true, 0.5), paintStep(false, 0.2), paintStep(false, 0), paintStep(false, 0)];
 	assert.equal(unpaintedStreak(steps), 2);
+});
+
+function withRunStamp(value: string | undefined, fn: () => void): void {
+	const prev = process.env.RUN_STAMP;
+	if (value === undefined) delete process.env.RUN_STAMP;
+	else process.env.RUN_STAMP = value;
+	try {
+		fn();
+	} finally {
+		if (prev === undefined) delete process.env.RUN_STAMP;
+		else process.env.RUN_STAMP = prev;
+	}
+}
+
+test("runKey__MintsTimestampedSlug__When__NoStampIsSupplied", () => {
+	withRunStamp(undefined, () => {
+		// The shape a hand-started run has always written, unchanged: out/runs/<key>.json
+		// is read by name elsewhere, so this format is a compatibility surface.
+		assert.match(runKey("", "Notion Calendar"), /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-notion-calendar$/);
+		assert.match(runKey("explore-", "Yarn"), /^explore-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-yarn$/);
+	});
+});
+
+test("runKey__UsesTheSuppliedStamp__When__RunStampIsSet", () => {
+	// A dispatcher pre-commits to the key so it knows which artifacts its child will write,
+	// rather than guessing at "newest file in out/runs" after the fact.
+	withRunStamp("2026-07-30T09-00-00-yarn", () => {
+		assert.equal(runKey("", "Yarn"), "2026-07-30T09-00-00-yarn");
+		// The prefix is the caller's convention, not part of the contract: an explicit key
+		// wins whole, or the two sides could disagree about where the artifacts landed.
+		assert.equal(runKey("explore-", "Yarn"), "2026-07-30T09-00-00-yarn");
+	});
+});
+
+test("runKey__MintsFreshKey__When__RunStampIsBlank", () => {
+	// launchd and `ssh host env RUN_STAMP=` both hand down empty strings for unset vars.
+	withRunStamp("   ", () => {
+		assert.match(runKey("", "Yarn"), /-yarn$/);
+		assert.notEqual(runKey("", "Yarn"), "   ");
+	});
+});
+
+// TargetNotObservableError: one symptom, two causes. Until 2026-07-30 the class asserted the
+// wrong one unconditionally, and two Macs with locked screens were read as a Spaces problem
+// and answered with a relaunch that could not possibly have helped. These pin the split.
+
+test("TargetNotObservableError__NamesTheLockScreen__When__TheDisplayIsLocked", () => {
+	const msg = new TargetNotObservableError("Yarn", "1974 AX elements, none of them app content", true).message;
+	assert.match(msg, /THE SCREEN IS LOCKED/);
+	// The operator must be sent to the unlock, not to a Space. Naming Spaces here is the
+	// regression itself: it is advice that cannot work on a locked machine.
+	assert.doesNotMatch(msg, /Space/);
+	assert.match(msg, /\.\/run signin/);
+});
+
+test("TargetNotObservableError__KeepsTheSpacesGuidance__When__TheDisplayIsUnlocked", () => {
+	// Still the right answer for the other cause, and it must say the screen is unlocked so
+	// the reader knows the lock was checked rather than never considered.
+	const msg = new TargetNotObservableError("Yarn", "3 AX elements, none of them app content", false).message;
+	assert.match(msg, /inactive\s+macOS Space/);
+	assert.match(msg, /screen is unlocked/);
+	assert.doesNotMatch(msg, /LOCKED/);
+});
+
+test("TargetNotObservableError__AssumesUnlocked__When__NoLockStateIsPassed", () => {
+	// The default must be the message that merely misdirects, never the one that asserts a
+	// lock: telling someone to unlock an already-unlocked Mac is an unanswerable instruction.
+	assert.doesNotMatch(new TargetNotObservableError("Yarn", "no content").message, /LOCKED/);
+});
+
+test("screenIsLocked__ReturnsABoolean__When__AskedOnThisMachine", () => {
+	// Deliberately not asserting WHICH: this test runs on developer laptops and colo Macs
+	// alike. What matters is that it answers instead of throwing — it is called from inside
+	// an error path and from ensureObservable's catch, where a throw would replace a real
+	// diagnosis with a diagnostic's own failure.
+	assert.equal(typeof screenIsLocked(), "boolean");
+});
+
+// resetToHome's failure detail. "home control X not present" is true and unactionable: a
+// sign-in wall, a leftover modal and a different view all produce it, and the operator's next
+// move differs for each. These pin the census that tells them apart — without teaching the
+// harness what any of those screens look like, which would be app-specific.
+
+const homeGraph: AppMap = {
+	app: "Anything",
+	capturedAt: "2026-07-30T00:00:00Z",
+	provenance: "explore",
+	home: { surface: "landing", control: "Library", description: "the library view" },
+	nodes: [{ id: "landing", label: "Landing", scope: "app", controls: [] }] as unknown as AppMapNode[],
+	edges: [{ from: "landing", to: "landing", action: 'click "Library"' }] as unknown as AppMapEdge[],
+};
+
+/** A driver that answers every observation with one fixed element list. */
+function driverShowing(elements: { role: string; label: string }[]): Driver {
+	// `label` is the driver's key for an element's name — `name` is what the parsed
+	// InteractiveElement calls it, and using that here silently produced unnamed controls.
+	const payload = JSON.stringify({
+		elements: elements.map((e, i) => ({ element_index: i, role: e.role, label: e.label, enabled: true })),
+	});
+
+	return {
+		act: async () => ({ text: "", structuredJson: payload }),
+	} as unknown as Driver;
+}
+
+test("resetToHome__NamesWhatIsOnScreen__When__TheHomeControlIsMissing", async () => {
+	const driver = driverShowing([
+		{ role: "AXTextField", label: "Email" },
+		{ role: "AXButton", label: "Continue with Google" },
+	]);
+	const out = await resetToHome(driver, { pid: 1, windowId: 2 }, "Anything", homeGraph);
+	assert.equal(out.result, "failed");
+	assert.match(out.detail, /"Library" not present/);
+	// The labels are the whole point: a reader recognises a sign-in wall from these, and the
+	// harness never has to.
+	assert.match(out.detail, /"Email"/);
+	assert.match(out.detail, /"Continue with Google"/);
+});
+
+test("resetToHome__PutsAppControlsBeforeMenuItems__When__BothAreOnScreen", async () => {
+	// Every Mac app exposes the same ~70 menu items. In walk order they arrive first and, on
+	// the first real use of this census, buried the four labels that identified the screen.
+	const driver = driverShowing([
+		{ role: "AXMenuItem", label: "About This Mac" },
+		{ role: "AXMenuItem", label: "System Settings…" },
+		{ role: "AXButton", label: "Sign in with SSO" },
+	]);
+	const out = await resetToHome(driver, { pid: 1, windowId: 2 }, "Anything", homeGraph);
+	assert.match(out.detail, /instead: "Sign in with SSO"/);
+	// Kept, not dropped: an app whose only named controls are menu items is itself a finding.
+	assert.match(out.detail, /"About This Mac"/);
+});
+
+test("resetToHome__SaysTheAppIsEmpty__When__ThereIsNoContentAtAll", async () => {
+	// Distinct from "wrong screen" and pointing somewhere entirely different — this is the
+	// locked-display / off-Space shape (LIMITATIONS §1, §12), not an app-state problem.
+	const out = await resetToHome(driverShowing([]), { pid: 1, windowId: 2 }, "Anything", homeGraph);
+	assert.match(out.detail, /NO content elements/);
 });

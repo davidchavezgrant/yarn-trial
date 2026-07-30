@@ -1,11 +1,28 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { quitApp } from "./appctl.js";
 import * as axdom from "./axdom.js";
 import { Driver } from "./driver.js";
-import type { ActionRequest, AppMap, AppMapEdge, AppMapNode, Expectation, ScopeAmbiguity, StepRecord, SurfaceScope } from "./types.js";
+import { appmapsDir, appSlug, outDir } from "./paths.js";
+import type { ActionRequest, AppMap, AppMapEdge, AppMapHome, AppMapNode, Expectation, ScopeAmbiguity, StepRecord, SurfaceScope } from "./types.js";
 
-export const OUT = `${process.cwd()}/out`;
+/**
+ * Snapshot at load, unlike the accessors in paths.ts: this is a CLI process whose data root
+ * is fixed before it starts (by `run`, or by the LaunchAgent plist), and dozens of call
+ * sites interpolate it as a plain string.
+ */
+export const OUT = outDir();
+
+/**
+ * What agent.ts exits with when the app is not at its declared home state.
+ *
+ * A CROSS-MACHINE contract, like the codes in runner/ctl.ts: the agent exits with it on a colo
+ * Mac and the client on the laptop reads the number to decide whether to offer a sign-in. Two
+ * independent copies of the literal is a protocol that drifts the first time one of them moves,
+ * so there is one and both ends import it.
+ */
+export const UNREADY_EXIT = 3;
 
 export interface WindowRef {
 	pid: number;
@@ -30,6 +47,16 @@ export interface InteractiveElement {
 	name: string;
 	/** Nearest named ancestor: which panel or menu this sits in. "" at top level. */
 	surface: string;
+	/**
+	 * The control's current value — what a combobox reads, what a text field holds. "" when
+	 * it has none, or when it duplicates `name` (a button labelled by its own value).
+	 *
+	 * Rendered into `elementsText` for the model long before it was carried here. Pulling it
+	 * into the struct is what lets code diff two observations and say which control CHANGED,
+	 * rather than only which one was clicked — the raw material for the mutation journal in
+	 * src/journal.ts, and the difference between restoring a setting and guessing at it.
+	 */
+	value: string;
 	/**
 	 * Bounds in SCREENSHOT PIXELS — the space coordinate actions consume, NOT the logical
 	 * points AX reports and `frames` below carries. Converted here, once, so a click point
@@ -68,8 +95,71 @@ export interface ObservationBundle {
 	frames: Map<string, { x: number; y: number }>;
 }
 
-export function appSlug(app: string): string {
-	return app.toLowerCase().replace(/\s+/g, "-");
+// Re-exported, not defined here: the runner needs it and must not import this module, which
+// loads the Anthropic SDK and the driver. Every existing call site keeps working.
+export { appSlug };
+
+/**
+ * The key every artifact of one run shares: `out/runs/<key>.json`, `out/recording/<key>/`,
+ * and — when the run was dispatched rather than started by hand — `out/jobs/<key>/`.
+ *
+ * `RUN_STAMP` exists so a dispatcher can decide the key BEFORE the child exists. Without it
+ * the runner would have to guess which log a spawned process went on to write, and guessing
+ * by "newest file in out/runs" is wrong the moment two runs land in the same second or a
+ * previous run failed before writing anything. The child still owns the format; the caller
+ * only pre-commits to a value.
+ */
+export function runKey(prefix: string, app: string): string {
+	const override = process.env.RUN_STAMP?.trim();
+	if (override) return override;
+
+	return mintRunKey(prefix, app);
+}
+
+/**
+ * The same key, minted rather than inherited. Separate from `runKey` because the runner is a
+ * long-lived process that mints an id per job and then hands it to the child as `RUN_STAMP`:
+ * if it ever read that variable out of its own environment — a launchd plist, a shell that
+ * exported it once — every job it started would share one id, one job directory and one log.
+ */
+export function mintRunKey(prefix: string, app: string): string {
+	return `${prefix}${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}-${appSlug(app)}`;
+}
+
+/**
+ * Make SIGINT and SIGTERM a clean stop instead of an instant kill, and report whether one
+ * has arrived.
+ *
+ * Node's default action for both is to terminate the process on the spot, so every `finally`
+ * in the script is skipped: the driver session stays open until its own 300-second lifetime
+ * expires, and the run writes no log at all. That is not hypothetical — `runnerctl stop`
+ * signals the whole process group, so under the default a stopped run would be both invisible
+ * to the gallery and a hazard to whichever job started next on that Mac.
+ *
+ * The handler only sets a flag. The caller reads it between actions and leaves through its
+ * ordinary cleanup path, which is what keeps the run log. `graceMs` covers the case the flag
+ * cannot: a signal landing in the middle of a model call, where nothing will read it for
+ * several seconds. At that deadline the session is closed directly and the process exits —
+ * the value sits below the runner's own SIGINT→SIGKILL interval so that this, and not
+ * SIGKILL, is what ends the run.
+ */
+export function onInterrupt(closeDriver: () => Promise<void>, graceMs = 8000): () => boolean {
+	let interrupted = false;
+
+	for (const sig of ["SIGINT", "SIGTERM"] as const) {
+		process.on(sig, () => {
+			// A second signal is an operator saying the first one did not work. Honour it.
+			if (interrupted) process.exit(130);
+			interrupted = true;
+			console.log(`\n=== ${sig} received — finishing the current action and stopping ===`);
+			setTimeout(() => {
+				console.log("=== cleanup did not finish in time; closing the driver session ===");
+				closeDriver().finally(() => process.exit(130));
+			}, graceMs).unref();
+		});
+	}
+
+	return () => interrupted;
 }
 
 /**
@@ -107,25 +197,66 @@ export async function findWindow(driver: Driver, app: string): Promise<WindowRef
 }
 
 /**
- * A window on an inactive macOS Space (e.g. because another app is fullscreen) still
- * appears in the window list and every driver call still succeeds — but Chromium has
- * suspended the app: no app-content AX elements, no screenshot. The failure looks
- * like a healthy app, so detect it explicitly instead of letting the caller flail
- * against a menu-bar-only tree. See LIMITATIONS.md §1.
+ * An app that is running, answers every driver call, and shows nothing but its menu bar.
+ *
+ * Two different causes produce the identical symptom, and the message has to name the right
+ * one or it sends the operator somewhere useless:
+ *
+ * 1. THE SCREEN IS LOCKED. The login window owns the display, so app windows are not
+ *    composited and AX exposes only the menu bar. Measured on mac2 and mac3, 2026-07-30:
+ *    1974 elements, every one of them `AXMenu*`, `screencapture` refusing with "could not
+ *    create image from display", and `CGSSessionScreenIsLocked` true on exactly the two
+ *    hosts that failed. This is the common case on a colo Mac nobody sits at.
+ * 2. The window is on an inactive Space (another app is fullscreen). Chromium suspends the
+ *    app and produces the same empty tree. See LIMITATIONS.md §1.
+ *
+ * Only (1) is cheaply detectable, so it is checked and the rest is left as the fallback
+ * rather than asserted. Until 2026-07-30 this class named (2) unconditionally, which is how
+ * two locked Macs were read as a Spaces problem and answered with a relaunch that could not
+ * possibly have helped — nothing relaunches its way out of a lock screen.
  */
 export class TargetNotObservableError extends Error {
-	constructor(app: string, detail: string) {
+	constructor(app: string, detail: string, locked = false) {
 		super(
-			`"${app}" is running but not observable (${detail}), and foregrounding it did not help.\n` +
-				`Most likely it is on an inactive macOS Space — another app is fullscreen, or the\n` +
-				`window is on a different desktop. Programmatic activation cannot fix that; bring the\n` +
-				`app onto the active Space (click it in the Dock or ⌘-Tab to it), then re-run.`,
+			locked
+				? `"${app}" is running but not observable (${detail}) because THE SCREEN IS LOCKED.\n` +
+						`A locked Mac composites no app windows, so the accessibility tree contains the\n` +
+						`menu bar and nothing else. No amount of foregrounding or relaunching changes this.\n` +
+						`Unlock it — screen-share in (./run signin <host>) and log in once — then re-run.\n` +
+						`To stop it recurring on a machine that exists to be driven, turn off the screen\n` +
+						`lock and display sleep on that host.`
+				: `"${app}" is running but not observable (${detail}), and neither foregrounding nor\n` +
+						`relaunching it helped. The screen is unlocked, so most likely it is on an inactive\n` +
+						`macOS Space that it keeps restoring itself onto — another app is fullscreen, or the\n` +
+						`window belongs to a different desktop. Bring the app onto the active Space (click it\n` +
+						`in the Dock or ⌘-Tab to it), then re-run.`,
 		);
 		this.name = "TargetNotObservableError";
 	}
 }
 
 const isAppContent = (e: any) => !String(e.role ?? "").startsWith("AXMenu");
+
+/**
+ * Whether the login window currently owns the display.
+ *
+ * `ioreg` rather than a Quartz call because this has to work from whatever context the runner
+ * is in, including one that cannot link CoreGraphics. The key is absent — not false — on an
+ * unlocked machine, so absence is the unlocked answer.
+ *
+ * Answers false on any failure. This only ever refines an error message; a diagnostic that
+ * could itself fail a run would be worse than the wrong message.
+ */
+export function screenIsLocked(): boolean {
+	try {
+		const out = execFileSync("ioreg", ["-n", "Root", "-d1", "-a"], { encoding: "utf8", timeout: 5000 });
+		const at = out.indexOf("CGSSessionScreenIsLocked");
+
+		return at >= 0 && out.slice(at, at + 120).includes("<true/>");
+	} catch {
+		return false;
+	}
+}
 
 export async function assertObservable(driver: Driver, win: WindowRef, app: string): Promise<void> {
 	const state = await driver.act({
@@ -136,7 +267,7 @@ export async function assertObservable(driver: Driver, win: WindowRef, app: stri
 	const elements: any[] = JSON.parse(state.structuredJson ?? "{}").elements ?? [];
 	const content = elements.filter(isAppContent).length;
 	if (content === 0)
-		throw new TargetNotObservableError(app, `${elements.length} AX elements, none of them app content`);
+		throw new TargetNotObservableError(app, `${elements.length} AX elements, none of them app content`, screenIsLocked());
 }
 
 /**
@@ -176,10 +307,42 @@ async function foregroundApp(driver: Driver, app: string, pid: number): Promise<
 }
 
 /**
- * Observability with one recovery attempt: an unobservable target is foregrounded and
- * re-probed before the run is abandoned. Returns the window to use — possibly a NEW one,
- * because an app that was running with no open windows gets a fresh window id from the
- * relaunch, and the id probed a moment earlier then belongs to nothing.
+ * Quit the app and start it again, then wait for a window.
+ *
+ * This is the escalation that actually reaches the off-Space case. `foregroundApp` cannot:
+ * macOS refuses background-initiated Space switches, so every nudge in it returns success while
+ * the window stays on the desktop it is on. But a process that has EXITED has no window to
+ * leave anywhere, and the one it opens on next launch opens on the ACTIVE Space. Quitting is
+ * therefore not a bigger hammer for the same nail — it is the only move that changes the thing
+ * that is wrong.
+ *
+ * The cost is the app's unsaved state, which is why it is second and not first. In this repo
+ * that cost is close to zero: a run is supposed to start from a general state anyway, and the
+ * alternative on offer is a refused run.
+ *
+ * An app that restores its windows onto the Space they were on will defeat even this. That is
+ * the case `TargetNotObservableError` is left for.
+ */
+async function relaunchApp(driver: Driver, app: string): Promise<void> {
+	await quitApp(app).catch(() => {});
+	try {
+		await driver.act({ kind: "tool", name: "launch_app", args: { name: app } });
+	} catch {
+		// LaunchServices may still consider the app to be terminating. `open -a` again below.
+	}
+	try {
+		execFileSync("open", ["-a", app], { timeout: 10_000, stdio: "ignore" });
+	} catch {}
+	// A cold Electron launch is slow, and a window that exists but has not painted yet still
+	// reports zero app content — which is the very symptom being recovered from.
+	await new Promise((r) => setTimeout(r, 6000));
+}
+
+/**
+ * Observability with two recovery attempts, cheapest first: foreground the app, and failing
+ * that quit and relaunch it. Returns the window to use — possibly a NEW one, because an app
+ * that was restarted, or that was running with no open windows, gets a fresh window id and the
+ * one probed a moment earlier then belongs to nothing.
  */
 export async function ensureObservable(driver: Driver, win: WindowRef, app: string): Promise<WindowRef> {
 	try {
@@ -188,18 +351,47 @@ export async function ensureObservable(driver: Driver, win: WindowRef, app: stri
 		return win;
 	} catch (err) {
 		if (!(err instanceof TargetNotObservableError)) throw err;
+		// Neither recovery below can survive a lock screen — a locked Mac composites no app
+		// windows at all — and both are slow: the relaunch alone costs a quit, a cold Electron
+		// start and a 6s settle, then fails anyway. Worse, it would discard the app's state to
+		// buy nothing. Report the real reason immediately.
+		if (screenIsLocked()) throw err;
 	}
 
 	console.log(`"${app}" is not observable — foregrounding it and retrying`);
 	await foregroundApp(driver, app, win.pid);
+	const settled = await recheck(driver, app, win);
+	if (settled) return settled;
+
+	console.log(`"${app}" is still not observable — relaunching it so its window opens on the active Space`);
+	await relaunchApp(driver, app);
+	// findWindow throws if the app came back with no window at all; assertObservable throws the
+	// TargetNotObservableError whose message tells the operator what is left to do by hand.
 	const fresh = await findWindow(driver, app);
-	// Throws TargetNotObservableError again if foregrounding did not help — which is the
-	// off-Space case, and its message says so.
 	await assertObservable(driver, fresh, app);
-	if (fresh.windowId !== win.windowId || fresh.pid !== win.pid)
-		console.log(`recovered on a different window: pid=${fresh.pid} window=${fresh.windowId}`);
+	announceMove(fresh, win);
 
 	return fresh;
+}
+
+/** Re-probe after a recovery nudge. Answers the usable window, or nothing if it did not take. */
+async function recheck(driver: Driver, app: string, before: WindowRef): Promise<WindowRef | undefined> {
+	try {
+		const fresh = await findWindow(driver, app);
+		await assertObservable(driver, fresh, app);
+		announceMove(fresh, before);
+
+		return fresh;
+	} catch {
+		// Anything other than "still not observable" — the app having no window at all, say — is
+		// also worth escalating to a relaunch, so nothing is rethrown here.
+		return undefined;
+	}
+}
+
+function announceMove(fresh: WindowRef, before: WindowRef): void {
+	if (fresh.windowId !== before.windowId || fresh.pid !== before.pid)
+		console.log(`recovered on a different window: pid=${fresh.pid} window=${fresh.windowId}`);
 }
 
 export async function observe(driver: Driver, win: WindowRef, shotName: string): Promise<ObservationBundle> {
@@ -293,7 +485,7 @@ export async function observe(driver: Driver, win: WindowRef, shotName: string):
 		// A disabled control cannot be actuated, so listing it in the frontier would leave an
 		// entry nothing can ever clear. It re-enters the moment the app enables it.
 		if (INTERACTIVE_ROLES.includes(e.role) && e.enabled !== false)
-			interactive.push({ handle: e.element_index, role: e.role, name: key ?? "", surface: parent, ...toPixels(e.frame) });
+			interactive.push({ handle: e.element_index, role: e.role, name: key ?? "", surface: parent, value: val ? value : "", ...toPixels(e.frame) });
 		const inWhat = parent && !label.slice(0, 40).startsWith(parent) ? ` in="${parent}"` : "";
 		lines.push(`[${e.element_index}] ${e.role} "${label.slice(0, 80)}"${val}${dsc}${inWhat}${f}${e.selected ? " SELECTED" : ""}${e.enabled === false ? " DISABLED" : ""}`);
 	}
@@ -464,7 +656,16 @@ const normSurface = (s: string): string =>
 	s
 		.trim()
 		.toLowerCase()
-		.replace(/&lt;|&gt;|[<>]/g, "")
+		// Every spelling of a bracket that can reach here, not just the two that were observed.
+		// The listing prints `<top level>`; whatever escapes it on the way through the model's
+		// context decides the form it comes back in, and named entities are only the first one
+		// we happened to see. Decimal (`&#60;`), hex (`&#x3c;`) and the doubly-escaped
+		// `&amp;lt;` an escaper applied twice produces are the same string to a reader and were
+		// four different non-matches to this function.
+		.replace(/&(?:amp;)*(?:lt|gt|#0*6[02]|#x0*3[ce]);|[<>]/g, "")
+		// After the brackets go, not before: `< top level >` leaves inner padding that would
+		// otherwise stop the placeholder below from anchoring.
+		.trim()
 		.replace(/^(top[- ]?level|none|root|unnamed)$/, "");
 
 /**
@@ -549,6 +750,46 @@ export function mergeGraph(
 }
 
 /**
+ * The upstream provider OpenRouter blamed for a failed request, if it named one.
+ *
+ * OpenRouter is a router: one model id fans out to several hosts, and a request that fails
+ * because ONE of them is broken carries that host's name in `error.metadata.provider_name`.
+ * Reading it is what makes the retry different from the attempt that just failed — see
+ * providerRouting below.
+ *
+ * Both shapes are handled because both were observed from the same incident: the SDK attaches
+ * the parsed body as `.error` on an APIError, but a failure that arrives wrapped (or from
+ * `.stream()`) only has the JSON inside the message string.
+ */
+export function failedProvider(err: unknown): string | undefined {
+	const body = (err as { error?: { error?: { metadata?: { provider_name?: unknown } } } })?.error;
+	const named = body?.error?.metadata?.provider_name;
+	if (typeof named === "string" && named.trim()) return named.trim();
+
+	const m = /"provider_name"\s*:\s*"([^"]+)"/.exec(`${(err as Error)?.message ?? ""}`);
+
+	return m?.[1]?.trim() || undefined;
+}
+
+/**
+ * Tell OpenRouter to route around providers this run has already watched fail.
+ *
+ * The bug this closes: a run died with five consecutive 404 DeploymentNotFound while the same
+ * key on the same host got a 200 for the same model seconds later. OpenRouter was routing some
+ * requests to a broken Azure-backed provider, and the retry loop — which backed off correctly —
+ * re-asked the identical route each time, so one bad provider consumed the whole allowance.
+ * Backoff cannot help when the fault is not load.
+ *
+ * Empty when nothing has failed, so the normal request is byte-for-byte what it was and
+ * OpenRouter's own ranking is untouched. Non-OpenRouter clients ignore the field.
+ */
+export function providerRouting(ignore: Iterable<string>): Record<string, unknown> {
+	const list = [...new Set(ignore)];
+
+	return list.length ? { provider: { ignore: list } } : {};
+}
+
+/**
  * Is this error worth trying again, or is retrying it just a slower failure?
  *
  * Transient here means the request never got a verdict: the connection dropped, the body
@@ -558,8 +799,15 @@ export function mergeGraph(
  * Matching on message text as well as status because a mid-stream failure arrives wrapped —
  * the observed one was `AnthropicError: terminated` with a `BodyTimeoutError` cause and no
  * status at all, since the headers had already come back 200.
+ *
+ * A provider-attributed error is transient WHATEVER its status. That is not a general claim
+ * about 404s — it is specific to a router: the code came from one upstream host, the next
+ * attempt can be sent somewhere else (providerRouting makes sure it is), and "this provider
+ * has no such deployment" says nothing about the others.
  */
 export function isTransientApiError(err: unknown): boolean {
+	if (failedProvider(err)) return true;
+
 	const status = (err as { status?: number })?.status;
 	if (typeof status === "number") return status === 408 || status === 429 || status >= 500;
 	const text = `${(err as Error)?.message ?? ""} ${String((err as { cause?: unknown })?.cause ?? "")}`.toLowerCase();
@@ -652,17 +900,35 @@ export function recoverLeakedGraph(text: string): {
 const DESTRUCTIVE_LABEL =
 	/\b(delete|remove|discard|erase|trash|publish|export|download|send|share|invite|buy|purchase|subscribe|unsubscribe|sign out|log out|revoke|deactivate|reset|restore|merge|archive)\b/i;
 
-export function destructiveTarget(action: any, obs: ObservationBundle): string | undefined {
+/**
+ * Which control does this action operate?
+ *
+ * Two addressing modes because the model has two: a handle when the target is a real element,
+ * and a coordinate when it is painted. On the coordinate path the SMALLEST containing box
+ * wins — boxes nest, so a click inside a button is also inside its panel, and the panel is
+ * never the thing being pressed.
+ *
+ * Shared by the destructive-label guard and the mutation journal, which ask different
+ * questions of the same answer. Two copies would be two chances to disagree about what the
+ * agent just touched.
+ */
+export function resolveTarget(action: any, obs: ObservationBundle): InteractiveElement | undefined {
 	const handle = action?.element_index ?? action?.ref;
+	if (handle !== undefined && handle !== null) return obs.interactive.find((e) => e.handle === handle);
+	if (typeof action?.x !== "number" || typeof action?.y !== "number") return undefined;
+
 	let target: InteractiveElement | undefined;
-	if (handle !== undefined && handle !== null) target = obs.interactive.find((e) => e.handle === handle);
-	else if (typeof action?.x === "number" && typeof action?.y === "number") {
-		for (const e of obs.interactive) {
-			if (e.w <= 0 || e.h <= 0) continue;
-			if (action.x < e.x || action.x >= e.x + e.w || action.y < e.y || action.y >= e.y + e.h) continue;
-			if (!target || e.w * e.h < target.w * target.h) target = e;
-		}
+	for (const e of obs.interactive) {
+		if (e.w <= 0 || e.h <= 0) continue;
+		if (action.x < e.x || action.x >= e.x + e.w || action.y < e.y || action.y >= e.y + e.h) continue;
+		if (!target || e.w * e.h < target.w * target.h) target = e;
 	}
+
+	return target;
+}
+
+export function destructiveTarget(action: any, obs: ObservationBundle): string | undefined {
+	const target = resolveTarget(action, obs);
 	// Only *pressing* things is guarded. A keystroke can be destructive too, but nothing
 	// here can tell which one is, and guessing at key combinations would block the pass
 	// from typing at all.
@@ -679,31 +945,195 @@ export function observationBlocks(obs: ObservationBundle, vision = true): Array<
 }
 
 /**
- * Per-app "home" state: where a run must start so results are comparable.
+ * The surface exploration started from: the one surface no edge leads to.
  *
- * A run that begins wherever the last run happened to stop is not a measurement — it
- * inherits that run's navigation for free. (Measured: the Yarn cursor task took 3 actions
- * starting on the settings page it ends on, vs 4 from the app's home view — the difference
- * is entirely the navigation step the warm start skipped.)
- *
- * `label` is matched against element labels in the observation; the first match is clicked
- * with foreground delivery. Apps absent from this map get no reset, and the run log records
- * `homeReset: "none"` so the omission is visible rather than silent.
+ * Derived structurally rather than by looking for an id called "root", because that id is a
+ * convention of one exploration pass and not part of the schema. Undefined unless exactly one
+ * surface qualifies — zero means every surface is reachable (a cycle) and more than one means
+ * the graph is disconnected; in both cases there is no single landing state to speak of, and
+ * guessing between candidates is worse than admitting it.
  */
-const APP_HOME: Record<string, { label: string; description: string }> = {
-	yarn: { label: "Library", description: "left-rail Library view" },
-	"notion-calendar": { label: "Today", description: "current week, no modal open" },
-};
+export function rootSurface(graph: AppMap): AppMapNode | undefined {
+	const targets = new Set(graph.edges.map((e) => e.to));
+	const roots = graph.nodes.filter((n) => n.kind === "surface" && !targets.has(n.id));
 
-export type HomeResetResult = "reset" | "already-home" | "none" | "failed";
+	return roots.length === 1 ? roots[0] : undefined;
+}
+
+/**
+ * Labels of the controls that sit on the root surface, taken from the edges leaving it.
+ *
+ * Edge actions are prose ('click "Brand Kit" in bottom-left rail') and the quoted span is the
+ * label the walk actually observed, so it is the one string in the graph that can be matched
+ * against a live observation. Used only to answer "does this app look like itself right now" —
+ * never to decide where to click.
+ */
+export function rootControlLabels(graph: AppMap): string[] {
+	const root = rootSurface(graph);
+	if (!root) return [];
+
+	const labels = graph.edges.filter((e) => e.from === root.id).flatMap((e) => quotedLabels(e.action));
+
+	return [...new Set(labels)];
+}
+
+/** The labels an edge action quotes — the only strings in the graph a live observation can match. */
+function quotedLabels(action: string): string[] {
+	return [...action.matchAll(/"([^"]+)"/g)].map((m) => m[1]).filter((l) => l.trim());
+}
+
+/**
+ * Accept a declared home only if the pass can show its own evidence for it.
+ *
+ * The surface must be a node the walk recorded, and the control label must appear in some edge
+ * action — that is where the walk quotes labels it actually operated. Both are weak checks and
+ * that is deliberate: they catch a fabricated or misremembered label at the end of a 40-minute,
+ * context-reset transcript, which is the realistic failure, without pretending to validate
+ * against a live app that is no longer running by the time this is called.
+ *
+ * Worth being strict about because this one field is written once and then silently governs the
+ * start state of every future run: a label the pass never saw becomes a permanent, invisible
+ * "failed" reset. Dropping it costs only the normalisation and keeps the readiness check.
+ */
+export function checkHome(
+	home: AppMapHome | undefined,
+	nodes: AppMapNode[],
+	edges: AppMapEdge[],
+): { home?: AppMapHome; problem?: string } {
+	if (!home) return {};
+	if (!home.surface?.trim() || !home.control?.trim()) return { problem: "surface and control are both required" };
+	if (!nodes.some((n) => n.id === home.surface)) return { problem: `surface "${home.surface}" is not a node in the graph` };
+
+	const quoted = new Set(edges.flatMap((e) => quotedLabels(e.action)));
+	if (!quoted.has(home.control))
+		return { problem: `control "${home.control}" appears in no edge action, so the pass never recorded operating it` };
+
+	return { home };
+}
+
+export type HomeResetResult = "reset" | "already-home" | "none" | "failed" | "root-visible";
+
+/**
+ * Put the app in a known state before a run, and refuse to proceed if it is not in one.
+ *
+ * A run that begins wherever the last run happened to stop is not a measurement — it inherits
+ * that run's navigation for free. (Measured: the Yarn cursor task took 3 actions starting on
+ * the settings page it ends on, vs 4 from the app's home view; the difference is entirely the
+ * navigation step the warm start skipped.)
+ *
+ * The home state is DECLARED IN THE APPMAP, not in this file. It used to be a table here
+ * keyed by app slug, which was app-specific data in general-purpose code and, worse, meant the
+ * unusable-app refusal in agent.ts only fired for the two apps that happened to be listed —
+ * every newly onboarded app got "none" and was driven straight into its login wall.
+ *
+ * So there are two tiers, and the weaker one is the one that generalises:
+ *
+ *  - A declared home is clicked, which both normalises the start state and proves the app is
+ *    usable.
+ *  - With no declared home we can still ask whether ANY control from the app's landing surface
+ *    is on screen. That does not normalise anything, so it is reported as `root-visible` and
+ *    not as a reset — but it is a real answer to "is this app at a sign-in wall", and it works
+ *    for any app with a map.
+ *
+ * Nothing here knows what a login looks like; that would be app-specific. It knows only
+ * whether the app's own recorded landing state can be seen.
+ */
+/**
+ * A short census of the named controls actually visible, for a diagnostic that would otherwise
+ * only say what is missing.
+ *
+ * Deliberately app-agnostic: it reports labels, it does not try to classify them. Nothing here
+ * knows what a login screen looks like — a reader does, from the labels.
+ */
+function onScreenSummary(obs: ObservationBundle): string {
+	if (!obs.appContent) return " — and the app has NO content elements at all";
+
+	// Menu-bar items last, not excluded: every Mac app carries the same ~70 of them ("About
+	// This Mac", "System Settings…"), so unfiltered they crowd out the handful of labels that
+	// identify the screen — on the first real use they pushed "Sign in with SSO" to fourth
+	// place and filled the rest of the line. They still belong in the tail, because an app
+	// whose ONLY named controls are menu items is itself the diagnosis.
+	const named = obs.interactive.filter((e) => e.name.trim());
+	const names = [
+		...new Set([...named.filter(isAppContent), ...named.filter((e) => !isAppContent(e))].map((e) => e.name.trim())),
+	];
+	if (!names.length) return ` — ${obs.appContent} content elements, none of them a named control`;
+
+	const shown = names.slice(0, 12);
+
+	return ` — on screen instead: ${shown.map((n) => `"${n}"`).join(", ")}${names.length > shown.length ? `, +${names.length - shown.length} more` : ""}`;
+}
+
+/**
+ * Which labels prove this app's landing surface is on screen — or why none can be named.
+ *
+ * Shared by the reset and the read-only probe below, because "is the app at home" has to mean
+ * the same thing in both. They answer for different callers (one normalises a run's start
+ * state, one waits for a human to finish signing in) and a second, drifting copy of the rule
+ * would let a sign-in be declared complete against a screen the next run then refuses.
+ */
+function homeTargets(app: string, graph: AppMap | undefined): { home?: AppMap["home"]; wanted: string[]; problem?: string } {
+	if (!graph) return { wanted: [], problem: `no appmap for "${app}" — run: npm run explore -- "${app}"` };
+
+	// Any of the fallback labels will do; a declared home wants its own.
+	const home = graph.home;
+	const wanted = home ? [home.control] : rootControlLabels(graph);
+	if (!wanted.length) return { wanted, problem: `appmap for "${app}" declares no home and has no identifiable landing surface` };
+
+	return { home, wanted };
+}
+
+/** The first observation line naming any of `wanted`. */
+function findHomeLine(text: string, wanted: string[]): string | undefined {
+	return text.split("\n").find((l) => wanted.some((label) => l.includes(`"${label}"`)));
+}
+
+/**
+ * Is the app sitting at its declared home right now? Observes and answers — nothing else.
+ *
+ * The read-only counterpart to `resetToHome`, and the difference is the point. It exists to be
+ * called repeatedly while a HUMAN is using the app (signing it in over screen sharing), where
+ * the reset's two side effects are both destructive: the escape would dismiss the dialog they
+ * are filling in, and the click would navigate away from it. So there is no escape and no
+ * click here, and a run of these leaves the app exactly as it found it.
+ *
+ * Nothing here knows what a sign-in looks like. It knows whether the app's own recorded landing
+ * state can be seen, which is as app-agnostic as the reset it shares its rules with.
+ */
+export async function probeHome(
+	driver: Driver,
+	win: WindowRef,
+	app: string,
+	graph: AppMap | undefined = loadAppMapGraph(app),
+): Promise<{ ready: boolean; detail: string }> {
+	const target = homeTargets(app, graph);
+	if (target.problem) return { ready: false, detail: target.problem };
+
+	const obs = await observe(driver, win, "home-probe");
+	if (findHomeLine(obs.elementsText, target.wanted))
+		return {
+			ready: true,
+			detail: target.home ? `home control "${target.home.control}" is on screen` : `the landing surface of "${app}" is on screen`,
+		};
+
+	return { ready: false, detail: `${target.wanted.map((l) => `"${l}"`).join(", ")} not on screen${onScreenSummary(obs)}` };
+}
 
 export async function resetToHome(
 	driver: Driver,
 	win: WindowRef,
 	app: string,
+	graph: AppMap | undefined = loadAppMapGraph(app),
 ): Promise<{ result: HomeResetResult; detail: string }> {
-	const home = APP_HOME[appSlug(app)];
-	if (!home) return { result: "none", detail: `no home state declared for "${app}"` };
+	// Loaded here rather than passed down from agent.ts on purpose: there, the graph is gated
+	// on grounding being enabled, and a reset that only happens in the grounded arm would make
+	// every A/B comparison measure the reset instead of the grounding.
+	const target = homeTargets(app, graph);
+	if (target.problem) return { result: "none", detail: target.problem };
+
+	const home = target.home;
+	const wanted = target.wanted;
+	const findLine = (text: string): string | undefined => findHomeLine(text, wanted);
 
 	// An overlay left open by the previous run hides the sidebar: Yarn's dropdowns overlay
 	// the page and sidebar elements vanish from the AX tree entirely, so the home control
@@ -711,7 +1141,7 @@ export async function resetToHome(
 	// started wherever the last one stopped — the exact non-comparability the reset exists
 	// to prevent. Escape first, then retry once.
 	let obs = await observe(driver, win, "home-reset-probe");
-	let line = obs.elementsText.split("\n").find((l) => l.includes(`"${home.label}"`));
+	let line = findLine(obs.elementsText);
 	let dismissed = false;
 	if (!line) {
 		await driver.act({
@@ -721,11 +1151,32 @@ export async function resetToHome(
 		});
 		await new Promise((r) => setTimeout(r, 900));
 		obs = await observe(driver, win, "home-reset-probe");
-		line = obs.elementsText.split("\n").find((l) => l.includes(`"${home.label}"`));
+		line = findLine(obs.elementsText);
 		dismissed = true;
 	}
 	if (!line)
-		return { result: "failed", detail: `home control "${home.label}" not present, even after escape` };
+		return {
+			result: "failed",
+			detail:
+				(home
+					? `home control "${home.control}" not present, even after escape`
+					: `nothing from the landing surface of "${app}" is on screen, even after escape (looked for ${wanted.map((l) => `"${l}"`).join(", ")})`) +
+				// What IS on screen, because the absence alone is unactionable. A sign-in wall, a
+				// leftover modal and a different view all produce the identical "not present", and
+				// the operator's next move differs for each. Measured on mac1, 2026-07-30: the run
+				// refused with only the missing name and nothing in the log said whether the app
+				// wanted a password or had a dialog open.
+				onScreenSummary(obs),
+		};
+
+	// Without a declared home there is nowhere specific to click: the labels above prove the
+	// app is usable, which is the safety half, but normalising the start state needs to know
+	// WHICH surface is home and that is exactly what the map is missing.
+	if (!home)
+		return {
+			result: "root-visible",
+			detail: `landing surface of "${app}" is on screen, but the appmap declares no home — start state is not normalised; re-run: npm run explore -- "${app}"`,
+		};
 
 	const index = Number(line.match(/^\[(\d+)\]/)?.[1]);
 	if (!Number.isFinite(index)) return { result: "failed", detail: `could not parse index from: ${line}` };
@@ -739,7 +1190,7 @@ export async function resetToHome(
 
 	return {
 		result: "reset",
-		detail: `${dismissed ? "escaped a leftover overlay, then " : ""}clicked "${home.label}" → ${home.description}`,
+		detail: `${dismissed ? "escaped a leftover overlay, then " : ""}clicked "${home.control}" → ${home.description}`,
 	};
 }
 
@@ -865,29 +1316,36 @@ export function findScopeAmbiguities(map: AppMap): ScopeAmbiguity[] {
  * alone did not prevent the wrong-scope changes; naming each collision explicitly, with the
  * scope of every candidate, gives the model something it cannot skim past.
  */
+/**
+ * The click-path to a node, as recorded by exploration. Edges are keyed by node id, and a
+ * control's route is the path to its parent surface — you navigate to the panel, not to the
+ * combobox inside it.
+ *
+ * Lifted out of `scopeWarnings`, where it was a closure, because teardown needs the same walk
+ * to tell a restore where its control lives (`restoreRoute` in src/journal.ts).
+ */
+export function routeTo(map: AppMap, nodeId: string): string {
+	const surface = map.nodes.find((n) => n.id === nodeId)?.kind === "control"
+		? nodeId.split("/").slice(0, -1).join("/")
+		: nodeId;
+	const hops: string[] = [];
+	let cursor = surface;
+	// Walk parents until root; bounded by node count so a cyclic graph cannot hang us.
+	for (let i = 0; i <= map.nodes.length; i++) {
+		const edge = map.edges.find((e) => e.to === cursor);
+		if (!edge) break;
+		hops.unshift(edge.action);
+		if (edge.from === "root") break;
+		cursor = edge.from;
+	}
+
+	return hops.length ? hops.join(" → ") : "(route not recorded)";
+}
+
 export function scopeWarnings(map: AppMap): string {
 	const ambiguities = findScopeAmbiguities(map);
 	if (ambiguities.length === 0) return "";
 
-	// Route to each option, so "both paths" is actionable rather than a label. Edges are
-	// keyed by node id; a control's route is the path to its parent surface.
-	const routeTo = (nodeId: string): string => {
-		const surface = map.nodes.find((n) => n.id === nodeId)?.kind === "control"
-			? nodeId.split("/").slice(0, -1).join("/")
-			: nodeId;
-		const hops: string[] = [];
-		let cursor = surface;
-		// Walk parents until root; bounded by node count so a cyclic graph cannot hang us.
-		for (let i = 0; i <= map.nodes.length; i++) {
-			const edge = map.edges.find((e) => e.to === cursor);
-			if (!edge) break;
-			hops.unshift(edge.action);
-			if (edge.from === "root") break;
-			cursor = edge.from;
-		}
-
-		return hops.length ? hops.join(" → ") : "(route not recorded)";
-	};
 
 	// Group by the SURFACES involved, not per setting. Yarn has 15 settings split across the
 	// same brand-vs-document pair of panels; listing each separately made the warning 10.8k
@@ -911,7 +1369,7 @@ export function scopeWarnings(map: AppMap): string {
 
 	const lines = [...groups.values()].map((g) => {
 		const options = g.nodes
-			.map((n) => `    · ${n.scope} scope — ${n.id}\n      route: ${routeTo(n.id)}`)
+			.map((n) => `    · ${n.scope} scope — ${n.id}\n      route: ${routeTo(map, n.id)}`)
 			.join("\n");
 
 		return (
@@ -934,7 +1392,7 @@ export function scopeWarnings(map: AppMap): string {
 }
 
 export function loadAppMapGraph(app: string): AppMap | undefined {
-	const path = `${process.cwd()}/docs/appmaps/${appSlug(app)}.json`;
+	const path = `${appmapsDir()}/${appSlug(app)}.json`;
 	if (!fs.existsSync(path)) return undefined;
 
 	try {

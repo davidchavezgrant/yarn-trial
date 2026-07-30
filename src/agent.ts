@@ -10,6 +10,7 @@ import {
 	dragMoved,
 	DRIVER_RULES,
 	ensureObservable,
+	failedProvider,
 	findScopeAmbiguities,
 	findWindow,
 	framesShifted,
@@ -17,25 +18,42 @@ import {
 	makeClient,
 	observationBlocks,
 	observe,
+	onInterrupt,
 	OUT,
 	pixelDelta,
+	providerRouting,
 	resetToHome,
+	runKey,
 	scopeWarnings,
 	settleMsFor,
 	stageWindowForRecording,
 	TargetNotObservableError,
 	toActionRequest,
 	unpaintedStreak,
+	UNREADY_EXIT,
 	verificationTallies,
 	verify,
 	visualJudge,
 } from "./harness.js";
 import { DOM_ACT_TOOL, DOM_RULES, DomBackend, FIND_TOOL } from "./dom.js";
+import { appendMutation, detectMutation, readJournal } from "./journal.js";
+import { runTeardown } from "./teardown.js";
 import { startOverlay } from "./overlay.js";
+import { appmapsDir, recipesDir, relToData } from "./paths.js";
 import type { ActionRequest, Expectation, StepRecord } from "./types.js";
 import type { ObservationBundle, VerifyResult, VisualVerdict } from "./harness.js";
 
 const MAX_STEPS = Number(process.env.AGENT_STEPS ?? 15);
+/**
+ * Steps a single restore entry may spend before it is abandoned.
+ *
+ * Restoring is strictly easier than the task that caused it — the target value is already
+ * known, so the harness writes the expectation instead of trusting one — and the route comes
+ * from the appmap. A budget this small is therefore a real signal: an entry that cannot be
+ * put back in ten steps is reporting that the control moved or the surface changed, which is
+ * worth saying rather than grinding on.
+ */
+const CLEANUP_STEPS = Number(process.env.CLEANUP_STEPS ?? 10);
 /**
  * Consecutive steps with nothing verified and nothing repainted before the run says so. It
  * used to abort here, and that was wrong for a whole class of target: apps with an embedded
@@ -64,6 +82,10 @@ DEMONSTRATE BY DOING. Your runs are recorded as product demos, so the video must
 - If the task names no specific value ("change the cursor type" — to what?), CHOOSE a sensible one — any value different from the current one — and commit it. An unspecified value is not a reason to stop short; it is yours to pick. Say which you chose in your summary.
 - Commit the change: if there is a Save / Done / Apply control, click it, and confirm the change survived (the unsaved-changes affordance disappears, or the control still reads the new value on re-observation).
 - Your "done" evidence must prove the NEW state, so pair textIncludes on the new value with textExcludes on the old one wherever the change replaces a value.
+
+WORK IN SCRATCH, NOT IN THE USER'S CONTENT. When a task needs something to operate on — a document, a project, a draft — CREATE A NEW ONE with a distinctive name rather than opening something that is already there, and call "claim" the moment it exists. The workspace you are driving may be a real person's, and a demo that edits their actual work is a failure even when the task succeeds.
+
+Settings you change are put back after the run, so change them freely. Things you CREATE are not removed automatically — they are only reported — so creating a scratch document is safe and preferable, but creating five of them leaves five behind.
 
 The one exception is irreversible or externally-visible actions — deleting, publishing, exporting, sending, sharing, purchasing, account changes. For those, and ONLY those, go as far as the final confirmation step WITHOUT confirming, then call done with success: true, evidence showing you reached that point, and a summary saying plainly that you stopped before the irreversible step.
 
@@ -97,6 +119,38 @@ const DONE_TOOL: Anthropic.Tool = {
 	},
 };
 
+/**
+ * The agent's declaration that it brought something into existence.
+ *
+ * This is the sandbox half of cleanup, and it exists because restoring a value and disposing
+ * of a thing are not the same operation: a setting has a previous value to write back, while
+ * a draft the run created has no "before" at all — the only way to leave the workspace as it
+ * was found is to remove it. A claimed name is the whole of teardown's authority to do that:
+ * disposal is matched against this ledger by code, so an unclaimed document cannot be deleted
+ * however convinced the model is that it is scratch.
+ */
+const CLAIM_TOOL: Anthropic.Tool = {
+	name: "claim",
+	description:
+		"Declare a resource this run created (or is about to modify) so the harness can account for it afterwards. " +
+		"Call it IMMEDIATELY after creating the thing, with the exact name as the app renders it.",
+	input_schema: {
+		type: "object",
+		properties: {
+			kind: {
+				type: "string",
+				enum: ["created", "will-modify"],
+				description:
+					'"created" is a thing that did not exist before this run. ' +
+					'"will-modify" is pre-existing content you are about to change, recorded so the change can be reported.',
+			},
+			name: { type: "string", description: 'Exact name as it appears in the app, e.g. "scratch-demo-7f3a".' },
+			note: { type: "string", description: "One sentence: what it is and why the task needed it." },
+		},
+		required: ["kind", "name"],
+	},
+};
+
 interface GroundingMeta {
 	/** "none" | "explore" (autonomous exploration output) | "curated" (human-edited — a recipe tier, not measurable as grounding) */
 	provenance: "none" | "explore" | "curated";
@@ -110,8 +164,8 @@ function loadGrounding(app: string): GroundingMeta {
 	// docs/appmaps/ holds ONLY explore.ts output (stamped with a provenance header);
 	// docs/recipes/ holds hand-curated notes. Both ground the agent, but they are
 	// different classes of input and the run log must say which one was used.
-	const explorePath = `${process.cwd()}/docs/appmaps/${appSlug(app)}.md`;
-	const recipePath = `${process.cwd()}/docs/recipes/${appSlug(app)}.md`;
+	const explorePath = `${appmapsDir()}/${appSlug(app)}.md`;
+	const recipePath = `${recipesDir()}/${appSlug(app)}.md`;
 	const useRecipe = process.env.USE_RECIPE ? fs.existsSync(recipePath) : false;
 	const path = useRecipe ? recipePath : fs.existsSync(explorePath) ? explorePath : undefined;
 	if (!path) return { provenance: "none" };
@@ -219,7 +273,7 @@ async function main(): Promise<void> {
 	const backendKind = backendIdx >= 0 ? (argv[backendIdx + 1] ?? "ax") : "ax";
 	const args = argv.filter(
 		(a, i) =>
-			!["--record", "--hinted", "--no-reset", "--no-vision"].includes(a) &&
+			!["--record", "--hinted", "--no-reset", "--no-vision", "--allow-unready"].includes(a) &&
 			(backendIdx < 0 || (i !== backendIdx && i !== backendIdx + 1)),
 	);
 	const task = args[0];
@@ -236,6 +290,7 @@ async function main(): Promise<void> {
 	// test, and the resulting run log is indistinguishable from a clean one unless we
 	// record the fact here. Refuse by default; --hinted opts in and marks the log.
 	const noReset = argv.includes("--no-reset");
+	const allowUnready = argv.includes("--allow-unready");
 	const hintedAck = argv.includes("--hinted");
 	const audit = auditTaskPrompt(task);
 	if (audit.hinted && !hintedAck) {
@@ -258,15 +313,16 @@ async function main(): Promise<void> {
 	// where the banner would be in frame.
 	const overlay = startOverlay("drive", `Agent driving ${app} — do not touch`);
 	const driver = await Driver.start("agent");
+	const interrupted = onInterrupt(() => driver.close());
 	const records: StepRecord[] = [];
 	const startedAt = Date.now();
 	const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, modelCalls: 0 };
 	// Unique per run: a single overwritten agent-run.json forced hand-copying to preserve
 	// A/B artifacts, which is how out/ab-grounded-script.json ended up a mislabeled
 	// duplicate of a different run and its real numbers were lost.
-	const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+	const stamp = runKey("", app);
 	fs.mkdirSync(`${OUT}/runs`, { recursive: true });
-	const runLog = `${OUT}/runs/${stamp}-${appSlug(app)}.json`;
+	const runLog = `${OUT}/runs/${stamp}.json`;
 	let driverBusy = false;
 	let homeReset: string = noReset ? "skipped" : "pending";
 	// Whether the axdom sidecar supplied DOM id/class this run. Recorded so a run's
@@ -275,8 +331,28 @@ async function main(): Promise<void> {
 	let expectationRejections = 0;
 	let findCalls = 0;
 	let malformedStreak = 0;
+	// Upstream providers this run has watched fail. Sent back to OpenRouter as an ignore list so
+	// a retry is routed somewhere else — backoff alone re-asks the broken host. See
+	// providerRouting in harness.ts for the incident that motivated it.
+	const badProviders = new Set<string>();
 	let aborted: unknown;
 	let outcome: Record<string, unknown> | undefined;
+	// off | advisory (default) | block. Advisory keeps the task's verdict and cleanup's on
+	// separate axes: a demo that achieved its goal did so whether or not the app was tidied
+	// afterwards, and collapsing the two would mark good runs as failures. `off` is for
+	// filming takes, where the changed end state IS the artifact.
+	const cleanupMode = process.env.CLEANUP ?? "advisory";
+	// Appended the instant a mutation is detected rather than written with the run log,
+	// because the case this most needs to survive is the one where there is no run log: a
+	// crash mid-task leaves the app dirty, and the journal on disk is what lets
+	// `npm run cleanup -- <stamp>` put it back without a human reconstructing what happened.
+	const journalPath = `${OUT}/runs/${stamp}.journal.jsonl`;
+	const claimed: Array<{ kind: string; name: string; note?: string; step: number }> = [];
+	// Restore steps live apart from `records` so verificationTallies() keeps reporting the
+	// TASK's numbers. Folding them in would let a run improve its own verification rate by
+	// cleaning up after itself, which measures nothing.
+	const cleanupSteps: StepRecord[] = [];
+	let cleanupReport: Record<string, unknown> | undefined;
 
 	/**
 	 * The one place a run log is written. Every exit — done(), the step limit, an abort —
@@ -309,9 +385,12 @@ async function main(): Promise<void> {
 					elapsedSec: Math.round((Date.now() - startedAt) / 1000),
 					usage,
 					...verificationTallies(records),
+					...(cleanupReport ? { cleanup: cleanupReport } : {}),
+					...(claimed.length ? { claimed } : {}),
 					...result,
-					...(record ? { video: videoPath.replace(`${process.cwd()}/`, "") } : {}),
+					...(record ? { video: relToData(videoPath) } : {}),
 					steps: records,
+					...(cleanupSteps.length ? { cleanupSteps } : {}),
 				},
 				null,
 				2,
@@ -326,7 +405,7 @@ async function main(): Promise<void> {
 	// the driver, so frames land in the model-thinking gaps.
 	// Per-run directory, sharing the run log's stamp: the video and the log that proves
 	// what it shows stay paired, and a recorded A/B no longer overwrites its own evidence.
-	const recordingDir = `${OUT}/recording/${stamp}-${appSlug(app)}`;
+	const recordingDir = `${OUT}/recording/${stamp}`;
 	const framesDir = `${recordingDir}/frames`;
 	const videoPath = `${recordingDir}/window.mp4`;
 	const frameTimes: number[] = [];
@@ -339,7 +418,7 @@ async function main(): Promise<void> {
 	// to pin exactly which appmap version grounded the run without bloating every log.
 	const groundingMeta: Record<string, unknown> = {
 		provenance: grounding.provenance,
-		...(grounding.path ? { path: grounding.path.replace(`${process.cwd()}/`, "") } : {}),
+		...(grounding.path ? { path: relToData(grounding.path) } : {}),
 		...(grounding.notes ? { sha256: createHash("sha256").update(grounding.notes).digest("hex").slice(0, 12) } : {}),
 	};
 	// The structured appmap rides alongside the prose one. Its job here is the scope
@@ -364,7 +443,7 @@ async function main(): Promise<void> {
 	}
 	// find is DOM-only: it is the escape hatch from the semantic_v2 node budget, and the
 	// AX path has no budget to escape (get_window_state returns the whole tree).
-	const tools: Anthropic.Tool[] = backendKind === "dom" ? [DOM_ACT_TOOL, FIND_TOOL, DONE_TOOL] : [ACT_TOOL, DONE_TOOL];
+	const tools: Anthropic.Tool[] = backendKind === "dom" ? [DOM_ACT_TOOL, FIND_TOOL, CLAIM_TOOL, DONE_TOOL] : [ACT_TOOL, CLAIM_TOOL, DONE_TOOL];
 
 	try {
 		await driver.act({ kind: "tool", name: "launch_app", args: { name: app } });
@@ -392,13 +471,33 @@ async function main(): Promise<void> {
 			overlay.setDriving(false);
 			homeReset = reset.result;
 			console.log(`home reset: ${reset.result} — ${reset.detail}`);
-			if (reset.result === "none")
-				console.log(`  (add "${appSlug(app)}" to APP_HOME in src/harness.ts to make runs comparable)`);
+			if (reset.result === "none" || reset.result === "root-visible")
+				console.log(`  (runs are NOT normalised for "${app}" — an exploration pass records the home state)`);
 			// A failed reset means this run starts wherever the last one stopped, inheriting
 			// its navigation. That is not a comparable measurement, and it is invisible in
 			// the summary line unless said plainly here.
-			if (reset.result === "failed")
+			//
+			// It is also the cheapest signal we have that the app is not USABLE at all. A
+			// freshly installed app on a fleet Mac sits at a sign-in wall, and its declared
+			// home control is exactly what is missing there — so the same probe that keeps
+			// runs comparable also catches an unauthenticated machine. Left ungated, the
+			// agent treats the wall as the task: a real run on 2026-07-30 spent four steps
+			// and opened an OAuth flow in Chrome before it was killed.
+			//
+			// Nothing here knows what a login looks like — that would be app-specific. It
+			// knows only that a DECLARED home state could not be reached, which is a fact
+			// about this app's own appmap data, and refuses to spend a run guessing why.
+			if (reset.result === "failed") {
+				if (!allowUnready) {
+					console.error(`\nREFUSING TO RUN — "${app}" is not at its home state and the reason is unknown.`);
+					console.error(`  ${reset.detail}`);
+					console.error("  Most often this is an app that has never been signed in on this machine, or a modal");
+					console.error("  the previous run left open. Driving it anyway makes the obstacle the task.");
+					console.error(`  Sign in once on this Mac (./run signin <mac> "${app}"), or pass --allow-unready to drive it as-is.`);
+					process.exit(UNREADY_EXIT);
+				}
 				console.log("  WARNING: start state is whatever the previous run left behind — NOT comparable for A/B measurement.");
+			}
 		}
 		console.log(`task: ${task}\n`);
 
@@ -470,6 +569,18 @@ async function main(): Promise<void> {
 		];
 
 		for (let step = 1; step <= MAX_STEPS; step++) {
+			// Between actions, never mid-action: leaving here rather than from the signal
+			// handler means the finally below still assembles the video and writes the log, so
+			// a stopped run is a recorded failure instead of a run that never existed.
+			if (interrupted()) {
+				console.log(`\n=== stopped after ${step - 1} steps ===`);
+				outcome = { success: false, summary: `interrupted after ${step - 1} steps` };
+
+				// return, not break: the step-limit lines below the loop would otherwise
+				// overwrite this outcome and file the run as having exhausted its budget.
+				return;
+			}
+
 			// A provider overload can arrive as an empty body, which the SDK surfaces as a
 			// JSON parse error from inside the call — not something the malformed-content
 			// check below can see. Both failure shapes are the same transient event, so
@@ -483,10 +594,18 @@ async function main(): Promise<void> {
 					tools,
 					cache_control: { type: "ephemeral" },
 					messages,
+					...providerRouting(badProviders),
 				});
 			} catch (err) {
 				const detail = err instanceof Error ? err.message.slice(0, 200) : String(err);
 				if (++malformedStreak >= 5) throw new Error(`5 consecutive model-call failures; last: ${detail}`);
+				// Before the backoff: the next attempt is only different if it is routed
+				// differently, and this is the one place the failing route names itself.
+				const provider = failedProvider(err);
+				if (provider && !badProviders.has(provider)) {
+					badProviders.add(provider);
+					console.log(`    -> routing around provider "${provider}" for the rest of this run`);
+				}
 				const backoffMs = 2000 * 2 ** (malformedStreak - 1);
 				console.log(`    -> model call failed (${malformedStreak}/5), retrying in ${backoffMs / 1000}s: ${detail}`);
 				await new Promise((r) => setTimeout(r, backoffMs));
@@ -554,6 +673,33 @@ async function main(): Promise<void> {
 				// Refunding the step keeps searching free, but a model that only ever
 				// searches would loop forever — past the cap, finds start costing a step.
 				if (findCalls <= MAX_FINDS) step--;
+				continue;
+			}
+
+			// Bookkeeping, not actuation: nothing touches the app, so the step is refunded and
+			// the model goes straight back to work. Charging for it would price honesty.
+			if (toolUse.name === "claim") {
+				const c = toolUse.input as { kind: string; name: string; note?: string };
+				claimed.push({ ...c, step });
+				console.log(`    claim (${c.kind}): "${c.name}"${c.note ? ` — ${c.note}` : ""}`);
+				messages.push({
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: toolUse.id,
+							// Accurate about what the ledger does. Telling the model a resource
+							// "will be deleted" would be false — disposal is reporting-only — and a
+							// model that believes its mess is handled is the one that stops
+							// preferring scratch over the user's own content.
+							content:
+								`Claimed "${c.name}" (${c.kind}). It is recorded and will be reported at the end of the run; ` +
+								"it is NOT deleted automatically, so keep preferring scratch over existing content. Carry on with the task.",
+						},
+					],
+				});
+				step--;
+
 				continue;
 			}
 
@@ -735,6 +881,10 @@ async function main(): Promise<void> {
 			}
 
 			const prevHaystack = obs.haystack;
+			// The whole bundle, not just the derived views below: the mutation journal needs
+			// the pre-action control VALUES, and `obs` is reassigned by the re-observation
+			// before anything downstream could read them back.
+			const prevObs = obs;
 			const prevFrames = obs.frames;
 			const prevShot = `${OUT}/agent-step-${step - 1}.png`;
 			while (driverBusy) await new Promise((r) => setTimeout(r, 50));
@@ -833,6 +983,22 @@ async function main(): Promise<void> {
 				modelReasoning: input.reasoning,
 			});
 
+			// Journal what this step CHANGED, as opposed to what it was aimed at. Detection is
+			// a value diff over the two observations rather than the model's own account of
+			// what it did, for the same reason verification is: a run that reports its own
+			// side effects can only restore the ones it noticed having.
+			if (cleanupMode !== "off" && !isError) {
+				const mutation = detectMutation(input.action, prevObs, obs, graph, step);
+				if (mutation) {
+					appendMutation(journalPath, mutation);
+					console.log(
+						`    journaled: "${mutation.control}"${mutation.surface ? ` in ${mutation.surface}` : ""} ` +
+							`${JSON.stringify(mutation.before ?? "")} -> ${JSON.stringify(mutation.after ?? "")}` +
+							`${mutation.scope ? ` [${mutation.scope}]` : ""}`,
+					);
+				}
+			}
+
 			// Advisory only — see FROZEN_STEPS. Printed at the crossing rather than every step
 			// after it, so a long legitimate wait says this once instead of filling the log.
 			const frozen = unpaintedStreak(records);
@@ -884,6 +1050,50 @@ async function main(): Promise<void> {
 				console.error("video assembly failed:", err);
 			}
 		}
+
+		/**
+		 * Put the app back, AFTER the recording has been stopped and assembled just above.
+		 *
+		 * The order is the whole point. Teardown undoes exactly what the demo just
+		 * demonstrated, so a frame of it in `window.mp4` turns the deliverable into a video of
+		 * the agent changing its mind. The mp4 ends on the changed state; the restoration is
+		 * data, kept in the run log and the journal, not footage.
+		 *
+		 * It sits in the `finally` rather than after a successful `done` so that the runs that
+		 * most need it are covered: a step-limit exit or an abort leaves the app just as dirty
+		 * as a success does, and those are the ones nobody is watching. The driver is still
+		 * open here — `driver.close()` is deliberately below.
+		 */
+		if (cleanupMode !== "off" && !interrupted()) {
+			try {
+				const journal = readJournal(journalPath);
+				if (journal.length || claimed.length) {
+					overlay.setDriving(true);
+					cleanupReport = await runTeardown({
+						driver,
+						client,
+						model,
+						app,
+						journal,
+						claimed,
+						graph,
+						steps: cleanupSteps,
+						budget: CLEANUP_STEPS,
+						mode: cleanupMode,
+						vision,
+						usage,
+					});
+					overlay.setDriving(false);
+				}
+			} catch (err) {
+				// A failed teardown must never bury the run it was tidying up after. The task's
+				// own result is already decided by this point; losing it to an exception thrown
+				// while cleaning would be the worse outcome by far.
+				cleanupReport = { mode: cleanupMode, error: err instanceof Error ? err.message : String(err) };
+				console.error(`cleanup failed: ${cleanupReport.error}`);
+			}
+		}
+
 		await driver.close();
 		overlay.stop();
 
@@ -905,6 +1115,15 @@ async function main(): Promise<void> {
 				success: false,
 				summary: `aborted: ${aborted instanceof Error ? aborted.message : String(aborted)}`,
 				aborted: true,
+			};
+		// CLEANUP=block makes a dirty exit a failed run. Opt-in, mirroring VISUAL_JUDGE: the
+		// default keeps "did the task succeed" and "was the app left tidy" as separate
+		// questions, because a demo that achieved its goal achieved it either way.
+		if (outcome && cleanupMode === "block" && Number(cleanupReport?.failed ?? 0) > 0)
+			outcome = {
+				...outcome,
+				success: false,
+				summary: `${outcome.summary} — but cleanup left ${cleanupReport!.failed} change(s) in place (CLEANUP=block)`,
 			};
 		if (outcome) writeRunLog(outcome);
 	}

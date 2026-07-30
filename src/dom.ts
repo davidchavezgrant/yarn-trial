@@ -221,7 +221,7 @@ export class DomBackend {
 			// reason to issue coordinate actions.
 			interactive: snap.refs
 				.filter((r) => r.actions.length > 0)
-				.map((r) => ({ handle: r.ref, role: r.role, name: r.name ?? "", surface: "", x: 0, y: 0, w: 0, h: 0 })),
+				.map((r) => ({ handle: r.ref, role: r.role, name: r.name ?? "", surface: "", value: r.value ?? "", x: 0, y: 0, w: 0, h: 0 })),
 			haystack: `${snap.title}\n${haystackParts.join("\n")}`.toLowerCase(),
 			screenshotB64: fs.readFileSync(shotPath).toString("base64"),
 			title: snap.title,

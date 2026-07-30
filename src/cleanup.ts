@@ -1,0 +1,237 @@
+import fs from "node:fs";
+import { pathToFileURL } from "node:url";
+import { Driver } from "./driver.js";
+import {
+	ensureObservable,
+	findWindow,
+	loadAppMapGraph,
+	makeClient,
+	onInterrupt,
+	OUT,
+	resetToHome,
+} from "./harness.js";
+import { type Mutation, readJournal } from "./journal.js";
+import { collapseJournal, runTeardown } from "./teardown.js";
+import { startOverlay } from "./overlay.js";
+
+/**
+ * Replay a run's mutation journal after the run itself has gone.
+ *
+ * The in-run teardown covers the ordinary exit. It cannot cover the case that most needs
+ * covering: a run killed mid-task — SIGKILL, a panic, a closed laptop — leaves the app dirty
+ * and its `finally` never runs. The journal is written append-per-mutation precisely so that
+ * it survives that, and this is the thing that reads it back.
+ *
+ * The restore loop itself is `runTeardown()`, unmodified. A second implementation here would
+ * have to agree with it about what "restored" means — including the open-dropdown case in
+ * `controlReads` — and two implementations of one check are how they stop agreeing. So this
+ * file owns only what a CLI owns: which journal, which app, driver lifecycle, and the exit
+ * code. Everything below the driver boundary is reused.
+ *
+ * usage: npm run cleanup -- <stamp> [--app "App Name"] [--dry-run] [--no-vision]
+ */
+
+const DEFAULT_BUDGET = 10;
+
+export type Disposition = "restore" | "unrestorable" | "resource";
+
+export interface EntryPlan {
+	mutation: Mutation;
+	disposition: Disposition;
+	/** The value a restore will aim for — the earliest recorded `before`. */
+	wanted?: string;
+}
+
+/**
+ * What a replay will attempt, in the order it will attempt it.
+ *
+ * Wraps `collapseJournal` rather than reimplementing it, so the CLI's dry run and the live
+ * replay cannot disagree about which entries exist or what they aim for. The wrapper earns
+ * its place by recovering what the collapse drops: it filters to `kind === "setting"`, so
+ * resource entries vanish, and it does not distinguish an entry with no `before` from a
+ * restorable one. Both belong on a receipt.
+ */
+export function planRestores(journal: Mutation[]): EntryPlan[] {
+	const settings = collapseJournal(journal)
+		.reverse()
+		.map((m): EntryPlan => ({
+			mutation: m,
+			// An empty string is a real prior value (a field that was blank), not a missing
+			// one — restoreOne() draws the same line, and the receipt must not blur it. Only
+			// `undefined` is unrestorable: a field the run typed into is put back by clearing
+			// it, and calling that "unrestorable" would leave the agent's text where the user
+			// had left nothing.
+			disposition: m.before === undefined ? "unrestorable" : "restore",
+			wanted: m.before,
+		}));
+	const resources = journal
+		.filter((m) => m.kind === "resource")
+		.map((m): EntryPlan => ({ mutation: m, disposition: "resource" }));
+
+	return [...settings, ...resources];
+}
+
+/**
+ * Which app the journal belongs to.
+ *
+ * The stamp carries an app slug, but de-slugging it is lossy — "yarn" and "notion-calendar"
+ * recover cleanly, "iterm2" does not become "iTerm2" — and a run killed hard enough to need
+ * this CLI may never have written the run log that records the name exactly. Hence the
+ * override: without it such a journal is unreplayable without editing code.
+ */
+export function appForStamp(stamp: string, runLogApp?: string, override?: string): string {
+	if (override) return override;
+	if (runLogApp) return runLogApp;
+
+	// Stamps are `<ISO-19-chars>-<app-slug>`; the timestamp half contains no letters.
+	const slug = stamp.replace(/^\d{4}-\d{2}-\d{2}T[\d-]+-/, "");
+
+	return slug
+		.split("-")
+		.filter(Boolean)
+		.map((w) => w[0].toUpperCase() + w.slice(1))
+		.join(" ");
+}
+
+export function formatPlan(plan: EntryPlan[]): string {
+	if (plan.length === 0) return "  (nothing to do)";
+
+	return plan
+		.map(({ mutation: m, disposition, wanted }) => {
+			const where = `${m.surface || "(surface not recorded)"}${m.scope ? `, ${m.scope}` : ""}`;
+			if (disposition === "restore")
+				return `  restore  "${m.control}" [${where}] -> ${JSON.stringify(wanted)} (run left it at ${JSON.stringify(m.after ?? "")})`;
+			if (disposition === "unrestorable")
+				return `  skip     "${m.control}" [${where}] — no prior value recorded; will not be guessed`;
+
+			return `  report   resource ${JSON.stringify(m.resource ?? m.control)} — disposal is not automatic`;
+		})
+		.join("\n");
+}
+
+/**
+ * Non-zero only when a restore was attempted and failed. An empty journal, an all-unrestorable
+ * one, and a journal of nothing but resources are all successful outcomes: nothing to clean is
+ * not an error, and neither is honestly declining to guess.
+ */
+export function exitCodeFor(summary: { attempted: number; failed: number }): number {
+	return summary.attempted > 0 && summary.failed > 0 ? 1 : 0;
+}
+
+async function main(): Promise<void> {
+	const argv = process.argv.slice(2);
+	const dryRun = argv.includes("--dry-run");
+	const vision = !argv.includes("--no-vision");
+	const appIdx = argv.indexOf("--app");
+	const appOverride = appIdx >= 0 ? argv[appIdx + 1] : undefined;
+	const stamp = argv.find(
+		(a, i) => !a.startsWith("--") && (appIdx < 0 || i !== appIdx + 1),
+	);
+	if (!stamp) {
+		console.error('usage: npm run cleanup -- <stamp> [--app "App Name"] [--dry-run] [--no-vision]');
+		console.error("  stamp identifies a run, e.g. 2026-07-30T03-00-00-yarn");
+		process.exit(1);
+	}
+
+	const journalPath = `${OUT}/runs/${stamp}.journal.jsonl`;
+	const journal = readJournal(journalPath);
+	if (journal.length === 0) {
+		// Not an error. Most runs change nothing worth journalling, and a caller sweeping a
+		// directory of stamps should not have to distinguish "clean" from "broken".
+		console.log(`no mutations recorded for ${stamp} (${journalPath}) — nothing to clean up`);
+
+		return;
+	}
+
+	const plan = planRestores(journal);
+	const restores = plan.filter((p) => p.disposition === "restore").length;
+	const unrestorable = plan.filter((p) => p.disposition === "unrestorable").length;
+	const resources = plan.filter((p) => p.disposition === "resource").length;
+
+	let runLogApp: string | undefined;
+	try {
+		runLogApp = JSON.parse(fs.readFileSync(`${OUT}/runs/${stamp}.json`, "utf8")).app;
+	} catch {
+		// The run log is absent exactly when this CLI is most needed — a run killed before it
+		// could write one. --app covers it; the stamp suffix covers the common case.
+	}
+	const app = appForStamp(stamp, runLogApp, appOverride);
+
+	console.log(`=== cleanup: ${stamp} (${app}) ===`);
+	console.log(
+		`journal: ${journal.length} entr${journal.length === 1 ? "y" : "ies"} — ` +
+			`${restores} to restore, ${unrestorable} unrestorable, ${resources} claimed resource(s)`,
+	);
+	console.log(formatPlan(plan));
+
+	if (dryRun) {
+		console.log("\n--dry-run: no driver started, nothing changed");
+
+		return;
+	}
+
+	const overlay = startOverlay("drive", `Agent restoring ${app} — do not touch`);
+	const driver = await Driver.start("cleanup");
+	const interrupted = onInterrupt(() => driver.close());
+	const { client, model } = makeClient();
+	const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, modelCalls: 0 };
+	let summary = { attempted: 0, failed: 0 };
+
+	try {
+		await driver.act({ kind: "tool", name: "launch_app", args: { name: app } });
+		await new Promise((r) => setTimeout(r, 1500));
+		let win = await findWindow(driver, app);
+		await overlay.countdown();
+		win = await ensureObservable(driver, win, app);
+
+		// The run this is cleaning up after died wherever it died — quite possibly with a
+		// dropdown or modal standing open, which is the state in which the controls a restore
+		// needs are missing from the AX tree entirely. resetToHome already handles exactly
+		// that (escape, then click the declared home control, then retry).
+		overlay.setDriving(true);
+		const reset = await resetToHome(driver, win, app);
+		console.log(`home reset: ${reset.result} — ${reset.detail}`);
+
+		if (interrupted()) return;
+
+		const report = await runTeardown({
+			driver,
+			client,
+			model,
+			app,
+			journal,
+			// Synthesised from the journal because a crashed run left no in-memory ledger.
+			// Today this is always empty: agent.ts keeps `claimed` in memory and never appends
+			// it, so a resource a dead run created is not recoverable from disk at all. Reported
+			// as zero rather than guessed at.
+			claimed: journal
+				.filter((m) => m.kind === "resource")
+				.map((m) => ({ kind: "created", name: m.resource ?? m.control, step: m.step })),
+			graph: loadAppMapGraph(app),
+			// Discarded: a standalone replay has no run log to fold step records into.
+			steps: [],
+			budget: Number(process.env.CLEANUP_STEPS ?? DEFAULT_BUDGET),
+			mode: "cli",
+			vision,
+			usage,
+		});
+		summary = { attempted: Number(report.attempted ?? 0), failed: Number(report.failed ?? 0) };
+	} finally {
+		overlay.setDriving(false);
+		await driver.close();
+		overlay.stop();
+		console.log(
+			`cleanup finished: ${summary.attempted - summary.failed}/${summary.attempted} restored, ` +
+				`${usage.modelCalls} model calls`,
+		);
+	}
+
+	process.exit(exitCodeFor(summary));
+}
+
+// Guarded so the pure helpers above can be imported by tests without starting a driver.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
+	main().catch((err) => {
+		console.error("cleanup failed:", err);
+		process.exit(1);
+	});
