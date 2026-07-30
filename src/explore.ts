@@ -5,9 +5,11 @@ import { Driver } from "./driver.js";
 import {
 	ACT_TOOL,
 	appSlug,
+	checkHome,
 	destructiveTarget,
 	DRIVER_RULES,
 	ensureObservable,
+	failedProvider,
 	findScopeAmbiguities,
 	findWindow,
 	frontierCredit,
@@ -23,16 +25,20 @@ import {
 	observationBlocks,
 	type ObservationBundle,
 	observe,
+	onInterrupt,
 	OUT,
+	providerRouting,
 	recoverLeakedGraph,
 	retryTransient,
+	runKey,
 	settleMsFor,
 	TargetNotObservableError,
 	toActionRequest,
 } from "./harness.js";
 import { DOM_ACT_TOOL, DOM_RULES, DomBackend, FIND_TOOL } from "./dom.js";
 import { startOverlay } from "./overlay.js";
-import type { AppMap, AppMapEdge, AppMapNode } from "./types.js";
+import { appmapsDir } from "./paths.js";
+import type { AppMap, AppMapEdge, AppMapHome, AppMapNode } from "./types.js";
 
 /**
  * The only backstop, and it counts actions rather than seconds on purpose. A wall-clock cap
@@ -66,9 +72,9 @@ const CHAPTER_OBSERVATIONS = Number(process.env.EXPLORE_CHAPTER ?? 12);
 const SETTLE_MS = 900;
 
 /** The payload of the "finish" tool — the pass's entire output, prose plus graph. */
-type FinishInput = { document: string; nodes?: AppMapNode[]; edges?: AppMapEdge[] };
+type FinishInput = { document: string; nodes?: AppMapNode[]; edges?: AppMapEdge[]; home?: AppMapHome };
 type GraphInput = { nodes?: AppMapNode[]; edges?: AppMapEdge[] };
-type StopReason = "frontier-empty" | "action-ceiling" | "frontier-conceded" | "error";
+type StopReason = "frontier-empty" | "action-ceiling" | "frontier-conceded" | "interrupted" | "error";
 
 const systemPrompt = (rules: string): string => `You are an exploration agent building grounding notes for a macOS app, so a future task-running agent can navigate it directly without dead ends. You drive the app through a UI driver: each turn you receive the window's elements (addressing handle, role, label/value) and a screenshot, and you perform ONE action via the "act" tool.
 
@@ -102,6 +108,8 @@ When the frontier is empty, call "finish" with BOTH artifacts:
 1. "document" — the prose grounding document in markdown: a "Layout" section (main surfaces and how to reach them), a "How to" section (task recipes as exact interaction sequences), and a "Dead ends & quirks" section. Be specific and terse — this document is injected into the task agent's prompt.
 
 2. "nodes" + "edges" — the same knowledge as a graph, for code to query. Anything already sent via "record" is merged in; you need only add what is missing.
+
+3. "home" — where a task run should START. Not a place you found interesting: the app's ordinary landing view, the one a person sees on opening it and returns to between jobs. Name the control in the navigation chrome that goes there from anywhere (usually a sidebar or tab item), spelled EXACTLY as its label appears in observations. Prefer a stable list or overview over a document or editor, however much of this app's substance lives inside one — a run that starts inside an open document inherits that document's state. This is used only to reset the app before a run and is never shown to the task agent.
 
 On the graph, one thing matters more than completeness: SCOPE. Many apps let the same setting be changed in more than one place — an app-wide or brand-wide default, and a per-document override — and these are usually separate stores, so changing one does not change the other. An agent that changes the wrong one appears to succeed. When you find a control, ask "whose state does this change?" and set "scope" accordingly. If you find the same underlying setting exposed in two places, give BOTH controls the identical "settingKey" and their own distinct "scope". That pairing is what lets the harness warn the next agent.
 
@@ -149,6 +157,21 @@ const EDGES_SCHEMA = {
 	},
 };
 
+const HOME_SCHEMA = {
+	type: "object" as const,
+	description:
+		"Where a task run should start: the app's ordinary landing view, and the navigation control that returns there from anywhere. Used only to reset the app before a run; never shown to the task agent.",
+	properties: {
+		surface: { type: "string", description: "Node id of that landing surface." },
+		control: {
+			type: "string",
+			description: "Label of the control that navigates there, EXACTLY as it appears in observations — it is matched literally against element labels.",
+		},
+		description: { type: "string", description: 'What is on screen once it is reached, e.g. "left-rail Library view".' },
+	},
+	required: ["surface", "control", "description"],
+};
+
 const EXTRA_TOOLS: Anthropic.Tool[] = [
 	{
 		name: "record",
@@ -184,8 +207,9 @@ const EXTRA_TOOLS: Anthropic.Tool[] = [
 				document: { type: "string", description: "The prose grounding document (markdown), as described in your instructions." },
 				nodes: NODES_SCHEMA,
 				edges: EDGES_SCHEMA,
+				home: HOME_SCHEMA,
 			},
-			required: ["document", "nodes", "edges"],
+			required: ["document", "nodes", "edges", "home"],
 		},
 	},
 ];
@@ -242,10 +266,11 @@ async function main(): Promise<void> {
 	// task run, different colour so the mode is readable at a glance.
 	const overlay = startOverlay("explore", `Agent exploring ${app} — do not touch`);
 	const driver = await Driver.start("explore");
+	const interrupted = onInterrupt(() => driver.close());
 	const findings: string[] = [];
-	const outPath = `${process.cwd()}/docs/appmaps/${appSlug(app)}.md`;
-	const graphPath = `${process.cwd()}/docs/appmaps/${appSlug(app)}.json`;
-	fs.mkdirSync(`${process.cwd()}/docs/appmaps`, { recursive: true });
+	const outPath = `${appmapsDir()}/${appSlug(app)}.md`;
+	const graphPath = `${appmapsDir()}/${appSlug(app)}.json`;
+	fs.mkdirSync(appmapsDir(), { recursive: true });
 	fs.mkdirSync(`${OUT}/runs`, { recursive: true });
 
 	// Declared out here, not in the try, because the salvage path in the catch needs them:
@@ -258,6 +283,18 @@ async function main(): Promise<void> {
 	let chapters = 1;
 	let refusals = 0;
 	const startedAt = Date.now();
+	// Upstream providers this pass has watched fail. Fed back to OpenRouter as an ignore list so
+	// a retry is routed elsewhere; a plain backoff re-asks the same broken host. An exploration
+	// pass is 40 minutes of actions, so losing it to one bad route is the expensive case.
+	const badProviders = new Set<string>();
+	const noteProvider = (attempt: number, e: unknown): void => {
+		const provider = failedProvider(e);
+		if (provider && !badProviders.has(provider)) {
+			badProviders.add(provider);
+			console.log(`  routing around provider "${provider}" for the rest of this pass`);
+		}
+		console.log(`  retry ${attempt} after transient API error: ${(e as Error).message}`);
+	};
 	const ledger = newFrontier();
 
 	/**
@@ -287,8 +324,8 @@ async function main(): Promise<void> {
 	 * 3 would otherwise overwrite a good 45-node map with two nodes, which is worse than the
 	 * loss it is meant to prevent. Promote a checkpoint by hand if a run is killed.
 	 */
-	const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-	const checkpointPath = `${OUT}/runs/explore-${stamp}-${appSlug(app)}.checkpoint.json`;
+	const stamp = runKey("explore-", app);
+	const checkpointPath = `${OUT}/runs/${stamp}.checkpoint.json`;
 	const checkpoint = (): void => {
 		fs.writeFileSync(
 			checkpointPath,
@@ -320,6 +357,12 @@ async function main(): Promise<void> {
 		const recovered = recoverLeakedGraph(out.document);
 		merge(recovered);
 		const cov = coverageNow(stopped);
+		// Checked, not trusted: this one field is written once and then silently governs the
+		// start state of every future run, so a label the pass never actually saw would be a
+		// permanent, invisible "failed" reset. Dropping it costs the normalisation and keeps
+		// the readiness check, which is the safe way round.
+		const { home, problem } = checkHome(out.home, [...graphNodes.values()], [...graphEdges.values()]);
+		if (problem) console.log(`WARNING: discarding declared home — ${problem}`);
 		const elapsed = hm(Date.now() - startedAt);
 		const prose =
 			provenanceHeader({ app, actions, elapsed, findings: findings.length, backend: backendKind, findCalls, guidance, salvaged, ...cov }) +
@@ -337,6 +380,7 @@ async function main(): Promise<void> {
 			proseSha256: createHash("sha256").update(prose).digest("hex").slice(0, 12),
 			elapsed,
 			coverage: cov,
+			...(home ? { home } : {}),
 			nodes: [...graphNodes.values()],
 			edges: [...graphEdges.values()],
 		};
@@ -370,9 +414,10 @@ async function main(): Promise<void> {
 						tools,
 						tool_choice: { type: "tool", name: "finish" },
 						messages,
+						...providerRouting(badProviders),
 					})
 					.finalMessage(),
-			{ onRetry: (n, e) => console.log(`  retry ${n} after transient API error: ${(e as Error).message}`) },
+			{ onRetry: (n, e) => noteProvider(n, e) },
 		);
 		const out = rescue.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
 		if (!out) throw new Error("model did not emit finish");
@@ -434,6 +479,15 @@ async function main(): Promise<void> {
 		let obsThisChapter = 1;
 
 		for (;;) {
+			// Same shape as the ceiling below: a stopped pass still asks for the map it has,
+			// because forty minutes of exploration are worth more written down than discarded.
+			if (interrupted()) {
+				console.log(`\nstopped after ${actions} actions — asking for the map now`);
+				await requestFinish("The run was stopped. Call finish NOW with the map you have.", "interrupted", true);
+
+				return;
+			}
+
 			if (actions >= MAX_ACTIONS) {
 				console.log(`\naction ceiling (${MAX_ACTIONS}) reached — asking for the map now`);
 				await requestFinish(`The action ceiling of ${MAX_ACTIONS} has been reached. Call finish NOW with the map you have.`, "action-ceiling", false);
@@ -451,9 +505,10 @@ async function main(): Promise<void> {
 							tools,
 							cache_control: { type: "ephemeral" },
 							messages,
+							...providerRouting(badProviders),
 						})
 						.finalMessage(),
-				{ onRetry: (n, e) => console.log(`  retry ${n} after transient API error: ${(e as Error).message}`) },
+				{ onRetry: (n, e) => noteProvider(n, e) },
 			);
 
 			if (response.stop_reason === "refusal") throw new Error("model refused");

@@ -10,6 +10,7 @@ import {
 	dragMoved,
 	DRIVER_RULES,
 	ensureObservable,
+	failedProvider,
 	findScopeAmbiguities,
 	findWindow,
 	framesShifted,
@@ -17,21 +18,26 @@ import {
 	makeClient,
 	observationBlocks,
 	observe,
+	onInterrupt,
 	OUT,
 	pixelDelta,
+	providerRouting,
 	resetToHome,
+	runKey,
 	scopeWarnings,
 	settleMsFor,
 	stageWindowForRecording,
 	TargetNotObservableError,
 	toActionRequest,
 	unpaintedStreak,
+	UNREADY_EXIT,
 	verificationTallies,
 	verify,
 	visualJudge,
 } from "./harness.js";
 import { DOM_ACT_TOOL, DOM_RULES, DomBackend, FIND_TOOL } from "./dom.js";
 import { startOverlay } from "./overlay.js";
+import { appmapsDir, recipesDir, relToData } from "./paths.js";
 import type { ActionRequest, Expectation, StepRecord } from "./types.js";
 import type { ObservationBundle, VerifyResult, VisualVerdict } from "./harness.js";
 
@@ -110,8 +116,8 @@ function loadGrounding(app: string): GroundingMeta {
 	// docs/appmaps/ holds ONLY explore.ts output (stamped with a provenance header);
 	// docs/recipes/ holds hand-curated notes. Both ground the agent, but they are
 	// different classes of input and the run log must say which one was used.
-	const explorePath = `${process.cwd()}/docs/appmaps/${appSlug(app)}.md`;
-	const recipePath = `${process.cwd()}/docs/recipes/${appSlug(app)}.md`;
+	const explorePath = `${appmapsDir()}/${appSlug(app)}.md`;
+	const recipePath = `${recipesDir()}/${appSlug(app)}.md`;
 	const useRecipe = process.env.USE_RECIPE ? fs.existsSync(recipePath) : false;
 	const path = useRecipe ? recipePath : fs.existsSync(explorePath) ? explorePath : undefined;
 	if (!path) return { provenance: "none" };
@@ -219,7 +225,7 @@ async function main(): Promise<void> {
 	const backendKind = backendIdx >= 0 ? (argv[backendIdx + 1] ?? "ax") : "ax";
 	const args = argv.filter(
 		(a, i) =>
-			!["--record", "--hinted", "--no-reset", "--no-vision"].includes(a) &&
+			!["--record", "--hinted", "--no-reset", "--no-vision", "--allow-unready"].includes(a) &&
 			(backendIdx < 0 || (i !== backendIdx && i !== backendIdx + 1)),
 	);
 	const task = args[0];
@@ -236,6 +242,7 @@ async function main(): Promise<void> {
 	// test, and the resulting run log is indistinguishable from a clean one unless we
 	// record the fact here. Refuse by default; --hinted opts in and marks the log.
 	const noReset = argv.includes("--no-reset");
+	const allowUnready = argv.includes("--allow-unready");
 	const hintedAck = argv.includes("--hinted");
 	const audit = auditTaskPrompt(task);
 	if (audit.hinted && !hintedAck) {
@@ -258,15 +265,16 @@ async function main(): Promise<void> {
 	// where the banner would be in frame.
 	const overlay = startOverlay("drive", `Agent driving ${app} — do not touch`);
 	const driver = await Driver.start("agent");
+	const interrupted = onInterrupt(() => driver.close());
 	const records: StepRecord[] = [];
 	const startedAt = Date.now();
 	const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, modelCalls: 0 };
 	// Unique per run: a single overwritten agent-run.json forced hand-copying to preserve
 	// A/B artifacts, which is how out/ab-grounded-script.json ended up a mislabeled
 	// duplicate of a different run and its real numbers were lost.
-	const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+	const stamp = runKey("", app);
 	fs.mkdirSync(`${OUT}/runs`, { recursive: true });
-	const runLog = `${OUT}/runs/${stamp}-${appSlug(app)}.json`;
+	const runLog = `${OUT}/runs/${stamp}.json`;
 	let driverBusy = false;
 	let homeReset: string = noReset ? "skipped" : "pending";
 	// Whether the axdom sidecar supplied DOM id/class this run. Recorded so a run's
@@ -275,6 +283,10 @@ async function main(): Promise<void> {
 	let expectationRejections = 0;
 	let findCalls = 0;
 	let malformedStreak = 0;
+	// Upstream providers this run has watched fail. Sent back to OpenRouter as an ignore list so
+	// a retry is routed somewhere else — backoff alone re-asks the broken host. See
+	// providerRouting in harness.ts for the incident that motivated it.
+	const badProviders = new Set<string>();
 	let aborted: unknown;
 	let outcome: Record<string, unknown> | undefined;
 
@@ -310,7 +322,7 @@ async function main(): Promise<void> {
 					usage,
 					...verificationTallies(records),
 					...result,
-					...(record ? { video: videoPath.replace(`${process.cwd()}/`, "") } : {}),
+					...(record ? { video: relToData(videoPath) } : {}),
 					steps: records,
 				},
 				null,
@@ -326,7 +338,7 @@ async function main(): Promise<void> {
 	// the driver, so frames land in the model-thinking gaps.
 	// Per-run directory, sharing the run log's stamp: the video and the log that proves
 	// what it shows stay paired, and a recorded A/B no longer overwrites its own evidence.
-	const recordingDir = `${OUT}/recording/${stamp}-${appSlug(app)}`;
+	const recordingDir = `${OUT}/recording/${stamp}`;
 	const framesDir = `${recordingDir}/frames`;
 	const videoPath = `${recordingDir}/window.mp4`;
 	const frameTimes: number[] = [];
@@ -339,7 +351,7 @@ async function main(): Promise<void> {
 	// to pin exactly which appmap version grounded the run without bloating every log.
 	const groundingMeta: Record<string, unknown> = {
 		provenance: grounding.provenance,
-		...(grounding.path ? { path: grounding.path.replace(`${process.cwd()}/`, "") } : {}),
+		...(grounding.path ? { path: relToData(grounding.path) } : {}),
 		...(grounding.notes ? { sha256: createHash("sha256").update(grounding.notes).digest("hex").slice(0, 12) } : {}),
 	};
 	// The structured appmap rides alongside the prose one. Its job here is the scope
@@ -392,13 +404,33 @@ async function main(): Promise<void> {
 			overlay.setDriving(false);
 			homeReset = reset.result;
 			console.log(`home reset: ${reset.result} — ${reset.detail}`);
-			if (reset.result === "none")
-				console.log(`  (add "${appSlug(app)}" to APP_HOME in src/harness.ts to make runs comparable)`);
+			if (reset.result === "none" || reset.result === "root-visible")
+				console.log(`  (runs are NOT normalised for "${app}" — an exploration pass records the home state)`);
 			// A failed reset means this run starts wherever the last one stopped, inheriting
 			// its navigation. That is not a comparable measurement, and it is invisible in
 			// the summary line unless said plainly here.
-			if (reset.result === "failed")
+			//
+			// It is also the cheapest signal we have that the app is not USABLE at all. A
+			// freshly installed app on a fleet Mac sits at a sign-in wall, and its declared
+			// home control is exactly what is missing there — so the same probe that keeps
+			// runs comparable also catches an unauthenticated machine. Left ungated, the
+			// agent treats the wall as the task: a real run on 2026-07-30 spent four steps
+			// and opened an OAuth flow in Chrome before it was killed.
+			//
+			// Nothing here knows what a login looks like — that would be app-specific. It
+			// knows only that a DECLARED home state could not be reached, which is a fact
+			// about this app's own appmap data, and refuses to spend a run guessing why.
+			if (reset.result === "failed") {
+				if (!allowUnready) {
+					console.error(`\nREFUSING TO RUN — "${app}" is not at its home state and the reason is unknown.`);
+					console.error(`  ${reset.detail}`);
+					console.error("  Most often this is an app that has never been signed in on this machine, or a modal");
+					console.error("  the previous run left open. Driving it anyway makes the obstacle the task.");
+					console.error(`  Sign in once on this Mac (./run signin <mac> "${app}"), or pass --allow-unready to drive it as-is.`);
+					process.exit(UNREADY_EXIT);
+				}
 				console.log("  WARNING: start state is whatever the previous run left behind — NOT comparable for A/B measurement.");
+			}
 		}
 		console.log(`task: ${task}\n`);
 
@@ -470,6 +502,18 @@ async function main(): Promise<void> {
 		];
 
 		for (let step = 1; step <= MAX_STEPS; step++) {
+			// Between actions, never mid-action: leaving here rather than from the signal
+			// handler means the finally below still assembles the video and writes the log, so
+			// a stopped run is a recorded failure instead of a run that never existed.
+			if (interrupted()) {
+				console.log(`\n=== stopped after ${step - 1} steps ===`);
+				outcome = { success: false, summary: `interrupted after ${step - 1} steps` };
+
+				// return, not break: the step-limit lines below the loop would otherwise
+				// overwrite this outcome and file the run as having exhausted its budget.
+				return;
+			}
+
 			// A provider overload can arrive as an empty body, which the SDK surfaces as a
 			// JSON parse error from inside the call — not something the malformed-content
 			// check below can see. Both failure shapes are the same transient event, so
@@ -483,10 +527,18 @@ async function main(): Promise<void> {
 					tools,
 					cache_control: { type: "ephemeral" },
 					messages,
+					...providerRouting(badProviders),
 				});
 			} catch (err) {
 				const detail = err instanceof Error ? err.message.slice(0, 200) : String(err);
 				if (++malformedStreak >= 5) throw new Error(`5 consecutive model-call failures; last: ${detail}`);
+				// Before the backoff: the next attempt is only different if it is routed
+				// differently, and this is the one place the failing route names itself.
+				const provider = failedProvider(err);
+				if (provider && !badProviders.has(provider)) {
+					badProviders.add(provider);
+					console.log(`    -> routing around provider "${provider}" for the rest of this run`);
+				}
 				const backoffMs = 2000 * 2 ** (malformedStreak - 1);
 				console.log(`    -> model call failed (${malformedStreak}/5), retrying in ${backoffMs / 1000}s: ${detail}`);
 				await new Promise((r) => setTimeout(r, backoffMs));
