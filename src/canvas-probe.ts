@@ -4,6 +4,7 @@ import { Driver } from "./driver.js";
 import { findWindow, pixelDelta } from "./harness.js";
 import { startOverlay } from "./overlay.js";
 import * as axdom from "./axdom.js";
+import { outDir } from "./paths.js";
 
 /**
  * Probe 1b: does Yarn's timeline surface a sync point as TEXT?
@@ -40,7 +41,7 @@ import * as axdom from "./axdom.js";
  *        WIDEN=<regex>       control that maximizes the canvas viewport (default /zoom|fit/i)
  */
 
-const OUT = `${process.cwd()}/out`;
+const OUT = outDir();
 const APP = process.env.APP ?? "Yarn";
 /** Document to open from the landing list; on Yarn this is Jasper's markers.mp4 demo project. */
 const DOC = process.env.DOC ?? "AutoTime";

@@ -3,32 +3,38 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { dataRoot, outDir } from "./paths.js";
 import { listRecordedRuns, pruneUiState, readUiState, writeUiState } from "./ui-core.js";
 
 /**
- * State is keyed off process.cwd(), so each test runs in its own temp dir rather than
- * writing out/ui-state.json into the checkout.
+ * Each test gets its own data root rather than writing out/ui-state.json into the checkout.
+ *
+ * This redirects the root by env var instead of chdir'ing, because paths.ts deliberately
+ * stopped deriving roots from cwd — a LaunchAgent and a packaged .app both start at `/`, so
+ * cwd was never a trustworthy input. The env var is the same override the plist uses, which
+ * makes this test exercise the production mechanism rather than a test-only one.
  */
-function inTempCwd(fn: () => void): void {
-	const prev = process.cwd();
+function inTempRoot(fn: () => void): void {
+	const prev = process.env.YARN_RUNNER_DATA;
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ui-state-"));
 	try {
-		process.chdir(dir);
+		process.env.YARN_RUNNER_DATA = dir;
 		fn();
 	} finally {
-		process.chdir(prev);
+		if (prev === undefined) delete process.env.YARN_RUNNER_DATA;
+		else process.env.YARN_RUNNER_DATA = prev;
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
 }
 
 test("readUiState__ReturnsEmpty__When__NoStateFileExists", () => {
-	inTempCwd(() => {
+	inTempRoot(() => {
 		assert.deepEqual(readUiState(), { byApp: {} });
 	});
 });
 
 test("writeUiState__RoundTrips__When__StateHasPerAppTaskAndLog", () => {
-	inTempCwd(() => {
+	inTempRoot(() => {
 		const state = {
 			lastApp: "Yarn",
 			byApp: {
@@ -42,7 +48,7 @@ test("writeUiState__RoundTrips__When__StateHasPerAppTaskAndLog", () => {
 });
 
 test("readUiState__ReturnsEmpty__When__StateFileIsCorrupt", () => {
-	inTempCwd(() => {
+	inTempRoot(() => {
 		fs.mkdirSync("out", { recursive: true });
 		fs.writeFileSync("out/ui-state.json", "{not json");
 		assert.deepEqual(readUiState(), { byApp: {} });
@@ -73,22 +79,31 @@ test("pruneUiState__Coerces__When__FieldsAreWrongType", () => {
 	assert.deepEqual(pruned.byApp.Yarn, { task: "", log: ["ok"] });
 });
 
-/** Writes the pair of artifacts a recorded run leaves behind: a log and an mp4 on disk. */
+/**
+ * Writes the pair of artifacts a recorded run leaves behind: a log and an mp4 on disk.
+ *
+ * Absolute, via outDir(), so the fixture lands in the same redirected root the code under
+ * test reads. These paths used to be relative and therefore cwd-dependent, which silently
+ * wrote fixtures into the real checkout the moment the root stopped being cwd — and the two
+ * assert-empty tests below went on passing, because reading the wrong directory also
+ * returns nothing. The `video` field stays root-relative because that is what a real run
+ * log stores.
+ */
 function fakeRun(id: string, log: Record<string, unknown>, withVideo = true): void {
-	fs.mkdirSync("out/runs", { recursive: true });
+	fs.mkdirSync(`${outDir()}/runs`, { recursive: true });
 	const video = `out/recording/${id}/window.mp4`;
 	if (withVideo) {
-		fs.mkdirSync(path.dirname(video), { recursive: true });
-		fs.writeFileSync(video, "");
+		fs.mkdirSync(path.dirname(`${dataRoot()}/${video}`), { recursive: true });
+		fs.writeFileSync(`${dataRoot()}/${video}`, "");
 	}
-	fs.writeFileSync(`out/runs/${id}.json`, JSON.stringify({ ...(withVideo ? { video } : {}), ...log }));
+	fs.writeFileSync(`${outDir()}/runs/${id}.json`, JSON.stringify({ ...(withVideo ? { video } : {}), ...log }));
 }
 
 test("listRecordedRuns__ListsTheRun__When__RunFailedButRecordedAVideo", () => {
 	// The bug this pins: the two exits in agent.ts wrote the log independently and the
 	// step-limit path omitted `video` — the one field this filter keys on. Runs that ran
 	// out of steps vanished from the gallery even with a finished mp4 beside them.
-	inTempCwd(() => {
+	inTempRoot(() => {
 		fakeRun("2026-07-30T01-00-53-notion-calendar", {
 			app: "Notion Calendar", task: "change my timezone", success: false,
 			summary: "step limit reached", steps: [{ timestamp: "t0" }, { timestamp: "t1" }],
@@ -102,7 +117,7 @@ test("listRecordedRuns__ListsTheRun__When__RunFailedButRecordedAVideo", () => {
 
 test("listRecordedRuns__SkipsTheRun__When__LogDeclaresNoVideo", () => {
 	// The filter itself stays strict: a run with no recording is not a gallery entry.
-	inTempCwd(() => {
+	inTempRoot(() => {
 		fakeRun("2026-07-30T02-00-00-yarn", { app: "Yarn", success: true, steps: [] }, false);
 		assert.deepEqual(listRecordedRuns(), []);
 	});
@@ -111,9 +126,9 @@ test("listRecordedRuns__SkipsTheRun__When__LogDeclaresNoVideo", () => {
 test("listRecordedRuns__SkipsTheRun__When__DeclaredVideoIsGone", () => {
 	// Logs outlive out/recording/, which gets cleaned. A dead <video> src is worse than
 	// an absent card, so existence on disk is checked rather than trusted.
-	inTempCwd(() => {
+	inTempRoot(() => {
 		fakeRun("2026-07-30T03-00-00-yarn", { app: "Yarn", success: true, steps: [] });
-		fs.rmSync("out/recording/2026-07-30T03-00-00-yarn/window.mp4");
+		fs.rmSync(`${dataRoot()}/out/recording/2026-07-30T03-00-00-yarn/window.mp4`);
 		assert.deepEqual(listRecordedRuns(), []);
 	});
 });

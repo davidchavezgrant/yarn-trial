@@ -2,6 +2,7 @@ import { execFileSync, spawn as spawnProcess, type ChildProcess } from "node:chi
 import fs from "node:fs";
 import path from "node:path";
 import { appSlug, auditTaskPrompt } from "./harness.js";
+import { appmapsDir, dataRoot, outDir, resourcesRoot } from "./paths.js";
 
 /**
  * Host-side logic for the Electron shell: app enumeration, the recorded-run gallery, the
@@ -53,7 +54,7 @@ export function listApps(): AppEntry[] {
 		.map((name) => ({
 			name,
 			running: running.has(name),
-			grounded: fs.existsSync(`${process.cwd()}/docs/appmaps/${appSlug(name)}.md`),
+			grounded: fs.existsSync(`${appmapsDir()}/${appSlug(name)}.md`),
 		}))
 		.sort((a, b) => {
 			// Grounded first, then running, then alphabetical: likeliest to work at the top.
@@ -88,7 +89,7 @@ export interface PastRun {
  * that pairing is the whole point of showing them together.
  */
 export function listRecordedRuns(limit = 40): PastRun[] {
-	const dir = `${process.cwd()}/out/runs`;
+	const dir = `${outDir()}/runs`;
 	if (!fs.existsSync(dir)) return [];
 
 	const out: PastRun[] = [];
@@ -100,7 +101,7 @@ export function listRecordedRuns(limit = 40): PastRun[] {
 		} catch {
 			continue; // a half-written log during a live run is not an error worth surfacing
 		}
-		if (!d.video || !fs.existsSync(`${process.cwd()}/${d.video}`)) continue;
+		if (!d.video || !fs.existsSync(`${dataRoot()}/${d.video}`)) continue;
 		out.push({
 			id: f.replace(/\.json$/, ""),
 			app: d.app ?? "",
@@ -124,8 +125,8 @@ export function listRecordedRuns(limit = 40): PastRun[] {
  * The path arrives from the renderer, so it is untrusted even though the renderer is ours.
  */
 export function resolveVideo(rel: string): string | undefined {
-	const root = `${process.cwd()}/out/recording/`;
-	const full = path.resolve(process.cwd(), rel);
+	const root = `${outDir()}/recording/`;
+	const full = path.resolve(dataRoot(), rel);
 	if (!full.startsWith(root) || !full.endsWith(".mp4") || !fs.existsSync(full)) return undefined;
 
 	return full;
@@ -143,7 +144,7 @@ export interface UiState {
 	byApp: Record<string, AppUiState>;
 }
 
-const STATE_PATH = (): string => `${process.cwd()}/out/ui-state.json`;
+const STATE_PATH = (): string => `${outDir()}/ui-state.json`;
 
 /**
  * Per-app scrollback cap. A grounding pass emits a few hundred lines, so this keeps a whole
@@ -245,7 +246,9 @@ export class RunController {
 	/** Shared launcher for task runs and grounding passes. */
 	private spawn(args: string[], handlers: RunHandlers): undefined {
 		// No shell: task text is user input and passes through as a single argv entry.
-		const child = spawnProcess("npx", args, { cwd: process.cwd(), env: process.env });
+		// cwd is the checkout rather than ours: `src/explore.ts` in the argv is resolved
+		// relative to it, and under a LaunchAgent our own cwd is `/`.
+		const child = spawnProcess("npx", args, { cwd: resourcesRoot(), env: process.env });
 		const startedAt = Date.now();
 		this.current = { child, startedAt };
 
