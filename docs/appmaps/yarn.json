@@ -57,6 +57,12 @@
       "The last 2 frontier entries are unnamed elements (blank-label buttons/images inside the editor timeline and toolbar — e.g. the per-scene skip buttons and the timeline left-edge button, which have empty AX names). Clicking them scrubs/moves the playhead or jumps scenes in the open project, i.e. it changes document/playback state for no mapping benefit, and their containing surfaces (timeline, scene gap buttons) are already documented."
     ]
   },
+  "home": {
+    "surface": "library",
+    "control": "Library",
+    "description": "Your Library page, a stable workspace-level overview of projects accessible from the persistent left rail.",
+    "source": "backfill"
+  },
   "nodes": [
     {
       "id": "brand-kit",

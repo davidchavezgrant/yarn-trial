@@ -116,6 +116,35 @@ export interface AppMapCoverage {
 	dismissals?: string[];
 }
 
+/**
+ * Where a run should start, declared by the exploration pass.
+ *
+ * This is a TEST FIXTURE, not grounding: it is read by the harness to put the app in a known
+ * state before a run, the way a test resets a database, and it is never shown to the task
+ * agent. Keeping it out of the prompt is what lets a grounded and an ungrounded run start from
+ * the same place and stay comparable.
+ *
+ * It has to be declared rather than derived. Every structural signal in the graph picks the
+ * wrong node: on Yarn the correct home ("Library") is the SMALLEST labelled subtree at 9 nodes,
+ * because exploration spends its time in configuration surfaces, while subtree size picks the
+ * editor at 77 — a document, and the most stateful place a run could possibly begin.
+ */
+export interface AppMapHome {
+	/** Node id of the surface a run should start on. */
+	surface: string;
+	/** Label of the control that navigates there, matched against observed element labels. */
+	control: string;
+	/** What should be on screen once it is reached, for the run log. */
+	description: string;
+	/**
+	 * Where this declaration came from. "explore" is a live pass that operated the app;
+	 * "backfill" (src/home.ts) derived it from the graph a pass already wrote, which is checked
+	 * against the same evidence but cannot notice that the map itself is wrong. Absent on the
+	 * first maps to carry a home at all; read it as "explore".
+	 */
+	source?: "explore" | "backfill";
+}
+
 export interface AppMap {
 	app: string;
 	capturedAt: string;
@@ -127,6 +156,8 @@ export interface AppMap {
 	 *  of producing this map has to travel with it rather than living only in a console log. */
 	elapsed?: string;
 	coverage?: AppMapCoverage;
+	/** Absent on maps written before exploration recorded one; the harness degrades. */
+	home?: AppMapHome;
 	nodes: AppMapNode[];
 	edges: AppMapEdge[];
 }
