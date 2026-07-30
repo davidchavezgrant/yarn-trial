@@ -664,7 +664,7 @@ async function loadRuns(force) {
   const open = new Set([...box.querySelectorAll('.run')].filter(c => c.querySelector('video')).map(c => c.dataset.id));
 
   box.innerHTML = runs.map((r, i) =>
-    '<div class="run" data-i="' + i + '" data-id="' + r.id + '">' +
+    '<div class="run" data-i="' + i + '" data-id="' + esc(r.id) + '">' +
       '<div class="task">' + r.task.replace(/</g,'&lt;') + '</div>' +
       '<div class="meta">' +
         '<span>' + r.app.replace(/</g,'&lt;') + '</span>' +
@@ -706,16 +706,34 @@ for (const ev of ['input', 'change', 'keyup', 'paste']) el('url').addEventListen
 // Run button enabled next to a visible "this will be refused" warning. 'change' catches
 // the stragglers; the server re-checks regardless.
 for (const ev of ['input', 'change', 'keyup', 'paste']) el('task').addEventListener(ev, () => setTimeout(() => { check(); saveSoon(); }, 0));
-el('go').onclick = async () => {
-  const err = await bus.run({ app: sel, task: el('task').value.trim(), record: el('record').checked, noVision: el('novision').checked, host: host, url: selUrl() });
+/**
+ * Dispatch once per click.
+ *
+ * `running` only flips when the host echoes `started`, and getting there means an IPC round
+ * trip plus a spawn — long enough to click twice. The second click reached a controller that
+ * had not registered the first run yet, so both dispatched, and two driver sessions kill each
+ * other (LIMITATIONS §6). Disable on the click; `check()` restores the true state afterwards,
+ * which for a run that did start means staying disabled because `running` is now set.
+ */
+async function dispatch(id, send) {
+  const b = el(id);
+  if (b.disabled) return;
+  b.disabled = true;
+  let err;
+  try {
+    err = await send();
+  } catch (e) {
+    err = errText(e);
+  }
   if (err) line('✗ ' + err);
-};
+  check();
+}
+
+el('go').onclick = () => dispatch('go', () =>
+  bus.run({ app: sel, task: el('task').value.trim(), record: el('record').checked, noVision: el('novision').checked, host: host, url: selUrl() }));
 el('stop').onclick = () => bus.stop();
 el('refresh').onclick = () => loadRuns(true);
-el('ground').onclick = async () => {
-  const err = await bus.ground(sel, host, selUrl());
-  if (err) line('✗ ' + err);
-};
+el('ground').onclick = () => dispatch('ground', () => bus.ground(sel, host, selUrl()));
 // loadApps too: the list is per-host, so switching machines must re-ask rather than leave the
 // previous Mac's inventory on screen looking like this one's.
 el('host').onchange = () => { host = el('host').value; bus.saveHostPref(host); check(); loadApps(); };

@@ -1,6 +1,7 @@
 import { execFileSync, spawn as spawnProcess, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { appSlug, auditTaskPrompt } from "./harness.js";
 import { appmapsDir, dataRoot, outDir, resourcesRoot } from "./paths.js";
 import { buildRunArgs, isBrowserApp, type Target, webTarget } from "./target.js";
@@ -261,6 +262,64 @@ export interface RunHandlers {
 	onDone(code: number | null, elapsedSec: number): void;
 }
 
+/**
+ * Reassemble whole lines from a stream that arrives in arbitrary pieces.
+ *
+ * A process writes bytes, not rows. Splitting each chunk on "\n" independently emits
+ * `[12] click` and ` "Save" ✓ verified` as two separate lines — neither matches the step
+ * pattern the log pane colours by, so a torn step silently loses its formatting and reads as
+ * two unrelated fragments. The carry buffer is the whole fix: hold the tail until its newline
+ * actually arrives.
+ *
+ * Lives here rather than beside its first caller in `ui-remote.ts` because the LOCAL run path
+ * needs it too and this module may not depend on the remote stack. `ui-remote.ts` re-exports
+ * it, so the name and its tests are unchanged.
+ */
+export class LineSplitter {
+	private pending = "";
+
+	push(text: string): string[] {
+		this.pending += text;
+		const parts = this.pending.split("\n");
+		this.pending = parts.pop() ?? "";
+
+		return parts.filter((l) => l.trim());
+	}
+
+	/** The last line of a log rarely ends in a newline. Called once the stream is finished. */
+	flush(): string[] {
+		const rest = this.pending;
+		this.pending = "";
+
+		return rest.trim() ? [rest] : [];
+	}
+}
+
+/**
+ * A child stream's bytes, delivered as intact lines.
+ *
+ * Two independent corruptions live at a chunk boundary and the log pane showed both. The line
+ * tearing is `LineSplitter`'s job above. The second is narrower and worse-looking: a boundary
+ * that falls INSIDE a multi-byte character makes `Buffer.toString()` emit replacement
+ * characters, and every verdict this agent prints is a ✓ or a ✗ — three bytes each. A chunk cut
+ * mid-glyph turned `✓ verified` into `�� verified`, which reads as a failed run. `StringDecoder`
+ * holds the partial code point instead.
+ */
+function streamPump(emit: (line: string) => void): { push: (buf: Buffer) => void; end: () => void } {
+	const decoder = new StringDecoder("utf8");
+	const splitter = new LineSplitter();
+
+	return {
+		push: (buf) => {
+			for (const line of splitter.push(decoder.write(buf))) emit(line);
+		},
+		end: () => {
+			for (const line of splitter.push(decoder.end())) emit(line);
+			for (const line of splitter.flush()) emit(line);
+		},
+	};
+}
+
 /** Holds the single in-flight run. Both shells share one instance. */
 export class RunController {
 	private current: { child: ChildProcess; startedAt: number } | undefined;
@@ -323,15 +382,36 @@ export class RunController {
 		const startedAt = Date.now();
 		this.current = { child, startedAt };
 
-		const pump = (buf: Buffer) => {
-			for (const line of buf.toString().split("\n")) if (line.trim()) handlers.onLine(line);
-		};
-		child.stdout?.on("data", pump);
-		child.stderr?.on("data", pump);
-		child.on("close", (code) => {
+		// One decoder and one splitter PER STREAM. Sharing a single pair across stdout and
+		// stderr would splice one stream's partial line onto the other's next chunk, which is
+		// the same defect in a form that is much harder to spot in a log.
+		const out = streamPump(handlers.onLine);
+		const err = streamPump(handlers.onLine);
+		child.stdout?.on("data", out.push);
+		child.stderr?.on("data", err.push);
+
+		// Settle exactly once. A child that cannot be spawned emits `error` and then `close`,
+		// and a second onDone would tell the page a run it is no longer watching has ended.
+		let settled = false;
+		const settle = (code: number | null): void => {
+			if (settled) return;
+			settled = true;
 			this.current = undefined;
+			// Flush before reporting: a process's final line usually has no trailing newline, so
+			// without this the last thing the agent said — often the reason it stopped — is lost.
+			out.end();
+			err.end();
 			handlers.onDone(code, Math.round((Date.now() - startedAt) / 1000));
+		};
+		// Without this listener a child that will not spawn — `npx` missing from a packaged
+		// app's PATH, no toolchain on a fresh Mac — raises an unhandled 'error' event, which
+		// throws out of the Electron main process and takes the whole shell down with it. It
+		// also left `current` set, so even a survivable failure latched the UI as busy forever.
+		child.on("error", (e) => {
+			handlers.onLine(`✗ could not start the run: ${e.message}`);
+			settle(1);
 		});
+		child.on("close", settle);
 
 		return undefined;
 	}

@@ -245,10 +245,24 @@ function registerVideoProtocol(): void {
  */
 let dispatched: { app: string; remote: boolean } | undefined;
 
+/**
+ * Deliver to the renderer if there still is one.
+ *
+ * `win` alone is not the test. Closing the window tears the webContents down before the
+ * `closed` event clears `win`, and both shutdown paths emit MORE lines inside that gap: a
+ * local child answers SIGINT with its exit output, and `remote.detach()` prints its own
+ * farewell. `send` on a destroyed webContents throws, and that throw is in the main process —
+ * so closing the window mid-run could take the app down instead of the window.
+ */
+function toRenderer(channel: string, payload: unknown): void {
+	if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
+	win.webContents.send(channel, payload);
+}
+
 const handlers: RunHandlers = {
-	onLine: (line) => win?.webContents.send("line", line),
+	onLine: (line) => toRenderer("line", line),
 	onDone: (code, elapsed) =>
-		win?.webContents.send("done", {
+		toRenderer("done", {
 			code,
 			elapsed,
 			app: dispatched?.app ?? "",
@@ -284,7 +298,7 @@ ipcMain.handle("run", (_event, opts: ShellRunOptions) => {
 	const err = isRemoteHost(opts.host)
 		? remote.start({ host: opts.host as string, app: opts.app, task: opts.task, kind: "task", record: opts.record, noVision: opts.noVision, ...(opts.url ? { url: opts.url } : {}) }, handlers)
 		: runs.start(opts, handlers);
-	if (!err) win?.webContents.send("started", { app: opts.app, task: opts.task });
+	if (!err) toRenderer("started", { app: opts.app, task: opts.task });
 
 	return err;
 });
@@ -297,7 +311,7 @@ ipcMain.handle("ground", (_event, { app, host, url }: { app: string; host?: stri
 	const err = isRemoteHost(host)
 		? remote.start({ host: host as string, app, task: "", kind: "explore", record: false, noVision: false, ...(url ? { url } : {}) }, handlers)
 		: runs.explore(app, handlers, url);
-	if (!err) win?.webContents.send("started", { app, task: `grounding pass — exploring ${app}` });
+	if (!err) toRenderer("started", { app, task: `grounding pass — exploring ${app}` });
 
 	return err;
 });
@@ -315,7 +329,7 @@ ipcMain.handle("attach", async (_event, { host, jobId, app }: { host: string; jo
 
 	dispatched = { app: app || "", remote: true };
 	const err = remote.attach(host, jobId, handlers);
-	if (!err) win?.webContents.send("started", { app: app || host, task: `following ${jobId} on ${host}` });
+	if (!err) toRenderer("started", { app: app || host, task: `following ${jobId} on ${host}` });
 
 	return err;
 });

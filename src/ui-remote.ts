@@ -25,7 +25,7 @@ import { closeScreenShare, planSignin, waitForHome } from "./remote/signin.js";
 import { describeCredentials, setModelKey } from "./remote/team.js";
 import type { JobKind } from "./runner/jobs.js";
 import { UNREADY_EXIT } from "./harness.js";
-import type { RunHandlers } from "./ui-core.js";
+import { LineSplitter, type RunHandlers } from "./ui-core.js";
 
 /**
  * The fleet half of the shell: choosing a host, watching the fleet, and driving one remote
@@ -372,26 +372,11 @@ export function attachOffers(rows: FleetRow[]): AttachOffer[] {
  * chunk ends wherever a poll happened to land — while the page's `onLine` contract is one
  * line per call and it classifies each by regex. Emitting chunks directly splits `[12] click`
  * across two rows and neither half matches the step pattern.
+ *
+ * The implementation moved to `ui-core.ts` once the local run path was found to have the exact
+ * defect this comment warns about; re-exported so the name and its tests stay put.
  */
-export class LineSplitter {
-	private pending = "";
-
-	push(text: string): string[] {
-		this.pending += text;
-		const parts = this.pending.split("\n");
-		this.pending = parts.pop() ?? "";
-
-		return parts.filter((l) => l.trim());
-	}
-
-	/** The last line of a log rarely ends in a newline. Called once the stream is finished. */
-	flush(): string[] {
-		const rest = this.pending;
-		this.pending = "";
-
-		return rest.trim() ? [rest] : [];
-	}
-}
+export { LineSplitter };
 
 /** The "still there" line, or nothing. Split out from the timer so the threshold is testable. */
 export function silenceNote(silentForMs: number, host: string, jobId: string): string | undefined {
@@ -408,6 +393,13 @@ export interface RemoteRunOptions {
 	kind: JobKind;
 	record: boolean;
 	noVision: boolean;
+	/**
+	 * Website target. Declared so the shell's call site typechecks against something real —
+	 * it was spreading `url` into this object already, and a spread bypasses excess-property
+	 * checking, so the field was dropped in silence all the way down to the far Mac's argv.
+	 * `start` refuses it below rather than running the wrong thing; see the note there.
+	 */
+	url?: string;
 }
 
 /** Every side effect the controller has, injected so tests never reach a Mac. */
@@ -490,6 +482,12 @@ export class RemoteRunController {
 		if (!app) return "pick an app";
 		// Length only. The content of the task is agent.ts's business on the far side.
 		if (opts.kind === "task" && !opts.task.trim()) return "enter a task";
+		// Refuse rather than run the wrong thing. `DispatchOptions` carries no url, so a website
+		// target dispatched to a colo Mac silently became a run against an app named after the
+		// host — which either does not exist there or, worse, exists and gets driven. Saying so
+		// is a one-line fix; carrying the url through dispatch → job registry → argv is not, and
+		// belongs with the fleet backend rather than here.
+		if (opts.url) return "website targets only run on this Mac for now — fleet dispatch does not carry the URL yet";
 
 		const abort = new AbortController();
 		this.active = { host: opts.host, startedAt: this.deps.now(), abort };
