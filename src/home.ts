@@ -119,7 +119,7 @@ async function main(): Promise<void> {
 	}
 
 	const path = `${appmapsDir()}/${appSlug(app)}.json`;
-	const graph = loadAppMapGraph(app);
+	const graph = loadAppMapGraph(appSlug(app));
 	if (!graph) {
 		console.error(`no graph at ${path} — this needs a full pass: npm run explore -- "${app}"`);
 		process.exit(1);

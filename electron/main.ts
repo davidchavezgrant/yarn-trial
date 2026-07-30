@@ -68,7 +68,7 @@ window.__bus = {
   // handler at all (symptom: a black video stuck at 0:00 and no protocol log line).
   videoUrl: (rel) => window.__videoBase + rel.split('/').map(encodeURIComponent).join('/'),
   run: (opts) => ipcRenderer.invoke('run', opts),
-  ground: (app, host) => ipcRenderer.invoke('ground', { app, host }),
+  ground: (app, host, url) => ipcRenderer.invoke('ground', { app, host, url }),
   stop: () => ipcRenderer.invoke('stop'),
   // Fleet. Every one of these answers something on a "no hosts.json" machine rather than
   // throwing, so the local-only shell needs no branch of its own.
@@ -282,21 +282,21 @@ ipcMain.handle("run", (_event, opts: ShellRunOptions) => {
 	// lives in agent.ts, on the machine that will execute the run (CLAUDE.md, "Measurement rule").
 	dispatched = { app: opts.app, remote: isRemoteHost(opts.host) };
 	const err = isRemoteHost(opts.host)
-		? remote.start({ host: opts.host as string, app: opts.app, task: opts.task, kind: "task", record: opts.record, noVision: opts.noVision }, handlers)
+		? remote.start({ host: opts.host as string, app: opts.app, task: opts.task, kind: "task", record: opts.record, noVision: opts.noVision, ...(opts.url ? { url: opts.url } : {}) }, handlers)
 		: runs.start(opts, handlers);
 	if (!err) win?.webContents.send("started", { app: opts.app, task: opts.task });
 
 	return err;
 });
 
-ipcMain.handle("ground", (_event, { app, host }: { app: string; host?: string }) => {
+ipcMain.handle("ground", (_event, { app, host, url }: { app: string; host?: string; url?: string }) => {
 	const busy = alreadyBusy();
 	if (busy) return busy;
 
 	dispatched = { app, remote: isRemoteHost(host) };
 	const err = isRemoteHost(host)
-		? remote.start({ host: host as string, app, task: "", kind: "explore", record: false, noVision: false }, handlers)
-		: runs.explore(app, handlers);
+		? remote.start({ host: host as string, app, task: "", kind: "explore", record: false, noVision: false, ...(url ? { url } : {}) }, handlers)
+		: runs.explore(app, handlers, url);
 	if (!err) win?.webContents.send("started", { app, task: `grounding pass — exploring ${app}` });
 
 	return err;

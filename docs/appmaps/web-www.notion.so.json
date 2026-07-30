@@ -1,0 +1,482 @@
+{
+  "app": "www.notion.so",
+  "capturedAt": "2026-07-30T20:45:26.199Z",
+  "provenance": "explore",
+  "proseSha256": "31fdffaa96af",
+  "elapsed": "7m",
+  "coverage": {
+    "seen": 480,
+    "actuated": 1,
+    "dismissed": 0,
+    "surfaces": 1,
+    "chapters": 3,
+    "stopped": "error",
+    "dismissals": []
+  },
+  "nodes": [
+    {
+      "id": "root",
+      "title": "www.notion.so → www.notion.com home (logged out marketing)",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Shared header (Product/Solutions/Resources dropdowns, Developers, Enterprise, Pricing, Request a demo, Log in, Get Notion free) and footer link groups."
+    },
+    {
+      "id": "pricing",
+      "title": "/pricing",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Plan cards, billing-period toggle, FAQ accordion."
+    },
+    {
+      "id": "pricing/billing-period",
+      "title": "Monthly / Yearly billing toggle",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "billing-period-display",
+      "options": [
+        "Monthly",
+        "Yearly"
+      ],
+      "notes": "Display-only pricing toggle; could not be operated (input refused)."
+    },
+    {
+      "id": "product",
+      "title": "/product",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Renders same content as home."
+    },
+    {
+      "id": "product/ai",
+      "title": "/product/ai",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Agents, Enterprise search, AI Meeting Notes, Admin controls; FAQ accordion."
+    },
+    {
+      "id": "product/docs",
+      "title": "/product/docs",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "product/wikis",
+      "title": "/product/wikis",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "enterprise",
+      "title": "/enterprise",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "login",
+      "title": "/login → app.notion.com/login",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "login/email",
+      "title": "Email",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "login-email"
+    },
+    {
+      "id": "login/continue",
+      "title": "Continue",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "login-submit"
+    },
+    {
+      "id": "login/providers",
+      "title": "Google / ChatGPT / Apple / Microsoft / Passkey / SSO",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "login-provider"
+    },
+    {
+      "id": "login/language",
+      "title": "Language: English (US)",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "site-language",
+      "notes": "Same setting as the marketing footer 'English (US)' button but exposed on the auth screen."
+    },
+    {
+      "id": "signup",
+      "title": "/signup → app.notion.com/signup",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Work email + Continue; only Google/Microsoft/ChatGPT providers."
+    },
+    {
+      "id": "help",
+      "title": "/help",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "help/search",
+      "title": "Search help center",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "help-search-query"
+    },
+    {
+      "id": "marketplace",
+      "title": "/templates (Marketplace)",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Sub-nav: Marketplace | Templates | Agents | Consultants | Connections."
+    },
+    {
+      "id": "marketplace/search",
+      "title": "Search template gallery",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "template-search-query"
+    },
+    {
+      "id": "product/calendar",
+      "title": "/product/calendar",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Downloads for macOS/Windows/iOS/Android, video player, FAQ disclosures."
+    },
+    {
+      "id": "contact-sales",
+      "title": "/contact-sales",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Bare layout, no header/footer; multi-step form."
+    },
+    {
+      "id": "contact-sales/work-email",
+      "title": "Work email (step 1)",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "contact-sales-work-email"
+    },
+    {
+      "id": "desktop",
+      "title": "/desktop",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Header here has an extra 'AI' dropdown."
+    },
+    {
+      "id": "desktop/platform",
+      "title": "Choose desktop platform and architecture",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "desktop-download-platform",
+      "options": [
+        "macOS Universal",
+        "macOS Apple Silicon",
+        "macOS Intel",
+        "Windows"
+      ],
+      "notes": "Defaults to macOS Universal; options inferred from label, not opened."
+    },
+    {
+      "id": "security",
+      "title": "/security",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "blog",
+      "title": "/blog (Tools & Craft)",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Category nav + pagination 1-5."
+    },
+    {
+      "id": "customers",
+      "title": "/customers (Customer Stories)",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "page-gate",
+      "title": "Sign-in gate for unknown paths (app.notion.com/<slug>)",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Any unrecognized www.notion.com path forwards here: 'You're almost there! Sign in to see this page in <slug>'. Confirmed for /solutions and /solutions/engineering — those marketing routes do not exist."
+    },
+    {
+      "id": "customers/team-sizes",
+      "title": "Team sizes filter",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "customer-story-team-size-filter",
+      "notes": "Not operated (input refused)."
+    },
+    {
+      "id": "customers/industries",
+      "title": "Industries filter",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "customer-story-industry-filter",
+      "notes": "Not operated (input refused)."
+    },
+    {
+      "id": "footer/language",
+      "title": "English (US) (marketing footer)",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "site-language",
+      "notes": "Site-wide language picker in the marketing footer; pairs with login/language."
+    },
+    {
+      "id": "footer/cookie-settings",
+      "title": "Cookie settings",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "cookie-preferences",
+      "notes": "Marketing footer; not opened."
+    }
+  ],
+  "edges": [
+    {
+      "from": "root",
+      "to": "pricing",
+      "action": "navigate to https://www.notion.com/pricing (or click 'Pricing' in top nav)"
+    },
+    {
+      "from": "root",
+      "to": "product/ai",
+      "action": "navigate to https://www.notion.com/product/ai (or Product menu > AI)"
+    },
+    {
+      "from": "root",
+      "to": "product/docs",
+      "action": "navigate to https://www.notion.com/product/docs"
+    },
+    {
+      "from": "root",
+      "to": "product/wikis",
+      "action": "navigate to https://www.notion.com/product/wikis"
+    },
+    {
+      "from": "root",
+      "to": "product",
+      "action": "navigate to https://www.notion.com/product"
+    },
+    {
+      "from": "root",
+      "to": "enterprise",
+      "action": "click header link 'Enterprise' or navigate to /enterprise"
+    },
+    {
+      "from": "root",
+      "to": "login",
+      "action": "click header 'Log in' or navigate to /login"
+    },
+    {
+      "from": "login",
+      "to": "signup",
+      "action": "click 'Sign up'"
+    },
+    {
+      "from": "root",
+      "to": "help",
+      "action": "footer link 'Help center' or navigate to /help"
+    },
+    {
+      "from": "root",
+      "to": "marketplace",
+      "action": "footer link 'Templates' or navigate to /templates"
+    },
+    {
+      "from": "root",
+      "to": "product/calendar",
+      "action": "navigate to /product/calendar (also footer Download > Calendar)"
+    },
+    {
+      "from": "root",
+      "to": "contact-sales",
+      "action": "click header 'Request a demo' or navigate to /contact-sales"
+    },
+    {
+      "from": "root",
+      "to": "desktop",
+      "action": "footer Download > 'Mac & Windows' or navigate to /desktop"
+    },
+    {
+      "from": "root",
+      "to": "security",
+      "action": "footer Company > 'Security' or navigate to /security"
+    },
+    {
+      "from": "root",
+      "to": "blog",
+      "action": "footer Resources > 'Blog' or navigate to /blog"
+    },
+    {
+      "from": "root",
+      "to": "customers",
+      "action": "navigate to https://www.notion.com/customers (also under Resources dropdown)"
+    },
+    {
+      "from": "root",
+      "to": "page-gate",
+      "action": "navigate to any unrecognized path, e.g. https://www.notion.com/solutions"
+    },
+    {
+      "from": "root",
+      "to": "pricing",
+      "action": "click header \"Pricing\" or navigate https://www.notion.com/pricing"
+    },
+    {
+      "from": "pricing",
+      "to": "pricing/billing-period",
+      "action": "toggle on the pricing page"
+    },
+    {
+      "from": "root",
+      "to": "product",
+      "action": "navigate https://www.notion.com/product"
+    },
+    {
+      "from": "root",
+      "to": "product/ai",
+      "action": "navigate https://www.notion.com/product/ai"
+    },
+    {
+      "from": "root",
+      "to": "product/docs",
+      "action": "navigate https://www.notion.com/product/docs"
+    },
+    {
+      "from": "root",
+      "to": "product/wikis",
+      "action": "navigate https://www.notion.com/product/wikis"
+    },
+    {
+      "from": "root",
+      "to": "product/calendar",
+      "action": "navigate https://www.notion.com/product/calendar (also footer Download > Calendar)"
+    },
+    {
+      "from": "root",
+      "to": "enterprise",
+      "action": "click header \"Enterprise\" or navigate https://www.notion.com/enterprise"
+    },
+    {
+      "from": "root",
+      "to": "desktop",
+      "action": "footer Download > \"Mac & Windows\" or navigate https://www.notion.com/desktop"
+    },
+    {
+      "from": "desktop",
+      "to": "desktop/platform",
+      "action": "open the platform dropdown"
+    },
+    {
+      "from": "root",
+      "to": "security",
+      "action": "footer Company > \"Security\" or navigate https://www.notion.com/security"
+    },
+    {
+      "from": "root",
+      "to": "help",
+      "action": "footer Resources > \"Help center\" or navigate https://www.notion.com/help"
+    },
+    {
+      "from": "help",
+      "to": "help/search",
+      "action": "type in \"Search help center\""
+    },
+    {
+      "from": "root",
+      "to": "marketplace",
+      "action": "footer Resources > \"Templates\" or navigate https://www.notion.com/templates"
+    },
+    {
+      "from": "marketplace",
+      "to": "marketplace/search",
+      "action": "type in \"Search template gallery\""
+    },
+    {
+      "from": "root",
+      "to": "blog",
+      "action": "footer Resources > \"Blog\" or navigate https://www.notion.com/blog"
+    },
+    {
+      "from": "root",
+      "to": "customers",
+      "action": "navigate https://www.notion.com/customers"
+    },
+    {
+      "from": "customers",
+      "to": "customers/team-sizes",
+      "action": "click \"Team sizes\""
+    },
+    {
+      "from": "customers",
+      "to": "customers/industries",
+      "action": "click \"Industries\""
+    },
+    {
+      "from": "root",
+      "to": "contact-sales",
+      "action": "click header \"Request a demo\" or navigate https://www.notion.com/contact-sales"
+    },
+    {
+      "from": "contact-sales",
+      "to": "contact-sales/work-email",
+      "action": "type into \"Work email\" then click Next"
+    },
+    {
+      "from": "root",
+      "to": "login",
+      "action": "click header \"Log in\" or navigate https://www.notion.com/login"
+    },
+    {
+      "from": "login",
+      "to": "login/email",
+      "action": "type into \"Email\""
+    },
+    {
+      "from": "login",
+      "to": "login/continue",
+      "action": "click \"Continue\""
+    },
+    {
+      "from": "login",
+      "to": "login/providers",
+      "action": "click a provider button"
+    },
+    {
+      "from": "login",
+      "to": "login/language",
+      "action": "click \"Language: English (US)\" in the auth footer"
+    },
+    {
+      "from": "root",
+      "to": "signup",
+      "action": "click header \"Get Notion free\" or navigate https://www.notion.com/signup"
+    },
+    {
+      "from": "login",
+      "to": "signup",
+      "action": "click \"Sign up\""
+    },
+    {
+      "from": "root",
+      "to": "footer/language",
+      "action": "click \"English (US)\" in the marketing footer"
+    },
+    {
+      "from": "root",
+      "to": "footer/cookie-settings",
+      "action": "click \"Cookie settings\" in the marketing footer"
+    }
+  ]
+}

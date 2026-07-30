@@ -138,6 +138,37 @@ the SDK — the actuator can be swapped without touching the agent loop.
   `tools/winrec.swift` documents that boundary (works, but suspends while the window
   is off its display's active Space).
 
+## Browser targets (browser_prepare) — measured 2026-07-30, cua-driver 0.12.6
+
+Driving a WEBSITE rather than an Electron app means getting a driver-owned Chrome. Corrections
+to what the section below assumes, all learned by calling the tool rather than reading strings:
+
+- **`open -a … --args --remote-debugging-port=9222` is superseded.** The binary states
+  "Chromium remote-debugging flags moved to browser_prepare so DevTools is never enabled on an
+  unproven user profile"; `launch_app`'s `cdp_debugging_port` is retired with it.
+- **`browser_prepare` takes a required `pid`** and prepares an existing process. Launch first.
+- **Refusals are not errors** — `{"status":"refused","refusal":{…}}` with `isError` unset.
+  Check the payload; an exception handler alone will miss it.
+- **Consent is per-CALL, and the gate is a TTY rather than a human.** `browser-approve` mints a
+  five-minute single-use token, so this is per run, not per machine. It refuses a pipe — but it
+  is checking for a terminal, not for a person, so running it under a pty (`expect`) and
+  answering `APPROVE` mints a token `browser_prepare` accepts. `mintApprovalToken()` in
+  `src/browser.ts`. Bounded/unrestricted permission modes and the binary's magic token literal
+  do NOT open this gate — all four measured. See LIMITATIONS §12.
+- **The AX backend needs none of this.** It reads the window, not the DOM, so
+  `--backend ax --url <site>` skips prepare entirely — `open -a <browser> <url>` is the whole
+  acquisition, and the web-area filter keeps browser chrome out of the frontier.
+- Verified arg shape (schema-confirmed via `cua-driver describe browser_prepare`):
+  `{pid, allow_launch: true, profile: {mode: "isolated_named", name: "yarn-runner"}}`.
+  Do NOT pass `strategy` alongside `profile`/`allow_launch` — the driver rejects the pair.
+- **`viewport_x`/`viewport_y`/`pixel_to_css_scale_*` are NOT `get_browser_state` fields.** They
+  belong to the `browser_screenshot` and legacy `page` clusters. The AX→viewport coordinate
+  conversion for real Chrome therefore has no confirmed source yet, and the window-origin
+  fallback is wrong by the height of the tab strip + omnibox. See LIMITATIONS §12.
+- **`binding_quality` is a four-value enum** — `exact` / `heuristic` / `embedded_single_page` /
+  `native_cdp_window`. Reject only `heuristic`; requiring `exact` would break Electron, which
+  is the one DOM target that works today.
+
 ## DOM access (browser_* / CDP) — VERIFIED on Notion Calendar, 2026-07-29
 
 The driver speaks Chrome DevTools Protocol, so for browsers and Electron apps it can

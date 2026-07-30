@@ -82,6 +82,14 @@ export interface ObservationBundle {
 	haystack: string;
 	screenshotB64: string;
 	title: string;
+	/**
+	 * The page URL, on a web target. Absent for a Mac app, which has no such thing.
+	 *
+	 * Worth carrying separately from the haystack it also feeds: it is the one piece of state a
+	 * website exposes that a native app does not, and it makes a run log say WHERE each step
+	 * happened rather than only what was on screen.
+	 */
+	url?: string;
 	/** Every actuatable control in this observation. See InteractiveElement. */
 	interactive: InteractiveElement[];
 	/** Count of non-menu-bar AX elements. 0 means the app is not addressable right now. */
@@ -401,7 +409,21 @@ function announceMove(fresh: WindowRef, before: WindowRef): void {
 		console.log(`recovered on a different window: pid=${fresh.pid} window=${fresh.windowId}`);
 }
 
-export async function observe(driver: Driver, win: WindowRef, shotName: string): Promise<ObservationBundle> {
+/**
+ * `webAreaOnly` restricts the FRONTIER to page content on a web target. Defaulted off so every
+ * existing call site — and the whole Mac-app path — is unchanged.
+ *
+ * Deliberately narrow: it filters `interactive`, not `elementsText`. The model still SEES the
+ * omnibox and the tab strip in its element list, because hiding them would make the browser
+ * look broken when a page fails to load; it simply cannot spend frontier or dismiss budget on
+ * them.
+ */
+export async function observe(
+	driver: Driver,
+	win: WindowRef,
+	shotName: string,
+	opts: { webAreaOnly?: boolean } = {},
+): Promise<ObservationBundle> {
 	const shotPath = `${OUT}/${shotName}.png`;
 	const state = await driver.act({
 		kind: "tool",
@@ -428,6 +450,33 @@ export async function observe(driver: Driver, win: WindowRef, shotName: string):
 		}
 
 		return "";
+	};
+
+	/**
+	 * Is this element part of the PAGE, rather than the browser around it?
+	 *
+	 * Only consulted for web targets, and only to decide what enters the frontier. On the
+	 * DOM/CDP backend the question never arises — `get_browser_state` snapshots the page — but
+	 * the AX fallback sees the whole Chrome window, so the tab strip, omnibox, bookmarks bar,
+	 * extension icons and Chrome's entire menu bar all arrive as perfectly good AXButtons. Left
+	 * in, they dominate the frontier: the pass spends its actions and its dismiss budget on
+	 * browser furniture instead of the app it was pointed at.
+	 *
+	 * The hop bound is `elements.length`, NOT the 12 that `ancestorOf` uses. That difference is
+	 * load-bearing: 12 is fine for "which panel is this in", a question whose answer is nearby,
+	 * but real page controls nest tens of levels below their AXWebArea, so borrowing the same
+	 * bound here would quietly discard genuine page content — the failure would look like an
+	 * app with almost no controls.
+	 */
+	const inWebArea = (e: any): boolean => {
+		let cur = e, hops = 0;
+		while (cur && hops++ < elements.length) {
+			if (cur.role === "AXWebArea") return true;
+			if (cur.parent_index === undefined) return false;
+			cur = byIndex.get(cur.parent_index);
+		}
+
+		return false;
 	};
 
 	// Chromium labels every undescribed image with this; it names no control and is pure
@@ -491,7 +540,7 @@ export async function observe(driver: Driver, win: WindowRef, shotName: string):
 		const parent = ancestorOf(e);
 		// A disabled control cannot be actuated, so listing it in the frontier would leave an
 		// entry nothing can ever clear. It re-enters the moment the app enables it.
-		if (INTERACTIVE_ROLES.includes(e.role) && e.enabled !== false)
+		if (INTERACTIVE_ROLES.includes(e.role) && e.enabled !== false && (!opts.webAreaOnly || inWebArea(e)))
 			interactive.push({ handle: e.element_index, role: e.role, name: key ?? "", surface: parent, value: val ? value : "", ...toPixels(e.frame) });
 		const inWhat = parent && !label.slice(0, 40).startsWith(parent) ? ` in="${parent}"` : "";
 		lines.push(`[${e.element_index}] ${e.role} "${label.slice(0, 80)}"${val}${dsc}${inWhat}${f}${e.selected ? " SELECTED" : ""}${e.enabled === false ? " DISABLED" : ""}`);
@@ -702,6 +751,91 @@ export function frontierMatches(
  */
 export const isVagueSurface = (surface?: string): boolean => surface === undefined || normSurface(surface) === "";
 
+/**
+ * Roles that can name a surface in a semantic snapshot: ARIA landmarks and the containers a
+ * page actually organises itself with.
+ *
+ * `main`, `document` and the web area are deliberately ABSENT, and that omission is the whole
+ * point. If `main` counted, `isVagueSurface("main")` would be false, so a single dismiss
+ * naming it would retire the entire page in one call — bypassing EXPLORE_DISMISS_CAP by a
+ * different route, which is precisely the sweep the cap was added to stop.
+ */
+const LANDMARK_ROLES = new Set([
+	"navigation",
+	"banner",
+	"complementary",
+	"contentinfo",
+	"form",
+	"search",
+	"region",
+	"dialog",
+	"alertdialog",
+	"menu",
+	"menubar",
+	"toolbar",
+	"tablist",
+	"listbox",
+	"grid",
+	"table",
+	"article",
+	"group",
+]);
+
+/** `"x,y,w,h"` in whatever punctuation the driver used, or undefined if it is unreadable. */
+function parseFrame(frame: string | undefined): { x: number; y: number; w: number; h: number } | undefined {
+	const n = String(frame ?? "").match(/-?\d+(?:\.\d+)?/g);
+	if (!n || n.length < 4) return undefined;
+	const [x, y, w, h] = n.slice(0, 4).map(Number);
+
+	return w > 0 && h > 0 ? { x, y, w, h } : undefined;
+}
+
+/**
+ * Name the surface each semantic ref sits in, so the DOM backend's frontier can be grouped and
+ * dismissed by panel the way the AX one is.
+ *
+ * Why this is needed at all: `DomBackend.observe` reports every ref with `surface: ""`, which
+ * has two costs. `frontierKey` collapses distinct controls that share a role and a name, and —
+ * worse — `isVagueSurface` is then ALWAYS true, so the un-named-surface dismiss cap of 20
+ * binds on every bulk dismissal. A web page has far more controls than an Electron sidebar, so
+ * a pass would crawl, retiring twenty at a time with a fresh justification for each batch.
+ *
+ * Semantic refs carry no parent pointer, so containment is geometric: the smallest landmark
+ * whose box encloses the control wins. Computed for the whole observation at once rather than
+ * per control, because the naive form is O(n²) on a page with hundreds of refs.
+ *
+ * Degrades to `""` — today's behaviour — for anything it cannot place. The `frame` string's
+ * exact format is typed only as `string` in dom.ts and is unverified against a live driver, so
+ * a wrong guess here makes the feature inert rather than wrong.
+ */
+export function refSurfaces(
+	refs: Array<{ ref: string; role: string; name?: string | null; frame?: string }>,
+): Map<string, string> {
+	const landmarks = refs
+		.filter((r) => LANDMARK_ROLES.has(r.role?.toLowerCase?.() ?? ""))
+		.map((r) => ({ ref: r.ref, name: (r.name ?? "").trim() || r.role, box: parseFrame(r.frame) }))
+		.filter((l): l is { ref: string; name: string; box: { x: number; y: number; w: number; h: number } } => !!l.box)
+		.sort((a, b) => a.box.w * a.box.h - b.box.w * b.box.h);
+
+	const out = new Map<string, string>();
+	for (const r of refs) {
+		const box = parseFrame(r.frame);
+		if (!box) continue;
+		const cx = box.x + box.w / 2;
+		const cy = box.y + box.h / 2;
+		// Smallest-first, so the first enclosing landmark is the innermost one.
+		// Compared by REF, not by box identity: parseFrame returns a fresh object per call, so
+		// an object comparison never matches and a landmark would become its own surface.
+		const hit = landmarks.find(
+			(l) => l.ref !== r.ref && cx >= l.box.x && cx < l.box.x + l.box.w && cy >= l.box.y && cy < l.box.y + l.box.h,
+		);
+		if (hit) out.set(r.ref, hit.name.slice(0, 40));
+	}
+
+	return out;
+}
+
+
 export function frontierDismiss(
 	ledger: FrontierLedger,
 	opts: { names?: string[]; surface?: string; reason: string },
@@ -908,6 +1042,20 @@ const DESTRUCTIVE_LABEL =
 	/\b(delete|remove|discard|erase|trash|publish|export|download|send|share|invite|buy|purchase|subscribe|unsubscribe|sign out|log out|revoke|deactivate|reset|restore|merge|archive)\b/i;
 
 /**
+ * The same guard, retuned for the open web, where the verb set above is wrong in both
+ * directions.
+ *
+ * Too narrow: a website's destructive act is usually a bare commit verb — Confirm, Submit,
+ * Post, Reply, Accept, Place order — none of which appear above, and every one of which is
+ * irreversible and externally visible in exactly the way the carve-out exists to prevent.
+ *
+ * Too broad: `download` is on every documentation page on the internet, and blocking it would
+ * refuse a large fraction of ordinary navigation. It is dropped here — a download is a local
+ * side effect, not an externally visible one.
+ */
+const DESTRUCTIVE_LABEL_WEB =
+	/\b(delete|remove|discard|erase|trash|publish|send|share|invite|buy|purchase|subscribe|unsubscribe|sign out|log out|revoke|deactivate|reset|restore|merge|archive|confirm|submit|post|reply|accept|decline|place order|checkout|check out|pay|book|sign up|register|apply|transfer|withdraw)\b/i;
+/**
  * Which control an action operates, resolved against the observation the model was looking at.
  *
  * Two addressing modes because the model has two: a handle names its element directly, and a
@@ -938,19 +1086,40 @@ export function actionTarget(action: any, obs: ObservationBundle): InteractiveEl
 	return target;
 }
 
-export function destructiveTarget(action: any, obs: ObservationBundle): string | undefined {
+/**
+ * `web` swaps in the verb set above. The caller knows the target kind; this function stays
+ * blind to which app it is guarding, as it always has.
+ *
+ * KNOWN HOLE, stated rather than papered over: only *pressing* is guarded, and on the web the
+ * destructive action is frequently **Enter in a form** — no control is named, so there is
+ * nothing for a label check to read. The partial guard below catches Enter aimed at a named
+ * control; Enter with no target, or in a text field that happens to be inside a form, still
+ * submits. Closing that needs form membership, which the AX tree does not report.
+ */
+export function destructiveTarget(action: any, obs: ObservationBundle, web = false): string | undefined {
 	const target = actionTarget(action, obs);
 	// Only *pressing* things is guarded. A keystroke can be destructive too, but nothing
 	// here can tell which one is, and guessing at key combinations would block the pass
-	// from typing at all.
-	if (!target || !["click", "double_click", "right_click"].includes(String(action?.name))) return undefined;
+	// from typing at all. The one exception is web: Enter is a submit, so an Enter aimed at a
+	// NAMED control is treated as pressing that control. Enter with no target still passes —
+	// see the hole documented above.
+	const pressing = ["click", "double_click", "right_click"];
+	const isPress =
+		pressing.includes(String(action?.name)) ||
+		(web && String(action?.name) === "press_key" && /^(return|enter)$/i.test(String(action?.key ?? "")) && target !== undefined);
+	if (!target || !isPress) return undefined;
+	const pattern = web ? DESTRUCTIVE_LABEL_WEB : DESTRUCTIVE_LABEL;
 
-	return DESTRUCTIVE_LABEL.test(target.name) ? target.name : undefined;
+	return pattern.test(target.name) ? target.name : undefined;
 }
 
 export function observationBlocks(obs: ObservationBundle, vision = true): Array<Anthropic.TextBlockParam | Anthropic.ImageBlockParam> {
 	const text: Anthropic.TextBlockParam = { type: "text", text: `Window title: "${obs.title}"\nElements:\n${obs.elementsText}` };
-	if (!vision) return [text];
+	// An empty frame is possible on the DOM path, where a missing screenshot degrades the
+	// observation rather than ending the run (see DomBackend.observe). Sending it anyway would
+	// put an empty base64 image block on the wire and the API would reject the whole request —
+	// turning a cosmetic gap into exactly the run-ending failure the degradation avoided.
+	if (!vision || !obs.screenshotB64) return [text];
 
 	return [text, { type: "image", source: { type: "base64", media_type: "image/png", data: obs.screenshotB64 } }];
 }
@@ -1115,7 +1284,7 @@ export async function probeHome(
 	driver: Driver,
 	win: WindowRef,
 	app: string,
-	graph: AppMap | undefined = loadAppMapGraph(app),
+	graph: AppMap | undefined = loadAppMapGraph(appSlug(app)),
 ): Promise<{ ready: boolean; detail: string }> {
 	const target = homeTargets(app, graph);
 	if (target.problem) return { ready: false, detail: target.problem };
@@ -1134,7 +1303,7 @@ export async function resetToHome(
 	driver: Driver,
 	win: WindowRef,
 	app: string,
-	graph: AppMap | undefined = loadAppMapGraph(app),
+	graph: AppMap | undefined = loadAppMapGraph(appSlug(app)),
 ): Promise<{ result: HomeResetResult; detail: string }> {
 	// Loaded here rather than passed down from agent.ts on purpose: there, the graph is gated
 	// on grounding being enabled, and a reset that only happens in the grounded arm would make
@@ -1414,8 +1583,13 @@ export function scopeWarnings(map: AppMap): string {
 	);
 }
 
-export function loadAppMapGraph(app: string): AppMap | undefined {
-	const path = `${appmapsDir()}/${appSlug(app)}.json`;
+/**
+ * Takes the artifact SLUG, not an app name: a web target's slug is derived from its origin
+ * rather than by folding whitespace, so `appSlug` is no longer the right thing to apply here
+ * and applying it twice would mangle one. Callers own the slug (see `targetSlug`).
+ */
+export function loadAppMapGraph(slug: string): AppMap | undefined {
+	const path = `${appmapsDir()}/${slug}.json`;
 	if (!fs.existsSync(path)) return undefined;
 
 	try {

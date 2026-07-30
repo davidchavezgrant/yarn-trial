@@ -34,10 +34,13 @@ import {
 	settleMsFor,
 	TargetNotObservableError,
 	toActionRequest,
+	type WindowRef,
 } from "./harness.js";
+import { ensureBrowser } from "./browser.js";
 import { DOM_ACT_TOOL, DOM_RULES, DomBackend, FIND_TOOL } from "./dom.js";
 import { startOverlay } from "./overlay.js";
 import { appmapsDir } from "./paths.js";
+import { parseTarget, type Target, targetLabel, targetSlug, type TargetVocabulary, targetVocabulary } from "./target.js";
 import type { AppMap, AppMapEdge, AppMapHome, AppMapNode } from "./types.js";
 
 /**
@@ -76,15 +79,15 @@ type FinishInput = { document: string; nodes?: AppMapNode[]; edges?: AppMapEdge[
 type GraphInput = { nodes?: AppMapNode[]; edges?: AppMapEdge[] };
 type StopReason = "frontier-empty" | "action-ceiling" | "frontier-conceded" | "interrupted" | "error";
 
-const systemPrompt = (rules: string): string => `You are an exploration agent building grounding notes for a macOS app, so a future task-running agent can navigate it directly without dead ends. You drive the app through a UI driver: each turn you receive the window's elements (addressing handle, role, label/value) and a screenshot, and you perform ONE action via the "act" tool.
+const systemPrompt = (rules: string, vocab: TargetVocabulary): string => `You are an exploration agent building grounding notes for ${vocab.subject}, so a future task-running agent can navigate it directly without dead ends. You drive it through a UI driver: each turn you receive ${vocab.container}'s elements (addressing handle, role, label/value) and a screenshot, and you perform ONE action via the "act" tool.
 
-Your goal is a map, not a task: systematically visit the app's main surfaces — menus, settings panels and their tabs, context menus on notable controls, pickers — and record where things live and how to operate them.
+Your goal is a map, not a task: systematically visit the main surfaces — ${vocab.surfaces} — and record where things live and how to operate them.
 
 Safety rules (absolute):
 - NEVER take destructive or externally visible actions: no deleting, no sending/sharing, no account or sync changes, no creating events/documents you can't discard, no toggling settings you don't revert.
 - Opening panels, tabs, menus, and pickers is fine. Close what you open (escape, foreground) before moving on.
-- Leave the app in the state you found it.
-
+- Leave it in the state you found it.
+${vocab.cautions ? `\n${vocab.cautions}\n` : ""}
 ${rules}
 
 Use the "record" tool whenever you learn something a task agent would need: where a setting lives, the exact interaction pattern for a control (e.g. "right-click X, then choose Y"), a dead end ("Z is NOT in Settings"), or a quirk. Record findings as you go — do not save them all for the end. "record" also accepts graph nodes and edges: emit them as you discover surfaces rather than holding the whole graph until the end. Anything you record is checkpointed to disk immediately and survives even if this run is killed, and it is preserved verbatim across context resets — anything you merely reasoned about is not.
@@ -251,14 +254,31 @@ const hm = (ms: number): string => {
 async function main(): Promise<void> {
 	const argv = process.argv.slice(2);
 	const backendIdx = argv.indexOf("--backend");
-	const backendKind = backendIdx >= 0 ? (argv[backendIdx + 1] ?? "ax") : "ax";
-	const positional = argv.filter((_, i) => backendIdx < 0 || (i !== backendIdx && i !== backendIdx + 1));
-	const app = positional[0] ?? "Notion Calendar";
+	// `--url` is VALUE-bearing, like --backend and unlike --record: parsed as a pair, or its
+	// value falls through into the positionals and is read as the guidance string.
+	let target: Target;
+	let afterUrl: string[];
+	try {
+		({ target, rest: afterUrl } = parseTarget(argv, "Notion Calendar"));
+	} catch (err) {
+		console.error(err instanceof Error ? err.message : String(err));
+		process.exit(1);
+	}
+	const bi = afterUrl.indexOf("--backend");
+	let positional = afterUrl.filter((_, i) => bi < 0 || (i !== bi && i !== bi + 1));
+	const app = target.kind === "web" ? targetLabel(target) : (positional[0] ?? "Notion Calendar");
+	// `buildRunArgs` keeps the label in positional 0 for a web target too, so that guidance
+	// stays where every caller already puts it. Drop it here rather than teaching the guidance
+	// slot to move — a shifted positional is how a target name becomes a safety instruction.
+	if (target.kind === "web" && positional[0] === app) positional = positional.slice(1);
 	// Optional per-run guidance: relaxes or tightens the safety rules for this app
 	// (e.g. "creating a draft is allowed; use <address> if a form needs an email").
-	const guidance = positional[1];
+	const guidance = target.kind === "web" ? positional[0] : positional[1];
+	// A web target defaults to the CDP backend: it snapshots the page rather than the window,
+	// so the browser's own tab strip, omnibox and menu bar never reach the frontier.
+	const backendKind = backendIdx >= 0 ? (argv[backendIdx + 1] ?? "ax") : target.kind === "web" ? "dom" : "ax";
 	if (!["ax", "dom"].includes(backendKind)) {
-		console.error('usage: tsx src/explore.ts ["App Name"] ["guidance"] [--backend ax|dom]');
+		console.error('usage: tsx src/explore.ts ["App Name" | --url <https://…>] ["guidance"] [--backend ax|dom]');
 		process.exit(1);
 	}
 	const { client, model } = makeClient();
@@ -268,8 +288,9 @@ async function main(): Promise<void> {
 	const driver = await Driver.start("explore");
 	const interrupted = onInterrupt(() => driver.close());
 	const findings: string[] = [];
-	const outPath = `${appmapsDir()}/${appSlug(app)}.md`;
-	const graphPath = `${appmapsDir()}/${appSlug(app)}.json`;
+	const slug = targetSlug(target);
+	const outPath = `${appmapsDir()}/${slug}.md`;
+	const graphPath = `${appmapsDir()}/${slug}.json`;
 	fs.mkdirSync(appmapsDir(), { recursive: true });
 	fs.mkdirSync(`${OUT}/runs`, { recursive: true });
 
@@ -425,20 +446,35 @@ async function main(): Promise<void> {
 	};
 
 	try {
-		await driver.act({ kind: "tool", name: "launch_app", args: { name: app } });
-		await new Promise((r) => setTimeout(r, 1500));
-		// Reassigned by ensureObservable — see the same call in src/agent.ts.
-		let win = await findWindow(driver, app);
+		// A web target has no app to launch: the driver brings up its own Chromium against a
+		// persistent profile and navigates it, which is also what makes a logged-in site
+		// reachable without handling credentials here.
+		let win: WindowRef;
+		if (target.kind === "web") {
+			({ win } = await ensureBrowser(driver, target, { cdp: backendKind === "dom" }));
+		} else {
+			await driver.act({ kind: "tool", name: "launch_app", args: { name: app } });
+			await new Promise((r) => setTimeout(r, 1500));
+			// Reassigned by ensureObservable — see the same call in src/agent.ts.
+			win = await findWindow(driver, app);
+		}
 		// Last chance to take your hands off before the run owns the pointer.
 		await overlay.countdown();
 		// Exploration runs once and its whole purpose is coverage, so it exhausts the
 		// continuation chain on every observation — the opposite tradeoff from the agent
 		// loop, which re-observes after every action and pays per-step for depth.
-		const dom = backendKind === "dom" ? await DomBackend.bind(driver, win, Infinity) : undefined;
+		const dom =
+			backendKind === "dom"
+				? await DomBackend.bind(driver, win, Infinity, target.kind === "web" ? target.origin : undefined)
+				: undefined;
 		if (!dom) win = await ensureObservable(driver, win, app);
-		const doObserve = (name: string) => (dom ? dom.observe(name, Infinity) : observe(driver, win, name));
+		// webAreaOnly keeps the browser's own tab strip, omnibox and menu bar out of the
+		// frontier on the AX fallback. A no-op for a Mac app, and unreachable on the DOM
+		// backend, which snapshots the page rather than the window.
+		const webAreaOnly = target.kind === "web";
+		const doObserve = (name: string) => (dom ? dom.observe(name, Infinity) : observe(driver, win, name, { webAreaOnly }));
 		tools = dom ? [DOM_ACT_TOOL, FIND_TOOL, ...EXTRA_TOOLS] : [ACT_TOOL, ...EXTRA_TOOLS];
-		basePrompt = systemPrompt(dom ? DOM_RULES : DRIVER_RULES);
+		basePrompt = systemPrompt(dom ? DOM_RULES : DRIVER_RULES, targetVocabulary(target));
 		console.log(`exploring ${app} pid=${win.pid} window=${win.windowId} backend=${backendKind}`);
 		console.log(`ends when the frontier empties; no time cap, action backstop ${MAX_ACTIONS}\n`);
 
@@ -648,7 +684,7 @@ async function main(): Promise<void> {
 			// Unattended-safety pre-flight. A label check over a fixed verb set — it knows
 			// nothing about this app. Opting out is its OWN switch (EXPLORE_GUARD=off): this
 			// used to ride on `guidance`, so steering the pass silently disarmed the guard.
-			const danger = GUARD_ON ? destructiveTarget(input.action, obs) : undefined;
+			const danger = GUARD_ON ? destructiveTarget(input.action, obs, target.kind === "web") : undefined;
 			if (danger) {
 				refusals++;
 				console.log(`  REFUSED: "${danger}" reads destructive and this run is unattended`);

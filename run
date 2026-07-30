@@ -6,6 +6,9 @@
 #   ./run "show me how to change X"         headless: run a task against the default app
 #   ./run "<task>" "App Name" [--record]    ...against a named app, flags passed through
 #   ./run explore "App Name"                grounding pass -> docs/appmaps/
+#   ./run explore --url https://site.com    ...against a website instead of an installed app
+#   ./run "<task>" --url https://site.com   run a task against a website
+#   ./run browser-login https://site.com    one-time: sign in, so later web runs are logged in
 #   ./run doctor                            check permissions, keys, deps before demoing
 #   ./run enroll                            one-time: mint the fleet key, pin host keys,
 #                                           install it on each Mac (prompts for passwords)
@@ -99,7 +102,7 @@ app | "")
 
 explore)
 	have_key || die "no API key: export OPENROUTER_API_KEY or ANTHROPIC_API_KEY (or put it in .env)"
-	[[ $# -ge 2 ]] || die 'usage: ./run explore "App Name"'
+	[[ $# -ge 2 ]] || die 'usage: ./run explore "App Name" | ./run explore --url https://example.com'
 	assert_no_run_in_flight
 	shift
 	exec npx tsx src/explore.ts "$@"
@@ -150,6 +153,16 @@ signin)
 	# No have_key: this never talks to a model.
 	shift
 	exec npx tsx src/remote/signin.ts "$@"
+	;;
+
+browser-login)
+	# One-time, per machine, per site: bring up the driver-owned Chrome profile on a URL so a
+	# human can sign in. The profile persists, so every later web run inherits that session —
+	# which is the whole reason unattended grounding of a logged-in app is possible.
+	[[ $# -ge 2 ]] || die 'usage: ./run browser-login https://www.notion.so'
+	assert_no_run_in_flight
+	shift
+	exec npx tsx src/browser-login.ts "$@"
 	;;
 
 doctor)

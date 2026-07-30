@@ -13,9 +13,14 @@ export interface UiBus {
 	loadRuns(): Promise<unknown[]>;
 	/** Repo-relative mp4 path -> a URL this shell can play. */
 	videoUrl(rel: string): string;
-	/** Start a grounding (exploration) pass for an app. Resolves to an error string, or undefined. */
-	ground(app: string, host: string): Promise<string | undefined>;
-	run(opts: { app: string; task: string; record: boolean; noVision: boolean; host: string }): Promise<string | undefined>;
+	/**
+	 * Start a grounding (exploration) pass. Resolves to an error string, or undefined.
+	 *
+	 * `url` is set for a web target, alongside — never instead of — `app`, which stays the
+	 * display label and the key this page stores state under.
+	 */
+	ground(app: string, host: string, url?: string): Promise<string | undefined>;
+	run(opts: { app: string; task: string; record: boolean; noVision: boolean; host: string; url?: string }): Promise<string | undefined>;
 	/** Ends the run wherever it is. Closing the window only detaches; a remote job survives that. */
 	stop(): void;
 	/** Selector contents: always `local`, plus `auto` and the inventory when a fleet is configured. */
@@ -39,6 +44,7 @@ export interface UiBus {
 	loadHostPref(): Promise<{ host: string }>;
 	/** Fire-and-forget, like saveState: a lost preference must never block a click. */
 	saveHostPref(host: string): void;
+		rows: { name: string; state: string; detail: string; reason?: string; tccOk?: boolean; jobId?: string }[];
 	/** Per-app task text + log scrollback, and the app selected last. */
 	loadState(): Promise<{ lastApp?: string; byApp: Record<string, { task: string; log: string[] }> }>;
 	/** Fire-and-forget so it can also run from `beforeunload`, where a round trip would not finish. */
@@ -76,6 +82,10 @@ export const CHROME = String.raw`<meta charset="utf-8">
   .badge { font-size:10px; padding:1px 6px; border-radius:99px; border:1px solid var(--line); color:var(--dim); }
   .badge.g { color:var(--ok); border-color:#2f5d45; }
   .badge.r { color:var(--accent); border-color:#3a4a7a; }
+  .badge.w { color:#c9a0ff; border-color:#5a3f7a; }
+  #urlrow { margin-bottom:12px; }
+  .hint { font-size:11.5px; color:var(--dim); margin-top:5px; }
+  .hint.bad { color:var(--bad); }
   .row { display:flex; gap:10px; align-items:center; margin-top:12px; }
   .row label { margin:0; text-transform:none; letter-spacing:0; font-size:13px; color:var(--fg); display:flex; align-items:center; gap:6px; }
   .row input[type=checkbox] { width:auto; }
@@ -147,6 +157,11 @@ export const CHROME = String.raw`<meta charset="utf-8">
     <ul id="apps"></ul>
   </div>
   <div class="col">
+    <div id="urlrow" style="display:none">
+      <label for="url">Website to drive</label>
+      <input id="url" placeholder="https://www.notion.so" autocomplete="off" spellcheck="false">
+      <div id="urlhint" class="hint">A browser needs a URL — the run drives that site, and grounding maps it.</div>
+    </div>
     <label for="task">Task (state the GOAL only — not the steps)</label>
     <textarea id="task" placeholder="show me how to change the cursor type"></textarea>
     <div id="warn"></div>
@@ -208,6 +223,75 @@ let uiState = { byApp: {} };
 
 const el = (id) => document.getElementById(id);
 
+// A typed URL is offered as a target even before it has ever been explored, so the first
+// grounding pass on a new site can be started from here. Held separately from the apps list
+// because it is not a discovered entry — it exists only while the box says something navigable.
+function typedUrl() {
+  const q = el('q').value.trim();
+  if (!/^https?:\/\/\S+$/i.test(q)) return null;
+  try { return new URL(q).toString(); } catch { return null; }
+}
+
+/**
+ * The URL for the current selection, or undefined for a Mac app.
+ *
+ * sel stays a bare string on purpose: it is simultaneously the display label, the byApp key,
+ * an argv positional and an === join key against AppEntry.name and started.app. Making it an
+ * object breaks all four silently — the renderer is not typechecked and has no tests — so the
+ * URL is looked up beside it instead of carried inside it.
+ */
+function selUrl() {
+  const hit = apps.find((a) => a.name === sel);
+  // A browser is only a target once it has somewhere to go, so the URL box wins for one.
+  if (hit && isBrowser(hit.name)) return urlBoxValue();
+  if (hit && hit.kind === 'web') return hit.url;
+  const typed = typedUrl();
+
+  return typed && new URL(typed).host === sel ? typed : undefined;
+}
+
+// The host tags browser entries in listApps() — see AppEntry.browser. Deciding it there
+// rather than re-listing the browser names in this string literal is what keeps the two from
+// drifting; an unknown app is simply not a browser.
+function isBrowser(name) {
+  const hit = apps.find((a) => a.name === name);
+
+  return !!(hit && hit.browser);
+}
+
+/** The URL box's contents, normalised, or undefined when it is empty or not navigable. */
+function urlBoxValue() {
+  const raw = el('url').value.trim();
+  if (!raw) return undefined;
+  // Typing "notion.so" is the common case and meaning it as https is unambiguous. The host
+  // re-validates, so this only decides whether the Run button lights up.
+  const withScheme = /^https?:\/\//i.test(raw) ? raw : 'https://' + raw;
+  try {
+    const u = new URL(withScheme);
+
+    return u.hostname.includes('.') ? u.toString() : undefined;
+  } catch { return undefined; }
+}
+
+/**
+ * Show the URL box when the selected app is a browser, and report whether the run is blocked
+ * on it. A browser with no URL is not a runnable target — it would open on whatever page it
+ * happened to be showing.
+ */
+function syncUrlRow() {
+  const browser = !!sel && isBrowser(sel);
+  el('urlrow').style.display = browser ? 'block' : 'none';
+  if (!browser) return false;
+  const raw = el('url').value.trim();
+  const ok = !!urlBoxValue();
+  el('urlhint').textContent = raw && !ok
+    ? 'That does not look like a web address.'
+    : 'A browser needs a URL — the run drives that site, and grounding maps it.';
+  el('urlhint').className = raw && !ok ? 'hint bad' : 'hint';
+
+  return !ok;
+}
+
 function stateFor(app) {
   return uiState.byApp[app] || (uiState.byApp[app] = { task: '', log: [] });
 }
@@ -227,7 +311,7 @@ function flush() {
   if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
   // The textarea is the source of truth for the selected app's task; snapshot it here so
   // every caller gets that for free rather than remembering to copy it.
-  if (sel) { stateFor(sel).task = el('task').value; uiState.lastApp = sel; }
+  if (sel) { stateFor(sel).task = el('task').value; stateFor(sel).url = el('url').value.trim(); uiState.lastApp = sel; }
   bus.saveState(uiState);
 }
 
@@ -253,6 +337,7 @@ async function restore() {
   if (uiState.lastApp) {
     sel = uiState.lastApp;
     el('task').value = stateFor(sel).task;
+    el('url').value = stateFor(sel).url || '';
   }
   renderLog(sel);
   render();
@@ -261,9 +346,12 @@ async function restore() {
 
 function selectApp(name) {
   if (name === sel) return;
-  if (sel) stateFor(sel).task = el('task').value;   // keep what was typed for the app being left
+  // Keep what was typed for the app being left — both fields, or switching to Chrome and back
+  // loses the site you had already chosen.
+  if (sel) { stateFor(sel).task = el('task').value; stateFor(sel).url = el('url').value.trim(); }
   sel = name;
   el('task').value = stateFor(name).task;
+  el('url').value = stateFor(name).url || '';
   renderLog(name);
   render();
   check();
@@ -273,9 +361,18 @@ function selectApp(name) {
 function render() {
   const q = el('q').value.toLowerCase();
   const hits = apps.filter(a => a.name.toLowerCase().includes(q)).slice(0, 60);
-  el('apps').innerHTML = hits.map(a =>
+  // A navigable URL that is not already a known target gets an entry of its own, at the top:
+  // a site nobody has explored yet has nothing on disk to enumerate, so without this the only
+  // way to ground a new site would be the command line.
+  const typed = typedUrl();
+  const typedHost = typed ? new URL(typed).host : null;
+  const fresh = typedHost && !apps.some(a => a.name === typedHost)
+    ? [{ name: typedHost, grounded: false, running: false, kind: 'web', url: typed }]
+    : [];
+  el('apps').innerHTML = [...fresh, ...hits].map(a =>
     '<li data-n="' + encodeURIComponent(a.name) + '" class="' + (a.name === sel ? 'sel' : '') + '">' +
-    '<span style="flex:1">' + a.name.replace(/</g,'&lt;') + '</span>' +
+    '<span style="flex:1">' + esc(a.name) + '</span>' +
+    (a.kind === 'web' ? '<span class="badge w">web</span>' : '') +
     (a.grounded ? '<span class="badge g">grounded</span>' : '') +
     (a.running ? '<span class="badge r">open</span>' : '') + '</li>').join('');
   for (const li of el('apps').children) {
@@ -299,11 +396,21 @@ function check() {
   const w = t ? hintWarning(t) : '';
   el('warn').style.display = w ? 'block' : 'none';
   el('warn').textContent = w;
-  el('go').disabled = running || !sel || !t || !!w;
-  el('go').textContent = sel ? 'Run on ' + sel + (host === 'local' ? '' : ' @ ' + host) : 'Run';
+  // A browser with no URL is not a runnable target: it would open on whatever page it
+  // happened to be showing, which is nobody's intent and not reproducible.
+  const needsUrl = syncUrlRow();
+  el('go').disabled = running || !sel || !t || !!w || needsUrl;
+  const site = selUrl();
+  el('go').textContent = sel
+    ? 'Run on ' + (site ? new URL(site).host : sel) + (host === 'local' ? '' : ' @ ' + host)
+    : 'Run';
   // Grounding needs only a target — it explores the app, it does not perform a task.
-  el('ground').disabled = running || !sel;
-  const g = sel ? apps.find(a => a.name === sel) : null;
+  el('ground').disabled = running || !sel || needsUrl;
+  // Keyed on the SITE when there is one: whether Chrome has an appmap says nothing about
+  // whether notion.so does. A site never explored has no entry, so the button correctly
+  // reads "Ground" — that is the first pass on it.
+  const key = site ? new URL(site).host : sel;
+  const g = key ? apps.find(a => a.name === key) : null;
   el('ground').textContent = g && g.grounded ? 'Reground' : 'Ground';
 }
 
@@ -592,18 +699,21 @@ async function loadRuns(force) {
 }
 
 el('q').addEventListener('input', render);
+// Same coverage as the task box: 'input' alone misses paste and IME paths, and the Run button
+// must not stay enabled next to a URL that will be refused.
+for (const ev of ['input', 'change', 'keyup', 'paste']) el('url').addEventListener(ev, () => setTimeout(() => { check(); saveSoon(); }, 0));
 // 'input' alone misses programmatic setValue and some IME/paste paths, which left the
 // Run button enabled next to a visible "this will be refused" warning. 'change' catches
 // the stragglers; the server re-checks regardless.
 for (const ev of ['input', 'change', 'keyup', 'paste']) el('task').addEventListener(ev, () => setTimeout(() => { check(); saveSoon(); }, 0));
 el('go').onclick = async () => {
-  const err = await bus.run({ app: sel, task: el('task').value.trim(), record: el('record').checked, noVision: el('novision').checked, host: host });
+  const err = await bus.run({ app: sel, task: el('task').value.trim(), record: el('record').checked, noVision: el('novision').checked, host: host, url: selUrl() });
   if (err) line('✗ ' + err);
 };
 el('stop').onclick = () => bus.stop();
 el('refresh').onclick = () => loadRuns(true);
 el('ground').onclick = async () => {
-  const err = await bus.ground(sel, host);
+  const err = await bus.ground(sel, host, selUrl());
   if (err) line('✗ ' + err);
 };
 // loadApps too: the list is per-host, so switching machines must re-ask rather than leave the

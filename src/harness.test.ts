@@ -19,6 +19,7 @@ import {
 	frontierSummary,
 	isTransientApiError,
 	isVagueSurface,
+	refSurfaces,
 	MAX_WAIT_MS,
 	mergeGraph,
 	newFrontier,
@@ -621,12 +622,12 @@ const fakeDriver = (payload: Record<string, unknown>, shotPath: string): Driver 
 
 const axWindow = { element_index: 0, role: "AXWindow", label: "", frame: { x: -2181, y: 763, w: 1920, h: 1080 } };
 
-const observeFixture = async (elements: unknown[]): Promise<ObservationBundle> => {
+const observeFixture = async (elements: unknown[], opts: { webAreaOnly?: boolean } = {}): Promise<ObservationBundle> => {
 	const shot = `${process.cwd()}/out/test-observe.png`;
 	const prev = process.env.AXDOM;
 	process.env.AXDOM = "0"; // the sidecar needs a live app; this test is about the join-free path
 	try {
-		return await observe(fakeDriver({ elements, screenshot_width: 1568, screenshot_height: 882 }, shot), { pid: 1, windowId: 1 }, "test-observe");
+		return await observe(fakeDriver({ elements, screenshot_width: 1568, screenshot_height: 882 }, shot), { pid: 1, windowId: 1 }, "test-observe", opts);
 	} finally {
 		if (prev === undefined) delete process.env.AXDOM;
 		else process.env.AXDOM = prev;
@@ -1369,4 +1370,146 @@ test("resetToHome__SaysTheAppIsEmpty__When__ThereIsNoContentAtAll", async () => 
 	// locked-display / off-Space shape (LIMITATIONS §1, §12), not an app-state problem.
 	const out = await resetToHome(driverShowing([]), { pid: 1, windowId: 2 }, "Anything", homeGraph);
 	assert.match(out.detail, /NO content elements/);
+});
+/**
+ * A Chrome window as AX reports it: browser furniture hanging off the window, and the page
+ * itself nested under an AXWebArea. Deliberately nests the page button DEEP — real page
+ * controls sit tens of levels below their web area, which is why the filter cannot borrow
+ * ancestorOf's 12-hop bound.
+ */
+function chromeWindowElements(pageDepth = 30): unknown[] {
+	const els: unknown[] = [
+		axWindow,
+		{ element_index: 1, role: "AXButton", label: "Reload", parent_index: 0, frame: { x: -2181, y: 763, w: 30, h: 30 } },
+		{ element_index: 2, role: "AXTextField", label: "Address and search bar", parent_index: 0, frame: { x: -2100, y: 763, w: 800, h: 30 } },
+		{ element_index: 3, role: "AXButton", label: "New Tab", parent_index: 0, frame: { x: -1200, y: 763, w: 30, h: 30 } },
+		{ element_index: 4, role: "AXMenuItem", label: "Bookmarks", parent_index: 0, frame: { x: -2181, y: 740, w: 90, h: 20 } },
+		{ element_index: 10, role: "AXWebArea", label: "", parent_index: 0, frame: { x: -2181, y: 800, w: 1920, h: 1000 } },
+	];
+	let parent = 10;
+	for (let i = 0; i < pageDepth; i++) {
+		els.push({ element_index: 100 + i, role: "AXGroup", label: "", parent_index: parent, frame: { x: -2181, y: 800, w: 1920, h: 1000 } });
+		parent = 100 + i;
+	}
+	els.push({ element_index: 900, role: "AXButton", label: "Share page", parent_index: parent, frame: { x: -2000, y: 900, w: 100, h: 30 } });
+
+	return els;
+}
+
+test("observe__KeepsBrowserChrome__When__WebAreaOnlyIsOff", async () => {
+	// The default must be byte-identical to the Mac-app path: no existing caller opts in.
+	const obs = await observeFixture(chromeWindowElements());
+	assert.ok(obs.interactive.some((e) => e.name === "Reload"));
+	assert.ok(obs.interactive.some((e) => e.name === "Share page"));
+});
+
+test("observe__DropsBrowserChromeFromTheFrontier__When__WebAreaOnly", async () => {
+	// The tab strip, omnibox and Chrome's menu bar are perfectly good AXButtons. Left in the
+	// frontier they dominate it, and the pass spends its dismiss budget on browser furniture
+	// instead of the app it was pointed at.
+	const obs = await observeFixture(chromeWindowElements(), { webAreaOnly: true });
+	assert.deepEqual(obs.interactive.map((e) => e.name), ["Share page"]);
+});
+
+test("observe__KeepsDeeplyNestedPageControls__When__WebAreaOnly", async () => {
+	// The bound must be the element count, not ancestorOf's 12: a page control 40 levels down
+	// is ordinary, and dropping it would look like a site with almost no controls.
+	const obs = await observeFixture(chromeWindowElements(40), { webAreaOnly: true });
+	assert.deepEqual(obs.interactive.map((e) => e.name), ["Share page"]);
+});
+
+test("observe__StillListsBrowserChrome__When__WebAreaOnlyFiltersTheFrontier", async () => {
+	// Filtering the frontier must not blind the model: if a page fails to load, the omnibox is
+	// how it sees where it actually is.
+	const obs = await observeFixture(chromeWindowElements(), { webAreaOnly: true });
+	assert.match(obs.elementsText, /Address and search bar/);
+});
+
+const webCtl = (name: string): ObservationBundle =>
+	({ interactive: [{ handle: 7, role: "AXButton", name, surface: "", x: 0, y: 0, w: 0, h: 0 }] }) as ObservationBundle;
+
+test("destructiveTarget__RefusesCommitVerbs__When__TargetIsWeb", () => {
+	// A website's destructive act is usually a bare commit verb, and none of these appear in
+	// the desktop verb set.
+	for (const label of ["Confirm", "Submit", "Post", "Reply", "Accept", "Place order", "Pay now"])
+		assert.equal(destructiveTarget({ name: "click", element_index: 7 }, webCtl(label), true), label);
+});
+
+test("destructiveTarget__AllowsDownload__When__TargetIsWeb", () => {
+	// "Download" is on every docs page on the internet; blocking it would refuse a large
+	// fraction of ordinary navigation. It is a local side effect, not an externally visible one.
+	assert.equal(destructiveTarget({ name: "click", element_index: 7 }, webCtl("Download"), true), undefined);
+	// ...but it stays guarded for a desktop app, where it means an export.
+	assert.equal(destructiveTarget({ name: "click", element_index: 7 }, webCtl("Download"), false), "Download");
+});
+
+test("destructiveTarget__RefusesEnter__When__WebAndAimedAtANamedControl", () => {
+	// On the web, Enter is a submit. Partial guard — see the documented hole.
+	assert.equal(destructiveTarget({ name: "press_key", key: "return", element_index: 7 }, webCtl("Submit"), true), "Submit");
+});
+
+test("destructiveTarget__IgnoresEnter__When__TargetIsAMacApp", () => {
+	// Unchanged for apps: guessing at keystrokes would stop a pass from typing at all.
+	assert.equal(destructiveTarget({ name: "press_key", key: "return", element_index: 7 }, webCtl("Submit"), false), undefined);
+});
+
+const ref = (r: string, role: string, frame: string, name?: string) => ({ ref: r, role, name, frame });
+
+test("refSurfaces__NamesTheEnclosingLandmark__When__ControlSitsInside", () => {
+	const m = refSurfaces([
+		ref("p1:0", "navigation", "0,0,200,800", "Sidebar"),
+		ref("p1:1", "button", "10,20,100,30", "Inbox"),
+	]);
+	assert.equal(m.get("p1:1"), "Sidebar");
+});
+
+test("refSurfaces__PicksTheInnermost__When__LandmarksNest", () => {
+	const m = refSurfaces([
+		ref("p1:0", "region", "0,0,1000,1000", "Page"),
+		ref("p1:1", "dialog", "100,100,300,200", "Settings"),
+		ref("p1:2", "button", "150,150,80,20", "Save"),
+	]);
+	assert.equal(m.get("p1:2"), "Settings");
+});
+
+test("refSurfaces__IgnoresMain__When__ItWouldSwallowTheWholePage", () => {
+	// If `main` counted as a surface, isVagueSurface("main") would be false and ONE dismiss
+	// naming it would retire the entire page — bypassing EXPLORE_DISMISS_CAP by another route.
+	const m = refSurfaces([ref("p1:0", "main", "0,0,1000,1000", "Main"), ref("p1:1", "button", "10,10,50,20", "Go")]);
+	assert.equal(m.get("p1:1"), undefined);
+	assert.equal(isVagueSurface(m.get("p1:1")), true);
+});
+
+test("refSurfaces__FallsBackToTheRole__When__LandmarkHasNoName", () => {
+	const m = refSurfaces([ref("p1:0", "toolbar", "0,0,500,50"), ref("p1:1", "button", "10,10,40,30", "Bold")]);
+	assert.equal(m.get("p1:1"), "toolbar");
+});
+
+test("refSurfaces__ReturnsNothing__When__FramesAreUnreadable", () => {
+	// The frame format is unverified against a live driver, so a wrong guess must make the
+	// feature inert (today's behaviour: every surface "") rather than produce wrong groupings.
+	const m = refSurfaces([ref("p1:0", "navigation", "who knows", "Side"), ref("p1:1", "button", "", "Inbox")]);
+	assert.equal(m.size, 0);
+});
+
+test("refSurfaces__ToleratesOtherPunctuation__When__DriverFormatsFramesDifferently", () => {
+	const m = refSurfaces([
+		ref("p1:0", "navigation", "{x: 0, y: 0, w: 200, h: 800}", "Sidebar"),
+		ref("p1:1", "button", "{x: 10, y: 20, w: 100, h: 30}", "Inbox"),
+	]);
+	assert.equal(m.get("p1:1"), "Sidebar");
+});
+
+test("refSurfaces__DoesNotMakeALandmarkItsOwnSurface__When__ItEnclosesItself", () => {
+	const m = refSurfaces([ref("p1:0", "navigation", "0,0,200,800", "Sidebar")]);
+	assert.equal(m.get("p1:0"), undefined);
+});
+
+test("observationBlocks__OmitsImageBlock__When__FrameWasNotCaptured", () => {
+	// The DOM path degrades a missing screenshot to "" rather than throwing, so this is the
+	// guard that stops that empty string reaching the API as a malformed image block — which
+	// would fail the request and end the run, the very outcome the degradation prevents.
+	const blocks = observationBlocks({ ...bundle, screenshotB64: "" }, true);
+	assert.equal(blocks.length, 1);
+	assert.equal(blocks[0].type, "text");
 });

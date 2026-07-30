@@ -41,8 +41,10 @@ import { appendMutation, detectMutation, readJournal } from "./journal.js";
 import { runTeardown } from "./teardown.js";
 import { startOverlay } from "./overlay.js";
 import { appmapsDir, recipesDir, relToData } from "./paths.js";
+import { ensureBrowser } from "./browser.js";
+import { parseTarget, type Target, targetLabel, targetSlug, type TargetVocabulary, targetVocabulary } from "./target.js";
 import type { ActionRequest, Expectation, StepRecord } from "./types.js";
-import type { ObservationBundle, VerifyResult, VisualVerdict } from "./harness.js";
+import type { ObservationBundle, VerifyResult, VisualVerdict, WindowRef } from "./harness.js";
 
 const MAX_STEPS = Number(process.env.AGENT_STEPS ?? 15);
 /**
@@ -81,8 +83,8 @@ const RESPONSE_WINDOW_MS = 4000;
 const STAGE_SETTLE_HITS = 3;
 const STAGE_SETTLE_MAX_MS = 12_000;
 
-const systemPrompt = (rules: string, vision: boolean): string => `You are a UI automation agent driving a macOS app through a UI driver. Each turn you receive an observation: the target window's interactive elements (addressing handle, role, label/value)${vision ? " and a screenshot" : "; element frames give positions — there is no screenshot"}. You perform ONE action per turn by calling the "act" tool, then the harness executes it, waits, re-observes, and reports back.
-
+const systemPrompt = (rules: string, vision: boolean, vocab: TargetVocabulary): string => `You are a UI automation agent driving ${vocab.subject} through a UI driver. Each turn you receive an observation: ${vocab.container}'s interactive elements (addressing handle, role, label/value)${vision ? " and a screenshot" : "; element frames give positions — there is no screenshot"}. You perform ONE action per turn by calling the "act" tool, then the harness executes it, waits, re-observes, and reports back.
+${vocab.cautions ? `\n${vocab.cautions}\n` : ""}
 ${rules}
 - Set a concrete, checkable expectation for every action: textIncludes and/or textExcludes, literal substrings checked against the window title plus all element labels and values in the NEXT observation. This is MANDATORY — an act call carrying only a prose description is rejected and NOT executed, costing you a turn. Supply it even when you are certain the action will work.
 - Expectations must DISCRIMINATE: at least one substring that appears (or disappears) BECAUSE of the action. A check that was already true before the action is rejected as evidence — in particular, text you typed earlier does not verify a later action.
@@ -170,14 +172,14 @@ interface GroundingMeta {
 	notes?: string;
 }
 
-function loadGrounding(app: string): GroundingMeta {
+function loadGrounding(slug: string): GroundingMeta {
 	if (process.env.NO_GROUNDING) return { provenance: "none" }; // A/B measurement escape hatch
 
 	// docs/appmaps/ holds ONLY explore.ts output (stamped with a provenance header);
 	// docs/recipes/ holds hand-curated notes. Both ground the agent, but they are
 	// different classes of input and the run log must say which one was used.
-	const explorePath = `${appmapsDir()}/${appSlug(app)}.md`;
-	const recipePath = `${recipesDir()}/${appSlug(app)}.md`;
+	const explorePath = `${appmapsDir()}/${slug}.md`;
+	const recipePath = `${recipesDir()}/${slug}.md`;
 	const useRecipe = process.env.USE_RECIPE ? fs.existsSync(recipePath) : false;
 	const path = useRecipe ? recipePath : fs.existsSync(explorePath) ? explorePath : undefined;
 	if (!path) return { provenance: "none" };
@@ -288,10 +290,21 @@ async function main(): Promise<void> {
 			!["--record", "--hinted", "--no-reset", "--no-vision", "--allow-unready"].includes(a) &&
 			(backendIdx < 0 || (i !== backendIdx && i !== backendIdx + 1)),
 	);
-	const task = args[0];
+	// `--url` is VALUE-bearing, so it is consumed as a pair before the positionals are read —
+	// the filter above only strips boolean flags, and a URL left in `args` would be taken as
+	// the app name.
+	let target: Target;
+	let afterUrl: string[];
+	try {
+		({ target, rest: afterUrl } = parseTarget(args, "Yarn"));
+	} catch (err) {
+		console.error(err instanceof Error ? err.message : String(err));
+		process.exit(1);
+	}
+	const task = afterUrl[0];
 	// Yarn is the canonical target for all runs (set by David, 2026-07-29); Notion
 	// Calendar remains available by passing it explicitly.
-	const app = args[1] ?? "Yarn";
+	const app = target.kind === "web" ? targetLabel(target) : (afterUrl[1] ?? "Yarn");
 	if (!task || !["ax", "dom"].includes(backendKind)) {
 		console.error('usage: tsx src/agent.ts "<task>" ["App Name"] [--record] [--backend ax|dom] [--no-vision]');
 		console.error("--backend dom drives an Electron/browser target over CDP; launch it with --remote-debugging-port first.");
@@ -311,7 +324,7 @@ async function main(): Promise<void> {
 		console.error(
 			"\nA hinted prompt hands the model knowledge it would not have in a real run, so the\n" +
 				"result cannot be reported as autonomous. Move method knowledge into\n" +
-				`docs/appmaps/${appSlug(app)}.md (a declared input), and restate the task as the goal only.\n` +
+				`docs/appmaps/${targetSlug(target)}.md (a declared input), and restate the task as the goal only.\n` +
 				"If the hint is intentional (e.g. pinning a path for a filming take), re-run with --hinted;\n" +
 				"the run log and any published result must then say so.",
 		);
@@ -434,7 +447,8 @@ async function main(): Promise<void> {
 	let recordingActive = false;
 	let frameLoop: Promise<void> | undefined;
 
-	const grounding = loadGrounding(app);
+	const slug = targetSlug(target);
+	const grounding = loadGrounding(slug);
 	// What the log records: provenance + path + content hash, not the full text — enough
 	// to pin exactly which appmap version grounded the run without bloating every log.
 	const groundingMeta: Record<string, unknown> = {
@@ -447,11 +461,11 @@ async function main(): Promise<void> {
 	// per-draft override instead of the brand default, because both satisfy a
 	// substring check. Naming each collision explicitly gives the model something
 	// specific to act on. NO_GROUNDING drops it too, so the A/B stays honest.
-	const graph = grounding.notes ? loadAppMapGraph(app) : undefined;
+	const graph = grounding.notes ? loadAppMapGraph(slug) : undefined;
 	const warnings = graph ? scopeWarnings(graph) : "";
 	const ambiguities = graph ? findScopeAmbiguities(graph) : [];
 
-	const basePrompt = systemPrompt(backendKind === "dom" ? DOM_RULES : DRIVER_RULES, vision);
+	const basePrompt = systemPrompt(backendKind === "dom" ? DOM_RULES : DRIVER_RULES, vision, targetVocabulary(target));
 	const system = grounding.notes
 		? `${basePrompt}\n\n# App grounding notes for ${app} (from a prior exploration pass — trust these to skip dead ends)\n${grounding.notes}${warnings}`
 		: basePrompt;
@@ -467,17 +481,30 @@ async function main(): Promise<void> {
 	const tools: Anthropic.Tool[] = backendKind === "dom" ? [DOM_ACT_TOOL, FIND_TOOL, CLAIM_TOOL, DONE_TOOL] : [ACT_TOOL, CLAIM_TOOL, DONE_TOOL];
 
 	try {
-		await driver.act({ kind: "tool", name: "launch_app", args: { name: app } });
-		await new Promise((r) => setTimeout(r, 1500));
+		// A web target has no app to launch: the driver brings up its own Chromium against a
+		// persistent profile and navigates it. See src/browser.ts for why that profile, and
+		// not the operator's own Chrome.
 		// Reassigned by ensureObservable: recovering an unobservable target can relaunch it
 		// onto a new window, and every later call must use that one.
-		let win = await findWindow(driver, app);
+		let win: WindowRef;
+		if (target.kind === "web") {
+			({ win } = await ensureBrowser(driver, target, { cdp: backendKind === "dom" }));
+		} else {
+			await driver.act({ kind: "tool", name: "launch_app", args: { name: app } });
+			await new Promise((r) => setTimeout(r, 1500));
+			win = await findWindow(driver, app);
+		}
 		// Last chance to take your hands off before the run owns the pointer.
 		await overlay.countdown();
 		// For the DOM backend the CDP bind is the observability gate; AX darkness is fine.
-		const dom = backendKind === "dom" ? await DomBackend.bind(driver, win) : undefined;
+		const dom =
+			backendKind === "dom"
+				? await DomBackend.bind(driver, win, undefined, target.kind === "web" ? target.origin : undefined)
+				: undefined;
 		if (!dom) win = await ensureObservable(driver, win, app);
-		const doObserve = (name: string) => (dom ? dom.observe(name) : observe(driver, win, name));
+		// See the same call in src/explore.ts: page content only, on the AX fallback.
+		const webAreaOnly = target.kind === "web";
+		const doObserve = (name: string) => (dom ? dom.observe(name) : observe(driver, win, name, { webAreaOnly }));
 		console.log(`target: ${app} pid=${win.pid} window=${win.windowId} backend=${backendKind}`);
 
 		// Start from a declared home state, so a run never inherits the previous run's
