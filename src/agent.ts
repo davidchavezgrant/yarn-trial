@@ -36,12 +36,24 @@ import {
 	visualJudge,
 } from "./harness.js";
 import { DOM_ACT_TOOL, DOM_RULES, DomBackend, FIND_TOOL } from "./dom.js";
+import { appendMutation, detectMutation, readJournal } from "./journal.js";
+import { runTeardown } from "./teardown.js";
 import { startOverlay } from "./overlay.js";
 import { appmapsDir, recipesDir, relToData } from "./paths.js";
 import type { ActionRequest, Expectation, StepRecord } from "./types.js";
 import type { ObservationBundle, VerifyResult, VisualVerdict } from "./harness.js";
 
 const MAX_STEPS = Number(process.env.AGENT_STEPS ?? 15);
+/**
+ * Steps a single restore entry may spend before it is abandoned.
+ *
+ * Restoring is strictly easier than the task that caused it — the target value is already
+ * known, so the harness writes the expectation instead of trusting one — and the route comes
+ * from the appmap. A budget this small is therefore a real signal: an entry that cannot be
+ * put back in ten steps is reporting that the control moved or the surface changed, which is
+ * worth saying rather than grinding on.
+ */
+const CLEANUP_STEPS = Number(process.env.CLEANUP_STEPS ?? 10);
 /**
  * Consecutive steps with nothing verified and nothing repainted before the run says so. It
  * used to abort here, and that was wrong for a whole class of target: apps with an embedded
@@ -70,6 +82,10 @@ DEMONSTRATE BY DOING. Your runs are recorded as product demos, so the video must
 - If the task names no specific value ("change the cursor type" — to what?), CHOOSE a sensible one — any value different from the current one — and commit it. An unspecified value is not a reason to stop short; it is yours to pick. Say which you chose in your summary.
 - Commit the change: if there is a Save / Done / Apply control, click it, and confirm the change survived (the unsaved-changes affordance disappears, or the control still reads the new value on re-observation).
 - Your "done" evidence must prove the NEW state, so pair textIncludes on the new value with textExcludes on the old one wherever the change replaces a value.
+
+WORK IN SCRATCH, NOT IN THE USER'S CONTENT. When a task needs something to operate on — a document, a project, a draft — CREATE A NEW ONE with a distinctive name rather than opening something that is already there, and call "claim" the moment it exists. The workspace you are driving may be a real person's, and a demo that edits their actual work is a failure even when the task succeeds.
+
+Settings you change are put back after the run, so change them freely. Things you CREATE are not removed automatically — they are only reported — so creating a scratch document is safe and preferable, but creating five of them leaves five behind.
 
 The one exception is irreversible or externally-visible actions — deleting, publishing, exporting, sending, sharing, purchasing, account changes. For those, and ONLY those, go as far as the final confirmation step WITHOUT confirming, then call done with success: true, evidence showing you reached that point, and a summary saying plainly that you stopped before the irreversible step.
 
@@ -100,6 +116,38 @@ const DONE_TOOL: Anthropic.Tool = {
 			},
 		},
 		required: ["success", "summary"],
+	},
+};
+
+/**
+ * The agent's declaration that it brought something into existence.
+ *
+ * This is the sandbox half of cleanup, and it exists because restoring a value and disposing
+ * of a thing are not the same operation: a setting has a previous value to write back, while
+ * a draft the run created has no "before" at all — the only way to leave the workspace as it
+ * was found is to remove it. A claimed name is the whole of teardown's authority to do that:
+ * disposal is matched against this ledger by code, so an unclaimed document cannot be deleted
+ * however convinced the model is that it is scratch.
+ */
+const CLAIM_TOOL: Anthropic.Tool = {
+	name: "claim",
+	description:
+		"Declare a resource this run created (or is about to modify) so the harness can account for it afterwards. " +
+		"Call it IMMEDIATELY after creating the thing, with the exact name as the app renders it.",
+	input_schema: {
+		type: "object",
+		properties: {
+			kind: {
+				type: "string",
+				enum: ["created", "will-modify"],
+				description:
+					'"created" is a thing that did not exist before this run. ' +
+					'"will-modify" is pre-existing content you are about to change, recorded so the change can be reported.',
+			},
+			name: { type: "string", description: 'Exact name as it appears in the app, e.g. "scratch-demo-7f3a".' },
+			note: { type: "string", description: "One sentence: what it is and why the task needed it." },
+		},
+		required: ["kind", "name"],
 	},
 };
 
@@ -289,6 +337,22 @@ async function main(): Promise<void> {
 	const badProviders = new Set<string>();
 	let aborted: unknown;
 	let outcome: Record<string, unknown> | undefined;
+	// off | advisory (default) | block. Advisory keeps the task's verdict and cleanup's on
+	// separate axes: a demo that achieved its goal did so whether or not the app was tidied
+	// afterwards, and collapsing the two would mark good runs as failures. `off` is for
+	// filming takes, where the changed end state IS the artifact.
+	const cleanupMode = process.env.CLEANUP ?? "advisory";
+	// Appended the instant a mutation is detected rather than written with the run log,
+	// because the case this most needs to survive is the one where there is no run log: a
+	// crash mid-task leaves the app dirty, and the journal on disk is what lets
+	// `npm run cleanup -- <stamp>` put it back without a human reconstructing what happened.
+	const journalPath = `${OUT}/runs/${stamp}.journal.jsonl`;
+	const claimed: Array<{ kind: string; name: string; note?: string; step: number }> = [];
+	// Restore steps live apart from `records` so verificationTallies() keeps reporting the
+	// TASK's numbers. Folding them in would let a run improve its own verification rate by
+	// cleaning up after itself, which measures nothing.
+	const cleanupSteps: StepRecord[] = [];
+	let cleanupReport: Record<string, unknown> | undefined;
 
 	/**
 	 * The one place a run log is written. Every exit — done(), the step limit, an abort —
@@ -321,9 +385,12 @@ async function main(): Promise<void> {
 					elapsedSec: Math.round((Date.now() - startedAt) / 1000),
 					usage,
 					...verificationTallies(records),
+					...(cleanupReport ? { cleanup: cleanupReport } : {}),
+					...(claimed.length ? { claimed } : {}),
 					...result,
 					...(record ? { video: relToData(videoPath) } : {}),
 					steps: records,
+					...(cleanupSteps.length ? { cleanupSteps } : {}),
 				},
 				null,
 				2,
@@ -376,7 +443,7 @@ async function main(): Promise<void> {
 	}
 	// find is DOM-only: it is the escape hatch from the semantic_v2 node budget, and the
 	// AX path has no budget to escape (get_window_state returns the whole tree).
-	const tools: Anthropic.Tool[] = backendKind === "dom" ? [DOM_ACT_TOOL, FIND_TOOL, DONE_TOOL] : [ACT_TOOL, DONE_TOOL];
+	const tools: Anthropic.Tool[] = backendKind === "dom" ? [DOM_ACT_TOOL, FIND_TOOL, CLAIM_TOOL, DONE_TOOL] : [ACT_TOOL, CLAIM_TOOL, DONE_TOOL];
 
 	try {
 		await driver.act({ kind: "tool", name: "launch_app", args: { name: app } });
@@ -609,6 +676,33 @@ async function main(): Promise<void> {
 				continue;
 			}
 
+			// Bookkeeping, not actuation: nothing touches the app, so the step is refunded and
+			// the model goes straight back to work. Charging for it would price honesty.
+			if (toolUse.name === "claim") {
+				const c = toolUse.input as { kind: string; name: string; note?: string };
+				claimed.push({ ...c, step });
+				console.log(`    claim (${c.kind}): "${c.name}"${c.note ? ` — ${c.note}` : ""}`);
+				messages.push({
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: toolUse.id,
+							// Accurate about what the ledger does. Telling the model a resource
+							// "will be deleted" would be false — disposal is reporting-only — and a
+							// model that believes its mess is handled is the one that stops
+							// preferring scratch over the user's own content.
+							content:
+								`Claimed "${c.name}" (${c.kind}). It is recorded and will be reported at the end of the run; ` +
+								"it is NOT deleted automatically, so keep preferring scratch over existing content. Carry on with the task.",
+						},
+					],
+				});
+				step--;
+
+				continue;
+			}
+
 			if (toolUse.name === "done") {
 				const input = toolUse.input as { success: boolean; summary: string; evidence?: Expectation };
 
@@ -787,6 +881,10 @@ async function main(): Promise<void> {
 			}
 
 			const prevHaystack = obs.haystack;
+			// The whole bundle, not just the derived views below: the mutation journal needs
+			// the pre-action control VALUES, and `obs` is reassigned by the re-observation
+			// before anything downstream could read them back.
+			const prevObs = obs;
 			const prevFrames = obs.frames;
 			const prevShot = `${OUT}/agent-step-${step - 1}.png`;
 			while (driverBusy) await new Promise((r) => setTimeout(r, 50));
@@ -885,6 +983,22 @@ async function main(): Promise<void> {
 				modelReasoning: input.reasoning,
 			});
 
+			// Journal what this step CHANGED, as opposed to what it was aimed at. Detection is
+			// a value diff over the two observations rather than the model's own account of
+			// what it did, for the same reason verification is: a run that reports its own
+			// side effects can only restore the ones it noticed having.
+			if (cleanupMode !== "off" && !isError) {
+				const mutation = detectMutation(input.action, prevObs, obs, graph, step);
+				if (mutation) {
+					appendMutation(journalPath, mutation);
+					console.log(
+						`    journaled: "${mutation.control}"${mutation.surface ? ` in ${mutation.surface}` : ""} ` +
+							`${JSON.stringify(mutation.before ?? "")} -> ${JSON.stringify(mutation.after ?? "")}` +
+							`${mutation.scope ? ` [${mutation.scope}]` : ""}`,
+					);
+				}
+			}
+
 			// Advisory only — see FROZEN_STEPS. Printed at the crossing rather than every step
 			// after it, so a long legitimate wait says this once instead of filling the log.
 			const frozen = unpaintedStreak(records);
@@ -936,6 +1050,50 @@ async function main(): Promise<void> {
 				console.error("video assembly failed:", err);
 			}
 		}
+
+		/**
+		 * Put the app back, AFTER the recording has been stopped and assembled just above.
+		 *
+		 * The order is the whole point. Teardown undoes exactly what the demo just
+		 * demonstrated, so a frame of it in `window.mp4` turns the deliverable into a video of
+		 * the agent changing its mind. The mp4 ends on the changed state; the restoration is
+		 * data, kept in the run log and the journal, not footage.
+		 *
+		 * It sits in the `finally` rather than after a successful `done` so that the runs that
+		 * most need it are covered: a step-limit exit or an abort leaves the app just as dirty
+		 * as a success does, and those are the ones nobody is watching. The driver is still
+		 * open here — `driver.close()` is deliberately below.
+		 */
+		if (cleanupMode !== "off" && !interrupted()) {
+			try {
+				const journal = readJournal(journalPath);
+				if (journal.length || claimed.length) {
+					overlay.setDriving(true);
+					cleanupReport = await runTeardown({
+						driver,
+						client,
+						model,
+						app,
+						journal,
+						claimed,
+						graph,
+						steps: cleanupSteps,
+						budget: CLEANUP_STEPS,
+						mode: cleanupMode,
+						vision,
+						usage,
+					});
+					overlay.setDriving(false);
+				}
+			} catch (err) {
+				// A failed teardown must never bury the run it was tidying up after. The task's
+				// own result is already decided by this point; losing it to an exception thrown
+				// while cleaning would be the worse outcome by far.
+				cleanupReport = { mode: cleanupMode, error: err instanceof Error ? err.message : String(err) };
+				console.error(`cleanup failed: ${cleanupReport.error}`);
+			}
+		}
+
 		await driver.close();
 		overlay.stop();
 
@@ -957,6 +1115,15 @@ async function main(): Promise<void> {
 				success: false,
 				summary: `aborted: ${aborted instanceof Error ? aborted.message : String(aborted)}`,
 				aborted: true,
+			};
+		// CLEANUP=block makes a dirty exit a failed run. Opt-in, mirroring VISUAL_JUDGE: the
+		// default keeps "did the task succeed" and "was the app left tidy" as separate
+		// questions, because a demo that achieved its goal achieved it either way.
+		if (outcome && cleanupMode === "block" && Number(cleanupReport?.failed ?? 0) > 0)
+			outcome = {
+				...outcome,
+				success: false,
+				summary: `${outcome.summary} — but cleanup left ${cleanupReport!.failed} change(s) in place (CLEANUP=block)`,
 			};
 		if (outcome) writeRunLog(outcome);
 	}

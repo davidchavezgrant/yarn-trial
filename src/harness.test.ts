@@ -458,7 +458,7 @@ const bundle: ObservationBundle = {
 	haystack: "save",
 	screenshotB64: "aGk=",
 	title: "Settings",
-	interactive: [{ handle: 3, role: "AXButton", name: "Save", surface: "", x: 10, y: 20, w: 80, h: 30 }],
+	interactive: [{ handle: 3, role: "AXButton", name: "Save", surface: "", value: "", x: 10, y: 20, w: 80, h: 30 }],
 	appContent: 1,
 	domEnriched: 0,
 };
@@ -671,12 +671,16 @@ test("observe__ReportsZeroGeometry__When__WindowFrameIsUnavailable", async () =>
 /** Serves one AX payload per observation, in order, and records every act for inspection. */
 const scriptedDriver = (screens: unknown[][], acts: ActionRequest[]): Driver => {
 	let shown = 0;
-	const shot = `${process.cwd()}/out/test-reset.png`;
 
 	return {
 		act: async (req: ActionRequest) => {
 			acts.push(req);
 			if (req.kind !== "tool" || req.name !== "get_window_state") return { text: "" };
+			// Write the file observe() will actually look for. The driver names the screenshot
+			// from its own argument, so a fixture writing some other path only passed here
+			// because a real run had left a same-named PNG in out/ — these tests failed on any
+			// clean checkout, and passed locally for a reason unrelated to what they assert.
+			const shot = String((req.args as Record<string, unknown>).screenshot_out_file);
 			fs.mkdirSync(shot.replace(/\/[^/]+$/, ""), { recursive: true });
 			fs.writeFileSync(shot, "png");
 			const elements = screens[Math.min(shown++, screens.length - 1)];
@@ -769,7 +773,7 @@ test("resetToHome__ReportsNone__When__TheMapHasNoHomeAndNoIdentifiableRoot", asy
 // from draining a panel it never touched.
 
 const ie = (name: string, surface = "", box: Partial<InteractiveElement> = {}): InteractiveElement =>
-	({ handle: 0, role: "AXButton", name, surface, x: 0, y: 0, w: 0, h: 0, ...box });
+	({ handle: 0, role: "AXButton", name, surface, value: "", x: 0, y: 0, w: 0, h: 0, ...box });
 
 const obsWith = (interactive: InteractiveElement[]): ObservationBundle => ({ ...bundle, interactive });
 

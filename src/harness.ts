@@ -48,6 +48,16 @@ export interface InteractiveElement {
 	/** Nearest named ancestor: which panel or menu this sits in. "" at top level. */
 	surface: string;
 	/**
+	 * The control's current value — what a combobox reads, what a text field holds. "" when
+	 * it has none, or when it duplicates `name` (a button labelled by its own value).
+	 *
+	 * Rendered into `elementsText` for the model long before it was carried here. Pulling it
+	 * into the struct is what lets code diff two observations and say which control CHANGED,
+	 * rather than only which one was clicked — the raw material for the mutation journal in
+	 * src/journal.ts, and the difference between restoring a setting and guessing at it.
+	 */
+	value: string;
+	/**
 	 * Bounds in SCREENSHOT PIXELS — the space coordinate actions consume, NOT the logical
 	 * points AX reports and `frames` below carries. Converted here, once, so a click point
 	 * can be tested against a control's box without every caller re-deriving the display
@@ -475,7 +485,7 @@ export async function observe(driver: Driver, win: WindowRef, shotName: string):
 		// A disabled control cannot be actuated, so listing it in the frontier would leave an
 		// entry nothing can ever clear. It re-enters the moment the app enables it.
 		if (INTERACTIVE_ROLES.includes(e.role) && e.enabled !== false)
-			interactive.push({ handle: e.element_index, role: e.role, name: key ?? "", surface: parent, ...toPixels(e.frame) });
+			interactive.push({ handle: e.element_index, role: e.role, name: key ?? "", surface: parent, value: val ? value : "", ...toPixels(e.frame) });
 		const inWhat = parent && !label.slice(0, 40).startsWith(parent) ? ` in="${parent}"` : "";
 		lines.push(`[${e.element_index}] ${e.role} "${label.slice(0, 80)}"${val}${dsc}${inWhat}${f}${e.selected ? " SELECTED" : ""}${e.enabled === false ? " DISABLED" : ""}`);
 	}
@@ -890,17 +900,35 @@ export function recoverLeakedGraph(text: string): {
 const DESTRUCTIVE_LABEL =
 	/\b(delete|remove|discard|erase|trash|publish|export|download|send|share|invite|buy|purchase|subscribe|unsubscribe|sign out|log out|revoke|deactivate|reset|restore|merge|archive)\b/i;
 
-export function destructiveTarget(action: any, obs: ObservationBundle): string | undefined {
+/**
+ * Which control does this action operate?
+ *
+ * Two addressing modes because the model has two: a handle when the target is a real element,
+ * and a coordinate when it is painted. On the coordinate path the SMALLEST containing box
+ * wins — boxes nest, so a click inside a button is also inside its panel, and the panel is
+ * never the thing being pressed.
+ *
+ * Shared by the destructive-label guard and the mutation journal, which ask different
+ * questions of the same answer. Two copies would be two chances to disagree about what the
+ * agent just touched.
+ */
+export function resolveTarget(action: any, obs: ObservationBundle): InteractiveElement | undefined {
 	const handle = action?.element_index ?? action?.ref;
+	if (handle !== undefined && handle !== null) return obs.interactive.find((e) => e.handle === handle);
+	if (typeof action?.x !== "number" || typeof action?.y !== "number") return undefined;
+
 	let target: InteractiveElement | undefined;
-	if (handle !== undefined && handle !== null) target = obs.interactive.find((e) => e.handle === handle);
-	else if (typeof action?.x === "number" && typeof action?.y === "number") {
-		for (const e of obs.interactive) {
-			if (e.w <= 0 || e.h <= 0) continue;
-			if (action.x < e.x || action.x >= e.x + e.w || action.y < e.y || action.y >= e.y + e.h) continue;
-			if (!target || e.w * e.h < target.w * target.h) target = e;
-		}
+	for (const e of obs.interactive) {
+		if (e.w <= 0 || e.h <= 0) continue;
+		if (action.x < e.x || action.x >= e.x + e.w || action.y < e.y || action.y >= e.y + e.h) continue;
+		if (!target || e.w * e.h < target.w * target.h) target = e;
 	}
+
+	return target;
+}
+
+export function destructiveTarget(action: any, obs: ObservationBundle): string | undefined {
+	const target = resolveTarget(action, obs);
 	// Only *pressing* things is guarded. A keystroke can be destructive too, but nothing
 	// here can tell which one is, and guessing at key combinations would block the pass
 	// from typing at all.
@@ -1288,29 +1316,36 @@ export function findScopeAmbiguities(map: AppMap): ScopeAmbiguity[] {
  * alone did not prevent the wrong-scope changes; naming each collision explicitly, with the
  * scope of every candidate, gives the model something it cannot skim past.
  */
+/**
+ * The click-path to a node, as recorded by exploration. Edges are keyed by node id, and a
+ * control's route is the path to its parent surface — you navigate to the panel, not to the
+ * combobox inside it.
+ *
+ * Lifted out of `scopeWarnings`, where it was a closure, because teardown needs the same walk
+ * to tell a restore where its control lives (`restoreRoute` in src/journal.ts).
+ */
+export function routeTo(map: AppMap, nodeId: string): string {
+	const surface = map.nodes.find((n) => n.id === nodeId)?.kind === "control"
+		? nodeId.split("/").slice(0, -1).join("/")
+		: nodeId;
+	const hops: string[] = [];
+	let cursor = surface;
+	// Walk parents until root; bounded by node count so a cyclic graph cannot hang us.
+	for (let i = 0; i <= map.nodes.length; i++) {
+		const edge = map.edges.find((e) => e.to === cursor);
+		if (!edge) break;
+		hops.unshift(edge.action);
+		if (edge.from === "root") break;
+		cursor = edge.from;
+	}
+
+	return hops.length ? hops.join(" → ") : "(route not recorded)";
+}
+
 export function scopeWarnings(map: AppMap): string {
 	const ambiguities = findScopeAmbiguities(map);
 	if (ambiguities.length === 0) return "";
 
-	// Route to each option, so "both paths" is actionable rather than a label. Edges are
-	// keyed by node id; a control's route is the path to its parent surface.
-	const routeTo = (nodeId: string): string => {
-		const surface = map.nodes.find((n) => n.id === nodeId)?.kind === "control"
-			? nodeId.split("/").slice(0, -1).join("/")
-			: nodeId;
-		const hops: string[] = [];
-		let cursor = surface;
-		// Walk parents until root; bounded by node count so a cyclic graph cannot hang us.
-		for (let i = 0; i <= map.nodes.length; i++) {
-			const edge = map.edges.find((e) => e.to === cursor);
-			if (!edge) break;
-			hops.unshift(edge.action);
-			if (edge.from === "root") break;
-			cursor = edge.from;
-		}
-
-		return hops.length ? hops.join(" → ") : "(route not recorded)";
-	};
 
 	// Group by the SURFACES involved, not per setting. Yarn has 15 settings split across the
 	// same brand-vs-document pair of panels; listing each separately made the warning 10.8k
@@ -1334,7 +1369,7 @@ export function scopeWarnings(map: AppMap): string {
 
 	const lines = [...groups.values()].map((g) => {
 		const options = g.nodes
-			.map((n) => `    · ${n.scope} scope — ${n.id}\n      route: ${routeTo(n.id)}`)
+			.map((n) => `    · ${n.scope} scope — ${n.id}\n      route: ${routeTo(map, n.id)}`)
 			.join("\n");
 
 		return (
