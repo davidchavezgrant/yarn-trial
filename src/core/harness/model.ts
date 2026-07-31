@@ -2,28 +2,59 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { AppMapEdge, AppMapNode } from "../../types.js";
 
 /**
- * The OpenRouter default is an OpenAI model, reached through OpenRouter's Anthropic-format
- * `/api/v1/messages` endpoint — verified to carry tool use, streaming, base64 screenshots and
- * `thinking` blocks unchanged, so the SDK and both loops need no restructuring. `sol` rather
- * than `sol-pro`: same weights and price, but pro's `reasoning.mode=pro` buys longer thinking
- * per turn, and these loops are long and sequential — a 96-action pass pays that cost 96
- * times. `AGENT_MODEL` overrides, including to `openai/gpt-5.6-sol-pro` or any `anthropic/*` id.
+ * The default is Claude Fable 5 on Anthropic's own API (set by David, 2026-07-31): the
+ * benchmark's Claude arm runs direct, with no router in the path. The OpenAI arm reaches
+ * `openai/gpt-5.6-sol` through OpenRouter's Anthropic-format `/api/v1/messages` endpoint —
+ * verified to carry tool use, streaming, base64 screenshots and `thinking` blocks unchanged,
+ * so the SDK and both loops need no restructuring. `sol` rather than `sol-pro`: same weights
+ * and price, but pro's `reasoning.mode=pro` buys longer thinking per turn, and these loops are
+ * long and sequential — a 96-action pass pays that cost 96 times.
  *
- * One measured consequence: OpenRouter returns a null `cache_creation_input_tokens` for OpenAI
- * models, so the `cache_control` blocks the explore/agent prompts carry are accepted and then
- * ignored. Nothing breaks; the per-chapter system prompt is simply billed in full each time.
+ * **The MODEL ID picks the transport, not which key happens to be set.** Key presence was the
+ * old rule and it silently broke the two-provider split the moment both keys existed on one
+ * host: OpenRouter won unconditionally, so a `claude-*` run went through the router anyway —
+ * measurable only as a surprising `provider_name` in an error, and invisible when nothing
+ * failed. A bare `claude-*` id (or an explicit `anthropic:` prefix) is Anthropic-direct;
+ * anything else — including a deliberate `anthropic/claude-*`, which is OpenRouter's OWN
+ * spelling for a Claude model — goes to OpenRouter. The slash is the tell: OpenRouter ids are
+ * `vendor/model`, Anthropic's own are not.
+ *
+ * One measured consequence of the router path: OpenRouter returns a null
+ * `cache_creation_input_tokens` for OpenAI models, so the `cache_control` blocks the
+ * explore/agent prompts carry are accepted and then ignored. Nothing breaks; the per-chapter
+ * system prompt is simply billed in full each time.
  */
 export function makeClient(): { client: Anthropic; model: string } {
+	const requested = process.env.AGENT_MODEL?.trim();
+	const anthropicKey = process.env.ANTHROPIC_API_KEY;
 	const openrouter = process.env.OPENROUTER_API_KEY;
-	// :nitro is OpenRouter's throughput-first routing (fastest provider hosting the model,
-	// premium pricing) — a model-id suffix, not a different model. Composes with
+	// Default: Fable 5 direct when an Anthropic key exists, else whatever OpenRouter can
+	// reach. :nitro is OpenRouter's throughput-first routing (fastest provider hosting the
+	// model, premium pricing) — a model-id suffix, not a different model. Composes with
 	// providerRouting(): nitro sets the sort, the ignore list still excludes watched failures.
-	const model = process.env.AGENT_MODEL ?? (openrouter ? "openai/gpt-5.6-sol:nitro" : "claude-opus-5");
-	const client = openrouter
-		? new Anthropic({ baseURL: "https://openrouter.ai/api", authToken: openrouter })
-		: new Anthropic();
+	const model = requested || (anthropicKey ? "claude-fable-5" : "openai/gpt-5.6-sol:nitro");
+	const direct = wantsAnthropicDirect(model);
+	if (direct && !anthropicKey)
+		throw new Error(`${model} needs ANTHROPIC_API_KEY (a bare claude-* id runs direct). Set it, or ask for OpenRouter's "anthropic/${model}".`);
+	if (!direct && !openrouter) throw new Error(`${model} is an OpenRouter id and needs OPENROUTER_API_KEY.`);
 
-	return { client, model };
+	return {
+		model: direct ? model.replace(/^anthropic:/, "") : model,
+		client: direct
+			? new Anthropic({ apiKey: anthropicKey })
+			: new Anthropic({ baseURL: "https://openrouter.ai/api", authToken: openrouter }),
+	};
+}
+
+/**
+ * Does this model id mean "Anthropic's own API"? Bare `claude-*` ids and an explicit
+ * `anthropic:` prefix do; `vendor/model` ids are OpenRouter's namespace, `anthropic/claude-*`
+ * included — that spelling is how an operator deliberately routes Claude through the router.
+ */
+export function wantsAnthropicDirect(model: string): boolean {
+	const id = model.trim();
+
+	return id.startsWith("anthropic:") || (!id.includes("/") && /^claude-/i.test(id));
 }
 
 /**

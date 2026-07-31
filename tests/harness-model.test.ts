@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { failedProvider, isTransientApiError, mergeGraph, outputEffort, providerRouting, recoverLeakedGraph, retryTransient } from "../src/core/harness.js";
+import { failedProvider, isTransientApiError, makeClient, mergeGraph, outputEffort, providerRouting, recoverLeakedGraph, retryTransient, wantsAnthropicDirect } from "../src/core/harness.js";
 import type { AppMapEdge, AppMapNode } from "../src/types.js";
 
 // --- transient-error retry. A 12h unattended pass died two minutes in on one mid-stream
@@ -190,4 +190,75 @@ test("outputEffort__SendsNothing__When__EffortIsOff", () => {
 	} finally {
 		delete process.env.AGENT_EFFORT;
 	}
+});
+
+// --- transport routing. Key presence used to pick the client, which silently sent Claude
+// runs through OpenRouter the moment both keys existed on one host — the two-provider
+// benchmark split (Claude direct, OpenAI routed) cannot survive that rule.
+
+test("wantsAnthropicDirect__ReadsTheIdNamespace__When__AskedWhichTransport", () => {
+	// Bare claude-* ids are Anthropic's own spelling.
+	assert.equal(wantsAnthropicDirect("claude-fable-5"), true);
+	assert.equal(wantsAnthropicDirect("claude-opus-5"), true);
+	assert.equal(wantsAnthropicDirect("anthropic:claude-fable-5"), true);
+	// vendor/model is OpenRouter's namespace — INCLUDING its spelling for Claude, which is how
+	// an operator deliberately routes Claude through the router.
+	assert.equal(wantsAnthropicDirect("anthropic/claude-fable-5"), false);
+	assert.equal(wantsAnthropicDirect("openai/gpt-5.6-sol:nitro"), false);
+});
+
+function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
+	const prev: Record<string, string | undefined> = {};
+	for (const [k, v] of Object.entries(env)) {
+		prev[k] = process.env[k];
+		if (v === undefined) delete process.env[k];
+		else process.env[k] = v;
+	}
+	try {
+		return fn();
+	} finally {
+		for (const [k, v] of Object.entries(prev)) {
+			if (v === undefined) delete process.env[k];
+			else process.env[k] = v;
+		}
+	}
+}
+
+test("makeClient__GoesDirect__When__TheModelIsABareClaudeId", () => {
+	// Both keys present — the state a provisioned fleet Mac is in. The ID decides, so the
+	// Claude arm does NOT get routed through OpenRouter just because its key is there.
+	const { model, client } = withEnv(
+		{ AGENT_MODEL: "claude-fable-5", ANTHROPIC_API_KEY: "sk-ant-test", OPENROUTER_API_KEY: "sk-or-test" },
+		() => makeClient(),
+	);
+	assert.equal(model, "claude-fable-5");
+	assert.match(String(client.baseURL), /api\.anthropic\.com/);
+});
+
+test("makeClient__RoutesThroughOpenRouter__When__TheIdIsNamespaced", () => {
+	const { model, client } = withEnv(
+		{ AGENT_MODEL: "openai/gpt-5.6-sol:nitro", ANTHROPIC_API_KEY: "sk-ant-test", OPENROUTER_API_KEY: "sk-or-test" },
+		() => makeClient(),
+	);
+	assert.equal(model, "openai/gpt-5.6-sol:nitro");
+	assert.match(String(client.baseURL), /openrouter\.ai/);
+});
+
+test("makeClient__DefaultsToFableDirect__When__AnAnthropicKeyExists", () => {
+	const { model, client } = withEnv({ AGENT_MODEL: undefined, ANTHROPIC_API_KEY: "sk-ant-test", OPENROUTER_API_KEY: "sk-or-test" }, () => makeClient());
+	assert.equal(model, "claude-fable-5");
+	assert.match(String(client.baseURL), /api\.anthropic\.com/);
+});
+
+test("makeClient__Refuses__When__TheAskedModelHasNoKeyForItsTransport", () => {
+	// Naming the missing key beats a 401 from a provider the operator did not think they were
+	// using — the failure that the key-presence rule produced silently.
+	assert.throws(
+		() => withEnv({ AGENT_MODEL: "claude-fable-5", ANTHROPIC_API_KEY: undefined, OPENROUTER_API_KEY: "sk-or-test" }, () => makeClient()),
+		/needs ANTHROPIC_API_KEY/,
+	);
+	assert.throws(
+		() => withEnv({ AGENT_MODEL: "openai/gpt-5.6-sol", ANTHROPIC_API_KEY: "sk-ant-test", OPENROUTER_API_KEY: undefined }, () => makeClient()),
+		/needs OPENROUTER_API_KEY/,
+	);
 });
