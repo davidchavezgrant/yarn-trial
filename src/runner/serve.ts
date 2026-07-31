@@ -560,9 +560,12 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 				port: LIVEVIEW_PORT,
 			};
 
+		// Under the profile lock like every other swap call site: liveview, like signin, checks
+		// the lease without taking it, so the lock is the only thing keeping a concurrent
+		// submit/signin from interleaving two sets of directory moves — see withProfileLock.
 		let swap: ProfileSwap;
 		try {
-			swap = await swapProfileFor(app, operator);
+			swap = await withProfileLock(() => swapProfileFor(app, operator));
 		} catch (e) {
 			return { ok: false, error: `could not give ${operator} their own data in ${app}: ${(e as Error).message}` };
 		}
