@@ -261,16 +261,14 @@ export async function main(): Promise<void> {
 				// cdp→ax fallback, app targets only. The AX path is the actuator of last
 				// resort whenever there is no reachable DOM: native apps never had one, and a
 				// flag-stripped Electron app hid its behind argv sanitization — both land
-				// here as EndpointUnavailableError (electron-attach.ts), the TYPE check being
-				// the repo rule (never regex error prose). Everything else stays fatal: a web
-				// target's cdp failure is about OUR Chrome, and not-installed / port
-				// collisions / wrong-owner endpoints are faults the operator must see.
+				// here as EndpointUnavailableError (electron-attach.ts). The decision lives in
+				// fallbackEligible next to the error class, where its boundary is unit-tested.
 				//
 				// An explicit `--backend cdp` falls back too. Honouring the flag by refusing
 				// would be defensible, but hardened Electron apps are exactly why the ax path
 				// exists — the operator asked for cdp against an app where cdp is impossible,
 				// and the loud line below plus the run log's backendFallback carry the truth.
-				if (target.kind !== "app" || !(err instanceof cdpMod!.EndpointUnavailableError)) throw err;
+				if (!cdpMod!.fallbackEligible(err, target.kind)) throw err;
 				console.error(`\nCDP UNAVAILABLE for "${app}" (${err.reason}): ${err.message}`);
 				console.error(`  -> falling back to the AX backend — this run continues on the cua driver, recorded as backendFallback in the run log\n`);
 				backendFallback = { from: "cdp", reason: err.reason, detail: err.message };

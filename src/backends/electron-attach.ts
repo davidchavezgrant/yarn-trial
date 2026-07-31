@@ -1,6 +1,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
+import type { Target } from "../core/target.js";
 
 /**
  * Electron attach for the CDP backend: resolve an app NAME into a debuggable endpoint,
@@ -59,6 +60,18 @@ export class EndpointUnavailableError extends Error {
 		super(message);
 		this.name = "EndpointUnavailableError";
 	}
+}
+
+/**
+ * The runner's cdp→ax fallback decision, in one place: eligible only for an APP target
+ * failing with the marked error above. A web target's endpoint failure is about OUR
+ * Chrome, not a hardened app, and any other error — not-installed, port collision,
+ * wrong-owner endpoint — is an environment fault the operator must see. The instanceof
+ * IS the contract: a plain Error carrying identical prose stays fatal, because matching
+ * message text is the regex-over-prose pattern this repo has been burned by twice.
+ */
+export function fallbackEligible(err: unknown, targetKind: Target["kind"]): err is EndpointUnavailableError {
+	return targetKind === "app" && err instanceof EndpointUnavailableError;
 }
 
 /** Poll a debugging endpoint until it answers, or give up. */

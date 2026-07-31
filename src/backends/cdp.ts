@@ -9,10 +9,10 @@ import { webTarget } from "../core/target.js";
 import type { ActionRequest } from "../types.js";
 import { endpointAlive, ensureElectronEndpoint, KEEP_RENDERING_FLAGS, type PageCandidate, pickMainPage } from "./electron-attach.js";
 
-// Re-exported so the runner's cdp→ax fallback can instanceof-check it through the lazily
+// Re-exported so the runner's cdp→ax fallback can make its decision through the lazily
 // loaded cdp module (run.ts reaches backends ONLY through its selection-branch imports) —
 // same one-stop-shop posture as ax.ts's re-exports.
-export { EndpointUnavailableError } from "./electron-attach.js";
+export { EndpointUnavailableError, fallbackEligible } from "./electron-attach.js";
 
 /**
  * CDP-direct backend: drives a Chromium target through playwright-core attached over

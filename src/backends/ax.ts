@@ -12,8 +12,8 @@ import type { Target } from "../core/target.js";
  *   free, so this is the only path that needs no debug port.
  * - The fallback for Electron apps whose --remote-debugging-port never comes up: apps that
  *   sanitize their argv strip the flag, leaving the cdp backend nothing to attach to.
- *   The cdp→ax fallback lives in run.ts's acquisition branch, keyed on
- *   EndpointUnavailableError (src/backends/electron-attach.ts).
+ *   The cdp→ax fallback lives in run.ts's acquisition branch; the decision itself is
+ *   fallbackEligible (src/backends/electron-attach.ts), keyed on EndpointUnavailableError.
  *
  * Scope, stated plainly: this class owns ACQUISITION (launch → settle → find the window),
  * OBSERVATION, and the WINDOW STATE that recovery can move. Per-step actuation stays where
@@ -108,20 +108,30 @@ async function activate(app: string, pid: number): Promise<{ applied: boolean; e
 			["-e", `tell application "System Events" to set frontmost of (first process whose unix id is ${pid}) to true`],
 			{ encoding: "utf8", timeout: 5000 },
 		);
-	} catch (err: any) {
-		// osascript puts the useful diagnostic on stderr; err.message is just the echoed
-		// command (the observation.ts staging path learned this the hard way).
-		const stderr = typeof err?.stderr === "string" ? err.stderr.trim() : "";
-		const error = (stderr || (err instanceof Error ? err.message : String(err))).split("\n")[0].slice(0, 200);
-		console.warn(`  activation of "${app}" (pid ${pid}) failed — continuing anyway: ${error}`);
+	} catch (err) {
+		const failure = activationFailure(err);
+		console.warn(`  activation of "${app}" (pid ${pid}) failed — continuing anyway: ${failure.error}`);
 
-		return { applied: false, error };
+		return failure;
 	}
 	// Let AppKit finish the activation (key/main window assignment, menu revalidation)
 	// before the caller's first observation — same settle idiom as the launch pause above.
 	await new Promise((r) => setTimeout(r, 400));
 
 	return { applied: true };
+}
+
+/**
+ * Classify an osascript failure into the run log's activation record. osascript puts the
+ * useful diagnostic on STDERR; err.message is just the echoed command (the observation.ts
+ * staging path learned this the hard way). First line only, capped at 200 chars — the log
+ * field is forensic breadcrumb, not a transcript. Pure, exported for tests.
+ */
+export function activationFailure(err: unknown): { applied: false; error: string } {
+	const stderr = typeof (err as any)?.stderr === "string" ? (err as any).stderr.trim() : "";
+	const error = (stderr || (err instanceof Error ? err.message : String(err))).split("\n")[0].slice(0, 200);
+
+	return { applied: false, error };
 }
 
 // The ax path's model-facing surface, re-exported so this module is the one-stop shop —

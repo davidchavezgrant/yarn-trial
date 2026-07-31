@@ -91,7 +91,7 @@ capability the driver has but doesn't expose. For a greenfield build:
 | Web apps (majority of customer targets) | **CDP direct** — playwright-core attaching to a Chrome you launch yourself with `--remote-debugging-port` and a persistent profile | Mature, hireable, no consent gate on your own profiles, no shared daemon, sign-ins persist in the profile |
 | Electron apps | **CDP direct** — Electron passes Chromium switches through (verified: `open -a App --args --remote-debugging-port=9222` works) | Same. AX fallback for apps that strip the flag |
 | Native-chrome bits (menus, dialogs, file pickers, OS shortcuts) | Thin Swift sidecar (AX + CGEvent primitives — all probe-verified from unsigned Swift) | CDP's Input domain reaches the renderer only; anything the OS handles never fires |
-| Native Mac apps | cua's actual moat — **but out of scope** (David, 2026-07-30) | Our one native failure (Hex Fiend) was an activation-policy issue: cua's foreground delivery fronts the app at window-server level for <1ms, which never makes it key/main in the NSApp sense, so menu items stay disabled. Calculator worked. If native returns to scope, this is the first problem to solve |
+| Native Mac apps | cua's actual moat — was out of scope (David, 2026-07-30); the blocking fix is now **built but not live-validated** | Our one native failure (Hex Fiend) was an activation-policy issue: cua's foreground delivery fronts the app at window-server level for <1ms, which never makes it key/main in the NSApp sense, so menu items stay disabled. Calculator worked. The fix is implemented in `AxBackend.acquire` (src/backends/ax.ts): ONE genuine AppKit activation at run start (System Events `set frontmost` by pid — sticky per the TextEdit probe), outcome logged as `activation`. Typecheck+unit verified; no Hex Fiend re-run yet, so don't declare native working until one passes |
 
 ### What CDP-direct deletes, by construction (`src/backends/cdp.ts`, ~630 lines, read the header)
 
@@ -184,6 +184,18 @@ it, there isn't one — pick `cdp` (port open) or `ax` (port closed).
 
 ### AX-path actuation facts (needed if you keep any AX driving at all)
 
+- **AX is the actuator of last resort whenever there is no reachable DOM** — and the runner
+  now applies that rule automatically: native apps get it as the primary, and an app target
+  whose debug port never comes up (argv-sanitizing hardened Electron, or already running
+  without the flag) falls back cdp→ax mid-acquisition, loudly. The decision is
+  `fallbackEligible()` keyed on `EndpointUnavailableError` (src/backends/electron-attach.ts)
+  — a TYPE check, because regex-over-error-prose broke twice — and the run log records
+  `backend` (what actually drove) + `backendFallback: {from, reason, detail}`.
+- **The activation-policy fix is implemented in AxBackend** (src/backends/ax.ts): acquire
+  ends with ONE genuine AppKit activation — System Events `set frontmost` by pid, non-fatal
+  on refusal, sticky per the TextEdit probe (menu items stay enabled after backgrounding) —
+  logged as `activation` in the run log. Typecheck+unit verified; NOT yet validated against
+  a live native app (no Hex Fiend re-run).
 - **Warnings lie in both directions.** "Element does not advertise AXPress" clicks
   usually work; clicks that report success sometimes silently no-op. Only the next
   observation tells the truth — this is the core argument for verify-per-action. A
