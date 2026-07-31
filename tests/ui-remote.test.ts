@@ -6,6 +6,7 @@ import { test } from "node:test";
 import type { DispatchOptions, DispatchResult, FollowOptions, FollowResult, PullResult, StopResult } from "../src/remote/control/dispatch.js";
 import type { FleetRow } from "../src/remote/control/fleet.js";
 import { HOSTS_SCHEMA, type Inventory } from "../src/remote/control/hosts.js";
+import type { SessionWipeReport } from "../src/remote/control/session-wipe.js";
 import { setModelKey } from "../src/remote/control/team.js";
 import { host } from "./fixtures.js";
 import {
@@ -27,6 +28,8 @@ import {
 	RemoteRunController,
 	recordRemoteRun,
 	saveModelKey,
+	sessionWipePreviewView,
+	sessionWipeView,
 	silenceNote,
 	submitDetached,
 	writeRemotePrefs,
@@ -1141,6 +1144,127 @@ test("clearAuthView__RelaysTheRefusal__When__TheHostIsBusy", async () => {
 
 	assert.equal(view.ok, false);
 	assert.match(view.message, /mac1: sam is running Yarn/);
+});
+
+/**
+ * The session wipe's two legs. The wipe itself and the lease probe are injected — the real
+ * ones close every GUI app on a colo Mac and delete every operator's sessions, which is not
+ * a thing a test suite gets to do even once.
+ */
+
+const IDLE = async () => [];
+
+function wipeReport(over: Partial<SessionWipeReport> = {}): SessionWipeReport {
+	return {
+		host: "mac1",
+		go: true,
+		apps: ["Google Chrome", "Yarn"],
+		processes: 7,
+		cdpProfiles: { root: "/x/out/chrome-profile", profiles: ["yarn-runner"], removed: true },
+		operatorStore: { root: "/x/profiles", operators: ["alice", "bob"], removed: true },
+		appData: [{ app: "Yarn", paths: 4, removed: 4 }],
+		chrome: { host: "mac1", profiles: [], go: true, removed: ["Default"] },
+		...over,
+	};
+}
+
+test("sessionWipeViews__Refuse__When__TheSelectorNamesNoMachine", async () => {
+	const noCall = (async () => {
+		throw new Error("must not reach the fleet");
+	}) as never;
+
+	assert.equal((await sessionWipePreviewView("local", () => FLEET, noCall, noCall)).ok, false);
+	assert.equal((await sessionWipePreviewView("auto", () => FLEET, noCall, noCall)).ok, false);
+	assert.equal((await sessionWipeView("local", () => FLEET, noCall, noCall)).ok, false);
+	assert.equal((await sessionWipeView("auto", () => FLEET, noCall, noCall)).ok, false);
+});
+
+test("sessionWipeViews__RefuseAndNameTheHolder__When__TheHostIsBusy", async () => {
+	let wiped = 0;
+	const wipe = (async () => {
+		wiped++;
+
+		return wipeReport();
+	}) as never;
+	const busy = async () => [{ name: "mac1", reachable: true, state: "busy" as const, app: "Yarn", queue: [{ jobId: "j1" }] }];
+
+	for (const view of [await sessionWipePreviewView("mac1", () => FLEET, wipe, busy), await sessionWipeView("mac1", () => FLEET, wipe, busy)]) {
+		assert.equal(view.ok, false);
+		assert.match(view.message, /mac1 is busy \(Yarn\), 1 queued/);
+	}
+	// Refused means refused: the wipe must not have been attempted on either leg.
+	assert.equal(wiped, 0);
+});
+
+test("sessionWipePreviewView__ShowsTheInventoryWithoutGo__When__TheHostIsIdle", async () => {
+	let goSeen: boolean | undefined;
+	const view = await sessionWipePreviewView(
+		"mac1",
+		() => FLEET,
+		async (_h, go) => {
+			goSeen = go;
+
+			return wipeReport({ go: false });
+		},
+		IDLE,
+	);
+
+	assert.equal(goSeen, false);
+	assert.equal(view.ok, true);
+	// The dialog body must name what dies — the real inventory, not a generic warning.
+	assert.match(view.message, /Google Chrome, Yarn/);
+	assert.match(view.message, /alice, bob/);
+	assert.match(view.message, /cannot be undone/);
+});
+
+test("sessionWipeView__PassesGoAndSummarises__When__TheWipeSucceeds", async () => {
+	let goSeen: boolean | undefined;
+	const view = await sessionWipeView(
+		"mac1",
+		() => FLEET,
+		async (_h, go) => {
+			goSeen = go;
+
+			return wipeReport();
+		},
+		IDLE,
+	);
+
+	assert.equal(goSeen, true);
+	assert.equal(view.ok, true);
+	assert.match(view.message, /Wiped mac1: closed 2 app\(s\)/);
+	assert.match(view.message, /1 Chrome profile\(s\)/);
+	assert.match(view.message, /parked profiles of 2 operator\(s\)/);
+});
+
+test("sessionWipeView__ReportsRefusal__When__SomethingSurvivedSigkill", async () => {
+	const view = await sessionWipeView("mac1", () => FLEET, async () => wipeReport({ refused: "still running after SIGKILL: Yarn" }), IDLE);
+
+	assert.equal(view.ok, false);
+	assert.match(view.message, /nothing was deleted/);
+});
+
+test("sessionWipeView__SaysWhatTCCKept__When__SomePathsWereDenied", async () => {
+	const view = await sessionWipeView(
+		"mac1",
+		() => FLEET,
+		async () =>
+			wipeReport({
+				appData: [{ app: "Safari", paths: 3, removed: 1, denied: ["a: EPERM", "b: EPERM"] }],
+			}),
+		IDLE,
+	);
+
+	assert.equal(view.ok, true);
+	// A partial wipe must not read as a full one.
+	assert.match(view.message, /2 path\(s\) were refused by macOS/);
+});
+
+test("sessionWipeView__FailsTheVerdict__When__TheChromeWipeErrored", async () => {
+	const view = await sessionWipeView("mac1", () => FLEET, async () => wipeReport({ chrome: { host: "mac1", error: "no python3" } }), IDLE);
+
+	assert.equal(view.ok, false);
+	assert.match(view.message, /Chrome wipe failed/);
 });
 
 test("deleteAppView__NamesTheBundleAndProfiles__When__TheRunnerDeletes", async () => {

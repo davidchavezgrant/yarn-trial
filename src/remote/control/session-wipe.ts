@@ -4,7 +4,7 @@ import { resourcesRoot } from "../../paths.js";
 import { HOSTS_SCHEMA, loadHosts, resolveHost, type HostEntry } from "./hosts.js";
 import { encodeSpec, lastFrame, remoteDataRoot, runRsync, runSsh, rsyncShell, type RsyncRunner, type SshRunner } from "./ssh.js";
 import { wipeHost, type WipeReport } from "./browser-wipe.js";
-import { fleetStatus } from "./fleet.js";
+import { fleetStatus, type FleetRow } from "./fleet.js";
 
 /**
  * `./run session-wipe [<mac>|all] [--go] [--force]` — clear ALL session state on the fleet Macs.
@@ -286,7 +286,19 @@ export async function sessionWipeHost(host: HostEntry, go: boolean, deps: Sessio
 	return { ...frame, host: host.name, chrome };
 }
 
-function describe(r: SessionWipeReport): string {
+/**
+ * Hosts a wipe must not touch right now: a live lease or a queued job means killing every
+ * GUI app destroys someone's run. Shared by the CLI below and the shell's fleet-panel
+ * button, so the two entrances cannot drift on what "busy" means.
+ */
+export async function busyHosts(hosts: HostEntry[], status: typeof fleetStatus = fleetStatus): Promise<FleetRow[]> {
+	const rows = await status({ inventory: { schema: HOSTS_SCHEMA, hosts } });
+
+	return rows.filter((r) => r.state === "busy" || (r.queue?.length ?? 0) > 0);
+}
+
+/** The preview/result text, one line per store — shared by the CLI and the shell's confirm dialog. */
+export function describeSessionWipe(r: SessionWipeReport): string {
 	const lines = [`${r.host}:`];
 	const verb = r.go ? "closed" : "would close";
 	lines.push(`    ${verb} ${r.apps.length} GUI app(s)${r.apps.length ? `: ${r.apps.join(", ")}` : ""} (${r.processes} process(es))`);
@@ -326,8 +338,7 @@ async function main(): Promise<void> {
 
 	// A live lease or a queued job means someone's run dies with the apps. Refused, not raced:
 	// the durable queue would drain the next job into a box this is mid-wipe on.
-	const rows = await fleetStatus({ inventory: { schema: HOSTS_SCHEMA, hosts } });
-	const busy = rows.filter((r) => r.state === "busy" || (r.queue?.length ?? 0) > 0);
+	const busy = await busyHosts(hosts);
 	if (busy.length && !force) {
 		for (const b of busy) console.error(`${b.name}: busy${b.app ? ` (${b.app})` : ""}${b.queue?.length ? `, ${b.queue.length} queued` : ""} — a wipe would kill the run. Pass --force to do it anyway.`);
 		process.exit(1);
@@ -342,7 +353,7 @@ async function main(): Promise<void> {
 			failed = true;
 			continue;
 		}
-		console.log(describe(r));
+		console.log(describeSessionWipe(r));
 		if (r.refused || (r.chrome && ("error" in r.chrome || r.chrome.refused))) failed = true;
 	}
 

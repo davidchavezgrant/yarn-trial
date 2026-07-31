@@ -24,6 +24,8 @@ import {
 	isRemoteHost,
 	readRemotePrefs,
 	RemoteRunController,
+	sessionWipePreviewView,
+	sessionWipeView,
 	submitDetached,
 	saveModelKey,
 	writeRemotePrefs,
@@ -268,6 +270,8 @@ window.__bus = {
   // Fleet-panel overflow actions. All answer {ok, message} for the same transient slot.
   authClear: (host, app) => ipcRenderer.invoke('auth:clear', { host, app }),
   appDelete: (host, app) => ipcRenderer.invoke('app:delete', { host, app }),
+  sessionWipePreview: (host) => ipcRenderer.invoke('session:wipe:preview', { host }),
+  sessionWipe: (host) => ipcRenderer.invoke('session:wipe', { host }),
   cancelQueued: (host, jobId) => ipcRenderer.invoke('queue:cancel', { host, jobId }),
   appInstall: (host, app, url) => ipcRenderer.invoke('app:install', { host, app, url }),
   loadCreds: () => ipcRenderer.invoke('creds'),
@@ -817,6 +821,14 @@ ipcMain.handle("auth:clear", (_event, { host, app }: { host: string; app?: strin
 ipcMain.handle("app:delete", (_event, { host, app }: { host: string; app?: string }) =>
 	deleteAppView(String(host ?? ""), typeof app === "string" ? app : undefined),
 );
+
+// The session wipe's two legs. Preview is an ssh round trip that inventories the Mac and
+// changes nothing; the renderer shows its text in the confirm() dialog, and only that
+// dialog's OK invokes the second leg — the CLI's preview-then---go gate as UI. Both legs
+// re-check the lease themselves, so a stale panel row cannot wipe a box mid-run.
+ipcMain.handle("session:wipe:preview", (_event, { host }: { host: string }) => sessionWipePreviewView(String(host ?? "")));
+
+ipcMain.handle("session:wipe", (_event, { host }: { host: string }) => sessionWipeView(String(host ?? "")));
 
 // Cancel a job waiting in a host's queue. Not destructive — the job never started — which is
 // why it is the one fleet verb without a confirm() in front of it on the renderer side.

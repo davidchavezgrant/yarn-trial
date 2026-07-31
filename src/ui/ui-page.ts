@@ -1097,6 +1097,9 @@ function renderFleet() {
               '</div>'
             : (r.state !== 'busy' && !installForm ? '<button class="mini" data-fact="install" data-mac="' + esc(r.name) + '">Install…</button>' : '')) +
           (r.state !== 'busy' && appTarget ? '<button class="mini" data-fact="delete" data-mac="' + esc(r.name) + '">Delete ' + esc(appTarget) + '…</button>' : '') +
+          // Host-scoped, not app-scoped: the wipe signs EVERYONE out of EVERYTHING on that
+          // Mac, so it needs no selected app and renders whenever the host is not mid-run.
+          (r.state !== 'busy' ? '<button class="mini" data-fact="wipe" data-mac="' + esc(r.name) + '">Wipe sessions…</button>' : '') +
         '</div>') +
       (r.detail ? '<div class="fdetail">' + esc(r.detail) + '</div>' : '') +
       // The line behind the current run, one row per waiting job. Cancel is per-row and NOT
@@ -1554,6 +1557,21 @@ el('fleet').addEventListener('click', async (e) => {
     if (!name || !url) return say(false, '✗ the install needs both an app name and a download URL');
     installForm = null;
     return ask('installing ' + name + ' on ' + mac + ' — the download happens over there and can take minutes…', () => bus.appInstall(mac, name, url));
+  }
+  // The session wipe is host-scoped (no app target) and double-gated, mirroring the CLI's
+  // preview-then---go: the first leg inventories the Mac over ssh and changes NOTHING, the
+  // confirm() shows the real inventory it returned — which apps die, whose sessions go —
+  // and only that dialog's OK fires the wipe. Both legs re-check the lease on the far side,
+  // so a row gone stale since the last probe cannot wipe a box mid-run.
+  if (act === 'wipe') {
+    signinBusy = mac;
+    say(true, 'inventorying ' + mac + ' for a session wipe…', true);
+    let p;
+    try { p = await bus.sessionWipePreview(mac); } catch (err) { p = { ok: false, message: errText(err) }; }
+    signinBusy = null;
+    if (!p.ok) { say(false, '✗ ' + p.message); line('✗ ' + p.message, null); return; }
+    if (!confirm(p.message)) return say(true, '· session wipe of ' + mac + ' cancelled — nothing was touched');
+    return ask('wiping all session state on ' + mac + ' — closing every app over there, this can take a minute…', () => bus.sessionWipe(mac));
   }
   // The two destructive verbs need a MAC APP target; the buttons only render with one, and
   // this guard is the backstop for a stale row.

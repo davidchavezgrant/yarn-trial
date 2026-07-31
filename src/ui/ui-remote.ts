@@ -25,6 +25,7 @@ import { autoSync, type SyncOptions } from "../remote/control/appmaps.js";
 import { checkinAfterRun } from "../remote/control/creds.js";
 import { installApp, resolveAppSource } from "../remote/control/install.js";
 import { clearAppAuth, deleteRemoteApp } from "../remote/control/manage.js";
+import { busyHosts, describeSessionWipe, sessionWipeHost } from "../remote/control/session-wipe.js";
 import { closeScreenShare, forgetScreenShareLogin, planSignin, waitForHome } from "../remote/control/signin.js";
 import { describeCredentials, setModelKey } from "../remote/control/team.js";
 import type { JobKind } from "../remote/runner/jobs.js";
@@ -518,6 +519,117 @@ export async function deleteAppView(
 	const profiles = res.removedProfiles.length ? ` and ${res.removedProfiles.length} parked profile(s)` : "";
 
 	return { ok: true, message: `Deleted ${res.bundle ?? `${target}.app`}${profiles} on ${host.name}.` };
+}
+
+/**
+ * The session wipe's PREVIEW leg: `./run session-wipe <mac>` without `--go`, for the panel.
+ *
+ * The two legs are separate view functions rather than one with a flag because the renderer
+ * puts a confirm() between them, and the text inside that dialog must be the REAL inventory
+ * off the Mac — which apps die, whose sessions go — not a generic "are you sure". The CLI's
+ * preview-then-`--go` gate, reproduced as dialog-then-verb.
+ *
+ * Busy is checked here as well as at execution: the fleet row the button rendered from can
+ * be a poll interval stale, and `sessionWipeHost` itself deliberately does not know about
+ * leases (a wipe over plain ssh must work when the runner is dead).
+ */
+export async function sessionWipePreviewView(
+	hostName: string,
+	load: () => Inventory = loadHosts,
+	wipe: typeof sessionWipeHost = sessionWipeHost,
+	busy: typeof busyHosts = busyHosts,
+): Promise<ActionView> {
+	const host = namedHost(hostName, load);
+	if ("ok" in host) return host;
+
+	const holder = await refuseBusy(host, busy);
+	if (holder) return holder;
+
+	let r;
+	try {
+		r = await wipe(host, false);
+	} catch (e) {
+		return { ok: false, message: (e as Error).message };
+	}
+	if ("error" in r) return { ok: false, message: `${host.name}: ${r.error}` };
+
+	return {
+		ok: true,
+		message:
+			`${describeSessionWipe(r)}\n\n` +
+			`This closes every GUI app on ${host.name} (SIGTERM, then SIGKILL) and signs EVERYONE out of ` +
+			`everything — all operators, all apps, all browser profiles. The runner itself survives. ` +
+			`It cannot be undone.`,
+	};
+}
+
+/** The session wipe's EXECUTE leg — only ever called after the preview's dialog was answered. */
+export async function sessionWipeView(
+	hostName: string,
+	load: () => Inventory = loadHosts,
+	wipe: typeof sessionWipeHost = sessionWipeHost,
+	busy: typeof busyHosts = busyHosts,
+): Promise<ActionView> {
+	const host = namedHost(hostName, load);
+	if ("ok" in host) return host;
+
+	// Re-checked, not trusted from the preview: the queue can drain a job onto this box in
+	// the seconds the operator spent reading the dialog.
+	const holder = await refuseBusy(host, busy);
+	if (holder) return holder;
+
+	let r;
+	try {
+		r = await wipe(host, true);
+	} catch (e) {
+		return { ok: false, message: (e as Error).message };
+	}
+	if ("error" in r) return { ok: false, message: `${host.name}: ${r.error}` };
+	if (r.refused) return { ok: false, message: `${host.name}: ${r.refused} — nothing was deleted.` };
+
+	const chrome = r.chrome && !("error" in r.chrome) ? r.chrome : undefined;
+	const chromeBit = !r.chrome
+		? ""
+		: "error" in r.chrome
+			? `Chrome wipe failed (${r.chrome.error})`
+			: r.chrome.refused
+				? `Chrome profiles refused (${r.chrome.refused})`
+				: `${(chrome?.removed ?? []).length} Chrome profile(s)`;
+	// TCC denies a few Containers over ssh; said out loud, or a partial wipe reads as a full one.
+	const denied =
+		(r.cdpProfiles?.denied?.length ?? 0) +
+		(r.operatorStore?.denied?.length ?? 0) +
+		(r.appData ?? []).reduce((n, a) => n + (a.denied?.length ?? 0), 0);
+	const bits = [
+		`closed ${r.apps.length} app(s)`,
+		chromeBit,
+		r.cdpProfiles?.removed ? `${r.cdpProfiles.profiles?.length ?? 0} web-login profile(s)` : "",
+		r.operatorStore?.removed ? `parked profiles of ${r.operatorStore.operators.length} operator(s)` : "",
+		r.appData?.length ? `live data of ${r.appData.length} app(s)` : "",
+	].filter(Boolean);
+	const failed = !!r.chrome && ("error" in r.chrome || !!r.chrome.refused);
+
+	return {
+		ok: !failed,
+		message: `Wiped ${host.name}: ${bits.join(", ")}.${denied ? ` ${denied} path(s) were refused by macOS (TCC) and remain.` : ""}`,
+	};
+}
+
+/** The one sentence both wipe legs answer a busy host with, or undefined to proceed. */
+async function refuseBusy(host: HostEntry, busy: typeof busyHosts): Promise<ActionView | undefined> {
+	let holders: FleetRow[];
+	try {
+		holders = await busy([host]);
+	} catch (e) {
+		return { ok: false, message: (e as Error).message };
+	}
+	if (!holders.length) return undefined;
+	const b = holders[0];
+
+	return {
+		ok: false,
+		message: `${host.name} is busy${b.app ? ` (${b.app})` : ""}${b.queue?.length ? `, ${b.queue.length} queued` : ""} — a wipe would kill the run.`,
+	};
 }
 
 /**
