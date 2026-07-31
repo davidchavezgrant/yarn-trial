@@ -663,15 +663,25 @@ test("writeRemotePrefs__RoundTripsTheHost__When__SelectorChanges", () => {
 	});
 });
 
+/**
+ * Redirect the OPERATOR's runner dir — `YARN_RUNNER_HOME`, not `YARN_RUNNER_DIR`.
+ *
+ * These are two directories on two machines that happen to share a default: `runnerHome()`
+ * is this laptop's (identity, known_hosts, the saved model key), `defaultRunnerDir()` is the
+ * colo Mac's, relocated by the LaunchAgent. team.ts is operator-side throughout, so this must
+ * set the operator's variable. It set the runner's for a while and passed anyway — on the
+ * shared default — which is exactly the confusion that let team.ts write its credentials
+ * bundle and its env file through two different accessors.
+ */
 function inTempRunnerDir(fn: (dir: string) => void): void {
-	const prev = process.env.YARN_RUNNER_DIR;
+	const prev = process.env.YARN_RUNNER_HOME;
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ui-remote-runner-"));
 	try {
-		process.env.YARN_RUNNER_DIR = dir;
+		process.env.YARN_RUNNER_HOME = dir;
 		fn(dir);
 	} finally {
-		if (prev === undefined) delete process.env.YARN_RUNNER_DIR;
-		else process.env.YARN_RUNNER_DIR = prev;
+		if (prev === undefined) delete process.env.YARN_RUNNER_HOME;
+		else process.env.YARN_RUNNER_HOME = prev;
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
 }

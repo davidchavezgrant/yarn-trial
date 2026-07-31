@@ -2,12 +2,20 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { resourcesRoot } from "../../paths.js";
-import { defaultRunnerDir } from "../runner/lease.js";
 import { type HostEntry, loadHosts } from "./hosts.js";
 import { identityFile, runnerHome } from "./ssh.js";
 
 /**
  * Zero-step fleet access for everyone after the first person.
+ *
+ * EVERY PATH HERE IS THE OPERATOR'S OWN LAPTOP, so every one of them goes through
+ * `runnerHome()`. There are two accessors for `~/.yarn-runner` and they are NOT
+ * interchangeable: `runnerHome()` (ssh.ts, `YARN_RUNNER_HOME`) is this machine's — the
+ * identity, known_hosts, the control sockets — while `defaultRunnerDir()` (runner/lease.ts,
+ * `YARN_RUNNER_DIR`) is the COLO MAC's, and the LaunchAgent relocates it with that variable.
+ * They share a default, which is why using the wrong one works until someone sets one env
+ * var: this file wrote the credentials bundle under `runnerHome()` and the env file under
+ * `defaultRunnerDir()`, so setting either alone split them across two directories.
  *
  * `enroll` cannot be run by a teammate: installing a public key requires already being able
  * to log in, and the only credential that proves that is the Macs' admin password. Handing
@@ -233,7 +241,7 @@ export function applyCredentials(creds: TeamCredentials, opts: ApplyOptions = {}
 function applyModelKey(key: string | undefined): ApplyResult["modelKey"] {
 	if (!key) return "absent";
 
-	const file = path.join(defaultRunnerDir(), "env");
+	const file = path.join(runnerHome(), "env");
 	fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
 	const existing = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
 	if (/^\s*(export\s+)?OPENROUTER_API_KEY\s*=/m.test(existing)) return "kept";
@@ -307,7 +315,7 @@ export function checkModelKey(key: string): string {
 export function setModelKey(key: string): void {
 	const value = checkModelKey(key);
 
-	const file = path.join(defaultRunnerDir(), "env");
+	const file = path.join(runnerHome(), "env");
 	fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
 	const existing = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
 	const kept = existing
@@ -360,7 +368,7 @@ export function exportCredentials(target: string, openrouterKey?: string, vncPas
  */
 export function describeCredentials(): { present: boolean; fingerprint?: string; path: string; modelKey: boolean; modelKeySource?: "saved" | "environment" } {
 	const key = identityFile();
-	const envFile = path.join(defaultRunnerDir(), "env");
+	const envFile = path.join(runnerHome(), "env");
 	const saved = fs.existsSync(envFile) && /^\s*(export\s+)?(OPENROUTER|ANTHROPIC)_API_KEY\s*=\s*\S/m.test(fs.readFileSync(envFile, "utf8"));
 	// The saved file is not the only way a run gets a key: local runs inherit this process's
 	// environment (a team bundle, a shell export, ../yarn/.env sourced at launch). Reporting
