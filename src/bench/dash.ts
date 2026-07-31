@@ -42,6 +42,8 @@ export interface FleetView {
 export interface EntryView {
 	jobId: string;
 	host: string;
+	/** When the manifest accepted the submission — the timeline fallback for jobs not yet started. */
+	submittedAt: string;
 	collected: boolean;
 	/**
 	 * running/queued come from the live fleet (authoritative while the poll is fresh);
@@ -155,6 +157,7 @@ function entryView(e: ManifestEntry, fleet: FleetView): EntryView {
 		return {
 			jobId: e.jobId,
 			host: e.host,
+			submittedAt: e.submittedAt,
 			collected: true,
 			status: m?.success === true ? "succeeded" : (m?.failureKind ?? (m?.success === false ? "failed" : "collected")),
 			...(m?.success !== undefined ? { success: m.success } : {}),
@@ -175,7 +178,7 @@ function entryView(e: ManifestEntry, fleet: FleetView): EntryView {
 		};
 	}
 
-	return { jobId: e.jobId, host: e.host, collected: false, ...liveFor(e, fleet) };
+	return { jobId: e.jobId, host: e.host, submittedAt: e.submittedAt, collected: false, ...liveFor(e, fleet) };
 }
 
 function passView(arm: Arm, model: string | undefined, entries: ManifestEntry[], fleet: FleetView): PassView {

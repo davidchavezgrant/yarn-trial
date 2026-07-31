@@ -338,7 +338,7 @@ const TASK_HEAD = "<tr>" + th("arm", "hover a row's arm for the decision it info
 	th("runs", "one chip per run — hover for the job id") + "</tr>";
 const EXPLORE_HEAD = "<tr>" + th("arm", "hover a row's arm for the decision it informs") + th("flags") +
 	th("done", "collected / planned passes") + th("actions", "actions the pass took (elapsed on hover)") +
-	th("controls", "actuated / dismissed / seen") + th("surfaces") +
+	th("controls act / dism / seen", "of every control the pass observed (seen), how many it operated (actuated) vs swept off the frontier without operating (dismissed) — the pass ends when the frontier empties, and dismissing is a legitimate way to empty it") + th("surfaces") +
 	th("nodes", "appmap graph nodes (edges on hover)") + th("ambig", "dual-scope settings the graph flags") +
 	th("runs", "one chip per pass — hover for the job id") + "</tr>";
 
@@ -372,6 +372,27 @@ function exploreRow(a, p) {
 		<td>${p.entries.map(statusChip).join("")}</td></tr>`;
 }
 
+// The board reads as a drain timeline: within each section, rows whose runs FINISHED come
+// first in finish order, rows still in flight follow in start order — so the newest start
+// sits at the bottom and the next collect lands where the eye already is.
+function entryTime(e) {
+	if (e.collected) return Date.parse(e.endedAt || e.submittedAt) || 0;
+	if (e.status === "running" && e.elapsedSec != null) return receivedAt - e.elapsedSec * 1000;
+	return Date.parse(e.submittedAt) || Infinity;
+}
+
+function rowKey(p) {
+	const done = p.entries.filter((e) => e.collected);
+	// [group, time]: finished rows (group 0) by first finish, the rest (group 1) by first start.
+	return done.length ? [0, Math.min(...done.map(entryTime))] : [1, Math.min(...p.entries.map(entryTime))];
+}
+
+function timelineRows(arms) {
+	return arms
+		.flatMap((a) => a.passes.map((p) => ({ a, p, k: rowKey(p) })))
+		.sort((x, y) => x.k[0] - y.k[0] || x.k[1] - y.k[1]);
+}
+
 function renderBoard() {
 	const phases = [...new Set(state.arms.map((a) => a.phase))].sort();
 	let html = "<table>";
@@ -381,11 +402,11 @@ function renderBoard() {
 		html += `<tr class="phase-h"><td colspan="9">phase ${ph}</td></tr>`;
 		const explores = arms.filter((a) => a.kind === "explore");
 		const tasks = arms.filter((a) => a.kind !== "explore");
-		if (explores.length) html += EXPLORE_HEAD + explores.flatMap((a) => a.passes.map((p) => exploreRow(a, p))).join("");
-		if (tasks.length) html += TASK_HEAD + tasks.flatMap((a) => a.passes.map((p) => taskRow(a, p))).join("");
+		if (explores.length) html += EXPLORE_HEAD + timelineRows(explores).map(({ a, p }) => exploreRow(a, p)).join("");
+		if (tasks.length) html += TASK_HEAD + timelineRows(tasks).map(({ a, p }) => taskRow(a, p)).join("");
 	}
 	$("board").innerHTML = html + "</table>";
-	$("board-sub").textContent = `${state.progress.submitted} submitted of ${state.progress.planned} planned runs · ${state.progress.collected} collected · hover headers and chips for definitions`;
+	$("board-sub").textContent = `${state.progress.submitted} submitted of ${state.progress.planned} planned runs · ${state.progress.collected} collected · finished first (in finish order), in-flight below (newest start last) · hover headers and chips for definitions`;
 }
 
 function renderExplore() {
