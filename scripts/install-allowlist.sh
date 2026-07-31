@@ -38,10 +38,7 @@ print(m[0]['ssh']['user']+'@'+m[0]['ssh']['host'])
 # The XML fragment is generated from AUTO_LAUNCH_PROTOCOLS so this script and the grader can
 # never disagree about what SHOULD be there — the drift that makes a host report itself clean
 # while the dialog is still armed.
-xml=$(npx tsx -e "
-import { autoLaunchProtocolsPlist } from './src/remote/chrome-policy.js';
-process.stdout.write(autoLaunchProtocolsPlist() ?? '');
-")
+xml=$(npx tsx scripts/print-allowlist.ts)
 [[ -n $xml ]] || { echo "AUTO_LAUNCH_PROTOCOLS is empty — nothing to install"; exit 1; }
 
 echo "Installing the external-protocol allowlist on $host ($addr)."
