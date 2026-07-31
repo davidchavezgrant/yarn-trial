@@ -1,12 +1,13 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import { chromium, type Browser, type Page } from "playwright-core";
+import { chromium, type Browser, type Locator, type Page } from "playwright-core";
 import { envNum } from "../env.js";
 import { MAX_WAIT_MS, OUT, type ObservationBundle } from "../core/harness.js";
 import type { Target } from "../core/target.js";
 import { webTarget } from "../core/target.js";
 import type { ActionRequest } from "../types.js";
+import { endpointAlive, ensureElectronEndpoint, type PageCandidate, pickMainPage } from "./electron-attach.js";
 
 /**
  * CDP-direct backend: drives a Chromium target through playwright-core attached over
@@ -226,22 +227,62 @@ export function originMatches(pageUrl: string, origin: string): boolean {
 	}
 }
 
-/** Poll a debugging endpoint until it answers, or give up. */
-async function endpointAlive(url: string, attempts: number, delayMs: number): Promise<boolean> {
-	for (let i = 0; i < attempts; i++) {
-		try {
-			const r = await fetch(`${url}/json/version`);
-			if (r.ok) return true;
-		} catch {}
-		await new Promise((r) => setTimeout(r, delayMs));
-	}
+/**
+ * Demo-mode pointer pacing. The dwell sits between the move and the press so a :hover
+ * transition has real wall-clock to render before the click's effect replaces it —
+ * 150–250ms per the plan; long enough for a CSS transition, short enough not to read as
+ * hesitation. The press delay holds the button down like a finger, not a zero-width tap.
+ */
+const DEMO_DWELL_MS = 200;
+const DEMO_PRESS_MS = 60;
+/** Per-character delay for demo typing — the plate shows text arriving, not appearing. */
+const DEMO_TYPE_DELAY_MS = 70;
 
-	return false;
+/**
+ * The visible half of a demo click, as data: where the pointer goes, how long it hovers,
+ * which button, how many down/up cycles. Pure so tests pin it without a browser. The box
+ * is playwright's boundingBox() shape, in the same CSS pixels as the screenshots — centre
+ * is exact here BY CONSTRUCTION (no capture-scale offset exists on this backend).
+ */
+export interface DemoClickPlan {
+	point: { x: number; y: number };
+	dwellMs: number;
+	/** ms between mousedown and mouseup of each cycle. */
+	pressMs: number;
+	button: "left" | "right";
+	/** mouse.click performs this many down/up cycles with escalating clickCount. */
+	clickCount: 1 | 2;
+}
+
+export function demoClickPlan(
+	box: { x: number; y: number; width: number; height: number },
+	verb: "click" | "right_click" | "double_click",
+): DemoClickPlan {
+	return {
+		point: { x: box.x + box.width / 2, y: box.y + box.height / 2 },
+		dwellMs: DEMO_DWELL_MS,
+		pressMs: DEMO_PRESS_MS,
+		button: verb === "right_click" ? "right" : "left",
+		clickCount: verb === "double_click" ? 2 : 1,
+	};
 }
 
 export class CdpBackend {
 	/** The page URL as of the last observation. Empty until the first observe(). */
 	url = "";
+
+	/** Which CDP target an app attach chose (port, page URL, title). Undefined for web
+	 *  targets. The run log records it, so a run that drove the wrong window says which. */
+	attachInfo?: { port: number; url: string; title: string };
+
+	/**
+	 * Where the last demo pointer action actually went: click point + the box it was
+	 * resolved from, both from the SAME boundingBox call the mouse events used, in the
+	 * same CSS pixels as the frames. Cleared at the start of every act(), so it is only
+	 * ever the CURRENT turn's resolution — the trajectory write reads it in preference to
+	 * re-deriving a point from the (possibly stale) observation box.
+	 */
+	lastActuation?: { point: { x: number; y: number }; box: { x: number; y: number; w: number; h: number } };
 
 	private lastRows: SnapshotRow[] = [];
 
@@ -250,6 +291,8 @@ export class CdpBackend {
 		private page: Page,
 		/** The declared start URL, so goHome() is a navigation rather than a guess. */
 		private home?: string,
+		/** Demo actuation: recorded runs get visible pointer choreography and per-key typing. */
+		private demo = false,
 	) {
 		page.setDefaultTimeout(ACTION_TIMEOUT_MS);
 	}
@@ -261,12 +304,16 @@ export class CdpBackend {
 	 * flag and the persistent profile if not — idempotent across runs, which is exactly
 	 * the signed-in-session model), attach, and land a page on the target URL.
 	 *
-	 * App target (Electron): attach only. The app must already be running with
-	 * `--remote-debugging-port` — how it gets the flag is the operator's business
-	 * (`open -a "App" --args --remote-debugging-port=9222`), and launching someone
-	 * else's app with injected switches is not something to do implicitly.
+	 * App target (Electron): attach when an endpoint is up. When it is not, a target
+	 * marked `cdpAttach` gets the app LAUNCHED with the debug port (see
+	 * src/backends/electron-attach.ts for the posture: launch freely, never touch an
+	 * instance the user started). A plain app target keeps the old contract — the
+	 * operator launches it themselves (`open -a "App" --args --remote-debugging-port=9222`).
+	 *
+	 * `demo: true` (recorded runs) switches actuation to the visible kind: pointer
+	 * move + hover dwell + real down/up for clicks, per-character typing for text.
 	 */
-	static async acquire(target: Target): Promise<CdpBackend> {
+	static async acquire(target: Target, opts: { demo?: boolean } = {}): Promise<CdpBackend> {
 		// An explicit CDP_PORT wins for BOTH kinds — the operator who launched their
 		// Electron app with --remote-debugging-port=9333 means it. Unset (or blank, which
 		// envNum already treats as unset), the kinds keep their separate defaults: 9777 for
@@ -296,6 +343,12 @@ export class CdpBackend {
 				throw new Error(`Chrome did not expose a debugging endpoint at ${endpoint} within 10s`);
 		}
 
+		// Electron attach: when the target asked for it (and no CDP_URL points elsewhere),
+		// bring the endpoint up ourselves — attach to a listening instance, launch the app
+		// with the port when nothing runs, refuse with the fix when it runs portless.
+		if (target.kind === "app" && target.cdpAttach && !process.env.CDP_URL)
+			await ensureElectronEndpoint(target.name, endpoint, port);
+
 		if (!(await endpointAlive(endpoint, 1, 0)))
 			throw new Error(
 				`no CDP endpoint at ${endpoint}. For an Electron app, launch it with the flag first:\n` +
@@ -309,6 +362,7 @@ export class CdpBackend {
 			if (!context) throw new Error(`attached to ${endpoint} but it has no browser context`);
 
 			let page: Page;
+			let attachInfo: CdpBackend["attachInfo"];
 			if (target.kind === "web") {
 				const origin = target.origin;
 				const matching = context.pages().filter((p) => originMatches(p.url(), origin));
@@ -321,19 +375,49 @@ export class CdpBackend {
 					?? (await context.newPage());
 				if (!originMatches(page.url(), origin)) await page.goto(target.url, { waitUntil: "domcontentloaded" });
 			} else {
-				// Electron: one window is one page; take the largest-URL... no — take the first
-				// non-devtools page, which is the app's window.
-				page = context.pages().find((p) => !p.url().startsWith("devtools://")) ?? context.pages()[0];
-				if (!page) throw new Error(`attached to ${endpoint} but found no page`);
+				// Electron: the endpoint exposes every window plus devtools and background
+				// pages. Gather the facts (across ALL contexts — Electron does not promise a
+				// single one) and let the pure, tested chooser decide which is the app.
+				// viewportSize() is null on attached pages, so the size comes from the page
+				// itself; a page that cannot be measured competes with area 0.
+				const pages = browser.contexts().flatMap((c) => c.pages());
+				const candidates: PageCandidate[] = [];
+				for (const p of pages)
+					candidates.push({
+						url: p.url(),
+						title: await p.title().catch(() => ""),
+						viewport:
+							p.viewportSize()
+							?? ((await p.evaluate("({ width: window.innerWidth, height: window.innerHeight })").catch(() => null)) as PageCandidate["viewport"]),
+					});
+				const idx = pickMainPage(candidates, target.name);
+				if (idx < 0)
+					throw new Error(
+						`attached to ${endpoint} but no page looks like an app window — saw: ${candidates.map((c) => c.url || "(blank)").join(", ") || "(no pages)"}`,
+					);
+				page = pages[idx];
+				const attachPort = (() => {
+					try {
+						return Number(new URL(endpoint).port) || port;
+					} catch {
+						return port;
+					}
+				})();
+				attachInfo = { port: attachPort, url: candidates[idx].url, title: candidates[idx].title };
 			}
 
 			// Chrome throttles rendering for backgrounded tabs, and a throttled tab times out
 			// every screenshot — observed on the first run that ATTACHED instead of launching
-			// (the launched-Chrome case worked only because a fresh tab starts frontmost). The
-			// snapshot channel is unaffected either way; this is for the pixel channel.
-			await page.bringToFront().catch(() => {});
+			// (the launched-Chrome case worked only because a fresh tab starts frontmost). Web
+			// only: raising an Electron window is exactly the focus theft this backend exists
+			// to avoid, and the electron-attach launch flags keep its renderer painting while
+			// hidden instead.
+			if (target.kind === "web") await page.bringToFront().catch(() => {});
 
-			return new CdpBackend(browser, page, target.kind === "web" ? target.url : undefined);
+			const backend = new CdpBackend(browser, page, target.kind === "web" ? target.url : undefined, opts.demo === true);
+			backend.attachInfo = attachInfo;
+
+			return backend;
 		} catch (e) {
 			// Every refusal above would otherwise leave the CDP connection dangling. close()
 			// on an attached browser only disconnects — the browser itself, and the signed-in
@@ -475,6 +559,9 @@ export class CdpBackend {
 	 */
 	async act(a: any): Promise<string> {
 		this.assertSupported(a.name);
+		// Only ever the CURRENT act's resolution — a stale point must never attach to a
+		// later turn's trajectory.
+		this.lastActuation = undefined;
 		switch (a.name) {
 			case "wait":
 				return "waited (no page action)";
@@ -485,7 +572,11 @@ export class CdpBackend {
 				const ref = await this.resolveRef(a);
 				const loc = this.page.locator(`aria-ref=${ref}`);
 				if (a.name === "hover") await loc.hover();
-				else
+				else if (this.demo) {
+					const p = await this.demoPointer(loc, a.name);
+
+					return `${a.name} on [${ref}] at (${Math.round(p.x)}, ${Math.round(p.y)})`;
+				} else
 					await loc.click({
 						button: a.name === "right_click" ? "right" : "left",
 						clickCount: a.name === "double_click" ? 2 : 1,
@@ -495,9 +586,26 @@ export class CdpBackend {
 			}
 			case "type_text": {
 				const ref = await this.resolveRef(a);
+				const loc = this.page.locator(`aria-ref=${ref}`);
+				const text = String(a.text ?? "");
+				if (this.demo) {
+					// Focus arrives by a visible click, then the text by real keystrokes —
+					// the plate shows the field being chosen and the characters landing.
+					// The click is SKIPPED when the field already has focus: a click
+					// collapses any selection, and the documented pre-filled recovery
+					// (click the field, cmd+a, type_text) depends on the selection
+					// surviving into the typing.
+					const focused = (await loc.evaluate("el => el === document.activeElement").catch(() => false)) as boolean;
+					if (!focused) await this.demoPointer(loc, "click");
+					// The locator timeout is tuned for stale-ref failures; typing time is
+					// real work proportional to the text, so it gets its own budget.
+					await loc.pressSequentially(text, { delay: DEMO_TYPE_DELAY_MS, timeout: ACTION_TIMEOUT_MS + text.length * DEMO_TYPE_DELAY_MS });
+
+					return `typed into [${ref}] at the caret (existing content NOT replaced — cmd+a first if it must be cleared)`;
+				}
 				// fill() replaces — the pre-filled-field trap ("New YorkParis") cannot happen,
 				// so the rules stop telling the model to cmd+a first.
-				await this.page.locator(`aria-ref=${ref}`).fill(String(a.text ?? ""));
+				await loc.fill(text);
 
 				return `typed into [${ref}] (replaced existing content)`;
 			}
@@ -533,6 +641,33 @@ export class CdpBackend {
 		await this.page.screenshot({ path, scale: "css" });
 	}
 
+	/**
+	 * The demo pointer approach: scroll the element into reach, move the (injected)
+	 * pointer onto it so real `:hover` fires, dwell, then press with genuine down/up
+	 * cycles (mouse.click escalates clickCount exactly the way dblclick does). The point
+	 * and the box come from ONE boundingBox call and are recorded on `lastActuation`, so
+	 * the trajectory carries the same resolution the mouse events used — the "both wrong
+	 * together" class of coordinate bug has nowhere to live.
+	 *
+	 * Throws when the element has no visible box: pressing at a guessed point would be
+	 * exactly the invisible-actuation this mode exists to kill.
+	 */
+	private async demoPointer(loc: Locator, verb: "click" | "right_click" | "double_click"): Promise<{ x: number; y: number }> {
+		// The scroll a locator click would have done implicitly; without it the box below
+		// can sit outside the viewport and the mouse events land on nothing.
+		await loc.scrollIntoViewIfNeeded();
+		const box = await loc.boundingBox();
+		if (!box || box.width <= 0 || box.height <= 0)
+			throw new Error("target resolved but has no visible box to click — it may have just closed; re-observe");
+		const plan = demoClickPlan(box, verb);
+		await this.page.mouse.move(plan.point.x, plan.point.y);
+		await new Promise((r) => setTimeout(r, plan.dwellMs));
+		await this.page.mouse.click(plan.point.x, plan.point.y, { button: plan.button, clickCount: plan.clickCount, delay: plan.pressMs });
+		this.lastActuation = { point: plan.point, box: { x: box.x, y: box.y, w: box.width, h: box.height } };
+
+		return plan.point;
+	}
+
 	private async resolveRef(a: any): Promise<string> {
 		if (a.ref) return String(a.ref);
 		if (!a.query) throw new Error(`action "${a.name}" needs either a ref (from the observation) or a query (to resolve by name)`);
@@ -560,15 +695,24 @@ export class CdpBackend {
 	}
 }
 
-export const CDP_RULES = `Rules for this backend (CDP-direct via playwright, follow them):
+/** The one rule that differs by mode is type_text's contract — stated per mode because a
+ *  model told "replaces" in demo mode types over pre-filled content and gets "New YorkParis". */
+export function cdpRules(demo: boolean): string {
+	return `Rules for this backend (CDP-direct via playwright, follow them):
 - The observation is the WHOLE accessibility tree — nothing is budget-omitted. "find" exists as a search convenience on long pages, not as an escape hatch.
 - Address elements by their [ref]. Refs are re-issued on every observation and invalidated by navigate; never reuse a ref across a navigate.
 - Any act may pass "query" instead of "ref" to resolve the target by name at action time; it fails cleanly if the name is ambiguous.
-- type_text REPLACES the field's content (it is a fill, not an insert) — no select-all is needed first.
+- ${demo
+		? `type_text CLICKS the field, then types at the caret character by character — it does NOT replace existing content. If the field may be pre-filled: click it, press cmd+a, then type_text (type_text skips its own click when the field already has focus, so the selection survives and your text replaces it).`
+		: `type_text REPLACES the field's content (it is a fill, not an insert) — no select-all is needed first.`}
 - Keys go to the PAGE RENDERER only. Escape closes in-page overlays; cmd/ctrl combos reach the page (an editor's cmd+b works) but can NEVER trigger the browser's or the OS's own shortcuts — cmd+w cannot close the tab, and there is no menu bar to reach. Native OS dialogs (file pickers, permission prompts) are NOT driveable from here; if one opens, say so and stop.
 - The observation opens with the page URL. It is the strongest evidence available: navigation changes it, so a URL check cannot already have been true before the action.
 - "navigate" goes straight to an http/https URL and discards every ref you hold.
 - Element boxes and the screenshot share one coordinate space; trust the fresh observation over any assumption about layout.`;
+}
+
+/** The demo=false text, for the importers wired before demo mode existed. */
+export const CDP_RULES = cdpRules(false);
 
 /** Same role as dom.ts's FIND_TOOL, but honest about this backend: the observation is
  *  already complete, so find is a search aid, not an escape hatch from truncation. */
@@ -587,41 +731,51 @@ export const CDP_FIND_TOOL: Anthropic.Tool = {
 	},
 };
 
-/** The act tool this backend presents. Same shape as the DOM backend's, minus what CDP has no use for (delivery_mode) — the model should never see a knob that does nothing. */
-export const CDP_ACT_TOOL: Anthropic.Tool = {
-	name: "act",
-	description: "Perform one UI action on the target page and state the expected observable effect.",
-	input_schema: {
-		type: "object",
-		properties: {
-			reasoning: { type: "string", description: "One sentence: why this action now." },
-			action: {
-				type: "object",
-				properties: {
-					name: { type: "string", enum: [...CDP_ACTIONS] },
-					ref: { type: "string", description: "Target ref from the current observation (click/right_click/double_click/hover/type_text, optional for scroll)." },
-					query: { type: "string", description: "Alternative to ref: resolve the target by name at action time. Refused if it matches more than one element." },
-					text: { type: "string", description: "For type_text. Replaces the field's existing content." },
-					key: { type: "string", description: "For press_key: return, tab, escape, up, down, a-z, 0-9, etc." },
-					url: { type: "string", description: "For navigate: an http/https URL. Invalidates every ref from the current observation." },
-					modifiers: { type: "array", items: { type: "string" }, description: "For press_key: cmd, shift, option, ctrl — delivered to the page, never the OS." },
-					direction: { type: "string", enum: ["up", "down", "left", "right"], description: "For scroll." },
-					amount: { type: "integer", description: "For scroll: wheel notches." },
-					seconds: { type: "integer", description: `For wait: how long to wait before re-observing, up to ${MAX_WAIT_MS / 1000}. One wait of 120 costs a single step; 120 waits of 1 cost 120. Use it whenever the app is working on something slow.` },
+/** The act tool this backend presents. Same shape as the DOM backend's, minus what CDP has no use for (delivery_mode) — the model should never see a knob that does nothing. A function for the same reason as cdpRules: the type_text semantics differ by mode, and the schema must not contradict the rules. */
+export function cdpActTool(demo: boolean): Anthropic.Tool {
+	return {
+		name: "act",
+		description: "Perform one UI action on the target page and state the expected observable effect.",
+		input_schema: {
+			type: "object",
+			properties: {
+				reasoning: { type: "string", description: "One sentence: why this action now." },
+				action: {
+					type: "object",
+					properties: {
+						name: { type: "string", enum: [...CDP_ACTIONS] },
+						ref: { type: "string", description: "Target ref from the current observation (click/right_click/double_click/hover/type_text, optional for scroll)." },
+						query: { type: "string", description: "Alternative to ref: resolve the target by name at action time. Refused if it matches more than one element." },
+						text: {
+							type: "string",
+							description: demo
+								? "For type_text. Typed at the caret after clicking the field — does NOT replace existing content."
+								: "For type_text. Replaces the field's existing content.",
+						},
+						key: { type: "string", description: "For press_key: return, tab, escape, up, down, a-z, 0-9, etc." },
+						url: { type: "string", description: "For navigate: an http/https URL. Invalidates every ref from the current observation." },
+						modifiers: { type: "array", items: { type: "string" }, description: "For press_key: cmd, shift, option, ctrl — delivered to the page, never the OS." },
+						direction: { type: "string", enum: ["up", "down", "left", "right"], description: "For scroll." },
+						amount: { type: "integer", description: "For scroll: wheel notches." },
+						seconds: { type: "integer", description: `For wait: how long to wait before re-observing, up to ${MAX_WAIT_MS / 1000}. One wait of 120 costs a single step; 120 waits of 1 cost 120. Use it whenever the app is working on something slow.` },
+					},
+					required: ["name"],
 				},
-				required: ["name"],
-			},
-			expectation: {
-				type: "object",
-				properties: {
-					description: { type: "string" },
-					textIncludes: { type: "array", items: { type: "string" }, description: "REQUIRED unless textExcludes is given. Substrings that should appear in the next observation." },
-					textExcludes: { type: "array", items: { type: "string" }, description: "Substrings that should NOT appear in the next observation. Satisfies the checkable-expectation requirement on its own." },
+				expectation: {
+					type: "object",
+					properties: {
+						description: { type: "string" },
+						textIncludes: { type: "array", items: { type: "string" }, description: "REQUIRED unless textExcludes is given. Substrings that should appear in the next observation." },
+						textExcludes: { type: "array", items: { type: "string" }, description: "Substrings that should NOT appear in the next observation. Satisfies the checkable-expectation requirement on its own." },
+					},
+					required: ["description"],
+					description: "You MUST supply textIncludes and/or textExcludes. An act call with only a prose description is REJECTED WITHOUT BEING EXECUTED.",
 				},
-				required: ["description"],
-				description: "You MUST supply textIncludes and/or textExcludes. An act call with only a prose description is REJECTED WITHOUT BEING EXECUTED.",
 			},
+			required: ["action", "expectation"],
 		},
-		required: ["action", "expectation"],
-	},
-};
+	};
+}
+
+/** The demo=false tool, for the importers wired before demo mode existed. */
+export const CDP_ACT_TOOL: Anthropic.Tool = cdpActTool(false);

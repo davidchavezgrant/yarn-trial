@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CDP_ACT_TOOL, CDP_RULES, originMatches, parseAiSnapshot, playwrightKey } from "../src/backends/cdp.js";
+import { CDP_ACT_TOOL, CDP_RULES, cdpActTool, cdpRules, demoClickPlan, originMatches, parseAiSnapshot, playwrightKey } from "../src/backends/cdp.js";
 
 // A real ai-mode snapshot shape, taken from the live probe that preceded this backend
 // (headless Chrome 139, playwright-core 1.62): roles, quoted names, [ref]/[box]/flag
@@ -150,4 +150,50 @@ test("CDP_RULES__StateTheKeyBoundary__When__TheModelReadsThem", () => {
 	// reach the renderer only. A model told otherwise will "press cmd+," forever.
 	assert.match(CDP_RULES, /PAGE RENDERER/);
 	assert.match(CDP_RULES, /file pickers/);
+});
+
+test("demoClickPlan__PointsAtTheBoxCentre__When__PlanningAClick", () => {
+	// Centre is exact by construction on this backend: box and screenshot share the
+	// renderer's CSS-pixel space, so there is no capture-scale offset to compensate.
+	const plan = demoClickPlan({ x: 100, y: 40, width: 60, height: 20 }, "click");
+	assert.deepEqual(plan.point, { x: 130, y: 50 });
+	assert.equal(plan.button, "left");
+	assert.equal(plan.clickCount, 1);
+});
+
+test("demoClickPlan__DwellsWithinTheHoverWindow__When__AnyVerbIsPlanned", () => {
+	// 150–250ms per the plan: long enough for a :hover transition to render into polled
+	// frames, short enough not to read as hesitation on film.
+	const plan = demoClickPlan({ x: 0, y: 0, width: 10, height: 10 }, "click");
+	assert.ok(plan.dwellMs >= 150 && plan.dwellMs <= 250, `dwell ${plan.dwellMs}ms outside 150–250`);
+});
+
+test("demoClickPlan__UsesTheRightButton__When__TheVerbIsRightClick", () => {
+	assert.equal(demoClickPlan({ x: 0, y: 0, width: 4, height: 4 }, "right_click").button, "right");
+});
+
+test("demoClickPlan__DoublesTheClickCount__When__TheVerbIsDoubleClick", () => {
+	// mouse.click with clickCount 2 performs two down/up cycles with escalating
+	// clickCount — the same composition playwright's own dblclick uses.
+	assert.equal(demoClickPlan({ x: 0, y: 0, width: 4, height: 4 }, "double_click").clickCount, 2);
+});
+
+test("cdpRules__SwapTheTypingContract__When__DemoModeIsOn", () => {
+	// A model told "replaces" while the backend types at the caret produces the exact
+	// pre-filled-field trap ("New YorkParis") fill() was chosen to kill.
+	assert.match(cdpRules(false), /type_text REPLACES/);
+	assert.doesNotMatch(cdpRules(true), /type_text REPLACES/);
+	assert.match(cdpRules(true), /caret/);
+	assert.match(cdpRules(true), /cmd\+a/);
+	// The invariant lines survive both modes.
+	assert.match(cdpRules(true), /PAGE RENDERER/);
+	assert.match(cdpRules(true), /file pickers/);
+});
+
+test("cdpActTool__MatchesTheTypingContract__When__DemoModeIsOn", () => {
+	// The schema is read by the model too; it must never contradict the rules.
+	const text = (demo: boolean) => (cdpActTool(demo).input_schema as any).properties.action.properties.text.description;
+	assert.match(text(false), /Replaces/);
+	assert.match(text(true), /caret/);
+	assert.doesNotMatch(text(true), /Replaces/);
 });

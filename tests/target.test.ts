@@ -3,6 +3,7 @@ import test from "node:test";
 import { appSlug } from "../src/core/harness.js";
 import {
 	buildRunArgs,
+	electronTarget,
 	isBrowserApp,
 	parseTarget,
 	type Target,
@@ -66,6 +67,18 @@ test("webTarget__KeepsThePath__When__UrlIsADeepLink", () => {
 	if (t.kind !== "web") return;
 	assert.match(t.url, /\/my\/deep\/page$/);
 	assert.equal(t.origin, "https://www.notion.so");
+});
+
+test("electronTarget__KeepsSlugLabelAndVocabulary__When__AttachIsRequested", () => {
+	// cdpAttach is a field, not a kind: the app's artifacts (appmap, run logs) must land
+	// exactly where a plain app target's do — it is the same app, only reached differently.
+	const t = electronTarget("Yarn");
+	assert.equal(t.kind, "app");
+	if (t.kind !== "app") return;
+	assert.equal(t.cdpAttach, true);
+	assert.equal(targetSlug(t), appSlug("Yarn"));
+	assert.equal(targetLabel(t), "Yarn");
+	assert.equal(targetVocabulary(t).subject, "a macOS app");
 });
 
 test("targetSlug__IsUnchangedFromAppSlug__When__TargetIsAMacApp", () => {

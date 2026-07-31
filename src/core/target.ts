@@ -12,9 +12,16 @@ import { appSlug } from "./harness.js";
  * A web target is therefore a distinct KIND rather than a specially-formatted app name. The
  * discriminant is what lets `explore`/`agent` choose between `launch_app` + `findWindow` and
  * the browser-acquisition path, without either one sniffing the string for "https".
+ *
+ * `cdpAttach` is a FIELD rather than a third kind on purpose: an Electron app reached over
+ * a debug port is still the same app — same slug, same appmap, same artifact paths — so
+ * every consumer that switches on the kind must keep treating it as an app. The field only
+ * tells the cdp backend's acquisition that it may LAUNCH the app with
+ * `--remote-debugging-port` (src/backends/electron-attach.ts); WHICH backend runs remains
+ * the runner's decision, exactly as it is for web targets.
  */
 export type Target =
-	| { kind: "app"; name: string }
+	| { kind: "app"; name: string; cdpAttach?: boolean }
 	| { kind: "web"; url: string; origin: string };
 
 /**
@@ -66,6 +73,15 @@ export function webTarget(raw: string): Target {
 		throw new TargetError(`--url must be http or https (the driver refuses anything else), got "${parsed.protocol}"`);
 
 	return { kind: "web", url: parsed.toString(), origin: parsed.origin };
+}
+
+/**
+ * An Electron app to be driven over CDP: attach by debug port, launching the app with one
+ * when nothing is listening. Mirrors webTarget as the one documented construction point,
+ * so the runner never hand-assembles the shape.
+ */
+export function electronTarget(name: string): Target {
+	return { kind: "app", name, cdpAttach: true };
 }
 
 /**
