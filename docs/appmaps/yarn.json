@@ -1,391 +1,176 @@
 {
   "app": "Yarn",
-  "capturedAt": "2026-07-30T12:58:13.143Z",
+  "capturedAt": "2026-07-31T23:38:40.724Z",
   "provenance": "explore",
-  "proseSha256": "ab493c45e2ac",
-  "elapsed": "40m",
+  "proseSha256": "22b1c9633436",
+  "elapsed": "34m",
   "coverage": {
-    "seen": 396,
-    "actuated": 47,
-    "dismissed": 350,
-    "surfaces": 34,
-    "chapters": 9,
+    "seen": 1116,
+    "actuated": 57,
+    "dismissed": 1059,
+    "surfaces": 35,
+    "chapters": 13,
     "stopped": "frontier-empty",
     "dismissals": [
-      "Settings-modal controls that would change the account/workspace or reach external services: signing out, starting a paid upgrade, OAuth sign-ins (Figma/Google/YouTube/Notion), importing Screen Studio projects, deleting a saved custom window size, and uploading a profile photo. All are externally visible or destructive, so I only recorded where they live.",
-      "macOS Apple menu — OS-level items (restart, shut down, log out, force quit) that are destructive or unrelated to Yarn.",
-      "All four mutate brand records (rename/duplicate/create/archive the Default Brand) and cannot be reverted cleanly; the menu contents were captured by opening the menu only.",
-      "These are the options inside the Settings → Agent model popup (Fable 5 / GPT-5.6 Sol / Opus 4.8 / Opus 5). Selecting any of them would change the account-wide default model for new agent chats; the option list is already recorded.",
-      "These are the options inside the Settings → Agent effort popup (Low/Medium/High/Extra High/Max). Selecting any would change the account-wide default effort; the option list is already recorded.",
-      "Standard macOS Edit menu (Undo/Cut/Copy/Paste/Substitutions/Speech/Writing Tools/AutoFill) — OS-provided, no app-specific settings, and operating them would mutate document text.",
-      "macOS Apple-Intelligence Writing Tools submenu; all items disabled here and they would rewrite document text.",
-      "Standard macOS text substitutions submenu, all items disabled in this context.",
-      "macOS window tiling submenu; would move/resize the window and reveals nothing about the app.",
-      "Standard macOS Window menu (Minimize/Zoom/Fill/Center/Tile); window management only.",
-      "macOS full-screen tiling submenu; would take the window full screen.",
-      "macOS Services submenu populated by Xcode Instruments; launches external apps.",
-      "Apple menu Recent Items; opens Finder volumes outside the app.",
-      "App menu has only About/Hide/Quit; quitting or hiding ends the session and no settings live here (Settings is in the left rail).",
-      "File menu only offers Close Window / Close All, which would close the app window.",
-      "Electron View menu (Reload/Force Reload/Dev Tools/zoom/full screen); reloading would disturb app state and reveals no app surfaces.",
-      "macOS Start/Stop Speaking submenu; would read text aloud, no app state.",
-      "Help menu is empty apart from the system search field; no app help content.",
-      "Library project grid rows are user content (individual projects/drafts). Opening each one just re-enters the already-mapped project editor; renaming/reordering them would change the user's data.",
-      "Same virtualized library card rows exposed a second time under the first row's AX name; content, not navigation.",
-      "Every item in this menu was read and documented, but operating them changes the project: aspect ratio / performance mode / brand are per-project setting writes I would have to revert, Delete is destructive, Make a copy and Download SRT create artifacts, and Copy Transcript / Version History are read-only side trips already described. The menu's contents and scope are fully recorded.",
-      "These are project title labels / rename fields for individual library cards and left-rail entries — user content. Clicking opens an already-mapped editor; typing in them renames the user's projects.",
-      "Switching the paint type (Solid/Linear/Radial/Multi/Image/Shader) would overwrite this project's composition background, which I would then be unable to restore exactly (the current Image paint references an uploaded asset). All six options are recorded.",
-      "Inside the paint picker: clicking a brand swatch or choosing a different image Position would immediately change this project's composition background, and \"Replace image\" opens a file upload that would add an asset. Their behaviour and option lists are recorded instead.",
-      "Rows of the Add-from-Library asset grid: content items. Clicking one inserts media into the project and their \"...\" menus contain per-asset destructive actions.",
-      "Same Add-from-Library asset tiles surfaced again under the generic grid role; content, and inserting them would modify the project.",
-      "Voice-picker contents: selecting a different voice or talking speed would change this project's narration (a document mutation I'd have to undo), and the language/category tabs only re-filter the same list. The picker's structure and options are fully recorded.",
-      "\"Add Reference...\" opens a native file-upload dialog (outside the app window / can attach files), and \"Switch to Media Gen\" changes the composer's mode for this project's chat. Both are recorded; neither is needed for navigation.",
-      "Clicking a stop would change this chat's agent effort setting; all five values are already recorded and the current value (High) must be left intact.",
-      "Clicking it would insert a new overlay clip into this project's timeline — a document mutation I must not leave behind.",
-      "Export is refused by the harness as a destructive/irreversible verb (it renders and writes a file), and Publish makes the video externally visible on the web. Both are recorded as the two right-hand status-bar actions but must not be operated unattended.",
-      "\"Remix Music to Fit\" re-times the currently selected background track to the video — a destructive edit to this project's audio that I could not cleanly revert. Its location and behaviour are documented in the music-picker finding instead.",
-      ".dpSelectBtn-audioPreview just plays an audio sample of the keyboard-sound set; pressing it produces sound but reveals no new surface or setting.",
-      "Each of these edits the open project or starts a capture rather than revealing a surface: the record / record-talk-track buttons start a screen or voice recording; new-comment adds a comment to the video; play/scrub and the timeline skip/left-edge buttons only move the playhead; instant-zoom start/end insert a zoom keyframe into the selected clip; the caption \"Hidden\" checkbox toggles this project's caption visibility; add-media tiles and the add-media/music upload buttons insert or upload media; selecting a music track (and Remix Music to Fit) changes the project's background audio. The screen-video animation and soundEffects toolbar buttons only appear for a Yarn screen-recording clip, and this project's timeline has none selectable — their brand-level and per-project equivalents are already fully mapped (Brand Kit → Screen Clips and Project actions → Screen Clip Settings…).",
-      "The \"Unable to play media.\" entries are individual video assets in the add-media / add-from-library grids — content rows whose only action is inserting that clip into the project. \"0\", \"1.00\", \"12\" and \"48\" are pre-filled numeric value fields (clip corner radius, playback rate, a shadow/cursor number, caption font size) and \"1440x897\"/\"1600x987\" are the Settings → Workspace → Custom window size fields; typing into any of them changes a document or workspace value I would have to restore exactly, and each field's location and meaning is already recorded. \"A - Z\" is one option of the Library sort-order menu, which I already opened and enumerated; choosing it would change the saved view preference.",
-      "Batch 1 of the alphabetical leaf list. \"About font usage notes\"/\"About text styles\" are info tooltips on Brand Kit → Type (no state). \"Appear\" is an Enter-animation preset value, \"Arrow-first\"/\"Auto Hide\" are Screen-Clip cursor setting values, \"Cereal\" is the current caption font, \"Contain\"/\"Cover\" are paint-picker Fit values, \"Camera\" is a webcam-clip type value — selecting any of them would overwrite brand or per-clip settings whose current values I have already recorded and could not reliably restore. \"Add scene\", \"Convert to Camera\", \"Copy Scene\", \"Copy Transcript\", \"Color actions\" mutate the open project/brand (add a scene, convert a clip, copy to clipboard, delete/edit a brand swatch). All their containers and current values are documented in the notes.",
-      "Batch 2. \"Delete\", \"Delete Scene\" are destructive. \"Dark\" (Settings→Theme), \"Default\" (Project actions→Performance Mode), \"Custom 1\" (Settings→Workspace custom window size row) and \"Disappear\" (Exit-animation preset) would each overwrite a live app/project setting whose current value is recorded. \"David's Workspace\" ×2 are the workspace-switcher row and the rail org badge — already opened as a surface; re-selecting risks a workspace switch. \"Edit Cut\"/\"Edit Skip\"/\"Edit Trim\" mutate the selected clip's timing. \"ES_A Winter to Remember…\" would change the project's background music track. \"Effects\" (caption effects popup) and \"Enter\" (animation tab) are harmless but can no longer be reached: Yarn's web AX tree has dropped out of the snapshot, so no element_index exists for them; their location and contents are already documented.",
-      "Batch 3 — all enum VALUES inside already-mapped popovers. \"Fade Down/In/Left/Out/Right/Up\" are Enter/Exit animation presets in the per-clip animation popover (current = Fade In / Fade Out) and the same names appear in Brand Kit → Screen Clips → Entrance/Exit Animation (current = Fade Up); \"Fixed\" ×2 and \"Glide\" are the Default Zoom Type options at BOTH scopes (brand default and the per-project Screen Recording Settings copy) — clicking either would silently change one of the two stores I am documenting as a scope pair. \"Extra Soft\" is the current sound-effect level, \"Fill\" a paint-picker fit option, \"Everything\" the Add-from-Library tab that is already the active tab. Selecting any of them mutates a recorded setting; their option lists and current values are in the notes, so reading them adds nothing.",
-      "Batch 4. Enum values of already-documented controls: \"Graphics Video\" (clip video-fill type), \"Hide\" (Text Cursor), \"High\"/\"Low\"/\"Medium\" (agent-effort stops and Motion Blur levels), \"Inter\" (current Brand Kit primary font), \"Light\" (Settings→Theme + a font weight), \"Grid\"/\"Images\" (view toggle and Add-from-Library tab) — selecting any rewrites a recorded brand/app/clip setting. \"Make a copy\" and \"Make Private Draft\" duplicate or re-scope a real project (externally visible change to the workspace). \"Invite Members\" sends invitations — destructive/externally visible, explicitly out of bounds. `help=\"this button also has an action to zoom the window\"` is the macOS window zoom button, not app UI. \"Insert\" is the canvas Insert popup, which inserts content into the open project; it is also unreachable now because Yarn's web AX tree has dropped out of the snapshot.",
-      "Batch 5 — creation actions and enum values. \"New Collection\", \"New draft\", \"New Draft\", \"New Template\", \"New Text Style\", \"New Workflow\", \"New workspace\" all CREATE persistent objects in the workspace/brand that I could not discard cleanly (the instructions forbid creating documents I can't discard); their locations and the fact that they are the creation entry points are recorded instead. \"Mute\" mutes the selected clip's audio, \"No background track\" would clear this project's music, \"None\" is the current Secondary Font value, \"Off\" is an Auto-Hide-Cursor / Motion-Blur value, \"Newest first\"/\"Oldest first\" change the Library sort preference — each rewrites recorded state. \"More information\" is a static info tooltip. All are also unreachable now: the app's web AX tree has dropped out of the snapshot.",
-      "Batch 6 — remaining enum values, search fields and one destructive-ish action. \"On\" (Auto-Add Screen Zooms), \"Original\"/\"Set B\" (keyboard-press sound set), \"Pointer-first\" (Cursor Style option), \"Show\" (Text Cursor), \"Scale Up\"/\"Scale Down\" (animation presets) all overwrite recorded app/brand/clip settings. \"Reset\" resets a slider/setting to default — destroys the current recorded value. \"Rename\" renames a real project. \"Preset\" (captions preset popup), \"Projects\" (Add-from-Library tab), \"Select voice\" (voice dropdown, already opened and documented), \"Search\"/\"Search Everything...\" (library/media search text fields) are read-only-ish but typing into them changes the visible list and, more importantly, they are unreachable now: Yarn's web AX tree has dropped out of the snapshot, so no element_index exists. Their locations and option lists are recorded.",
-      "Final batch. \"Sort A-Z\"/\"Sort by newest\" (Brand Kit → Templates sort checkboxes), \"Z - A\" (Library sort menu), \"System\" (Settings → Theme) and \"Timeline Clip\" (the selected clip's current video-fill value) would each flip a recorded preference/setting. \"Vintage Groove\" would replace this project's background music track; \"Upload Camera Footage\" opens a native file-upload dialog and adds an asset to the workspace; \"Webcam actions\" is a per-asset ellipsis menu on a library tile whose items are rename/delete-class actions on real media. \"Videos\"/\"Webcams\" are two more tabs of the Add-from-Library dialog whose structure is already recorded (tab bar + search + virtualized asset grid) — opening them only re-filters content. \"Window\" is the macOS menu-bar Window menu (system chrome, already enumerated). \"Your Drafts\" is the left-rail item already documented as the Library list filtered to drafts; clicking it would navigate away from the project editor the app was found in, and I am leaving the app as I found it.",
-      "The last 2 frontier entries are unnamed elements (blank-label buttons/images inside the editor timeline and toolbar — e.g. the per-scene skip buttons and the timeline left-edge button, which have empty AX names). Clicking them scrubs/moves the playhead or jumps scenes in the open project, i.e. it changes document/playback state for no mapping benefit, and their containing surfaces (timeline, scene gap buttons) are already documented."
-    ]
-  },
-  "home": {
-    "surface": "library",
-    "control": "Library",
-    "description": "Your Library page, a stable workspace-level overview of projects accessible from the persistent left rail.",
-    "source": "backfill"
+      "Externally visible invitation flow; harness refuses activation and it would send/share.",
+      "Export is externally visible/output-producing and the harness explicitly refused opening it; no safe passive descent available.",
+      "These are stale controls from already mapped pickers/editor/settings, repeated content rows, or actions that add/upload/comment/playback; renderer is stuck and operating them is unsafe or impossible.",
+      "macOS recent applications/files are outside Yarn; opening or clearing them is irrelevant and may affect other apps/files.",
+      "Standard macOS window arrangement commands are unrelated to Yarn features and disabled in the stuck child state.",
+      "System-level commands are outside Yarn and include destructive session/power actions.",
+      "Repeated library assets/projects are content; selecting imports/opens them and ellipsis menus can delete, all already mapped conceptually.",
+      "Project menu was fully mapped; remaining options would copy/download/change document settings or delete content.",
+      "Standard macOS editing commands are disabled or unrelated to app-surface discovery.",
+      "Repeated library/project rows are content; selecting them would import/open content.",
+      "Insert choices were mapped; selecting any mutates the current document.",
+      "Standard macOS window-management items do not expose Yarn functionality and are disabled in the current stuck state.",
+      "Paint picker tabs were already inspected and mapped; selecting or editing paint would persist color changes.",
+      "Standard Electron reload/zoom/developer commands are not Yarn feature surfaces; reloads were tested and did not recover the stuck capture state.",
+      "Agent effort picker options were already mapped; selecting one would change the default.",
+      "Brand menu was fully mapped; all remaining items rename, duplicate, create, or archive persistent brand data.",
+      "Agent model picker options were mapped; selection would change the default for new chats.",
+      "Standard disabled macOS text substitutions are unrelated to Yarn navigation.",
+      "Repeated project rows are content; selecting them would import/open content.",
+      "Application quit/hide/services commands are outside Yarn feature mapping and could end or obscure the run.",
+      "Template menu was mapped; duplicate/move/delete alter persistent brand templates.",
+      "Composer menu was mapped; Add Reference opens external content and Media Gen changes creation mode.",
+      "Media track/list row is content; playback/selection would affect the current document or only preview media.",
+      "Media track/list row is content; selecting it would import/change document media.",
+      "Close commands are standard window management and currently disabled; no Yarn feature surface is exposed.",
+      "macOS window tiling is unrelated to Yarn and disabled.",
+      "The macOS Help search is empty and does not expose Yarn help topics in this build.",
+      "macOS Services has no applicable Yarn actions and opens system settings externally.",
+      "Keyboard sound-set picker was already mapped; choosing another set changes brand-wide defaults.",
+      "Standard macOS speech commands are disabled and unrelated to Yarn feature mapping.",
+      "Draft-card menu was mapped; remaining rename/copy/move/delete actions change persistent document state.",
+      "Template-card menu was mapped; remaining options change persistent template state.",
+      "Stale values, playback-error rows, library content, and already mapped settings inputs from prior surfaces; renderer is stuck and none opens an unmapped safe surface.",
+      "Previously mapped settings values and safe-surface controls mixed with actions that create/upload/change persistent content; no unmapped destination remains.",
+      "These are stale brand color/font-catalog rows and informational labels already mapped; choosing any font/color would change brand defaults.",
+      "Font-catalog rows are repetitive and selecting one changes brand defaults; Add scene mutates document content and was already mapped.",
+      "Repetitive font-catalog options; selecting any would change brand-wide type defaults.",
+      "Repetitive font-catalog and voice rows already mapped; selecting them changes brand typography or document narration.",
+      "Repetitive font-catalog rows from Brand Kit Type; selecting any would mutate the persistent brand-wide font default, so these are intentionally not operated.",
+      "Repetitive font-catalog rows from Brand Kit Type; selecting any would mutate the persistent brand-wide font default.",
+      "Font-catalog option rows; selecting any would persistently change the brand-wide font default.",
+      "Font-catalog option rows; intentionally skipped because choosing one changes persistent brand defaults.",
+      "Repetitive Brand Kit font choices, not navigation; selecting changes brand-wide defaults.",
+      "Repetitive font catalog content; not operated to avoid changing the persistent primary/secondary font.",
+      "Font-catalog option rows from the already mapped picker; choosing one would persist a brand setting.",
+      "Repetitive, mutating font choices; no distinct surface to discover.",
+      "Brand Kit font catalog options; selecting would change persistent defaults, so intentionally skipped.",
+      "Repetitive font choices with immediate persistent mutation; catalog behavior is already mapped.",
+      "Font catalog content rather than navigation; do not choose because it changes brand-wide font settings.",
+      "Repetitive font catalog options, skipped to preserve existing brand defaults.",
+      "These are mutating font choices in the known Brand Kit picker, not new surfaces.",
+      "Repetitive font rows; choosing any would change the persistent font default.",
+      "Font catalog options; skipped to avoid mutating brand-wide font selection.",
+      "Known picker’s repetitive content; selection would persistently change brand defaults.",
+      "Mutating Brand Kit font rows, intentionally not selected.",
+      "Repetitive font-catalog choices; preserve current brand-wide font state.",
+      "These catalog rows do not open distinct surfaces and would mutate persistent brand settings.",
+      "Font option rows in an already mapped picker; skipped because selection is persistent.",
+      "Repetitive persistent font choices, not navigation.",
+      "Brand Kit font options; choosing any would alter the existing persistent default.",
+      "Repetitive font catalog content; no need to mutate brand settings to map it.",
+      "Known font picker’s option rows; selecting would persist a brand-wide change.",
+      "Repetitive mutating font choices; intentionally skipped.",
+      "Font catalog options are content rather than navigation and change persistent defaults when selected.",
+      "Repetitive Brand Kit font rows; preserving app state.",
+      "Font picker choices; selecting would persistently alter brand-wide typography.",
+      "Repetitive catalog rows with immediate persistent mutation; no distinct surface.",
+      "Known font catalog options; not operated to leave brand defaults unchanged.",
+      "Repetitive font picker content; selection is a persistent brand mutation.",
+      "Brand-wide font choices, intentionally skipped to preserve state.",
+      "Repetitive catalog options; not surfaces, and choosing changes persistent typography.",
+      "Font catalog rows, skipped because selecting any mutates the brand-wide default.",
+      "Known picker’s repetitive font options; no reason to persist a typography change.",
+      "Already-mapped picker options or passive content labels; operating voice/font/animation/cursor options would mutate document or brand settings, while AutoTime is non-navigation content.",
+      "Font/voice catalog options from already mapped pickers; choosing any would mutate persistent brand or document narration settings.",
+      "Repetitive font-catalog rows; selecting would change persistent brand typography.",
+      "Font and voice options in already mapped pickers; selection would mutate brand typography or document narration.",
+      "Font/voice rows and document/library content are non-navigation or mutating; Connect Notion changes an external integration/account, and Copy Scene mutates clipboard/content workflow.",
+      "Already-mapped menu/options or passive rows; selecting theme/voice/font/workspace/default changes state, Copy Transcript affects clipboard, and Delete is destructive. Duplicate labels are covered by the exact-name dismissal.",
+      "Destructive or persistent-edit actions and already-mapped picker tabs/options; operating would mutate scene, brand/template/profile, narration, agent defaults, or font state.",
+      "Already-mapped animation, audio, color, voice, and font picker options; choosing or eyedropping would mutate brand/document settings.",
+      "Repetitive picker options for animations, voice, zoom type, or fonts; selection changes persistent brand/document settings.",
+      "Known picker/view options or OS chrome; choosing would mutate zoom/voice/font/effort/display state, and Import initiates content creation.",
+      "Already-mapped voice/theme/view/tab/intensity controls; operating options would mutate settings, while Library/Layout surfaces and List mode were already visited/mapped.",
+      "Already-mapped setting/voice/content actions; choosing would mutate agent/brand/document state or create/copy/move persistent content. Duplicate Medium labels are covered.",
+      "Creation/publish actions are persistent or external; remaining items are already-mapped sort/voice/cursor/audio/toggle options whose selection would change state.",
+      "Remove/Rename mutate persistent state; voice/animation/show choices change settings; draft/library rows are content; Script and search fields/surfaces were already mapped without needing data entry. Duplicate Remove labels are covered.",
+      "Account/integration/sign-out/suspend controls are externally visible or destructive; other already-mapped picker/edit/sort/theme/voice controls would mutate persistent state or are passive content.",
+      "Repetitive draft/library content rows; opening each would not reveal a new surface beyond the already-mapped editor.",
+      "Repetitive draft content rows; opening them only re-enters the already-mapped editor and risks inheriting document state.",
+      "Draft/template/library rows are repetitive content; Upgrade is external billing, upload creates content, and soundtrack/voice choices mutate document settings.",
+      "The first is a repetitive project/library content row already represented by the mapped editor/import surfaces; Z-A is an already-mapped sort option whose selection changes current view state.",
+      "The sole remaining unlabeled control came from an already-explored picker/catalog and has no stable accessible label; operating an unidentified control could mutate brand/document state, so it is deliberately skipped."
+    ],
+    "gatedRead": 0,
+    "gatedRefused": 2
   },
   "nodes": [
     {
-      "id": "brand-kit",
-      "title": "Brand Kit (Brand Studio, 'Default Brand')",
+      "id": "library",
+      "title": "Library",
       "kind": "surface",
-      "scope": "brand",
-      "notes": "Left rail bottom → Brand Kit. Sub-tabs listed in a second column."
+      "scope": "workspace"
     },
     {
-      "id": "brand-kit/screen-clips",
-      "title": "Brand Kit → Screen Clips (Screen Clip Settings)",
-      "kind": "surface",
-      "scope": "brand",
-      "notes": "Brand-wide defaults for screen recordings/clips."
-    },
-    {
-      "id": "brand-kit/screen-clips/auto-hide-cursor",
-      "title": "Auto-Hide Cursor",
+      "id": "library/search",
+      "title": "Search",
       "kind": "control",
-      "scope": "brand",
-      "settingKey": "auto-hide-cursor",
-      "options": [
-        "Auto Hide",
-        "Off"
-      ]
+      "scope": "workspace",
+      "settingKey": "library-search"
     },
     {
-      "id": "brand-kit/screen-clips/text-cursor",
-      "title": "Text Cursor",
+      "id": "library/view-mode",
+      "title": "Grid / List",
       "kind": "control",
-      "scope": "brand",
-      "settingKey": "text-cursor",
-      "options": [
-        "Hide",
-        "Show"
-      ]
-    },
-    {
-      "id": "brand-kit/screen-clips/cursor-style",
-      "title": "Cursor Style",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "cursor-style",
-      "notes": "Combobox, current value 'Arrow-first'."
-    },
-    {
-      "id": "brand-kit/screen-clips/cursor-scale",
-      "title": "Cursor Scale",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "cursor-scale",
-      "notes": "Slider, 1.60."
-    },
-    {
-      "id": "brand-kit/screen-clips/window-padding",
-      "title": "Screen Window Padding",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "screen-window-padding",
-      "notes": "Slider 18.0"
-    },
-    {
-      "id": "brand-kit/screen-clips/shadow",
-      "title": "Shadow opacity/blur/spread/X/Y",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "screen-shadow",
-      "notes": "Sliders + numeric inputs."
-    },
-    {
-      "id": "brand-kit/screen-clips/sound-effects",
-      "title": "Sound Effects (Cursor Clicks / Keyboard Presses)",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "sound-effects",
-      "notes": "Checkboxes + level comboboxes ('Extra Soft') + keyboard set ('Set B') with preview speaker button. Per-clip equivalent is the editor topbar speaker button (.editor-topbar-btn--soundEffects)."
-    },
-    {
-      "id": "brand-kit/screen-clips/entrance-exit-animation",
-      "title": "Entrance/Exit Animation (brand default)",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "entrance-exit-animation",
-      "notes": "Brand-level default, currently 'Fade Up'."
-    },
-    {
-      "id": "brand-kit/screen-clips/motion-blur",
-      "title": "Motion Blur",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "motion-blur",
-      "options": [
-        "Off",
-        "Low",
-        "Medium",
-        "High"
-      ]
-    },
-    {
-      "id": "brand-kit/screen-clips/default-zoom-type",
-      "title": "Default Zoom Type",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "zoom-type",
-      "options": [
-        "Glide",
-        "Fixed"
-      ],
-      "notes": "Brand default; the editor top bar 'Fixed' popup sets it for the selected zoom clip."
-    },
-    {
-      "id": "brand-kit/screen-clips/default-zoom-level",
-      "title": "Default Zoom Level",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "zoom-level",
-      "notes": "Slider 54%; per-clip zoom level is the editor topbar Zoom −/+ control."
-    },
-    {
-      "id": "brand-kit/colors",
-      "title": "Brand Kit → Colors",
-      "kind": "surface",
-      "scope": "brand",
-      "notes": "Brand palette: Background + Text Colors swatch grids, Color Notes textarea"
-    },
-    {
-      "id": "brand-kit/colors/background-swatches",
-      "title": "Brand Background swatches",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "background-color",
-      "notes": "Brand-level palette that populates the paint picker quick swatches."
-    },
-    {
-      "id": "brand-kit/colors/text-swatches",
-      "title": "Text color swatches",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "brand-text-colors"
-    },
-    {
-      "id": "brand-kit/colors/color-notes",
-      "title": "Color Notes",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "brand-color-notes",
-      "notes": "Markdown text area, placeholder 'Describe color usage guidelines, palette rationale...'"
-    },
-    {
-      "id": "brand-kit/type",
-      "title": "Brand Kit → Type",
-      "kind": "surface",
-      "scope": "brand"
-    },
-    {
-      "id": "brand-kit/type/primary-font",
-      "title": "Primary Font",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "brand-primary-font",
-      "notes": "Text field; type to search fonts. Currently 'Inter'"
-    },
-    {
-      "id": "brand-kit/type/secondary-font",
-      "title": "Secondary Font",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "brand-secondary-font",
-      "notes": "Currently 'None'"
-    },
-    {
-      "id": "brand-kit/type/new-text-style",
-      "title": "New Text Style",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "brand-text-styles",
-      "notes": "Creates a brand text style"
-    },
-    {
-      "id": "brand-kit/type/font-usage-notes",
-      "title": "Font Usage Notes",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "brand-font-usage-notes"
-    },
-    {
-      "id": "brand-kit/motion",
-      "title": "Brand Kit → Motion (Motion Principles)",
-      "kind": "surface",
-      "scope": "brand",
-      "notes": "Notes-only surface"
-    },
-    {
-      "id": "brand-kit/motion/notes",
-      "title": "Motion notes",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "brand-motion-notes"
-    },
-    {
-      "id": "brand-kit/layout",
-      "title": "Brand Kit → Layout (Layout Principles)",
-      "kind": "surface",
-      "scope": "brand",
-      "notes": "Notes-only"
-    },
-    {
-      "id": "brand-kit/layout/notes",
-      "title": "Layout notes",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "brand-layout-notes"
-    },
-    {
-      "id": "brand-kit/misc",
-      "title": "Brand Kit → Misc (Misc Context)",
-      "kind": "surface",
-      "scope": "brand",
-      "notes": "Notes-only"
-    },
-    {
-      "id": "brand-kit/misc/notes",
-      "title": "Misc notes",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "brand-misc-notes"
-    },
-    {
-      "id": "brand-kit/overview",
-      "title": "Brand Kit → Brand Overview",
-      "kind": "surface",
-      "scope": "brand"
-    },
-    {
-      "id": "brand-kit/overview/notes",
-      "title": "Overview notes",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "brand-overview-notes"
-    },
-    {
-      "id": "brand-kit/overview/brand-options",
-      "title": "Brand options menu",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "brand-lifecycle",
-      "options": [
-        "Rename Brand",
-        "Duplicate Brand",
-        "New Brand",
-        "Archive Brand"
-      ],
-      "notes": "Ellipsis button top-right of Brand Overview header"
-    },
-    {
-      "id": "brand-kit/templates",
-      "title": "Brand Kit → Templates",
-      "kind": "surface",
-      "scope": "brand",
-      "notes": "Brand template gallery; empty by default"
-    },
-    {
-      "id": "brand-kit/templates/new-template",
-      "title": "New Template button",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "brand-template-create",
-      "notes": "Blue header button, creates a new brand template"
-    },
-    {
-      "id": "brand-kit/templates/display-mode",
-      "title": "Grid / List display toggle",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "template-gallery-display",
+      "scope": "app",
+      "settingKey": "library-view-mode",
       "options": [
         "Grid",
         "List"
       ]
     },
     {
-      "id": "brand-kit/templates/sort",
-      "title": "Sort toggles (Sort by newest / Sort A-Z)",
+      "id": "library/sort",
+      "title": "Sort",
       "kind": "control",
-      "scope": "brand",
-      "settingKey": "template-gallery-sort",
-      "options": [
-        "Sort by newest",
-        "Sort A-Z"
-      ]
+      "scope": "app",
+      "settingKey": "library-sort"
     },
     {
-      "id": "brand-kit/workflows",
-      "title": "Brand Kit → Workflows",
-      "kind": "surface",
-      "scope": "brand",
-      "notes": "Empty list; header 'New Workflow' button only"
+      "id": "library/new-draft",
+      "title": "New Draft",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "create-draft"
     },
     {
-      "id": "brand-kit/workflows/new-workflow",
-      "title": "New Workflow button",
+      "id": "library/new-collection",
+      "title": "New Collection",
       "kind": "control",
-      "scope": "brand",
-      "settingKey": "brand-workflow-create"
+      "scope": "workspace",
+      "settingKey": "create-collection"
     },
     {
       "id": "settings",
-      "title": "Settings modal",
+      "title": "Settings",
       "kind": "surface",
-      "scope": "app",
-      "notes": "Reached from left rail bottom 'Settings'; scrolling modal with Preferences / Your Plan / Workspace settings / Integrations / Team Members"
+      "scope": "workspace"
     },
     {
-      "id": "settings/auto-add-screen-zooms",
-      "title": "Auto-Add Screen Zooms (On/Off)",
+      "id": "settings/auto-screen-zooms",
+      "title": "Auto-Add Screen Zooms",
       "kind": "control",
-      "scope": "app",
+      "scope": "workspace",
       "settingKey": "auto-add-screen-zooms",
       "options": [
         "On",
         "Off"
-      ],
-      "notes": "App-wide default: automatically add zooms to new screen recordings"
+      ]
     },
     {
       "id": "settings/theme",
@@ -397,27 +182,27 @@
         "Dark",
         "Light",
         "System"
-      ],
-      "notes": "Also Shift+Cmd+\\ to quick switch"
-    },
-    {
-      "id": "settings/agent-model",
-      "title": "Agent model (default for new agent chats)",
-      "kind": "control",
-      "scope": "app",
-      "settingKey": "agent-model",
-      "options": [
-        "Fable 5",
-        "GPT-5.6 Sol",
-        "Opus 4.8",
-        "Opus 5"
       ]
     },
     {
-      "id": "settings/agent-effort",
-      "title": "Agent effort (default for new agent chats)",
+      "id": "settings/agent-model",
+      "title": "Agent model",
       "kind": "control",
-      "scope": "app",
+      "scope": "workspace",
+      "settingKey": "agent-model",
+      "options": [
+        "Opus 5",
+        "Fable 5",
+        "Opus 4.8",
+        "GPT-5.6 Sol"
+      ],
+      "notes": "Default model for new agent chats."
+    },
+    {
+      "id": "settings/agent-effort",
+      "title": "Agent effort",
+      "kind": "control",
+      "scope": "workspace",
       "settingKey": "agent-effort",
       "options": [
         "Low",
@@ -425,153 +210,506 @@
         "High",
         "Extra High",
         "Max"
+      ],
+      "notes": "Default effort for new agent chats."
+    },
+    {
+      "id": "settings/agent-fast-default",
+      "title": "Agent Fast Mode default",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "agent-fast-mode-default",
+      "options": [
+        "On",
+        "Off"
       ]
     },
     {
-      "id": "settings/agent-fast-mode",
-      "title": "Agent Fast Mode default checkbox",
-      "kind": "control",
-      "scope": "app",
-      "settingKey": "agent-fast-mode"
+      "id": "settings/workspace",
+      "title": "Workspace settings",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/integrations",
+      "title": "Integrations",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/team-members",
+      "title": "Team Members",
+      "kind": "surface",
+      "scope": "workspace"
     },
     {
       "id": "settings/workspace-name",
-      "title": "Workspace name field",
+      "title": "Workspace name",
       "kind": "control",
       "scope": "workspace",
-      "settingKey": "workspace-name"
+      "settingKey": "workspace-name",
+      "notes": "Up to 65 characters."
     },
     {
       "id": "settings/workspace-icon",
-      "title": "Workspace icon upload",
+      "title": "Workspace icon",
       "kind": "control",
       "scope": "workspace",
       "settingKey": "workspace-icon"
     },
     {
       "id": "settings/custom-window-sizes",
-      "title": "Custom window sizes (rows + Add Size / Remove)",
+      "title": "Custom window sizes",
       "kind": "control",
       "scope": "workspace",
       "settingKey": "custom-window-sizes",
-      "notes": "Named size presets applied before starting a screen recording"
+      "options": [
+        "Default 1440x897",
+        "Custom 1 1600x987"
+      ],
+      "notes": "Rows can be added or removed."
     },
     {
-      "id": "settings/integrations",
-      "title": "Integrations (Figma, Google Slides, Notion MCP, Team/Personal YouTube, Screen Studio Import)",
+      "id": "settings/integrations/figma",
+      "title": "Figma",
       "kind": "control",
       "scope": "workspace",
-      "settingKey": "integrations",
-      "notes": "Each is an external sign-in - do NOT operate"
+      "settingKey": "figma-integration"
     },
     {
-      "id": "settings/team-members",
-      "title": "Team Members (Invite Members + member role popup)",
+      "id": "settings/integrations/google-slides",
+      "title": "Google Slides",
       "kind": "control",
       "scope": "workspace",
-      "settingKey": "team-members"
+      "settingKey": "google-slides-integration"
     },
     {
-      "id": "settings/plan-upgrade",
-      "title": "Upgrade button (Your Plan)",
+      "id": "settings/integrations/notion",
+      "title": "Notion MCP",
       "kind": "control",
       "scope": "workspace",
-      "settingKey": "plan"
+      "settingKey": "notion-mcp"
     },
     {
-      "id": "settings/sign-out",
+      "id": "settings/integrations/team-youtube",
+      "title": "Team YouTube",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "team-youtube-integration"
+    },
+    {
+      "id": "settings/integrations/personal-youtube",
+      "title": "Personal YouTube",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "personal-youtube-integration"
+    },
+    {
+      "id": "settings/integrations/screen-studio",
+      "title": "Screen Studio Import",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "screen-studio-import"
+    },
+    {
+      "id": "settings/team-members/member-menu",
+      "title": "Team member menu",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Current member overflow contains only destructive Suspend user."
+    },
+    {
+      "id": "settings/team-members/suspend-user",
+      "title": "Suspend user",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "member-suspension",
+      "notes": "Destructive; never operate during exploration."
+    },
+    {
+      "id": "workspace-switcher",
+      "title": "Workspace switcher",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Shows workspace list plus New workspace and Sign out."
+    },
+    {
+      "id": "workspace-switcher/new-workspace",
+      "title": "New workspace",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "workspace-create",
+      "notes": "Creates externally persistent workspace; avoid during exploration."
+    },
+    {
+      "id": "workspace-switcher/sign-out",
       "title": "Sign out",
       "kind": "control",
       "scope": "app",
-      "settingKey": "sign-out",
-      "notes": "Destructive - never click"
+      "settingKey": "account-session",
+      "notes": "Account-changing action."
     },
     {
-      "id": "editor",
-      "title": "Project editor",
+      "id": "brand-kit",
+      "title": "Brand Kit",
       "kind": "surface",
-      "scope": "document",
-      "notes": "Opened by clicking a draft in the left rail"
+      "scope": "brand",
+      "notes": "Workspace brand defaults; remembers selected tab."
     },
     {
-      "id": "editor/voice",
-      "title": "Select voice popup (Sarah)",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "project-voice"
-    },
-    {
-      "id": "editor/project-actions",
-      "title": "Project actions menu",
+      "id": "brand-kit/brand-overview",
+      "title": "Brand Overview",
       "kind": "surface",
-      "scope": "document",
-      "notes": "Ellipsis beside 'Select voice' in the script panel header."
+      "scope": "brand"
     },
     {
-      "id": "editor/agent-effort",
-      "title": "Composer 'Effort: High' popup",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "agent-effort",
-      "notes": "Per-chat override of the account default set in Settings → Agent effort"
-    },
-    {
-      "id": "editor/music",
-      "title": "Background music picker (status bar)",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "project-music"
-    },
-    {
-      "id": "editor/captions",
-      "title": "Captions button (status bar)",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "project-captions"
-    },
-    {
-      "id": "editor/composition-paint",
-      "title": "Composition paint (status bar)",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "composition-background",
-      "notes": "Opens the paint picker for the whole project's composition background."
-    },
-    {
-      "id": "editor/detail-panel",
-      "title": "Editor detail panel (Layers inspector)",
+      "id": "brand-kit/templates",
+      "title": "Templates",
       "kind": "surface",
-      "scope": "document",
-      "notes": "Toggle with .ag-editor-topbar-btn--detailPanel; shows Layers tree for the selected clip"
+      "scope": "brand"
     },
     {
-      "id": "editor/clip-more",
-      "title": "Clip top bar \"...\" more popover",
+      "id": "brand-kit/workflows",
+      "title": "Workflows",
       "kind": "surface",
-      "scope": "document",
-      "notes": "Popover from the ellipsis at the right end of the clip toolbar; contains Background / Add BG paint picker."
+      "scope": "brand"
     },
     {
-      "id": "editor/clip-more/background",
-      "title": "Background (Add BG) paint picker",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "background-color",
-      "notes": "Per-clip background fill; AXPopUpButton 'Open paint picker' .ppPaintInput-emptyTrigger."
-    },
-    {
-      "id": "editor/clip-animation",
-      "title": "Clip animation popover (Enter/Exit)",
+      "id": "brand-kit/colors",
+      "title": "Colors",
       "kind": "surface",
-      "scope": "document",
-      "notes": "Opened from dashed-circle button in clip top bar. Tabs Enter/Exit, preset list, '...' custom button."
+      "scope": "brand"
     },
     {
-      "id": "editor/clip-animation/preset",
-      "title": "Enter/Exit animation preset",
+      "id": "brand-kit/type",
+      "title": "Type",
+      "kind": "surface",
+      "scope": "brand"
+    },
+    {
+      "id": "brand-kit/screen-clips",
+      "title": "Screen Clips",
+      "kind": "surface",
+      "scope": "brand"
+    },
+    {
+      "id": "brand-kit/motion",
+      "title": "Motion",
+      "kind": "surface",
+      "scope": "brand"
+    },
+    {
+      "id": "brand-kit/layout",
+      "title": "Layout",
+      "kind": "surface",
+      "scope": "brand"
+    },
+    {
+      "id": "brand-kit/misc",
+      "title": "Misc",
+      "kind": "surface",
+      "scope": "brand"
+    },
+    {
+      "id": "brand-kit/layout/notes",
+      "title": "Layout notes",
       "kind": "control",
-      "scope": "document",
-      "settingKey": "entrance-exit-animation",
+      "scope": "brand",
+      "settingKey": "layout-principles",
+      "notes": "Freeform text; current placeholder asks for layout grid, spacing system, alignment rules."
+    },
+    {
+      "id": "brand-kit/brand-overview/notes",
+      "title": "Overview notes",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "brand-overview-notes"
+    },
+    {
+      "id": "brand-kit/brand-options",
+      "title": "Brand options",
+      "kind": "surface",
+      "scope": "brand",
+      "notes": "Rename Brand, Duplicate Brand, New Brand, Archive Brand."
+    },
+    {
+      "id": "brand-kit/brand-options/rename",
+      "title": "Rename Brand",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "brand-name"
+    },
+    {
+      "id": "brand-kit/brand-options/duplicate",
+      "title": "Duplicate Brand",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "brand-duplicate"
+    },
+    {
+      "id": "brand-kit/brand-options/new",
+      "title": "New Brand",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "brand-create"
+    },
+    {
+      "id": "brand-kit/brand-options/archive",
+      "title": "Archive Brand",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "brand-archive",
+      "notes": "Destructive."
+    },
+    {
+      "id": "brand-kit/templates/view-mode",
+      "title": "Template view mode",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "template-library-view",
+      "options": [
+        "Grid",
+        "List"
+      ]
+    },
+    {
+      "id": "brand-kit/templates/sort",
+      "title": "Template sort",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "template-library-sort",
+      "options": [
+        "newest",
+        "A-Z"
+      ]
+    },
+    {
+      "id": "brand-kit/templates/new-template",
+      "title": "New Template",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "template-create"
+    },
+    {
+      "id": "brand-kit/templates/name",
+      "title": "Template name",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "template-name"
+    },
+    {
+      "id": "brand-kit/templates/description",
+      "title": "Template description",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "template-description"
+    },
+    {
+      "id": "brand-kit/templates/edit",
+      "title": "Edit Template...",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "template-content"
+    },
+    {
+      "id": "brand-kit/templates/options",
+      "title": "Template options",
+      "kind": "surface",
+      "scope": "brand"
+    },
+    {
+      "id": "brand-kit/templates/options/duplicate",
+      "title": "Duplicate Template",
+      "kind": "control",
+      "scope": "brand",
+      "notes": "Creates persistent duplicate; do not use during exploration."
+    },
+    {
+      "id": "brand-kit/templates/options/move",
+      "title": "Move to Brand",
+      "kind": "control",
+      "scope": "brand",
+      "notes": "Moves template across brands; persistent."
+    },
+    {
+      "id": "brand-kit/templates/options/delete",
+      "title": "Delete Template",
+      "kind": "control",
+      "scope": "brand",
+      "notes": "Destructive."
+    },
+    {
+      "id": "brand-kit/workflows/new-workflow",
+      "title": "New Workflow",
+      "kind": "control",
+      "scope": "brand",
+      "notes": "Creates persistent workflow."
+    },
+    {
+      "id": "brand-kit/colors/backgrounds",
+      "title": "Background colors",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "background-colors",
+      "notes": "Swatches open paint picker; add tile creates a brand background color."
+    },
+    {
+      "id": "brand-kit/colors/text-colors",
+      "title": "Text Colors",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "text-colors",
+      "notes": "Swatches open paint picker; add tile creates a brand text color."
+    },
+    {
+      "id": "brand-kit/colors/notes",
+      "title": "Color Notes",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "color-notes"
+    },
+    {
+      "id": "brand-kit/colors/paint-picker",
+      "title": "Paint picker",
+      "kind": "surface",
+      "scope": "brand",
+      "notes": "Tabs: Solid, Linear, Radial, Multi, Image, Shader. Solid exposes hue, opacity, eyedropper, format switch, hex, and opacity percent."
+    },
+    {
+      "id": "brand-kit/colors/actions",
+      "title": "Color actions",
+      "kind": "surface",
+      "scope": "brand"
+    },
+    {
+      "id": "brand-kit/colors/actions/make-default",
+      "title": "Make Default",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "default-brand-color",
+      "notes": "Disabled for current default swatch."
+    },
+    {
+      "id": "brand-kit/colors/actions/duplicate",
+      "title": "Duplicate",
+      "kind": "control",
+      "scope": "brand",
+      "notes": "Creates persistent duplicate swatch."
+    },
+    {
+      "id": "brand-kit/colors/actions/remove",
+      "title": "Remove",
+      "kind": "control",
+      "scope": "brand",
+      "notes": "Destructive."
+    },
+    {
+      "id": "brand-kit/type/primary-font",
+      "title": "Primary Font",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "primary-font",
+      "notes": "Current Inter; click to search large catalog."
+    },
+    {
+      "id": "brand-kit/type/secondary-font",
+      "title": "Secondary Font",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "secondary-font",
+      "notes": "Current None; click to search large catalog."
+    },
+    {
+      "id": "brand-kit/type/new-text-style",
+      "title": "New Text Style",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "text-styles",
+      "notes": "Creates persistent brand text style."
+    },
+    {
+      "id": "brand-kit/type/font-usage-notes",
+      "title": "Font Usage Notes",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "font-usage-notes"
+    },
+    {
+      "id": "brand-kit/screen-clips/cursor-settings",
+      "title": "Cursor defaults",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "screen-clip-cursor-defaults",
+      "notes": "Auto-hide, text cursor visibility, style, and scale."
+    },
+    {
+      "id": "brand-kit/screen-clips/screen-display",
+      "title": "Screen display defaults",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "screen-clip-display-defaults",
+      "notes": "Window padding and shadow parameters."
+    },
+    {
+      "id": "brand-kit/screen-clips/sound-effects",
+      "title": "Sound effect defaults",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "screen-clip-sound-defaults",
+      "notes": "Cursor clicks and keyboard presses."
+    },
+    {
+      "id": "brand-kit/screen-clips/visual-effects",
+      "title": "Visual effect defaults",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "screen-clip-visual-defaults",
+      "notes": "Entrance/exit, motion blur, zoom type and zoom level."
+    },
+    {
+      "id": "brand-kit/screen-clips/cursor-style",
+      "title": "Cursor Style",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "cursor-style",
+      "options": [
+        "Arrow-first",
+        "Pointer-first",
+        "Original"
+      ]
+    },
+    {
+      "id": "brand-kit/screen-clips/sound-intensity",
+      "title": "Sound intensity",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "screen-clip-sound-intensity",
+      "options": [
+        "Extra Soft",
+        "Soft",
+        "Medium",
+        "Loud"
+      ]
+    },
+    {
+      "id": "brand-kit/screen-clips/keyboard-sound-set",
+      "title": "Keyboard Presses sound set",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "keyboard-press-sound-set",
+      "options": [
+        "Set A",
+        "Set B",
+        "Set C",
+        "Set D"
+      ]
+    },
+    {
+      "id": "brand-kit/screen-clips/entrance-animation",
+      "title": "Entrance animation",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "screen-clip-entrance-animation",
       "options": [
         "Appear",
         "Fade In",
@@ -581,8 +719,311 @@
         "Fade Right",
         "Scale Up",
         "Scale Down"
-      ],
-      "notes": "Applies to the selected clip only."
+      ]
+    },
+    {
+      "id": "brand-kit/screen-clips/animation-picker",
+      "title": "Entrance/Exit Animation picker",
+      "kind": "surface",
+      "scope": "brand"
+    },
+    {
+      "id": "brand-kit/screen-clips/exit-animation",
+      "title": "Exit animation",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "screen-clip-exit-animation",
+      "options": [
+        "Disappear",
+        "Fade Out",
+        "Fade Up",
+        "Fade Down",
+        "Fade Right",
+        "Fade Left",
+        "Scale Up",
+        "Scale Down"
+      ]
+    },
+    {
+      "id": "brand-kit/motion/notes",
+      "title": "Motion notes",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "motion-notes",
+      "notes": "Freeform brand animation style/timing/easing guidance."
+    },
+    {
+      "id": "brand-kit/misc/notes",
+      "title": "Misc notes",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "misc-notes",
+      "notes": "Freeform additional brand guidance."
+    },
+    {
+      "id": "invite-members",
+      "title": "Invite Members",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "workspace-members",
+      "notes": "Externally visible invite flow; harness refuses activation."
+    },
+    {
+      "id": "your-drafts",
+      "title": "Your Drafts",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "your-drafts/search",
+      "title": "Search",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "draft-search"
+    },
+    {
+      "id": "your-drafts/view-mode",
+      "title": "Grid/List",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "draft-gallery-view",
+      "options": [
+        "Grid",
+        "List"
+      ]
+    },
+    {
+      "id": "your-drafts/sort",
+      "title": "Sort",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "draft-gallery-sort"
+    },
+    {
+      "id": "your-drafts/new-draft",
+      "title": "New Draft",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "new-draft",
+      "notes": "Creates persistent draft."
+    },
+    {
+      "id": "your-drafts/card-menu",
+      "title": "Draft card ellipsis",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "your-drafts/sort-menu",
+      "title": "Draft sort menu",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "your-drafts/sort-options",
+      "title": "Sort order",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "draft-gallery-sort",
+      "options": [
+        "Newest first",
+        "Oldest first",
+        "A - Z",
+        "Z - A"
+      ]
+    },
+    {
+      "id": "your-drafts/card-menu/move",
+      "title": "Move to David's Workspace",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "document-location"
+    },
+    {
+      "id": "your-drafts/card-menu/rename",
+      "title": "Rename",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "document-name"
+    },
+    {
+      "id": "your-drafts/card-menu/copy",
+      "title": "Make a copy",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "duplicate-document"
+    },
+    {
+      "id": "your-drafts/card-menu/delete",
+      "title": "Delete",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "delete-document",
+      "notes": "Destructive."
+    },
+    {
+      "id": "editor",
+      "title": "Draft editor",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "editor/title",
+      "title": "Document title",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "document-name"
+    },
+    {
+      "id": "editor/agent",
+      "title": "Agent",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "editor/script",
+      "title": "Script",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "editor/voice",
+      "title": "Select voice",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "document-voice"
+    },
+    {
+      "id": "editor/project-actions",
+      "title": "Project actions",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "editor/composition-paint",
+      "title": "Composition paint",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "composition-paint"
+    },
+    {
+      "id": "editor/captions",
+      "title": "Captions",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "captions"
+    },
+    {
+      "id": "editor/music",
+      "title": "Add Music",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "editor/publish",
+      "title": "Publish",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "publish-document",
+      "notes": "Externally visible; do not use during exploration."
+    },
+    {
+      "id": "editor/export",
+      "title": "Export",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "editor/insert",
+      "title": "Insert",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "editor/background-paint",
+      "title": "Add BG",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "background-paint"
+    },
+    {
+      "id": "editor/detail-panel",
+      "title": "Detail panel",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "editor/playback",
+      "title": "Playback",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "playback"
+    },
+    {
+      "id": "editor/library-picker",
+      "title": "Add from Library",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Full-width modal opened from editor Library; card selection adds media."
+    },
+    {
+      "id": "editor/timeline-zoom",
+      "title": "Timeline Zoom",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "editor/add-scene",
+      "title": "Add scene",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "scene-list",
+      "notes": "Adds persistent scene."
+    },
+    {
+      "id": "editor/project-actions/copy-transcript",
+      "title": "Copy Transcript",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "copy-transcript"
+    },
+    {
+      "id": "editor/project-actions/make-copy",
+      "title": "Make a copy",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "duplicate-document"
+    },
+    {
+      "id": "editor/project-actions/download-srt",
+      "title": "Download SRT…",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "export-srt"
+    },
+    {
+      "id": "editor/project-actions/screen-clip-settings",
+      "title": "Screen Clip Settings…",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "screen-clip-settings"
+    },
+    {
+      "id": "editor/project-actions/version-history",
+      "title": "Show Version History…",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "version-history"
+    },
+    {
+      "id": "editor/project-actions/brand",
+      "title": "Brand",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "document-brand",
+      "options": [
+        "Default Brand"
+      ]
     },
     {
       "id": "editor/project-actions/aspect-ratio",
@@ -595,8 +1036,7 @@
         "Laptop (16:10)",
         "Square (1:1)",
         "Vertical (9:16)"
-      ],
-      "notes": "Per-project canvas aspect ratio; Widescreen active."
+      ]
     },
     {
       "id": "editor/project-actions/performance-mode",
@@ -608,472 +1048,27 @@
         "Efficiency",
         "Default",
         "Ultra"
-      ],
-      "notes": "Per-project render/preview quality; Default active."
-    },
-    {
-      "id": "editor/project-actions/brand",
-      "title": "Brand (submenu)",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "project-brand",
-      "notes": "Which brand kit this project uses; currently 'Default Brand'."
-    },
-    {
-      "id": "editor/project-actions/copy-transcript",
-      "title": "Copy Transcript",
-      "kind": "control",
-      "scope": "document"
-    },
-    {
-      "id": "editor/project-actions/make-a-copy",
-      "title": "Make a copy",
-      "kind": "control",
-      "scope": "document"
-    },
-    {
-      "id": "editor/project-actions/download-srt",
-      "title": "Download SRT...",
-      "kind": "control",
-      "scope": "document"
-    },
-    {
-      "id": "editor/project-actions/version-history",
-      "title": "Show Version History...",
-      "kind": "control",
-      "scope": "document"
+      ]
     },
     {
       "id": "editor/project-actions/delete",
-      "title": "Delete (project)",
+      "title": "Delete",
       "kind": "control",
       "scope": "document",
-      "notes": "DESTRUCTIVE - do not click during exploration."
+      "settingKey": "delete-document"
     },
     {
-      "id": "editor/project-screen-clip-settings",
-      "title": "Screen Recording Settings (per project)",
-      "kind": "surface",
-      "scope": "document",
-      "notes": "Project actions → 'Screen Clip Settings...'. Same layout as Brand Kit → Screen Clips but project-scoped. Footer 'Done'."
-    },
-    {
-      "id": "editor/project-screen-clip-settings/auto-hide-cursor",
-      "title": "Auto-Hide Cursor (project)",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "auto-hide-cursor",
-      "options": [
-        "Auto Hide",
-        "Off"
-      ]
-    },
-    {
-      "id": "editor/project-screen-clip-settings/text-cursor",
-      "title": "Text Cursor (project)",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "text-cursor",
-      "options": [
-        "Hide",
-        "Show"
-      ]
-    },
-    {
-      "id": "editor/project-screen-clip-settings/cursor-style",
-      "title": "Cursor Style (project)",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "cursor-style",
-      "notes": "Combobox, currently Arrow-first."
-    },
-    {
-      "id": "editor/project-screen-clip-settings/cursor-scale",
-      "title": "Cursor Scale (project)",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "cursor-scale",
-      "notes": "Slider, 1.60."
-    },
-    {
-      "id": "editor/project-screen-clip-settings/window-padding",
-      "title": "Screen Window Padding (project)",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "screen-window-padding"
-    },
-    {
-      "id": "editor/project-screen-clip-settings/shadow",
-      "title": "Shadow opacity/blur/spread/X/Y (project)",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "screen-shadow"
-    },
-    {
-      "id": "editor/project-screen-clip-settings/sound-effects",
-      "title": "Sound Effects: cursor clicks / keyboard presses (project)",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "screen-sound-effects"
-    },
-    {
-      "id": "editor/project-screen-clip-settings/entrance-exit-animation",
-      "title": "Entrance/Exit Animation (project default)",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "entrance-exit-animation",
-      "notes": "Fade Up; project-level default for screen clips."
-    },
-    {
-      "id": "editor/project-screen-clip-settings/motion-blur",
-      "title": "Motion Blur (project)",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "motion-blur",
-      "options": [
-        "Off",
-        "Low",
-        "Medium",
-        "High"
-      ],
-      "notes": "Medium active in this project."
-    },
-    {
-      "id": "editor/project-screen-clip-settings/default-zoom-type",
-      "title": "Default Zoom Type (project)",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "default-zoom-type",
-      "options": [
-        "Glide",
-        "Fixed"
-      ]
-    },
-    {
-      "id": "editor/project-screen-clip-settings/default-zoom-level",
-      "title": "Default Zoom Level (project)",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "default-zoom-level",
-      "notes": "Slider 54%."
-    },
-    {
-      "id": "editor/scene-menu",
-      "title": "Scene header menu",
-      "kind": "surface",
-      "scope": "document",
-      "notes": "Copy Scene / Copy Transcript / Delete Scene. One per scene in the Script panel."
-    },
-    {
-      "id": "editor/captions-bar",
-      "title": "Caption styling bar (project)",
-      "kind": "surface",
-      "scope": "document",
-      "notes": "Opened by the captions button in the editor status bar; replaces the clip toolbar."
-    },
-    {
-      "id": "editor/captions-bar/preset",
-      "title": "Captions Presets popup",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "caption-preset"
-    },
-    {
-      "id": "editor/captions-bar/font",
-      "title": "Caption font family ('Cereal')",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "font-family",
-      "notes": "Per-project caption font; brand default font is Brand Kit → Type → Primary Font."
-    },
-    {
-      "id": "editor/captions-bar/size-preset",
-      "title": "Caption size preset ('Medium')",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "caption-size-preset"
-    },
-    {
-      "id": "editor/captions-bar/font-size",
-      "title": "Caption font size (48)",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "caption-font-size"
-    },
-    {
-      "id": "editor/captions-bar/color",
-      "title": "Caption text color paint picker",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "text-color",
-      "notes": "Brand-level equivalent: Brand Kit → Colors → Text Colors swatches."
-    },
-    {
-      "id": "editor/captions-bar/effects",
-      "title": "Caption Effects popup",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "caption-effects"
-    },
-    {
-      "id": "editor/captions-bar/hidden",
-      "title": "'!? Hidden' captions visibility checkbox",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "captions-hidden"
-    },
-    {
-      "id": "editor/music-picker",
-      "title": "Background music picker (project)",
+      "id": "editor/voice-picker",
+      "title": "Voice picker",
       "kind": "surface",
       "scope": "document"
     },
     {
-      "id": "editor/music-picker/track",
-      "title": "Music track grid items",
+      "id": "editor/voice/category",
+      "title": "Voice category",
       "kind": "control",
       "scope": "document",
-      "settingKey": "background-music-track",
-      "options": [
-        "No background track",
-        "Vintage Groove",
-        "[No Copyright Music] Chill LoFi Hip Hop Beat",
-        "ES_A Winter to Remember - Trevor Kowalski"
-      ]
-    },
-    {
-      "id": "editor/music-picker/remix",
-      "title": "Remix Music to Fit",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "music-remix"
-    },
-    {
-      "id": "editor/music-picker/upload",
-      "title": "Upload audio file",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "music-upload"
-    },
-    {
-      "id": "library",
-      "title": "Your Library page",
-      "kind": "surface",
-      "scope": "workspace"
-    },
-    {
-      "id": "library/search",
-      "title": "Library search field",
-      "kind": "control",
-      "scope": "workspace",
-      "settingKey": "library-search"
-    },
-    {
-      "id": "library/display-mode",
-      "title": "Grid / List display toggle",
-      "kind": "control",
-      "scope": "workspace",
-      "settingKey": "gallery-display-mode",
-      "options": [
-        "Grid",
-        "List"
-      ],
-      "notes": "Same kind of control exists in Brand Kit → Templates header."
-    },
-    {
-      "id": "library/sort",
-      "title": "Sort order popup",
-      "kind": "control",
-      "scope": "workspace",
-      "settingKey": "library-sort"
-    },
-    {
-      "id": "library/new-draft",
-      "title": "New Draft button",
-      "kind": "control",
-      "scope": "workspace",
-      "settingKey": "new-draft"
-    },
-    {
-      "id": "library/new-collection",
-      "title": "New Collection tile",
-      "kind": "control",
-      "scope": "workspace",
-      "settingKey": "new-collection"
-    },
-    {
-      "id": "library/project-card-menu",
-      "title": "Project card '...' menu",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "project-card-actions"
-    },
-    {
-      "id": "library/card-menu",
-      "title": "Library card '...' menu",
-      "kind": "surface",
-      "scope": "document",
-      "notes": "Make Private Draft / Rename / Make a copy / Delete. Open by pixel click on the ellipsis."
-    },
-    {
-      "id": "library/sort-menu",
-      "title": "Sort order menu",
-      "kind": "surface",
-      "scope": "workspace",
-      "notes": "Newest first / Oldest first / A - Z / Z - A"
-    },
-    {
-      "id": "workspace-switcher",
-      "title": "Workspace switcher popover",
-      "kind": "surface",
-      "scope": "workspace",
-      "notes": "From left-rail org badge. Lists workspaces + New workspace + Sign out."
-    },
-    {
-      "id": "workspace-switcher/new-workspace",
-      "title": "New workspace",
-      "kind": "control",
-      "scope": "workspace",
-      "settingKey": "new-workspace",
-      "notes": "Creates a new workspace — not operated (would create real state)."
-    },
-    {
-      "id": "workspace-switcher/sign-out",
-      "title": "Sign out",
-      "kind": "control",
-      "scope": "app",
-      "settingKey": "sign-out",
-      "notes": "Same sign-out as Settings modal left column."
-    },
-    {
-      "id": "workspace-switcher/org-item",
-      "title": "Workspace row (David's Workspace)",
-      "kind": "control",
-      "scope": "workspace",
-      "settingKey": "active-workspace",
-      "notes": "Click to switch active workspace."
-    },
-    {
-      "id": "paint-picker",
-      "title": "Paint picker popover",
-      "kind": "surface",
-      "scope": "document",
-      "notes": "Shared color/paint editor reached from any 'Open paint picker' button."
-    },
-    {
-      "id": "paint-picker/quick-swatches",
-      "title": "Brand palette quick swatches",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "background-color",
-      "notes": "Applies a brand palette color to the current target (project composition / clip background). Same swatch set as Brand Kit → Colors Background."
-    },
-    {
-      "id": "paint-picker/paint-type",
-      "title": "Paint type tabs",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "paint-type",
-      "options": [
-        "Solid",
-        "Linear",
-        "Radial",
-        "Multi",
-        "Image",
-        "Shader"
-      ],
-      "notes": "Radio tabs; current project composition = Image."
-    },
-    {
-      "id": "paint-picker/replace-image",
-      "title": "Replace image",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "paint-image",
-      "notes": "Uploads a local image as the paint (Image type only)."
-    },
-    {
-      "id": "paint-picker/fit",
-      "title": "Fit",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "paint-image-fit",
-      "notes": "Combobox, value Cover."
-    },
-    {
-      "id": "paint-picker/position",
-      "title": "Position",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "paint-image-position",
-      "notes": "Combobox, value Center."
-    },
-    {
-      "id": "editor/timeline-zoom",
-      "title": "Timeline Zoom popover",
-      "kind": "surface",
-      "scope": "app",
-      "notes": "− / slider / + ; view-only timeline zoom."
-    },
-    {
-      "id": "editor/timeline-zoom/slider",
-      "title": "Timeline zoom slider",
-      "kind": "control",
-      "scope": "app",
-      "settingKey": "timeline-zoom",
-      "notes": "Value 0..1 (~0.65). View preference only."
-    },
-    {
-      "id": "editor/add-from-library",
-      "title": "Add from Library dialog",
-      "kind": "surface",
-      "scope": "document",
-      "notes": "Media browser for inserting assets into the open project."
-    },
-    {
-      "id": "editor/add-from-library/tabs",
-      "title": "Asset type tabs",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "add-from-library-tab",
-      "options": [
-        "Everything",
-        "Images",
-        "Screen Clips",
-        "Webcams",
-        "Videos",
-        "Projects"
-      ],
-      "notes": "Filters the asset grid."
-    },
-    {
-      "id": "editor/add-from-library/search",
-      "title": "Search Everything...",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "add-from-library-search"
-    },
-    {
-      "id": "editor/add-from-library/upload-camera-footage",
-      "title": "Upload Camera Footage",
-      "kind": "control",
-      "scope": "workspace",
-      "settingKey": "upload-camera-footage",
-      "notes": "Uploads a local camera video into the workspace library."
-    },
-    {
-      "id": "editor/voice-picker",
-      "title": "Voice picker dropdown",
-      "kind": "surface",
-      "scope": "document",
-      "notes": "Opened from Select voice button in Script panel header."
-    },
-    {
-      "id": "editor/voice-picker/lang-tabs",
-      "title": "English / World / Creative tabs",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "voice-category-tab",
+      "settingKey": "voice-category",
       "options": [
         "English",
         "World",
@@ -1081,594 +1076,527 @@
       ]
     },
     {
-      "id": "editor/voice-picker/voice",
-      "title": "Voice grid item",
+      "id": "editor/voice/speaker",
+      "title": "Narration voice",
       "kind": "control",
       "scope": "document",
-      "settingKey": "project-voice",
+      "settingKey": "narration-voice"
+    },
+    {
+      "id": "editor/voice/speed",
+      "title": "Talking speed",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "narration-speed",
       "options": [
-        "Annie",
-        "Brynn",
-        "Cassidy",
-        "Fay",
-        "Jacob",
-        "Jada",
-        "James",
-        "Jeff",
-        "Kendra",
-        "Miranda",
-        "Robert",
-        "Sarah"
-      ],
-      "notes": "Sarah currently selected; per-project TTS voice."
+        "Slowest",
+        "Slow",
+        "Default",
+        "Fast",
+        "Faster"
+      ]
     },
     {
-      "id": "editor/voice-picker/fast-talking-speed",
-      "title": "Fast Talking Speed",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "voice-speed"
-    },
-    {
-      "id": "editor/clip-fill-type",
-      "title": "Clip video fill type dropdown",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "clip-video-fill-type",
-      "options": [
-        "Graphics Video",
-        "Timeline Clip"
-      ],
-      "notes": ".editor-topbar-btn--videoFillType in clip toolbar."
-    },
-    {
-      "id": "editor/clip-corner-radius",
-      "title": "Clip corner radius",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "clip-corner-radius",
-      "notes": "Number field (.tbNumberInput-input) right of fill-type popup, value 0."
-    },
-    {
-      "id": "editor/clip-speed",
-      "title": "Clip playback rate",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "clip-playback-rate",
-      "notes": "Number field with stopwatch icon, value 1.00."
-    },
-    {
-      "id": "editor/clip-mute",
-      "title": "Mute clip",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "clip-mute"
-    },
-    {
-      "id": "editor/clip-edit-trim",
-      "title": "Edit Trim",
-      "kind": "control",
-      "scope": "document",
-      "notes": "Opens trim editing for the selected clip."
-    },
-    {
-      "id": "editor/clip-convert-to-camera",
-      "title": "Convert to Camera",
-      "kind": "control",
-      "scope": "document"
-    },
-    {
-      "id": "editor/composer-actions",
-      "title": "Composer actions menu",
+      "id": "editor/scene-actions",
+      "title": "Scene actions",
       "kind": "surface",
-      "scope": "document",
-      "notes": "Agent chat composer plus menu."
-    },
-    {
-      "id": "editor/composer-actions/add-reference",
-      "title": "Add Reference...",
-      "kind": "control",
       "scope": "document"
     },
     {
-      "id": "editor/composer-actions/switch-media-gen",
+      "id": "editor/scene-actions/copy-scene",
+      "title": "Copy Scene",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "copy-scene"
+    },
+    {
+      "id": "editor/scene-actions/copy-transcript",
+      "title": "Copy Transcript",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "copy-scene-transcript"
+    },
+    {
+      "id": "editor/scene-actions/delete",
+      "title": "Delete Scene",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "delete-scene"
+    },
+    {
+      "id": "editor/agent/composer-actions",
+      "title": "Composer actions",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "editor/agent/add-reference",
+      "title": "Add Reference…",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "agent-reference"
+    },
+    {
+      "id": "editor/agent/media-gen",
       "title": "Switch to Media Gen",
       "kind": "control",
       "scope": "document",
-      "settingKey": "composer-mode",
-      "options": [
-        "Agent",
-        "Media Gen"
-      ]
+      "settingKey": "agent-composer-mode"
     },
     {
-      "id": "editor/effort-popover",
-      "title": "Agent effort popover (composer)",
+      "id": "editor/insert-menu",
+      "title": "Insert menu",
       "kind": "surface",
       "scope": "document"
     },
     {
-      "id": "editor/effort-popover/stop",
-      "title": "Effort stop (Low/Medium/High/Extra/Max)",
+      "id": "editor/insert/tools",
+      "title": "Insert tools",
       "kind": "control",
       "scope": "document",
-      "settingKey": "agent-effort",
+      "settingKey": "insert-content-tool",
       "options": [
-        "Low",
-        "Medium",
-        "High",
-        "Extra",
-        "Max"
+        "Text",
+        "Image",
+        "Video",
+        "Icon",
+        "Rectangle",
+        "Ellipse",
+        "Polygon",
+        "Line",
+        "Arrow",
+        "Pen",
+        "Group"
       ],
-      "notes": "Per-chat override; pairs with settings/agent-effort (app default)."
+      "notes": "Choosing tools adds or initiates document content."
     },
     {
-      "id": "editor/insert-overlay",
-      "title": "Insert overlay slide (Default Brand Templates popover)",
+      "id": "editor/music-picker",
+      "title": "Music picker",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "editor/music-picker/track",
+      "title": "Background track",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "background-music",
+      "notes": "Rows include No background track and existing tracks; choosing changes document."
+    },
+    {
+      "id": "editor/music-picker/upload",
+      "title": "Upload music",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "background-music-upload",
+      "notes": "Bottom unlabeled upload button; opens file chooser."
+    },
+    {
+      "id": "editor/layers-panel",
+      "title": "Layers panel",
       "kind": "surface",
       "scope": "document",
-      "notes": "Templates listed come from Brand Kit → Templates for the project's brand."
+      "notes": "Right sidebar; current sync point shows No layers."
     },
     {
-      "id": "editor/insert-overlay/new-blank-overlay",
+      "id": "editor/timeline-zoom-popover",
+      "title": "Timeline Zoom popover",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "editor/timeline-zoom/slider",
+      "title": "Timeline zoom slider",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "timeline-zoom",
+      "notes": "Continuous minus-to-plus display scale; current observed AX value ~0.6525."
+    },
+    {
+      "id": "editor/library-picker/tabs",
+      "title": "Library media tabs",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-filter",
+      "options": [
+        "Everything",
+        "Images",
+        "Screen Clips",
+        "Webcams",
+        "Videos",
+        "Projects"
+      ]
+    },
+    {
+      "id": "editor/library-picker/search",
+      "title": "Search library media",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-search"
+    },
+    {
+      "id": "editor/library-picker/upload-camera",
+      "title": "Upload Camera Footage",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "upload-camera-footage"
+    },
+    {
+      "id": "editor/library-picker/card-menu",
+      "title": "Library item menu",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "editor/library-picker/card-menu/delete",
+      "title": "Delete library asset",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "delete-library-asset",
+      "notes": "Only menu item; destructive."
+    },
+    {
+      "id": "editor/library-picker/projects",
+      "title": "Project rows",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "add-from-project",
+      "notes": "Projects tab lists project/draft name and timestamp; selection adds/imports into current document."
+    },
+    {
+      "id": "editor/overlay-template-picker",
+      "title": "Overlay template picker",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Opened by first insert-toolbar icon."
+    },
+    {
+      "id": "editor/overlay-template-picker/template",
+      "title": "Brand overlay template",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "insert-overlay-template"
+    },
+    {
+      "id": "editor/overlay-template-picker/new-blank",
       "title": "New Blank Overlay",
       "kind": "control",
-      "scope": "document"
-    },
-    {
-      "id": "editor/side-panel-tabs",
-      "title": "Agent / Script tabs",
-      "kind": "control",
       "scope": "document",
-      "settingKey": "editor-side-panel-tab",
-      "notes": "Left panel tab switcher (.ag-editor-sidePanel-header-tab). Agent = chat, Script = transcript.",
-      "options": [
-        "Agent",
-        "Script"
-      ]
+      "settingKey": "insert-blank-overlay"
     },
     {
-      "id": "editor/export",
-      "title": "Export button",
-      "kind": "control",
-      "scope": "document",
-      "notes": "Status bar top-right (.ag-editor-statusBar-btn--export). Renders/downloads the video. Not opened during exploration (harness refuses destructive verbs)."
-    },
-    {
-      "id": "editor/publish",
-      "title": "Publish (globe) button",
-      "kind": "control",
-      "scope": "document",
-      "notes": "Status bar top-right (.ag-editor-statusBar-btn--publishing). Publishes/shares the video publicly. Not opened (externally visible action)."
-    },
-    {
-      "id": "editor/insert-media",
-      "title": "Add media popover (insert bar)",
+      "id": "editor/media-picker",
+      "title": "Media picker",
       "kind": "surface",
       "scope": "document",
-      "notes": "Opened by the 2nd insert-bar button (mediaClip icon) at the bottom toolbar. Grid of recent workspace media + upload button. Inserting affects only this project."
+      "notes": "Opened by the second insert-toolbar icon (media clip); reusable image/video gallery plus upload."
     },
     {
-      "id": "editor/insert-media/upload",
-      "title": "Upload media button",
+      "id": "editor/media-picker/asset",
+      "title": "Media asset",
       "kind": "control",
       "scope": "document",
-      "notes": ".popover--addMediaPopover-uploadBtn — opens a file picker to upload a local media file into the project."
+      "settingKey": "document-media-content",
+      "notes": "Selecting adds asset to current document."
     },
     {
-      "id": "editor/insert-media/item",
-      "title": "Media tile",
+      "id": "editor/media-picker/upload",
+      "title": "Upload media",
       "kind": "control",
       "scope": "document",
-      "notes": ".popover--addMediaPopover-itemContainer — click to insert that asset as a new media clip."
+      "settingKey": "document-media-content",
+      "notes": "Bottom laptop-upload button; persistent content/file chooser."
     },
     {
-      "id": "root",
-      "title": "Yarn main window (left rail)",
-      "kind": "surface",
-      "scope": "app",
-      "notes": "Rail: org badge, Library, Your Drafts, project rows, New draft, Invite Members, Brand Kit, Settings."
-    },
-    {
-      "id": "your-drafts",
-      "title": "Your Drafts",
-      "kind": "surface",
-      "scope": "workspace",
-      "notes": "Library list filtered to drafts. Not operated (would navigate away from the editor the app was found in)."
-    },
-    {
-      "id": "menubar",
-      "title": "macOS menu bar (Yarn)",
-      "kind": "surface",
-      "scope": "app",
-      "notes": "Generic Electron menus: Yarn, File (Close Window/Close All), Edit, View (Reload/Force Reload/Toggle Developer Tools/Actual Size/Zoom In/Out), Window, Help(empty). NO Preferences item — app settings live in the left rail only."
-    },
-    {
-      "id": "settings/theme-quick",
-      "title": "Theme quick-switch Shift+Cmd+\\",
-      "kind": "control",
-      "scope": "app",
-      "settingKey": "theme",
-      "notes": "Keyboard shortcut equivalent of Settings → Preferences → Theme."
-    },
-    {
-      "id": "editor/insert-popup",
-      "title": "Canvas top-bar \"Insert\" popup",
-      "kind": "control",
-      "scope": "document",
-      "notes": "Inserts content into the open project. Not operated (mutates the document)."
-    },
-    {
-      "id": "editor/timeline",
-      "title": "Editor timeline",
+      "id": "editor/record-capture",
+      "title": "Record/capture workflow",
       "kind": "surface",
       "scope": "document",
-      "notes": "Per-scene headers with Add scene + skip buttons, left-edge button, clip rows. Many buttons have empty AX names; pressing them scrubs/jumps the playhead."
-    },
-    {
-      "id": "editor/captions-bar/hidden-toggle",
-      "title": "Captions Hidden checkbox",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "captions-visible",
-      "notes": "'!? Hidden' checkbox in caption mode; shows/hides captions for this project."
+      "notes": "Dangerous exploration dead end: creates blank inaccessible child/modal and leaves editor dim/non-interactive; ordinary close/hide commands failed."
     }
   ],
   "edges": [
     {
       "from": "root",
+      "to": "library",
+      "action": "Open Yarn; Library is the ordinary landing view."
+    },
+    {
+      "from": "library",
+      "to": "settings",
+      "action": "Click Settings in the left sidebar."
+    },
+    {
+      "from": "settings",
+      "to": "library",
+      "action": "Click the X at the modal top-right."
+    },
+    {
+      "from": "settings/team-members",
+      "to": "settings/team-members/member-menu",
+      "action": "click the ellipsis at the right of a member row"
+    },
+    {
+      "from": "library",
+      "to": "workspace-switcher",
+      "action": "click “David's Workspace” at top of the left sidebar"
+    },
+    {
+      "from": "library",
       "to": "brand-kit",
-      "action": "click \"Brand Kit\" in bottom-left rail"
+      "action": "click “Brand Kit” in the left sidebar"
     },
     {
       "from": "brand-kit",
-      "to": "brand-kit/screen-clips",
-      "action": "click \"Screen Clips\" in the Brand Studio sub-menu"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/colors",
-      "action": "click \"Colors\" in Brand Studio side menu"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/type",
-      "action": "click \"Type\" in Brand Studio side menu"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/motion",
-      "action": "click \"Motion\" in Brand Studio side menu"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/layout",
-      "action": "click \"Layout\" in Brand Studio side menu"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/misc",
-      "action": "click \"Misc\" in Brand Studio side menu"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/overview",
-      "action": "click \"Brand Overview\" in Brand Studio side menu"
-    },
-    {
-      "from": "brand-kit/overview",
-      "to": "brand-kit/overview/brand-options",
-      "action": "click the \"Brand options\" ellipsis button (top-right)"
+      "to": "brand-kit/brand-overview",
+      "action": "click “Brand Overview”"
     },
     {
       "from": "brand-kit",
       "to": "brand-kit/templates",
-      "action": "click \"Templates\" in Brand Studio side menu"
+      "action": "click “Templates”"
     },
     {
       "from": "brand-kit",
       "to": "brand-kit/workflows",
-      "action": "click \"Workflows\" in Brand Studio side menu"
+      "action": "click “Workflows”"
     },
     {
-      "from": "root",
-      "to": "settings",
-      "action": "click \"Settings\" at bottom of left rail"
+      "from": "brand-kit",
+      "to": "brand-kit/colors",
+      "action": "click “Colors”"
     },
     {
-      "from": "root",
+      "from": "brand-kit",
+      "to": "brand-kit/type",
+      "action": "click “Type”"
+    },
+    {
+      "from": "brand-kit",
+      "to": "brand-kit/screen-clips",
+      "action": "click “Screen Clips”"
+    },
+    {
+      "from": "brand-kit",
+      "to": "brand-kit/motion",
+      "action": "click “Motion”"
+    },
+    {
+      "from": "brand-kit",
+      "to": "brand-kit/layout",
+      "action": "click “Layout”"
+    },
+    {
+      "from": "brand-kit",
+      "to": "brand-kit/misc",
+      "action": "click “Misc”"
+    },
+    {
+      "from": "brand-kit/brand-overview",
+      "to": "brand-kit/brand-options",
+      "action": "click the “Brand options” ellipsis near the page title"
+    },
+    {
+      "from": "brand-kit/templates/options",
+      "to": "brand-kit/templates/options/duplicate",
+      "action": "choose “Duplicate Template”"
+    },
+    {
+      "from": "brand-kit/templates/options",
+      "to": "brand-kit/templates/options/move",
+      "action": "choose “Move to Brand”"
+    },
+    {
+      "from": "brand-kit/templates/options",
+      "to": "brand-kit/templates/options/delete",
+      "action": "choose “Delete Template”"
+    },
+    {
+      "from": "brand-kit/workflows",
+      "to": "brand-kit/workflows/new-workflow",
+      "action": "click “New Workflow”"
+    },
+    {
+      "from": "brand-kit/colors",
+      "to": "brand-kit/colors/paint-picker",
+      "action": "click any color swatch or Add Background/Add Text Color"
+    },
+    {
+      "from": "brand-kit/colors",
+      "to": "brand-kit/colors/actions",
+      "action": "click a swatch’s ellipsis"
+    },
+    {
+      "from": "brand-kit/colors/actions",
+      "to": "brand-kit/colors/actions/make-default",
+      "action": "choose “Make Default”"
+    },
+    {
+      "from": "brand-kit/colors/actions",
+      "to": "brand-kit/colors/actions/duplicate",
+      "action": "choose “Duplicate”"
+    },
+    {
+      "from": "brand-kit/colors/actions",
+      "to": "brand-kit/colors/actions/remove",
+      "action": "choose “Remove”"
+    },
+    {
+      "from": "brand-kit/motion",
+      "to": "brand-kit/motion/notes",
+      "action": "click “Motion notes” text area to edit"
+    },
+    {
+      "from": "brand-kit/misc",
+      "to": "brand-kit/misc/notes",
+      "action": "click “Misc notes” text area to edit"
+    },
+    {
+      "from": "library",
+      "to": "invite-members",
+      "action": "click “Invite Members” (external/one-way; do not use unless requested)"
+    },
+    {
+      "from": "library",
+      "to": "your-drafts",
+      "action": "click “Your Drafts” in global sidebar"
+    },
+    {
+      "from": "your-drafts",
+      "to": "your-drafts/card-menu",
+      "action": "click a draft card’s ellipsis"
+    },
+    {
+      "from": "your-drafts",
+      "to": "your-drafts/sort-menu",
+      "action": "click sort icon"
+    },
+    {
+      "from": "your-drafts/sort-menu",
+      "to": "your-drafts/sort-options",
+      "action": "choose a sort order"
+    },
+    {
+      "from": "your-drafts",
+      "to": "your-drafts/card-menu",
+      "action": "right-click a card’s ellipsis image (not normal-click surrounding popup button)"
+    },
+    {
+      "from": "library",
       "to": "editor",
-      "action": "click a draft row in the left rail"
+      "action": "click an existing draft card or its sidebar row"
+    },
+    {
+      "from": "your-drafts",
+      "to": "editor",
+      "action": "click an existing draft card"
     },
     {
       "from": "editor",
-      "to": "editor/detail-panel",
-      "action": "click the panel-right icon at right end of the canvas top bar"
+      "to": "editor/agent",
+      "action": "click “Agent”"
     },
     {
       "from": "editor",
-      "to": "editor/clip-more",
-      "action": "click the '...' button at the right end of the clip top bar"
-    },
-    {
-      "from": "editor",
-      "to": "editor/clip-animation",
-      "action": "select a clip, then click the dashed-circle animation button in the clip top bar"
-    },
-    {
-      "from": "editor",
-      "to": "editor/project-actions",
-      "action": "click the 'Project actions' ellipsis in the script panel header"
+      "to": "editor/script",
+      "action": "click “Script”"
     },
     {
       "from": "editor/project-actions",
-      "to": "editor/project-screen-clip-settings",
-      "action": "click 'Screen Clip Settings...'"
+      "to": "editor/project-actions/screen-clip-settings",
+      "action": "click “Screen Clip Settings…”"
+    },
+    {
+      "from": "editor/project-actions",
+      "to": "editor/project-actions/version-history",
+      "action": "click “Show Version History…”"
     },
     {
       "from": "editor",
-      "to": "editor/scene-menu",
-      "action": "click the ellipsis on a scene header in the Script panel"
+      "to": "editor/voice-picker",
+      "action": "click “Select voice: <current voice>”"
+    },
+    {
+      "from": "editor/script",
+      "to": "editor/scene-actions",
+      "action": "click a populated scene header’s ellipsis"
+    },
+    {
+      "from": "editor/agent",
+      "to": "editor/agent/composer-actions",
+      "action": "click “Composer actions” plus button"
     },
     {
       "from": "editor",
-      "to": "editor/captions-bar",
-      "action": "click the captions (speech bubble) button in the top-right status bar"
+      "to": "editor/insert-menu",
+      "action": "click Insert in the top bar"
+    },
+    {
+      "from": "editor/insert-menu",
+      "to": "editor/insert/tools",
+      "action": "choose a tool (mutates or initiates content insertion)"
     },
     {
       "from": "editor",
       "to": "editor/music-picker",
-      "action": "click the music-note button in the top-right status bar"
-    },
-    {
-      "from": "root",
-      "to": "library",
-      "action": "click \"Library\" in the left rail"
-    },
-    {
-      "from": "library",
-      "to": "library/card-menu",
-      "action": "pixel-click the '...' at the right of a card footer (AXPress does nothing)"
-    },
-    {
-      "from": "library",
-      "to": "library/sort-menu",
-      "action": "click the sort-order icon button in the Library header"
-    },
-    {
-      "from": "root",
-      "to": "workspace-switcher",
-      "action": "click org badge \"David's Workspace\" at top of left rail"
+      "action": "click Add Music in the top status bar"
     },
     {
       "from": "editor",
-      "to": "paint-picker",
-      "action": "click the composition paint swatch in the editor status bar (top right, left of the captions icon)"
-    },
-    {
-      "from": "brand-kit/colors",
-      "to": "paint-picker",
-      "action": "click any color swatch (\"Open paint picker\")"
+      "to": "editor/layers-panel",
+      "action": "click the top-right panel icon"
     },
     {
       "from": "editor",
-      "to": "editor/timeline-zoom",
-      "action": "click the fit-timeline icon at the far right of the bottom toolbar"
+      "to": "editor/timeline-zoom-popover",
+      "action": "click Timeline Zoom above the timeline"
     },
     {
       "from": "editor",
-      "to": "editor/add-from-library",
-      "action": "click the 'Library' (add-from-library) icon in the bottom toolbar, left of Timeline Zoom"
+      "to": "editor/library-picker",
+      "action": "click “Library” in the editor toolbar"
+    },
+    {
+      "from": "editor/library-picker",
+      "to": "editor/library-picker/card-menu",
+      "action": "click a media card’s ellipsis button"
     },
     {
       "from": "editor",
-      "to": "editor/voice-picker",
-      "action": "click \"Select voice: Sarah\" (.ag-editor-transcriptPanel-title-actionBtn--voice)"
+      "to": "editor/overlay-template-picker",
+      "action": "click the first insert-toolbar icon (overlay slide)"
     },
     {
       "from": "editor",
-      "to": "editor/composer-actions",
-      "action": "click plus button (.editor-agentChat-plusMenuBtn) in the agent composer"
+      "to": "editor/media-picker",
+      "action": "click the second unlabeled insert-toolbar icon (media clip)"
     },
     {
-      "from": "editor",
-      "to": "editor/effort-popover",
-      "action": "click \"Effort: High\" (.editor-agentChat-composerPopoverBtn)"
-    },
-    {
-      "from": "editor",
-      "to": "editor/insert-overlay",
-      "action": "click the overlay-slide icon in the bottom insert bar (.ag-editor-toolbar-insertBar-btn, first)"
-    },
-    {
-      "from": "editor/insert-overlay",
-      "to": "brand-kit/templates",
-      "action": "templates shown here are managed in Brand Kit → Templates"
-    },
-    {
-      "from": "editor",
+      "from": "editor/media-picker",
       "to": "editor",
-      "action": "click \"Agent\" or \"Script\" tab at top of left panel"
+      "action": "press Escape to close"
     },
     {
       "from": "editor",
-      "to": "editor/insert-media",
-      "action": "click the 2nd insert-bar button (photo icon) in the bottom toolbar"
+      "to": "editor/record-capture",
+      "action": "click the third insert-toolbar icon (`--record`, text-slide symbol)"
+    }
+  ],
+  "gated": [
+    {
+      "id": "invite-members",
+      "tierReached": 0,
+      "boundary": "not opened — off-machine",
+      "stoppedBecause": "externality:label",
+      "scratchUsed": false
     },
     {
-      "from": "root",
-      "to": "brand-kit",
-      "action": "click \"Brand Kit\" (left rail bottom)"
-    },
-    {
-      "from": "root",
-      "to": "settings",
-      "action": "click \"Settings\" (left rail bottom)"
-    },
-    {
-      "from": "root",
-      "to": "library",
-      "action": "click \"Library\" (left rail)"
-    },
-    {
-      "from": "root",
-      "to": "your-drafts",
-      "action": "click \"Your Drafts\" (left rail)"
-    },
-    {
-      "from": "root",
-      "to": "editor",
-      "action": "click a project row in the left rail"
-    },
-    {
-      "from": "root",
-      "to": "workspace-switcher",
-      "action": "click the org badge \"David's Workspace\" at the top of the rail"
-    },
-    {
-      "from": "root",
-      "to": "menubar",
-      "action": "use the macOS menu bar (Yarn/File/Edit/View/Window/Help)"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/screen-clips",
-      "action": "click the \"Screen Clips\" tab"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/colors",
-      "action": "click the \"Colors\" tab"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/type",
-      "action": "click the \"Type\" tab"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/motion",
-      "action": "click the \"Motion\" tab"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/layout",
-      "action": "click the \"Layout\" tab"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/misc",
-      "action": "click the \"Misc\" tab"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/overview",
-      "action": "click the \"Brand Overview\" tab"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/templates",
-      "action": "click the \"Templates\" tab"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/workflows",
-      "action": "click the \"Workflows\" tab"
-    },
-    {
-      "from": "editor",
-      "to": "editor/project-actions",
-      "action": "click the \"Project actions\" ellipsis next to the voice picker"
-    },
-    {
-      "from": "editor/project-actions",
-      "to": "editor/project-screen-clip-settings",
-      "action": "choose \"Screen Clip Settings...\" (close with the Done button)"
-    },
-    {
-      "from": "editor",
-      "to": "editor/clip-animation",
-      "action": "select a clip, click the dashed-circle button in the clip top bar"
-    },
-    {
-      "from": "editor",
-      "to": "editor/clip-more",
-      "action": "click the \"...\" more button at the far right of the clip top bar"
-    },
-    {
-      "from": "editor",
-      "to": "editor/captions-bar",
-      "action": "click the captions (speech-bubble) button in the top-right status bar"
-    },
-    {
-      "from": "editor",
-      "to": "editor/voice-picker",
-      "action": "click \"Select voice: Sarah\" at the top of the Script panel"
-    },
-    {
-      "from": "editor",
-      "to": "editor/effort-popover",
-      "action": "click \"Effort: High\" at the bottom right of the Ask box"
-    },
-    {
-      "from": "editor",
-      "to": "editor/composer-actions",
-      "action": "click the + \"Composer actions\" button at the bottom left of the Ask box"
-    },
-    {
-      "from": "editor",
-      "to": "editor/add-from-library",
-      "action": "click the \"Library\" button at the bottom right of the toolbar"
-    },
-    {
-      "from": "editor",
-      "to": "editor/timeline-zoom",
-      "action": "click the \"Timeline Zoom\" button at the far bottom right"
-    },
-    {
-      "from": "editor",
-      "to": "editor/insert-overlay",
-      "action": "click the first (overlay-slide) button in the bottom insert bar"
-    },
-    {
-      "from": "editor",
-      "to": "editor/insert-media",
-      "action": "click the second (photo) button in the bottom insert bar — WARNING: does not close with escape"
-    },
-    {
-      "from": "editor",
-      "to": "editor/scene-menu",
-      "action": "click the ellipsis at the right of a scene header in the Script panel"
-    },
-    {
-      "from": "editor",
-      "to": "editor/detail-panel",
-      "action": "click the panel-right icon at the far right of the canvas top bar"
-    },
-    {
-      "from": "editor",
-      "to": "editor/timeline",
-      "action": "the timeline occupies the bottom right of the editor"
-    },
-    {
-      "from": "editor",
-      "to": "paint-picker",
-      "action": "click any \"Open paint picker\" button (status-bar composition paint, clip swatch, clip \"...\" → Add BG)"
-    },
-    {
-      "from": "brand-kit/colors",
-      "to": "paint-picker",
-      "action": "click any Background/Text Colors swatch"
-    },
-    {
-      "from": "library",
-      "to": "library/card-menu",
-      "action": "click a project card's \"...\" BY PIXEL (AXPress is a no-op)"
-    },
-    {
-      "from": "library",
-      "to": "library/sort-menu",
-      "action": "click the icon-only sort-order button right of the Grid/List toggle"
+      "id": "export",
+      "tierReached": 0,
+      "boundary": "not opened — descent off",
+      "stoppedBecause": "descent:off",
+      "scratchUsed": false
     }
   ]
 }

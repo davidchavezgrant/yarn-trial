@@ -124,6 +124,37 @@ let profileSwapChain: Promise<unknown> = Promise.resolve();
  * megabytes. Any read error means no verdict, so the exit code decides — a grading helper must
  * never be the thing that fails a healthy run.
  */
+/**
+ * The child's argv for one job — pure, so the flag plumbing is assertable.
+ *
+ * Extracted after a vision-only EXPLORE ran as an ordinary element-grounded pass: `noAx` was
+ * recorded on the job, crossed the wire, and was then dropped here because only the TASK
+ * branch spread the perception flags. Nothing failed — the arm reported `done`, with a map,
+ * and only the map's `provenance` stamp revealed it had measured the wrong thing.
+ *
+ * Inline inside startJob this was unreachable from a test, which is why the omission survived.
+ * A dropped flag is the worst kind of bug to leave untestable: it produces a plausible run.
+ */
+export function childRunArgs(kind: JobKind, rec: { url?: string; backend?: string; noVision?: boolean; noAx?: boolean; record?: boolean; noRescue?: boolean; recipe?: string }, app: string, task: string): string[] {
+	// `--backend` rides both the task and the explore argv; every further rule about the
+	// combination (e.g. --no-ax outside the ax backend) belongs to the child CLI, which
+	// refuses invalid ones itself — a second copy of its validation here would drift.
+	const backendArgs = rec.backend ? ["--backend", rec.backend] : [];
+	// A web target's argv drops the app positional: both CLIs read `--url` as the target and
+	// keep the label for display, and a stray positional would land in explore's guidance slot
+	// — becoming a safety instruction nobody wrote.
+	const urlArgs = rec.url ? ["--url", rec.url] : [];
+	// Perception flags belong to BOTH kinds. This is the omission described above.
+	const perception = [...(rec.noVision ? ["--no-vision"] : []), ...(rec.noAx ? ["--no-ax"] : [])];
+
+	if (kind === "explore") return [...(rec.url ? [] : [app]), ...urlArgs, ...perception, ...backendArgs];
+	// The recipe path was validated relative at submit time; the child resolves paths against
+	// its cwd (the resources root), so hand it the data-root form.
+	if (kind === "replay") return ["replay", path.join(dataRoot(), rec.recipe ?? ""), ...(rec.noRescue ? ["--no-rescue"] : []), ...(rec.url ? ["--url", rec.url] : [])];
+
+	return [task, ...(rec.url ? [] : [app]), ...urlArgs, ...(rec.record ? ["--record"] : []), ...perception, ...backendArgs];
+}
+
 export function passErrored(file: string): boolean {
 	try {
 		const fd = fs.openSync(file, "r");
@@ -544,22 +575,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 
 		const script = kind === "explore" ? "src/core/explore.ts" : kind === "replay" ? "src/core/recipe-cli.ts" : "src/core/agent.ts";
 		const base = resolveRunCommand(script);
-		// `--backend` rides both the task and the explore argv; every further rule about the
-		// combination (e.g. --no-ax outside the ax backend) belongs to the child CLI, which
-		// refuses invalid ones itself — a second copy of its validation here would drift.
-		const backendArgs = rec.backend ? ["--backend", rec.backend] : [];
-		// A web target's argv drops the app positional: both CLIs read `--url` as the target
-		// and keep the label for display, and a stray positional would land in explore's
-		// guidance slot — becoming a safety instruction nobody wrote.
-		const urlArgs = rec.url ? ["--url", rec.url] : [];
-		const runArgs =
-			kind === "explore"
-				? [...(rec.url ? [] : [app]), ...urlArgs, ...backendArgs]
-				: kind === "replay"
-					// The recipe path was validated relative at submit time; the child resolves
-					// paths against its cwd (the resources root), so hand it the data-root form.
-					? ["replay", path.join(dataRoot(), rec.recipe ?? ""), ...(rec.noRescue ? ["--no-rescue"] : []), ...(rec.url ? ["--url", rec.url] : [])]
-					: [task, ...(rec.url ? [] : [app]), ...urlArgs, ...(rec.record ? ["--record"] : []), ...(rec.noVision ? ["--no-vision"] : []), ...(rec.noAx ? ["--no-ax"] : []), ...backendArgs];
+		const runArgs = childRunArgs(kind, rec, app, task);
 
 		let spawned: Spawned;
 		try {

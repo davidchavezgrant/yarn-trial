@@ -26,7 +26,7 @@ import {
 import { acquire, adopt, defaultRunnerDir, describeHolder, inspect, type Lease, release } from "../src/remote/runner/lease.js";
 import { childEnv, isPackaged, PACKAGED_ENV, resolveRunCommand, spawnDetached } from "../src/remote/runner/spawn.js";
 import { parseArgs } from "../src/remote/runner/ctl.js";
-import { staleGrants, startRunner, unsafeRelPath, passErrored } from "../src/remote/runner/serve.js";
+import { childRunArgs, staleGrants, startRunner, unsafeRelPath, passErrored } from "../src/remote/runner/serve.js";
 import { resourcesRoot } from "../src/paths.js";
 import { tempDir, withTemp, withTempAsync } from "./fixtures.js";
 
@@ -2276,4 +2276,39 @@ test("createJob__NamesTheAppmapTheWayTheExploreWritesIt__When__TheTargetIsAWebUr
 		assert.equal(vision.artifacts.appmap, "docs/appmaps/yarn.vision.md");
 		assert.equal(vision.artifacts.appmapGraph, "docs/appmaps/yarn.vision.json");
 	});
+});
+
+test("childRunArgs__PassesPerceptionFlagsToExplore__When__ThePassIsVisionOnly", () => {
+	// The bug this exists for: only the TASK branch spread --no-ax/--no-vision, so a
+	// vision-only EXPLORE ran as an ordinary element-grounded pass. The flag was recorded on
+	// the job and crossed the wire; it was dropped here. Nothing failed — p1-explore-vision
+	// reported done with a 153-node map stamped `provenance: explore | backend: ax`, which is
+	// the ax arm's own result wearing the vision arm's name.
+	const argv = childRunArgs("explore", { backend: "ax", noAx: true }, "Yarn", "");
+	assert.ok(argv.includes("--no-ax"), `explore must carry --no-ax, got ${argv.join(" ")}`);
+	assert.deepEqual(argv, ["Yarn", "--no-ax", "--backend", "ax"]);
+
+	// Same flag on a task was always correct; asserted so a future edit cannot fix one and
+	// break the other.
+	assert.ok(childRunArgs("task", { backend: "ax", noAx: true }, "Yarn", "do a thing").includes("--no-ax"));
+	// --no-vision travels with it, on both kinds.
+	assert.ok(childRunArgs("explore", { noVision: true }, "Yarn", "").includes("--no-vision"));
+	assert.ok(childRunArgs("task", { noVision: true }, "Yarn", "t").includes("--no-vision"));
+});
+
+test("childRunArgs__DropsTheAppPositional__When__TheTargetIsAUrl", () => {
+	// A stray positional lands in explore's GUIDANCE slot — it would become a safety
+	// instruction nobody wrote.
+	const argv = childRunArgs("explore", { url: "https://app.notion.com", backend: "cdp" }, "app.notion.com", "");
+	assert.deepEqual(argv, ["--url", "https://app.notion.com", "--backend", "cdp"]);
+	assert.ok(!argv.includes("app.notion.com"), "the label must not ride as a positional");
+});
+
+test("childRunArgs__PutsTheTaskFirst__When__TheKindIsATask", () => {
+	// Order matters: the task text is the first positional and must not be reordered behind
+	// flags by a future edit.
+	assert.equal(childRunArgs("task", { record: true }, "Yarn", "show me how to change the cursor type")[0], "show me how to change the cursor type");
+	assert.ok(childRunArgs("task", { record: true }, "Yarn", "t").includes("--record"));
+	// --record is a TASK concept: an explore is never filmed.
+	assert.ok(!childRunArgs("explore", { record: true }, "Yarn", "").includes("--record"));
 });

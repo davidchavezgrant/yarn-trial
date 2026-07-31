@@ -1,76 +1,98 @@
-<!-- provenance: explore | app: Yarn | date: 2026-07-30 | backend: ax | actions: 96 | elapsed: 40m | findings: 36 | finds: 0 | controls: 47 actuated / 350 dismissed / 396 seen | surfaces: 34 | chapters: 9 | stopped: frontier-empty -->
+<!-- provenance: explore | app: Yarn | date: 2026-07-31 | backend: ax | actions: 132 | elapsed: 34m | calls: 305 | tokens-in: 2085446 | tokens-out: 39467 | cache-read: 14891008 | cache-write: 0 | findings: 43 | finds: 0 | controls: 57 actuated / 1059 dismissed / 1116 seen | surfaces: 35 | chapters: 13 | stopped: frontier-empty | descent: off | gated: 0 read / 2 refused -->
 <!-- controls actuated/seen is a LOWER BOUND ON BREADTH, not a coverage percentage: the denominator only grows as surfaces are opened, and operating a control is not understanding it. -->
-<!-- Written by src/explore.ts. DO NOT HAND-EDIT: edits make this a curated recipe, not exploration output — move such notes to docs/recipes/<app>.md instead. -->
+<!-- Written by src/core/explore.ts. DO NOT HAND-EDIT: edits make this a curated recipe, not exploration output — move such notes to docs/recipes/<app>.md instead. -->
 
-﻿# Yarn (Electron/Chromium app) — grounding notes
+# Layout
 
-Single window titled "Yarn". Everything is web content; element_index works, but see quirks.
+## Global navigation
+- **Library** is the ordinary landing view. Reach it with **Library** in the left sidebar. It has Search, Grid/List toggles, sort, **+ New Draft**, **+ New Collection**, draft cards, and card ellipsis menus.
+- **Your Drafts** in the sidebar opens a drafts-only gallery with Search, Grid/List, sort, **+ New Draft**, and draft-card menus.
+- The workspace header opens a popup listing the current workspace plus **New workspace** and **Sign out**.
+- Bottom sidebar links: **Invite Members**, **Brand Kit**, and **Settings**.
 
-## Layout
+## Settings
+- **Settings** opens a modal over Library. Top preferences: Auto-Add Screen Zooms; Theme (Dark/Light/System); Agent model; Agent effort; Agent Fast Mode default; plan usage and Upgrade.
+- Agent models: **Opus 5, Fable 5, Opus 4.8, GPT-5.6 Sol**.
+- Agent effort: **Low, Medium, High, Extra High, Max**.
+- Click blank space in the right pane, then use **Page Down** to reach lower sections; wheel scrolling was unreliable.
+- Lower sections contain Workspace name/icon; Custom window sizes; Figma, Google Slides, Notion, YouTube, and Screen Studio integrations; Team Members.
+- Existing custom sizes observed: Default 1440×897 and Custom 1 1600×987. Member ellipsis for the current user contains only **Suspend user**.
+- Close Settings with its top-right **X**.
 
-**Left rail (always present)**
-- Top: org badge **"David's Workspace"** (`.libraryPage-sideMenu-personalTab-orgBadgeBtn`) → **Workspace switcher** popover (workspace rows, "New workspace", "Sign out").
-- **Library** → "Your Library" page: Search field, Grid/List toggle, sort-order popup (`.icon--name--sortOrder` → menu "Newest first"/"Oldest first"/"A - Z"/"Z - A"), blue **New Draft**, "Collections" section with **New Collection** tile, then a virtualized grid of project cards (inline rename field + "…" menu per card).
-- **Your Drafts** → same list filtered to drafts.
-- Then one rail row per project/draft (click opens the **project editor**), then **New draft**.
-- Bottom: **Invite Members**, **Brand Kit**, **Settings**.
+## Brand Kit (brand/workspace-wide defaults)
+- **Brand Kit** reopens on the last-used tab. Tabs: **Brand Overview, Templates, Workflows, Colors, Type, Screen Clips, Motion, Layout, Misc**.
+- **Brand Overview:** freeform Overview notes and Brand options (Rename Brand, Duplicate Brand, New Brand, Archive Brand).
+- **Templates:** Grid/List, sort, New Template, template cards, editable name/description, Edit Template…, and Template options (Duplicate, Move to Brand, Delete).
+- **Workflows:** empty in this workspace; offers New Workflow.
+- **Colors:** Background and Text palettes plus Color Notes. Swatches open a paint picker with Solid/Linear/Radial/Multi/Image/Shader, hue, opacity, eyedropper, input-format switch, hex, and percentage. Swatch actions: Make Default, Duplicate, Remove.
+- **Type:** Primary Font (currently Inter with Light/Regular/Medium/Semibold/Bold/Heavy/Black weights), Secondary Font (None), New Text Style, and Font Usage Notes. Font fields open a searchable, very large catalog.
+- **Screen Clips:** brand defaults for cursor, screen display, sound effects, and visual effects. Includes cursor auto-hide/text cursor/style/scale; window padding/shadow/blur/spread/offsets; cursor-click and keyboard sounds; entrance/exit animation; motion blur; default zoom type/level.
+- **Motion, Layout, Misc:** freeform notes fields for animation guidance, spacing/alignment rules, and miscellaneous brand guidance.
 
-**Brand Kit** (rail → Brand Kit) = "Brand Studio" for the current brand ("Default Brand"). Tabs: Brand Overview, Templates, Workflows, Colors, Type, Screen Clips, Motion, Layout, Misc. Everything here is **brand-scoped**.
-- *Brand Overview*: notes textarea + "Brand options" ellipsis (top-right) → Rename Brand / Duplicate Brand / New Brand / Archive Brand.
-- *Templates*: overlay-template gallery (empty by default), Grid/List, "Sort by newest"/"Sort A-Z" checkboxes, **New Template**.
-- *Workflows*: empty; only **New Workflow**.
-- *Colors*: "Background" row (#6985FF, #26272A, #EDEEF8, #000000) and "Text Colors" row (#6985FF, #FFFFFF, #505155, #14181E). Each swatch is an AXPopUpButton "Open paint picker"; each has a neighbouring "Color actions" menu; "Add Background"/"Add Text Color" tiles. Bottom: "Color Notes" markdown area.
-- *Type*: "Primary Font" search field (value **Inter**) + weight list, "Secondary Font" (value None), "Text Styles" + **New Text Style**, "Font Usage Notes".
-- *Screen Clips* = **"Screen Clip Settings"**, the brand DEFAULTS for screen recordings: Cursor (Auto-Hide Cursor Auto Hide/Off, Text Cursor Hide/Show, Cursor Style combobox `Arrow-first` [also `Pointer-first`], Cursor Scale 1.60), Screen Display (Window Padding 18.0, Shadow Opacity 72%, Blur 32, Spread -18, X 0, Y 12), Sound Effects (Cursor Clicks ✓ + level `Extra Soft`; Keyboard Presses ✓ + set `Set B` (+`Original`) + level `Extra Soft`), Visual Effects (Entrance/Exit Animation `Fade Up`, Motion Blur Off/Low/**Medium**/High, Default Zoom Type **Glide**/Fixed, Default Zoom Level 54%).
-- *Motion*, *Layout*, *Misc*: notes textareas only — **no functional controls**.
+## Document editor (document scope)
+- Open an existing draft card/sidebar draft to enter the editor. Left panel: title, Agent/Script tabs, voice picker, Project actions, scenes/transcript, and agent composer. Center/right: canvas, composition paint, captions, Add Music, Publish, Export, Insert, Add BG, Layers toggle, playback, insert toolbar, Library, Timeline Zoom, and timeline.
+- **Project actions:** Copy Transcript, Make a copy, Download SRT…, Screen Clip Settings…, Show Version History…, Brand submenu, aspect ratio, Performance Mode, Delete. Aspect ratios: Widescreen 16:9, Laptop 16:10, Square 1:1, Vertical 9:16. Performance: Efficiency, Default, Ultra.
+- **Voice picker:** English, World, Creative tabs plus speed. Current voice observed: Sarah. Speeds: Slowest, Slow, Default, Fast, Faster.
+- **Scene ellipsis:** Copy Scene, Copy Transcript, Delete Scene. Empty scenes show inline Delete buttons.
+- **Agent composer +:** Add Reference… and Switch to Media Gen.
+- Top **Insert** menu: Text, Image, Video, Icon, Rectangle, Ellipse, Polygon, Line, Arrow, Pen, Group.
+- **Add Music:** No background track, reusable tracks with preview icons, and upload.
+- **Layers** panel may show “No layers” at a sync point.
+- **Timeline Zoom:** popover with a continuous minus-to-plus slider.
+- **Library:** full-width “Add from Library” modal with Everything, Images, Screen Clips, Webcams, Videos, Projects; per-tab search; media cards; Upload Camera Footage. Card ellipsis contains Delete. Projects are simple project/timestamp rows.
+- Insert-toolbar overlay icon opens Graphics/Overlay templates; media icon opens a reusable asset gallery; the record/capture icon launches a separate capture workflow.
 
-**Settings** (rail bottom → Settings) = app / account / workspace level modal (`.settingsModal`; close with the ✕ `.settingsModal-closeBtn`).
-- Left column: avatar ("Edit profile photo" file input), name/email, **Sign out**.
-- Right panel: **Preferences** — "Auto-Add Screen Zooms" On/Off, "Theme" Dark/Light/System (also Shift+Cmd+\), "Agent model" (Opus 5; Fable 5 / GPT-5.6 Sol / Opus 4.8 / Opus 5), "Agent effort" (Low/Medium/**High**/Extra High/Max), "Agent Fast Mode default" ✓. **Your Plan** (Free, Upgrade). **Workspace settings** — Workspace name field, Icon upload, "Custom window sizes" rows (Default 1440x897, Custom 1 1600x987, each with Remove) + Add Size. **Integrations** — Figma, Google Slides, Notion MCP, Team YouTube, Personal YouTube, Screen Studio Import. **Team Members** — Invite Members + member row with role popup.
+# How to
 
-**Project editor** (click any project in the rail)
-- LEFT panel: tabs **Agent** / **Script**; project-title text field; "Select voice: Sarah" popup; "Project actions" ellipsis; ProseMirror transcript with per-scene headers ({{intro:a}}, {{intro:b}}, Connect HubSpot, Transition, Pull in data, Outro), each with an ellipsis menu (Copy Scene / Copy Transcript / Delete Scene). Bottom: agent composer ("Ask, edit, or make something…") with "Composer actions" +, "Effort: High" popup, Send.
-- TOP-RIGHT status bar: composition paint picker, **captions** (speech bubble), **music** (note), **Publish** (globe), **Export**.
-- CANVAS TOP BAR (selected clip): fill-type popup ("Timeline Clip"/"Graphics Video"), corner-radius number, Edit Trim, Convert to Camera, Mute, playback-rate number (1.00), dashed-circle **animation** popup, "…" more popover (Background → "Add BG" paint picker), and a detail-panel toggle (Layers tree for overlay clips).
-- BOTTOM: play, timecodes, insert bar (overlay slide → brand template popover; media clip → "Add media" grid; text slide; record talk track; new comment), **Library** (Add-from-Library dialog: tabs Everything/Images/Screen Clips/Webcams/Videos/Projects, search, Upload Camera Footage, asset grid), **Timeline Zoom**, and the timeline with per-scene Add scene / skip buttons.
+## Return to a stable starting point
+1. Click **Library** in the global left sidebar.
+2. Confirm the Library gallery is visible rather than leaving a run inside an open draft.
 
-**Project actions menu** (ellipsis at top of Script panel) — all PROJECT-scoped: New Agent Chat (disabled), Copy Transcript, Make a copy, Download SRT…, **Screen Clip Settings…**, Show Version History…, **Brand ▸ Default Brand**, aspect ratio (Widescreen 16:9 / Laptop 16:10 / Square 1:1 / Vertical 9:16), Performance Mode (Efficiency / Default / Ultra), Delete.
+## Inspect a menu or picker safely
+1. Open the control.
+2. Read the options without selecting one.
+3. Press **Escape** with foreground delivery to close it.
+- Draft-card ellipses may require **right-click** because they advertise AXShowMenu; a normal click can silently do nothing.
 
-## How to
+## Change app defaults
+1. Open **Settings**.
+2. Use the appropriate top preference control.
+3. For workspace/integration/member settings, click blank right-pane space and press **Page Down**.
+4. Close with **X**.
+- These affect app/workspace defaults, not the current document.
 
-- **Change screen-recording defaults for ALL new projects**: rail → Brand Kit → Screen Clips tab → edit control → changes save inline.
-- **Change screen-recording settings for THIS project only**: editor → Script panel ellipsis ("Project actions") → "Screen Clip Settings…" → popover titled **"Screen Recording Settings"** with an identical control set → click **Done**. ⚠️ Separate store from Brand Kit; changing one does not change the other.
-- **Change animation of the selected clip**: select clip → dashed-circle button in the clip top bar → popover with **Enter**/**Exit** tabs → click a preset (Appear/Fade In/Fade Up/Fade Down/Fade Left/Fade Right/Scale Up/Scale Down; Exit: Disappear/Fade Out/…). Escape (foreground) to close. The "…" in that popover header only toggles list↔dropdown view.
-- **Change the animation default for new clips**: Brand Kit → Screen Clips → Visual Effects → Entrance/Exit Animation.
-- **Change agent effort for one chat**: editor composer → "Effort: High" → 5-stop slider (Low/Medium/High/Extra/Max). **App-wide default**: Settings → Preferences → "Agent effort".
-- **Style captions**: editor status bar → captions (speech-bubble) button; the clip toolbar switches into caption mode: Presets popup, font family ("Cereal"), size combobox ("Medium"), font-size number (48), text-colour paint picker, Effects popup, "Hidden" checkbox, "…". Click the captions button again to leave caption mode.
-- **Change background music**: status bar music-note button → picker grid (No background track, Vintage Groove, LoFi tracks, …); selected track exposes "Remix Music to Fit"; upload tile at the bottom. Escape to close. Project-scoped; no app/brand music setting exists.
-- **Change narration voice**: Script panel → "Select voice: Sarah" → dropdown with English/World/Creative tabs, 12 voices, footer "Fast Talking Speed". Project-scoped only.
-- **Set a colour anywhere**: any "Open paint picker" AXPopUpButton opens the shared paint picker: 4 quick swatches (= Brand Kit Background palette), "Paint type" tabs Solid/Linear/Radial/Multi/Image/Shader, then type editors (Image: Replace image, Fit=Cover, Position=Center). Escape to close.
-- **Create/switch/rename brands**: Brand Kit → Brand Overview → ellipsis "Brand options".
-- **Rename / duplicate / delete a project**: Library card "…" menu (Make Private Draft, Rename, Make a copy, Delete) — click the ellipsis **by pixel**, AXPress is a no-op. "Make a copy" also exists in the editor's Project actions menu.
-- **Rename the workspace**: Settings → Workspace settings → "Workspace name" (NOT in the workspace switcher).
+## Change brand defaults
+1. Click **Brand Kit**.
+2. Select the relevant tab.
+3. Edit the desired control or notes field.
+- **Type, Colors, Screen Clips, Motion, Layout, and Misc here are brand/workspace scope.** Font selection applies immediately.
 
-## Dead ends & quirks
+## Change only the current draft
+1. Open the draft.
+2. Use **Project actions** for Brand, aspect ratio, Performance Mode, Screen Clip Settings, version history, transcript/SRT operations, or copy/delete actions.
+3. Use the editor’s voice, music, background, caption, composition, insertion, and timeline controls for document-specific content/settings.
+- Project-level Screen Clip Settings are document scope; Brand Kit > Screen Clips is the brand-wide default location.
 
-- **AXPress no-op**: `.AGLibraryProjectCard-footer-dropdownMenuBtn` (library card "…") must be clicked by pixel coordinate.
-- **Scrolling is impossible**: "Background scroll is unavailable for Electron/Chromium windows on macOS". Long lists (Settings panel, Library grid, Add-media grid) can only be traversed via elements already in the tree.
-- **"Add media" popover trap**: the insert-bar photo button opens a popover that does NOT close with escape, drops the whole web AX tree out of the snapshot (only the macOS menu bar is reported) and unfocuses the window. It is transient/inert — keep acting, click a real element, or use View ▸ Reload; the tree comes back and nothing is inserted. Prefer the bottom-right **Library** button (Add-from-Library dialog) which closes cleanly with escape.
-- Never combine a `record` call and an `act` call in the same tool block — the act silently does not execute.
-- Escape to close popovers needs delivery_mode "foreground".
-- **Export** is refused by the harness (destructive-verb list) and **Publish** was deliberately not opened (externally visible) — their panels are unmapped.
-- Brand Kit → Motion / Layout / Misc contain **only** notes textareas: animation/layout settings are NOT there (animation defaults are in Screen Clips → Visual Effects).
-- There is **no** brand- or app-level default for narration voice or background music; both are project-only.
-- macOS menu bar is generic Electron (File: Close Window/Close All; View: Reload/Force Reload/Toggle Developer Tools/zoom; Window; Help empty). There is **no** app Preferences item — Settings is only reachable from the left rail.
+## Sort Your Drafts
+1. Click **Your Drafts**.
+2. Open the sort popup.
+3. Choose **Newest first, Oldest first, A - Z,** or **Z - A**.
 
-## Scope pairs to be careful about
+## Add reusable media to a document
+1. In the editor, click **Library**.
+2. Choose Everything, Images, Screen Clips, Webcams, Videos, or Projects.
+3. Search if needed and select the asset/project to add it.
+4. Press Escape to cancel without adding.
 
-| Setting | Brand/app scope | Document (project/clip) scope |
-|---|---|---|
-| Screen-clip cursor/shadow/sound/zoom/animation | Brand Kit → Screen Clips | Project actions → "Screen Clip Settings…" ("Screen Recording Settings" popover) |
-| Entrance/Exit animation | Brand Kit → Screen Clips → Visual Effects | clip toolbar dashed-circle animation popover |
-| Default zoom type/level | Brand Kit → Screen Clips; Settings → "Auto-Add Screen Zooms" (app default for new recordings) | per-project Screen Recording Settings; per-clip zoom buttons |
-| Agent effort | Settings → Preferences → Agent effort | composer "Effort: High" popover |
-| Background colour / palette | Brand Kit → Colors swatches | clip "…" → Add BG; clip swatch; status-bar composition paint |
-| Fonts | Brand Kit → Type (Primary/Secondary, Text Styles) | captions bar font family/size |
-| Sort order | Brand Kit → Templates checkboxes | Library sort-order menu (view preference) |
+# Dead ends & quirks
+- **Invite Members** is an externally visible sharing action; do not open casually.
+- Workspace creation/sign-out, integrations, Upgrade, Publish, uploads, and account/profile controls change external or persistent state.
+- New Draft/Collection/Template/Workflow/Text Style and duplicate/copy/move actions create or change persistent content.
+- Delete, Archive Brand, Remove, Suspend user, and library-card Delete are destructive.
+- Brand Kit reopens on its last-selected tab, not necessarily Brand Overview.
+- Settings wheel scrolling may fail; focus blank right-pane space and use Page Down.
+- Font catalogs expose hundreds of rows. Use the search field rather than browsing; selecting a row immediately changes the brand font.
+- The Keyboard Presses sound-set picker showed Set A/B/C/D with preview speakers, but AX marked menu rows disabled; preview controls may be separate from choosing the set.
+- A canvas press can scrub/select/deselect even if it misses the intended drawn target. Prefer accessible elements; use screenshot pixels only for genuinely painted targets.
+- **Avoid the editor record/capture toolbar icon.** It opened a blank inaccessible child, dimmed the editor, and could not be dismissed with Escape, Command-W, Command-`, File > Close All, Hide/Show All, Reload, or Force Reload. Recovery likely requires an external app restart.
+- The exploration session ended with the editor visually restored after the blank-child episode, but the ordinary reset location remains **Library**.
