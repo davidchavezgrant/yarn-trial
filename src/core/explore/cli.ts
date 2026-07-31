@@ -34,9 +34,9 @@ export const parseCli = (): { target: Target; app: string; guidance: string | un
 	const guidance = target.kind === "web" ? positional[0] : positional[1];
 	// A web target defaults to a page-snapshot backend: it observes the page rather than the
 	// window, so the browser's own tab strip, omnibox and menu bar never reach the frontier.
-	const backendKind = backendIdx >= 0 ? (argv[backendIdx + 1] ?? "ax") : target.kind === "web" ? "dom" : "ax";
-	if (!["ax", "dom", "cdp"].includes(backendKind)) {
-		console.error('usage: tsx src/core/explore.ts ["App Name" | --url <https://…>] ["guidance"] [--backend ax|dom|cdp] [--no-vision]');
+	const backendKind = backendIdx >= 0 ? (argv[backendIdx + 1] ?? "ax") : target.kind === "web" ? "cdp" : "ax";
+	if (!["ax", "cdp"].includes(backendKind)) {
+		console.error('usage: tsx src/core/explore.ts ["App Name" | --url <https://…>] ["guidance"] [--backend ax|cdp] [--no-vision]');
 		console.error("--backend cdp explores over CDP directly (playwright-core) with NO cua in the loop; web targets get their own Chrome, Electron targets need --remote-debugging-port.");
 		process.exit(1);
 	}

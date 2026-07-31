@@ -32,8 +32,8 @@ const COMMITISH = /\b(delete|remove|confirm|archive|reset|discard|clear|erase)\b
 /**
  * The pair heuristic reads BUTTONS only. Menu items named "Delete" appear fresh whenever a
  * context menu opens, and a menu is not a confirmation — recording every menu as a confirm
- * dialog would flood the appmap with gates that do not exist. "button" is the DOM backend's
- * spelling of the same role.
+ * dialog would flood the appmap with gates that do not exist. "button" is the cdp
+ * snapshot's spelling of the same role.
  */
 const isButton = (e: InteractiveElement): boolean => e.role === "AXButton" || e.role === "button";
 

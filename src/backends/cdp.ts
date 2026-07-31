@@ -45,12 +45,12 @@ import { endpointAlive, ensureElectronEndpoint, type PageCandidate, pickMainPage
  * options, and a ref survives unrelated DOM churn while its element stays attached.
  */
 
-/** Same verb set as the DOM backend, so the model-facing contract stays familiar. */
+/** The verb set the model drives pages with; names match the AX tool where verbs overlap. */
 const CDP_ACTIONS = ["click", "right_click", "double_click", "hover", "type_text", "press_key", "scroll", "wait", "navigate"] as const;
 
 /** Where the persistent profile lives. Persistent by design: a human signs into the
- *  target site once per machine, and every later run inherits the session — the same
- *  reason `src/backends/browser.ts` uses a named driver profile. */
+ *  target site once per machine (./run browser-login), and every later run inherits
+ *  the session. */
 const PROFILE_DIR = process.env.CDP_PROFILE_DIR ?? `${OUT}/chrome-profile/${process.env.CDP_PROFILE ?? "yarn-runner"}`;
 
 const CHROME_BIN = process.env.CDP_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -215,9 +215,9 @@ export function playwrightKey(key: string, modifiers?: string[]): string {
 }
 
 /**
- * Exact-origin equality, the same comparison pickTab makes in src/backends/dom.ts. A prefix match
- * (`startsWith`) adopts https://x.community as https://x.com and then drives it; anything
- * unparseable (a page that has not committed a URL) never matches.
+ * Exact-origin equality. A prefix match (`startsWith`) adopts https://x.community as
+ * https://x.com and then drives it; anything unparseable (a page that has not committed a
+ * URL) never matches.
  */
 export function originMatches(pageUrl: string, origin: string): boolean {
 	try {
@@ -369,8 +369,7 @@ export class CdpBackend {
 			if (target.kind === "web") {
 				const origin = target.origin;
 				const matching = context.pages().filter((p) => originMatches(p.url(), origin));
-				// Two tabs on the target site: driving the wrong one looks like it worked, the
-				// same trap pickTab refuses in src/backends/dom.ts. Refuse identically.
+				// Two tabs on the target site: driving the wrong one looks like it worked. Refuse.
 				if (matching.length > 1)
 					throw new Error(`${matching.length} tabs are open on ${origin} — close the spares so the target is unambiguous`);
 				page = matching[0]
@@ -454,7 +453,7 @@ export class CdpBackend {
 			await this.page.screenshot({ path: shotPath, scale: "css" });
 			shot = fs.readFileSync(shotPath).toString("base64");
 		} catch {
-			// Same posture as the DOM backend: perception is the snapshot; a missed frame
+			// Perception is the snapshot; a missed frame
 			// degrades the pixel channel, it does not end the run.
 			console.log("  (no frame captured for this observation)");
 		}
@@ -629,7 +628,7 @@ export class CdpBackend {
 			}
 			case "navigate": {
 				const url = String(a.url ?? "");
-				webTarget(url); // throws on a non-http(s) scheme, same gate as the DOM backend
+				webTarget(url); // throws on a non-http(s) scheme
 				await this.page.goto(url, { waitUntil: "domcontentloaded" });
 
 				return `navigated to ${url} (all previous refs are invalid)`;
@@ -734,7 +733,7 @@ export const CDP_FIND_TOOL: Anthropic.Tool = {
 	},
 };
 
-/** The act tool this backend presents. Same shape as the DOM backend's, minus what CDP has no use for (delivery_mode) — the model should never see a knob that does nothing. A function for the same reason as cdpRules: the type_text semantics differ by mode, and the schema must not contradict the rules. */
+/** The act tool this backend presents. No delivery_mode — the model should never see a knob that does nothing. A function for the same reason as cdpRules: the type_text semantics differ by mode, and the schema must not contradict the rules. */
 export function cdpActTool(demo: boolean): Anthropic.Tool {
 	return {
 		name: "act",

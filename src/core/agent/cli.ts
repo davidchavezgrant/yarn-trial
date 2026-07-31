@@ -1,5 +1,5 @@
 import { auditTaskPrompt, type PromptAudit } from "../harness.js";
-import { electronTarget, parseTarget, type Target, targetLabel, targetSlug } from "../target.js";
+import { parseTarget, type Target, targetLabel, targetSlug } from "../target.js";
 
 export interface CliConfig {
 	record: boolean;
@@ -36,10 +36,7 @@ export function parseCli(argv: string[]): CliConfig {
 	// direction is worse than no verdict until we have a measured error rate for it.
 	const judgeMode = process.env.VISUAL_JUDGE ?? "advisory";
 	const backendIdx = argv.indexOf("--backend");
-	// Explicit override if present; otherwise the default is resolved below, once the target
-	// is known. "" (a bare trailing --backend) stays invalid so it trips the usage check
-	// rather than silently taking a default.
-	const backendExplicit = backendIdx >= 0 ? (argv[backendIdx + 1] ?? "") : undefined;
+	let backendKind = backendIdx >= 0 ? (argv[backendIdx + 1] ?? "ax") : "ax";
 	const args = argv.filter(
 		(a, i) =>
 			!["--record", "--hinted", "--no-reset", "--no-vision", "--no-ax", "--allow-unready"].includes(a) &&
@@ -66,25 +63,16 @@ export function parseCli(argv: string[]): CliConfig {
 	// drove the app named on the command line, grounding it with the wrong appmap and recording
 	// a run log that lies about which map it used. Rebuild the target from the resolved name.
 	if (target.kind === "app") target = { kind: "app", name: app };
-	// Both target kinds default to CDP (2026-07-31, decided twice in one day): web targets
-	// get the backend's own persistent-profile Chrome (see
-	// docs/research/2026-07-30-cua-learnings-for-real-implementation.md), and app (Electron)
-	// targets are (re)launched with --remote-debugging-port and driven over the DOM directly —
-	// element geometry and screenshots share one renderer space, and injected input never
-	// steals the operator's pointer, keyboard, or focus. The morning take kept app targets on
-	// cua because cdp could only ATTACH; src/backends/electron-attach.ts removed that
-	// constraint the same evening. --backend ax opts back into the accessibility driver
-	// (fleet posture, or an app that strips the flag).
-	const backendKind = backendExplicit ?? "cdp";
-	if (backendKind === "cdp" && target.kind === "app") target = electronTarget(app);
-	if (!task || !["ax", "dom", "cdp"].includes(backendKind)) {
-		console.error('usage: tsx src/core/agent.ts "<task>" ["App Name"] [--record] [--backend ax|dom|cdp] [--no-vision] [--no-ax]');
-		console.error("default backend: cdp for both target kinds — app targets are (re)launched with --remote-debugging-port, hands-off the operator's session. --backend ax opts into the accessibility driver.");
-		console.error("--backend dom drives an Electron/browser target over CDP via cua's browser_* tools; launch it with --remote-debugging-port first.");
+	// A web target has exactly one browser to drive — the Chrome the cdp backend launches
+	// and holds signed in — so an unstated backend resolves there rather than refusing later.
+	if (target.kind === "web" && backendIdx < 0) backendKind = "cdp";
+	if (!task || !["ax", "cdp"].includes(backendKind)) {
+		console.error('usage: tsx src/core/agent.ts "<task>" ["App Name"] [--record] [--backend ax|cdp] [--no-vision] [--no-ax]');
+		console.error("--backend cdp drives a Chromium target over CDP directly (playwright-core) with NO cua in the loop; web targets get their own Chrome, Electron targets need --remote-debugging-port.");
 		process.exit(1);
 	}
 	if (noAx && backendKind !== "ax") {
-		// The DOM and CDP backends' observations ARE ref lists; suppressing one leaves ref
+		// The CDP backend's observations ARE ref lists; suppressing one leaves ref
 		// actions addressing handles the model has never seen.
 		console.error(`--no-ax only applies to the ax backend — the ${backendKind} backend has no AX list to drop.`);
 		process.exit(1);

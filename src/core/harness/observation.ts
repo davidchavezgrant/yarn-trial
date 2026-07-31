@@ -61,7 +61,7 @@ export interface InteractiveElement {
 	 * Bounds in SCREENSHOT PIXELS — the space coordinate actions consume, NOT the logical
 	 * points AX reports and `frames` below carries. Converted here, once, so a click point
 	 * can be tested against a control's box without every caller re-deriving the display
-	 * scale. All zero when the scale could not be derived (no AXWindow element, DOM backend),
+	 * scale. All zero when the scale could not be derived (no AXWindow element),
 	 * which makes containment tests MISS rather than match wrongly.
 	 */
 	x: number;
@@ -496,8 +496,8 @@ export function observationBlocks(obs: ObservationBundle, vision = true, ax = tr
 		type: "text",
 		text: ax ? `Window title: "${obs.title}"\nElements:\n${obs.elementsText}` : `Window title: "${obs.title}"`,
 	};
-	// An empty frame is possible on the DOM path, where a missing screenshot degrades the
-	// observation rather than ending the run (see DomBackend.observe). Sending it anyway would
+	// An empty frame degrades the observation rather than ending the run on backends where
+	// the snapshot channel is primary (cdp). Sending it anyway would
 	// put an empty base64 image block on the wire and the API would reject the whole request —
 	// turning a cosmetic gap into exactly the run-ending failure the degradation avoided.
 	if (!vision || !obs.screenshotB64) return [text];

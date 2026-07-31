@@ -179,13 +179,14 @@ signout | uninstall)
 	;;
 
 browser-login)
-	# One-time, per machine, per site: bring up the driver-owned Chrome profile on a URL so a
-	# human can sign in. The profile persists, so every later web run inherits that session —
-	# which is the whole reason unattended grounding of a logged-in app is possible.
+	# One-time, per machine, per site: bring up the cdp backend's persistent Chrome profile
+	# on a URL so a human can sign in. The profile persists, so every later web run inherits
+	# that session — which is the whole reason unattended grounding of a logged-in app is
+	# possible. (Web runs live on the cdp backend since the dom backend was removed.)
 	[[ $# -ge 2 ]] || die 'usage: ./run browser-login https://www.notion.so'
 	assert_no_run_in_flight
 	shift
-	exec npx tsx src/backends/browser-login.ts "$@"
+	exec npx tsx src/backends/cdp-login.ts "$@"
 	;;
 
 liveview)

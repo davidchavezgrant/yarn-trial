@@ -11,15 +11,22 @@ VM), not interactively on a customer's. Full brief: `docs/jasper-email-yarn-tria
 speaks Observation/ActionRequest. The driver is UniFFI bindings over a sealed Rust core —
 we treat it as a peripheral we might swap, not a framework we build inside.
 
-The swap has since happened without a fork: three backends live behind the seam.
-`--backend ax` (default — cua driving the AX tree), `--backend dom` (cua's `browser_*`
-tools over CDP), and `--backend cdp` (`src/backends/cdp.ts`: playwright-core attaching over
-`--remote-debugging-port`, **no cua in the loop at all** — no 300s session TTL, no shared
-daemon, no consent gate, no node budget; those four absences are its reason to exist).
-Explore, teardown, the cleanup CLI and the trajectory feed all run on cdp too.
+The swap has since happened without a fork: two backends live behind the seam.
+`--backend ax` (default — cua driving the AX tree) and `--backend cdp`
+(`src/backends/cdp.ts`: playwright-core attaching over `--remote-debugging-port`, **no cua
+in the loop at all** — no 300s session TTL, no shared daemon, no consent gate, no node
+budget; those four absences are its reason to exist). Explore, teardown, the cleanup CLI
+and the trajectory feed all run on cdp too.
+
+A third backend — `dom`, cua's `browser_*` tools — existed until 2026-07-31 and was
+**deleted as dominated**: it reached the same Chromium over the same CDP protocol as cdp
+but through cua's middleman, inheriting the 300-node snapshot cap, the pty-minted consent
+gate, the 300s TTL and the shared daemon. No target ever preferred it. Removing it also
+deleted `mintApprovalToken()` — the consent-token pty hack, the ugliest code in the repo,
+which only ever existed to serve that path.
 
 **Revisit if**: we fork the driver (see §5's exit path), or the cdp backend proves out on
-Electron targets broadly enough to retire the others there.
+Electron targets broadly enough to retire the ax path there.
 
 ## 2. Observe → act → verify loop, with verification as a gate
 
@@ -181,16 +188,11 @@ app-name string. Web artifacts key on the origin (`docs/appmaps/web-www.notion.s
 `appSlug` keeps its exact prior behaviour for Mac apps, so no existing appmap, run log or job
 id moves. `--url` is value-bearing and consumed by `parseTarget` before positionals are read.
 
-**Three backends work on web, and they need different things:**
-- **CDP-direct** (`--backend cdp`) — playwright-core, no cua: launches its own Chrome with a
-  persistent profile (sign-ins survive between runs), `ariaSnapshot` returns the whole tree,
-  no consent token. The strongest path for web targets.
-- **DOM** (`--backend dom`, explore's default for web) — cua's `browser_*` tools; snapshots
-  the page, so browser chrome never enters the frontier. Requires `browser_prepare`, which
-  needs a per-call approval token minted under a pty (`mintApprovalToken`; LIMITATIONS §13).
-- **AX** (`--backend ax`, agent's default for every target — pass `--backend` explicitly for
-  web runs) — reads the window, needs no CDP and no token. Browser chrome is excluded by an
-  `AXWebArea` subtree filter (`observe(..., {webAreaOnly})`).
+**Web targets run on cdp** (the default for `--url` since the dom backend's removal):
+playwright-core, no cua — it launches its own Chrome with a persistent profile (sign-ins
+survive between runs; `./run browser-login` seeds them), `ariaSnapshot` returns the whole
+tree, no consent token. The ax path refuses web targets now — its browser-acquisition
+route was deleted with the dom backend, and cdp is strictly stronger there.
 
 What the URL buys beyond reachability: it is a verification channel a native app has no
 equivalent of — navigation changes it, so a route check is discriminating by construction,

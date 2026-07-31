@@ -1,7 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { boundaryDescription, classifyBoundary } from "../../backends/boundary.js";
 import type { CdpBackend } from "../../backends/cdp.js";
-import type { DomBackend } from "../../backends/dom.js";
 import type { Driver } from "../driver.js";
 import {
 	actionTarget,
@@ -33,10 +32,10 @@ import { accumulatedGraph, type FinishInput, merge, type Pass } from "./state.js
 
 /**
  * Resolve a query-addressed action to the handle it operated, in the observation the model
- * saw. Both backends resolve `query` internally (dom.resolveRef / CdpBackend.resolveRef)
- * with this same case-insensitive containment test and refuse ambiguity, so an act that
- * succeeded matched exactly one candidate there; demanding uniqueness HERE means a miss
- * (say, the backend matched a non-interactive row) credits nothing rather than guessing.
+ * saw. CdpBackend.resolveRef resolves `query` internally with this same case-insensitive
+ * containment test and refuses ambiguity, so an act that succeeded matched exactly one
+ * candidate there; demanding uniqueness HERE means a miss (say, the backend matched a
+ * non-interactive row) credits nothing rather than guessing.
  */
 const uniqueQueryHandle = (query: string, obs: ObservationBundle): string | number | undefined => {
 	const q = query.toLowerCase();
@@ -53,12 +52,11 @@ export type LoopDeps = {
 	interrupted: () => boolean;
 	driver: Driver | undefined;
 	cdp: CdpBackend | undefined;
-	dom: DomBackend | undefined;
 	win: WindowRef | undefined;
 	doObserve: (name: string) => Promise<ObservationBundle>;
 };
 
-export async function runExploreLoop({ p, client, model, overlay, interrupted, driver, cdp, dom, win, doObserve }: LoopDeps): Promise<void> {
+export async function runExploreLoop({ p, client, model, overlay, interrupted, driver, cdp, win, doObserve }: LoopDeps): Promise<void> {
 	let blindStreak = 0;
 	// Same handoff as the loop below: the banner starts visible and only a setDriving(false)
 	// takes it down, so the opening observation has to be the thing that lowers it — else it
@@ -298,7 +296,7 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 			const q = (toolUse.input as { query: string }).query;
 			let text: string;
 			try {
-				const hits = await (cdp ?? dom!).find(q);
+				const hits = await cdp!.find(q);
 				text = hits.length
 					? `find("${q}") matched ${hits.length}:\n` +
 						hits
@@ -389,7 +387,7 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 
 		let resultText: string;
 		let isError = false;
-		// The handle the DOM backend resolved a `query` to. frontierCredit reads only
+		// The handle a query-addressed action resolved to. frontierCredit reads only
 		// element_index/ref/coordinates, so a query-addressed action credits nothing
 		// unless the resolution is carried back to it (see the credit below).
 		let resolvedRef: string | undefined;
@@ -404,10 +402,7 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 					// unknown verbs before anything executes, same contract as toActionRequest.
 					resultText = (await cdp.act(input.action)).slice(0, 400);
 				} else {
-					const request = dom ? await dom.toRequest(input.action) : toActionRequest(input.action, win!);
-					// dom.toRequest resolves `query` to a concrete ref and puts it on the
-					// request; keep it so the credit below names the element actually operated.
-					if (dom && request?.kind === "tool" && typeof request.args.ref === "string") resolvedRef = request.args.ref;
+					const request = toActionRequest(input.action, win!);
 					resultText = request
 						? (await driver!.act(request)).text.slice(0, 400)
 						: "waited (no driver action)";
@@ -473,7 +468,7 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 				if (cdp) {
 					await cdp.act(escAction);
 				} else {
-					const esc = dom ? await dom.toRequest(escAction) : toActionRequest(escAction, win!);
+					const esc = toActionRequest(escAction, win!);
 					if (esc) await driver!.act(esc);
 				}
 				await new Promise((r) => setTimeout(r, SETTLE_MS));

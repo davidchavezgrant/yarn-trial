@@ -67,7 +67,6 @@ export async function main(): Promise<void> {
 	// directory must not break it. Type-only imports of the same modules elsewhere stay
 	// static — they vanish at compile time.
 	const cdpMod = backendKind === "cdp" ? await import("../../backends/cdp.js") : undefined;
-	const domMod = backendKind === "dom" ? await import("../../backends/dom.js") : undefined;
 
 	const { client, model } = makeClient();
 	// Announce the takeover before the first action. A run seizes pointer and keyboard for
@@ -226,11 +225,9 @@ export async function main(): Promise<void> {
 	const basePrompt = systemPrompt(
 		backendKind === "cdp"
 			? cdpMod!.cdpRules(record)
-			: backendKind === "dom"
-				? domMod!.DOM_RULES
-				: noAx
-					? (record ? DEMO_VISION_ONLY_RULES : VISION_ONLY_RULES)
-					: (record ? DEMO_DRIVER_RULES : DRIVER_RULES),
+			: noAx
+				? (record ? DEMO_VISION_ONLY_RULES : VISION_ONLY_RULES)
+				: (record ? DEMO_DRIVER_RULES : DRIVER_RULES),
 		vision,
 		targetVocabulary(target),
 		!noAx,
@@ -246,32 +243,25 @@ export async function main(): Promise<void> {
 		for (const a of ambiguities)
 			console.log(`  scope ambiguity: ${a.settingKey} — ${a.nodes.map((n) => `${n.id} [${n.scope}]`).join(" vs ")}`);
 	}
-	// find is DOM/CDP-only: on cua's DOM path it is the escape hatch from the semantic_v2
-	// node budget; on the direct CDP path the tree is complete and find is just search. The
-	// AX path has neither need (get_window_state returns the whole tree).
+	// find is CDP-only: the snapshot is complete there, so find is just search. The AX
+	// path has no need for it (get_window_state returns the whole tree).
 	const tools: Anthropic.Tool[] =
 		backendKind === "cdp"
 			? [cdpMod!.cdpActTool(record), cdpMod!.CDP_FIND_TOOL, CLAIM_TOOL, DONE_TOOL]
-			: backendKind === "dom"
-				? [domMod!.DOM_ACT_TOOL, domMod!.FIND_TOOL, CLAIM_TOOL, DONE_TOOL]
-				: [record ? DEMO_ACT_TOOL : ACT_TOOL, CLAIM_TOOL, DONE_TOOL];
+			: [record ? DEMO_ACT_TOOL : ACT_TOOL, CLAIM_TOOL, DONE_TOOL];
 
 	try {
-		// A web target has no app to launch: the driver brings up its own Chromium against a
-		// persistent profile and navigates it. See src/backends/browser.ts for why that profile, and
-		// not the operator's own Chrome.
 		// Reassigned by ensureObservable: recovering an unobservable target can relaunch it
 		// onto a new window, and every later call must use that one.
 		// On the CDP backend there is no driver and no window: the page is the target, and
-		// acquisition (launch-or-attach, tab pick, navigate) lives in CdpBackend.acquire.
+		// acquisition (launch-or-attach, tab pick, navigate) lives in CdpBackend.acquire —
+		// which is the whole web story too, now that the driver-owned browser path went
+		// with the dom backend (web targets default to cdp in the CLI).
 		let win: WindowRef | undefined;
 		if (backendKind === "cdp") {
 			cdp = await cdpMod!.CdpBackend.acquire(target, { demo: record });
 		} else if (target.kind === "web") {
-			// Loaded here, not at module top: the browser path is the only default-backend
-			// route into src/backends/, and an app-target run must not depend on it existing.
-			const { ensureBrowser } = await import("../../backends/browser.js");
-			({ win } = await ensureBrowser(driver!, target, { cdp: backendKind === "dom" }));
+			throw new Error("web targets run on the cdp backend — pass --backend cdp (or omit it; web targets default there)");
 		} else {
 			await driver!.act({ kind: "tool", name: "launch_app", args: { name: app } });
 			await new Promise((r) => setTimeout(r, 1500));
@@ -279,16 +269,8 @@ export async function main(): Promise<void> {
 		}
 		// Last chance to take your hands off before the run owns the pointer.
 		await overlay.countdown();
-		// For the DOM backend the CDP bind is the observability gate; AX darkness is fine.
-		const dom =
-			backendKind === "dom"
-				? await domMod!.DomBackend.bind(driver!, win!, undefined, target.kind === "web" ? target.origin : undefined)
-				: undefined;
-		if (!dom && !cdp) win = await ensureObservable(driver!, win!, app);
-		// See the same call in src/core/explore.ts: page content only, on the AX fallback.
-		const webAreaOnly = target.kind === "web";
-		const doObserve = (name: string) =>
-			cdp ? cdp.observe(name) : dom ? dom.observe(name) : observe(driver!, win!, name, { webAreaOnly });
+		if (!cdp) win = await ensureObservable(driver!, win!, app);
+		const doObserve = (name: string) => (cdp ? cdp.observe(name) : observe(driver!, win!, name, {}));
 		console.log(
 			cdp
 				? `target: ${app} url=${target.kind === "web" ? target.url : "(attached)"} backend=cdp`
@@ -471,7 +453,7 @@ export async function main(): Promise<void> {
 				try {
 					while (sync.busy) await new Promise((r) => setTimeout(r, 50));
 					sync.busy = true;
-					const hits = await (cdp ?? dom!).find(q);
+					const hits = await cdp!.find(q);
 					sync.busy = false;
 					text = hits.length
 						? `find("${q}") matched ${hits.length}:\n` +
@@ -646,7 +628,7 @@ export async function main(): Promise<void> {
 			}
 
 			await executeAction(
-				{ driver, cdp, dom, win, app, doObserve, overlay, sync, rec, records, messages, vision, noAx, cleanupMode, journalPath, graph, demo: record, stepsDir },
+				{ driver, cdp, win, app, doObserve, overlay, sync, rec, records, messages, vision, noAx, cleanupMode, journalPath, graph, demo: record, stepsDir },
 				ls,
 				step,
 				toolUse,

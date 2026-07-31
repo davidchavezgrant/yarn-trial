@@ -37,6 +37,16 @@ export interface StepRecord {
 	verificationNote: string;
 	screenshotFile?: string;
 	/**
+	 * Node counts for the attention question: how big was the observation the model chose
+	 * from, and how much of it was actually rendered into the prompt. `observationNodes` is
+	 * the interactive elements in the PRE-action observation; `listShownToModel` is the
+	 * element-list lines the prompt carried (0 in a vision-only arm, where the model sees
+	 * pixels while the harness keeps the full bundle). Both from the pre-action snapshot,
+	 * because that is the one the model acted on.
+	 */
+	observationNodes?: number;
+	listShownToModel?: number;
+	/**
 	 * Fraction of pixels (0..1) that changed vs the previous observation. Advisory: rendered
 	 * content is absent from the AX text channel verify() greps, so this is the only signal
 	 * that a canvas/preview did or did not repaint. Undefined when the diff could not run.

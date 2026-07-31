@@ -43,18 +43,17 @@ async function main(): Promise<void> {
 	const p = newPass(target, app, backendKind, vision, guidance);
 
 	try {
-		// A web target has no app to launch: the driver brings up its own Chromium against a
-		// persistent profile and navigates it, which is also what makes a logged-in site
-		// reachable without handling credentials here.
 		// On the CDP backend there is no driver and no window: the page is the target, and
-		// acquisition (launch-or-attach, tab pick, navigate) lives in CdpBackend.acquire.
+		// acquisition (launch-or-attach, tab pick, navigate) lives in CdpBackend.acquire —
+		// which is also the whole web-target story now that the driver-owned browser path
+		// went with the dom backend (web targets default to cdp in the CLI).
 		// Backends load lazily at their selection branch so src/backends/ stays deletable
 		// without breaking default ax explores — same seam as agent.ts and teardown.ts.
 		let win: WindowRef | undefined;
 		if (backendKind === "cdp") {
 			cdp = await (await import("../backends/cdp.js")).CdpBackend.acquire(target);
 		} else if (target.kind === "web") {
-			({ win } = await (await import("../backends/browser.js")).ensureBrowser(driver!, target, { cdp: backendKind === "dom" }));
+			throw new Error("web targets explore on the cdp backend — pass --backend cdp (or omit it; web targets default there)");
 		} else {
 			await driver!.act({ kind: "tool", name: "launch_app", args: { name: app } });
 			await new Promise((r) => setTimeout(r, 1500));
@@ -63,21 +62,8 @@ async function main(): Promise<void> {
 		}
 		// Last chance to take your hands off before the run owns the pointer.
 		await overlay.countdown();
-		// Exploration runs once and its whole purpose is coverage, so it exhausts the
-		// continuation chain on every observation — the opposite tradeoff from the agent
-		// loop, which re-observes after every action and pays per-step for depth. (The CDP
-		// backend has no such chain: ariaSnapshot returns the whole tree in one call.)
-		const dom =
-			backendKind === "dom"
-				? await (await import("../backends/dom.js")).DomBackend.bind(driver!, win!, Infinity, target.kind === "web" ? target.origin : undefined)
-				: undefined;
-		if (!dom && !cdp) win = await ensureObservable(driver!, win!, app);
-		// webAreaOnly keeps the browser's own tab strip, omnibox and menu bar out of the
-		// frontier on the AX fallback. A no-op for a Mac app, and unreachable on the DOM
-		// and CDP backends, which observe the page rather than the window.
-		const webAreaOnly = target.kind === "web";
-		const doObserve = (name: string) =>
-			cdp ? cdp.observe(name) : dom ? dom.observe(name, Infinity) : observe(driver!, win!, name, { webAreaOnly });
+		if (!cdp) win = await ensureObservable(driver!, win!, app);
+		const doObserve = (name: string) => (cdp ? cdp.observe(name) : observe(driver!, win!, name, {}));
 		// The claim tool is only offered under descent — a non-descent pass never creates
 		// anything, so a claim ledger it can't act on is just a distraction in the prompt.
 		const extra = DESCENT_ON ? [...EXTRA_TOOLS, CLAIM_TOOL] : EXTRA_TOOLS;
@@ -85,10 +71,6 @@ async function main(): Promise<void> {
 			const { CDP_ACT_TOOL, CDP_FIND_TOOL, CDP_RULES } = await import("../backends/cdp.js");
 			p.tools = [CDP_ACT_TOOL, CDP_FIND_TOOL, ...extra];
 			p.basePrompt = systemPrompt(CDP_RULES, targetVocabulary(target), DESCENT_ON, vision);
-		} else if (dom) {
-			const { DOM_ACT_TOOL, FIND_TOOL, DOM_RULES } = await import("../backends/dom.js");
-			p.tools = [DOM_ACT_TOOL, FIND_TOOL, ...extra];
-			p.basePrompt = systemPrompt(DOM_RULES, targetVocabulary(target), DESCENT_ON, vision);
 		} else {
 			p.tools = [ACT_TOOL, ...extra];
 			p.basePrompt = systemPrompt(DRIVER_RULES, targetVocabulary(target), DESCENT_ON, vision);
@@ -100,7 +82,7 @@ async function main(): Promise<void> {
 		);
 		console.log(`ends when the frontier empties; no time cap, action backstop ${MAX_ACTIONS}\n`);
 
-		await runExploreLoop({ p, client, model, overlay, interrupted, driver, cdp, dom, win, doObserve });
+		await runExploreLoop({ p, client, model, overlay, interrupted, driver, cdp, win, doObserve });
 	} catch (err) {
 		/**
 		 * A dead driver session must not also destroy the map.

@@ -10,7 +10,6 @@ import {
 	isVagueSurface,
 	mergeGraph,
 	newFrontier,
-	refSurfaces,
 } from "../src/core/harness.js";
 import type { InteractiveElement, ObservationBundle } from "../src/core/harness.js";
 import type { AppMapEdge, AppMapNode } from "../src/types.js";
@@ -211,52 +210,3 @@ test("mergeGraph__DeduplicatesEdge__When__SameTraversalRecordedTwice", () => {
 
 const ref = (r: string, role: string, frame: string, name?: string) => ({ ref: r, role, name, frame });
 
-test("refSurfaces__NamesTheEnclosingLandmark__When__ControlSitsInside", () => {
-	const m = refSurfaces([
-		ref("p1:0", "navigation", "0,0,200,800", "Sidebar"),
-		ref("p1:1", "button", "10,20,100,30", "Inbox"),
-	]);
-	assert.equal(m.get("p1:1"), "Sidebar");
-});
-
-test("refSurfaces__PicksTheInnermost__When__LandmarksNest", () => {
-	const m = refSurfaces([
-		ref("p1:0", "region", "0,0,1000,1000", "Page"),
-		ref("p1:1", "dialog", "100,100,300,200", "Settings"),
-		ref("p1:2", "button", "150,150,80,20", "Save"),
-	]);
-	assert.equal(m.get("p1:2"), "Settings");
-});
-
-test("refSurfaces__IgnoresMain__When__ItWouldSwallowTheWholePage", () => {
-	// If `main` counted as a surface, isVagueSurface("main") would be false and ONE dismiss
-	// naming it would retire the entire page — bypassing EXPLORE_DISMISS_CAP by another route.
-	const m = refSurfaces([ref("p1:0", "main", "0,0,1000,1000", "Main"), ref("p1:1", "button", "10,10,50,20", "Go")]);
-	assert.equal(m.get("p1:1"), undefined);
-	assert.equal(isVagueSurface(m.get("p1:1")), true);
-});
-
-test("refSurfaces__FallsBackToTheRole__When__LandmarkHasNoName", () => {
-	const m = refSurfaces([ref("p1:0", "toolbar", "0,0,500,50"), ref("p1:1", "button", "10,10,40,30", "Bold")]);
-	assert.equal(m.get("p1:1"), "toolbar");
-});
-
-test("refSurfaces__ReturnsNothing__When__FramesAreUnreadable", () => {
-	// The frame format is unverified against a live driver, so a wrong guess must make the
-	// feature inert (today's behaviour: every surface "") rather than produce wrong groupings.
-	const m = refSurfaces([ref("p1:0", "navigation", "who knows", "Side"), ref("p1:1", "button", "", "Inbox")]);
-	assert.equal(m.size, 0);
-});
-
-test("refSurfaces__ToleratesOtherPunctuation__When__DriverFormatsFramesDifferently", () => {
-	const m = refSurfaces([
-		ref("p1:0", "navigation", "{x: 0, y: 0, w: 200, h: 800}", "Sidebar"),
-		ref("p1:1", "button", "{x: 10, y: 20, w: 100, h: 30}", "Inbox"),
-	]);
-	assert.equal(m.get("p1:1"), "Sidebar");
-});
-
-test("refSurfaces__DoesNotMakeALandmarkItsOwnSurface__When__ItEnclosesItself", () => {
-	const m = refSurfaces([ref("p1:0", "navigation", "0,0,200,800", "Sidebar")]);
-	assert.equal(m.get("p1:0"), undefined);
-});

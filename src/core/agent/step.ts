@@ -1,6 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { CdpBackend } from "../../backends/cdp.js";
-import type { DomBackend } from "../../backends/dom.js";
 import type { Driver } from "../driver.js";
 import {
 	actionTarget,
@@ -63,7 +62,6 @@ export interface StepLoopState {
 export interface StepContext {
 	driver: Driver | undefined;
 	cdp: CdpBackend | undefined;
-	dom: DomBackend | undefined;
 	win: WindowRef | undefined;
 	app: string;
 	doObserve: (name: string) => Promise<ObservationBundle>;
@@ -106,7 +104,7 @@ export async function executeAction(
 	toolUse: Anthropic.ToolUseBlock,
 	input: { reasoning?: string; action: any; expectation: Expectation },
 ): Promise<void> {
-	const { driver, cdp, dom, win, app, doObserve, overlay, sync, rec, records, messages, vision, noAx, cleanupMode, journalPath, graph } = ctx;
+	const { driver, cdp, win, app, doObserve, overlay, sync, rec, records, messages, vision, noAx, cleanupMode, journalPath, graph } = ctx;
 	// `agent-step-3` → `runs/<stamp>-steps/agent-step-3` when the caller namespaced the run.
 	const shotName = (suffix: string) => (ctx.stepsDir ? `${ctx.stepsDir}/${suffix}` : suffix);
 
@@ -118,7 +116,7 @@ export async function executeAction(
 	const typedChunks: Array<{ text: string; epochStartMs: number; epochEndMs: number }> = [];
 	// Demo actuation is the AX driver path's concern: the CDP backend grows its own demo
 	// variant in src/backends/cdp.ts, and the DOM backend has none.
-	const demoMode = ctx.demo === true && !cdp && !dom;
+	const demoMode = ctx.demo === true && !cdp;
 
 	const prevHaystack = ls.obs.haystack;
 	// The whole bundle, not just the derived views below: the mutation journal needs
@@ -144,19 +142,14 @@ export async function executeAction(
 			// The CDP backend acts directly (no driver dispatch), so its "request" is
 			// only what the run log records; the unsupported-verb check still runs here
 			// so a bad name is rejected before anything executes, same as the others.
-			// dom.toRequest is driver I/O (find → snapshot, plus an AX-centre probe), so
-			// it belongs inside the mutex with the act itself: the recording frame
-			// poller shares the driver, and a request resolved outside the hold
-			// interleaves with its captures.
 			if (cdp) {
 				cdp.assertSupported(input.action.name);
 				request = input.action.name === "wait" ? null : cdp.requestForLog(input.action);
-			} else if (dom) request = await dom.toRequest(input.action);
-			else {
+			} else {
 				// Recorded runs re-resolve element targets against ONE fresh snapshot — taken
-				// inside the mutex like dom.toRequest, so the frame poller cannot interleave —
-				// and act by coordinate, never AXPress (whose "click" moves no pointer and may
-				// focus nothing). A null plan means no demo variant; the normal path applies.
+				// inside the mutex so the recording frame poller cannot interleave — and act
+				// by coordinate, never AXPress (whose "click" moves no pointer and may focus
+				// nothing). A null plan means no demo variant; the normal path applies.
 				if (demoMode && demoTranslatable(input.action)) {
 					let snap: FreshSnapshot = { elements: [] };
 					if (input.action.element_index !== undefined && target)
@@ -363,6 +356,11 @@ export async function executeAction(
 		screenshotFile: `${shotName(`agent-step-${step}`)}.png`,
 		pixelDelta: delta,
 		modelReasoning: input.reasoning,
+		// Counted from the PRE-action observation — the one the model chose from. The
+		// prompt renders elementsText lines (interactive plus labelled context), so the
+		// line count IS what the model saw; a vision-only arm shows it none of them.
+		observationNodes: prevObs.interactive.length,
+		listShownToModel: noAx ? 0 : prevObs.elementsText ? prevObs.elementsText.split("\n").length : 0,
 		// Demo steps record the FRESH target — the geometry that was actually clicked and
 		// that the recording frames show — instead of the stale observation's rect.
 		...(plan?.target
