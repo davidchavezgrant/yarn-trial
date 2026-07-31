@@ -1,5 +1,19 @@
 # Session roaming — what we tried, why it's a dead end (2026-07-31)
 
+> **CORRECTION NOTE (2026-07-31, later the same day).** A seven-agent deep-research pass plus
+> first-person measurement re-examined this post-mortem. **The conclusion below stands —
+> per-box sign-in is still the right answer — but several stated causes are wrong**, and two
+> options were never considered (CDP-level cookie transfer; cloning the machine via a TCC-
+> pre-granted VM golden image, which is standard practice at GitHub's and Cirrus's macOS CI
+> fleets). Specifically: Yarn has **no** `Local State` and **no** Safe Storage Keychain item,
+> so the OSCrypt portability problem is inapplicable here; its cookies are plaintext; the
+> `so.yarn.MacRecorder` container is 216 KB of TipKit state and cannot have caused the crash;
+> the "device/instance marker" dotfiles are leaked Chromium `mkstemp` temporaries; the
+> quit-before-snapshot fix demonstrably never produced a quiesced profile (a 2.9 MB `DIPS-wal`
+> persists with the app closed); and the crash was never diagnosed because nobody read a crash
+> report — Yarn's own Sentry project has them. Read
+> `docs/research/2026-07-31-session-roaming-deep-research.md` before acting on anything here.
+
 A post-mortem so this isn't rediscovered. The question was: **can we route a demo run to any
 free fleet Mac and have the target app already signed in, without signing that app in on every
 box?** We built a credential vault to do it, chased it hard, and concluded it's the wrong tool for

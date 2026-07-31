@@ -380,8 +380,16 @@ each of which cost real time to diagnose because none of them reports an error.
   as a LaunchAgent (`--serve`), bootstrapped into `gui/<uid>` rather than `user/<uid>`, and
   why every run is a child of that process. Nothing else on the fleet path can be relaxed
   without walking back into this.
-- **The grant has to be given by a human at the machine, once per Mac.** TCC is SIP-protected;
-  there is no API, no MDM shortcut we have, and no way to copy the database. Screen Recording
+- **The grant has to be given by a human at the machine, once per Mac** — *on bare metal.* TCC is
+  SIP-protected; there is no API, no MDM shortcut we have, and no way to copy the database **on a
+  SIP-enabled physical Mac**. (Qualifier added 2026-07-31: inside a VM golden image this is
+  routine and two major CI fleets depend on it. The TCC `access` table keys a grant on service +
+  client + `csreq` — a *code-signing* requirement, not a machine one — and `boot_uuid` is the
+  literal string `'UNUSED'`, so grants survive cloning. GitHub's `actions/runner-images` ships
+  `configure-tccdb-macos.sh`, which INSERTs Accessibility/ScreenCapture/PostEvent grants directly
+  into both databases inside cloned Anka templates. What actually differs is SIP: disabling it
+  needs a recovery boot, which is a physical power-button hold on bare metal and a scripted step
+  in a VM. See `docs/research/2026-07-31-session-roaming-deep-research.md` §5.) Screen Recording
   additionally has no `+` button, so the app has to *ask* before it even appears in the list
   to be granted (§ electron/main.ts `requestPermissions`). A new Mac is therefore never
   zero-touch to the first run.

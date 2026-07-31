@@ -258,3 +258,43 @@ test("responsesUrl__AcceptsBothSpellings__When__AnOperatorPastesEither", () => {
 	assert.equal(responsesUrl(full), full);
 	assert.equal(responsesUrl("https://x.openai.azure.com/openai/v1/responses"), "https://x.openai.azure.com/openai/v1/responses");
 });
+
+test("toResponsesInput__AnswersEveryToolCall__When__OneTurnEmitsSeveral", () => {
+	// Reproduces the failure that killed the 2026-07-31 Wikipedia explore at action 7:
+	// "Responses API 400: No tool output found for function call <id>". Every loop in this
+	// repo takes ONE tool call per turn and replies with one tool_result, so a turn where the
+	// model emitted press_key plus three dismisses left three calls unanswered. Anthropic
+	// accepted that transcript; Responses rejects it and the whole run dies.
+	const input = toResponsesInput([
+		{
+			role: "assistant",
+			content: [
+				{ type: "tool_use", id: "call_a", name: "act", input: { name: "press_key" } },
+				{ type: "tool_use", id: "call_b", name: "dismiss", input: { names: ["x"] } },
+				{ type: "tool_use", id: "call_c", name: "dismiss", input: { names: ["y"] } },
+			],
+		},
+		{ role: "user", content: [{ type: "tool_result", tool_use_id: "call_a", content: "ok" }] },
+	]);
+
+	const calls = input.filter((i: any) => i.type === "function_call").map((i: any) => i.call_id);
+	const outputs = input.filter((i: any) => i.type === "function_call_output").map((i: any) => i.call_id);
+	assert.deepEqual(calls, ["call_a", "call_b", "call_c"]);
+	// Every call answered — that is the API's hard requirement.
+	for (const id of calls) assert.ok(outputs.includes(id), `${id} unanswered`);
+	// The real result is preserved, not overwritten by the synthesized one.
+	const real = input.find((i: any) => i.type === "function_call_output" && i.call_id === "call_a") as any;
+	assert.equal(real.output, "ok");
+	// And the synthesized answers tell the truth: not executed. Fabricating success would
+	// teach the model that firing three actions a turn works.
+	const synth = input.find((i: any) => i.type === "function_call_output" && i.call_id === "call_b") as any;
+	assert.match(synth.output, /not executed/);
+});
+
+test("toResponsesInput__PlacesTheAnswerAfterItsCall__When__Synthesizing", () => {
+	const input = toResponsesInput([{ role: "assistant", content: [{ type: "tool_use", id: "call_z", name: "act", input: {} }] }]);
+	// Order matters to the API: an output must follow the call it answers.
+	assert.equal((input[0] as any).type, "function_call");
+	assert.equal((input[1] as any).type, "function_call_output");
+	assert.equal((input[1] as any).call_id, "call_z");
+});

@@ -105,7 +105,31 @@ export const NC_TASK = "Change my calendar's time zone to Paris";
  * Phase 1's web-explore verification target. Wikipedia is the repo's prior cdp web target
  * (docs/recipes/www.wikipedia.org.*.recipe.json) — low-risk, public, no sign-in.
  */
-export const WEB_EXPLORE_URL = "https://www.wikipedia.org";
+/**
+ * The canonical web target (set by David 2026-07-31). Wikipedia was here first, as a thin
+ * regression check that `cdp` still covered web exploration after `dom` was deleted — a
+ * portal with a search box and some links, which proved almost nothing about whether any of
+ * this transfers to a real application.
+ *
+ * Notion is the generalization test the matrix lost when the Notion Calendar slice was cut
+ * for the app not being installed on the fleet. A web target needs no install — only a
+ * signed-in browser profile, which every Mac now has.
+ *
+ * NOTE .com, not .so: David corrected this, and the profile signed in on each Mac is the
+ * one for this host.
+ */
+export const WEB_EXPLORE_URL = "https://app.notion.com";
+
+/**
+ * Goal-only, and deliberately multi-step: a new document, a table view inside it, and five
+ * columns filled. It names OUTCOMES — no menu, no slash-command, no keystroke — so it passes
+ * auditTaskPrompt (verified: `hinted: false`).
+ *
+ * "Create a NEW document" is also the sandbox rule doing real work here. This runs against a
+ * live personal workspace, and an agent that edited existing pages instead of making its own
+ * would be a failure even on a run that passed every check.
+ */
+export const WEB_TASK = "Create a new document with a table view and populate its first five columns";
 
 /**
  * Phase 4's second task. The plan doc calls it "the Auto Time sync example" but records no
@@ -151,7 +175,7 @@ const PHASE1: Arm[] = [
 		app: WEB_EXPLORE_URL,
 		n: 1,
 		dispatch: { backend: "cdp", url: WEB_EXPLORE_URL },
-		informs: "dom's web-explore path is being deleted on the assumption cdp covers it — this run checks that",
+		informs: "grounding a real web app: controls seen/actuated, pass duration and cost on a target far larger than Yarn",
 	},
 	/**
 	 * The vision-only GROUNDING pass — discovery from screenshots alone, no element list.
@@ -235,7 +259,36 @@ const PHASE2_SLICES: Arm[] = [
 ];
 
 /**
- * ~~Phase 2 generalization slice (Notion Calendar)~~ — DROPPED 2026-07-31 (David's call).
+ * Phase 2 generalization slice — Notion on the web, cdp only (a browser page IS the DOM;
+ * there is no second backend to compare here).
+ *
+ * This is the question the matrix lost when the Notion Calendar arms were cut for the app
+ * being absent from the fleet: does ANY of the Yarn result transfer to a different, larger
+ * application? Same two tiers as the core arms so the comparison is like-for-like —
+ * ungrounded floor against the explore-grounded pass — at n=2, which is a spot check, not a
+ * measurement.
+ *
+ * Two things to know before running it. The task MUTATES a live personal workspace: every run
+ * creates a document, so a full slice leaves up to four behind, reported via `claim` and
+ * never auto-deleted (deletion has no second chance). And Notion is far bigger than Yarn, so
+ * the phase-1 pass over it has no precedent for duration or cost — the 40min/96-action Yarn
+ * figure is not a prediction, and EXPLORE_MAX_ACTIONS is the cap if one is wanted.
+ */
+const PHASE2_WEB: Arm[] = [
+	task("p2-web-ungrounded", { backend: "cdp", url: WEB_EXPLORE_URL, noGrounding: true }, "does the ungrounded floor transfer to a second, larger app", {
+		app: WEB_EXPLORE_URL,
+		task: WEB_TASK,
+		n: 2,
+	}),
+	task("p2-web-grounded", { backend: "cdp", url: WEB_EXPLORE_URL }, "does grounding's lift transfer to a second, larger app", {
+		app: WEB_EXPLORE_URL,
+		task: WEB_TASK,
+		n: 2,
+	}),
+];
+
+/**
+ * ~~Phase 2 generalization slice (Notion Calendar, the native app)~~ — DROPPED 2026-07-31.
  *
  * The arms carried a PREREQ marked UNVERIFIED; verifying it settled the matter — Notion
  * Calendar is installed on NONE of the three colo Macs (checked over ssh, all three). Every
@@ -376,7 +429,7 @@ const PHASE5: Arm[] = [
 	})),
 ];
 
-export const MATRIX: readonly Arm[] = [...PHASE1, ...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE3, ...PHASE4, ...PHASE5];
+export const MATRIX: readonly Arm[] = [...PHASE1, ...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE2_WEB, ...PHASE3, ...PHASE4, ...PHASE5];
 
 export const phaseArms = (phase: Phase): Arm[] => MATRIX.filter((a) => a.phase === phase);
 

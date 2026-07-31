@@ -204,6 +204,45 @@ export function toResponsesInput(messages: Anthropic.MessageParam[]): ResponsesI
 		flush();
 	}
 
+	return pairToolCalls(out);
+}
+
+/**
+ * Every `function_call` must be answered. The Responses API rejects a transcript containing a
+ * call with no matching `function_call_output` — 400 "No tool output found for function call
+ * <id>" — and it kills the run, not the turn.
+ *
+ * This is reachable from ordinary model behaviour, not from a bug in the translation above.
+ * Every loop in this repo takes ONE tool call per turn (`content.find(...)` in agent/run.ts,
+ * explore/loop.ts, replay.ts, teardown.ts, home.ts) and replies with exactly one tool_result.
+ * When the model emits several tool_use blocks in a single turn — which it does; a Wikipedia
+ * explore emitted a press_key plus three dismisses on 2026-07-31 — the extras are executed by
+ * nobody and answered by nobody. Anthropic accepted that transcript. Responses does not.
+ *
+ * Answering here rather than in five loops: the fix belongs at the boundary that has the
+ * constraint, it cannot be forgotten by the next loop written, and it does not change the
+ * deliberate one-action-per-turn semantics.
+ *
+ * The synthesized output tells the truth — the call was NOT executed — rather than fabricating
+ * a result. A fabricated success would teach the model its extra calls worked, which is how
+ * you get an agent that fires three actions a turn and believes all three landed.
+ */
+function pairToolCalls(items: ResponsesItem[]): ResponsesItem[] {
+	const answered = new Set<string>();
+	for (const it of items) if (it.type === "function_call_output" && typeof it.call_id === "string") answered.add(it.call_id);
+
+	const out: ResponsesItem[] = [];
+	for (const it of items) {
+		out.push(it);
+		if (it.type !== "function_call" || typeof it.call_id !== "string" || answered.has(it.call_id)) continue;
+		answered.add(it.call_id);
+		out.push({
+			type: "function_call_output",
+			call_id: it.call_id,
+			output: "not executed: this harness performs ONE tool call per turn, and another call in the same turn was taken instead. Emit a single call per turn.",
+		});
+	}
+
 	return out;
 }
 

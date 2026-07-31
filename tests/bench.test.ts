@@ -75,7 +75,10 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// ungrounded arm under a grounded label).
 	// Phase 2: core 12, plus 8 slices × 3 — the vision-only tier is now four arms
 	// (ungrounded floor / ax-written map / vision-written map / human notes).
-	assert.equal(phaseRunCount(2), 12 + 24);
+	// Phase 2: core 12, 8 slices x 3, plus the web generalization slice (2 arms x 2). The web
+	// arms restore the question the Notion Calendar cut lost — does anything transfer to a
+	// second, larger app — on a target that needs a login rather than an install.
+	assert.equal(phaseRunCount(2), 12 + 24 + 4);
 	// Phase 3: 2 local compiles + replay ×3 per backend + no-rescue ×3.
 	assert.equal(phaseRunCount(3), 2 + 6 + 3);
 	// Phase 4 (optional): 2 task cells × 2 + 1 compile + 2 replays.
@@ -248,7 +251,9 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		// The web verification run carries its URL.
 		const web = fake.calls.find((c) => c.url);
 		assert.equal(web?.backend, "cdp");
-		assert.match(web?.url ?? "", /wikipedia/);
+		// The canonical web target is Notion (David, 2026-07-31) — a real application, where
+	// Wikipedia was a portal that proved almost nothing about transfer.
+	assert.match(web?.url ?? "", /app\.notion\.com/);
 		// Every accepted job landed in the manifest, uncollected.
 		const m = readManifest(DATE, dir);
 		assert.equal(m.entries.length, 4);
@@ -274,7 +279,7 @@ test("runPhase__ShapesOptionsPerArm__When__Phase2Dispatches", async () => {
 		const fake = fakeDispatch();
 		const code = await runPhase(2, { go: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
 		assert.equal(code, EXIT_OK);
-		assert.equal(fake.calls.length, 36);
+		assert.equal(fake.calls.length, 40);
 
 		const byFlag = (pred: (c: DispatchOptions) => boolean): DispatchOptions[] => fake.calls.filter(pred);
 		// Task text crosses verbatim and is goal-only for every call.
@@ -299,6 +304,14 @@ test("runPhase__ShapesOptionsPerArm__When__Phase2Dispatches", async () => {
 		// assertion is kept (inverted) rather than deleted, so a careless restore that skips
 		// the fleet-install prereq trips a test instead of burning 8 runs on exit 3.
 		assert.equal(byFlag((c) => c.app === "Notion Calendar").length, 0);
+		// The web slice targets a URL, so every one of its dispatches must carry --url; a web
+		// arm that lost it would silently drive whatever the backend opened by default.
+		const web = byFlag((c) => c.app === "https://app.notion.com");
+		assert.equal(web.length, 4);
+		for (const c of web) {
+			assert.equal(c.url, "https://app.notion.com", "web arm must carry its URL");
+			assert.equal(c.backend, "cdp", "a browser page is the DOM — there is no second backend here");
+		}
 		// Samples interleave across arms rather than running one arm's n back-to-back.
 		assert.notEqual(fake.calls[0].noGrounding, fake.calls[1].noGrounding);
 	});
@@ -320,7 +333,7 @@ test("runPhase__BypassesPhase1Gate__When__ForceIsSet", async () => {
 		const fake = fakeDispatch();
 		const code = await runPhase(2, { go: true, force: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
 		assert.equal(code, EXIT_OK);
-		assert.equal(fake.calls.length, 36);
+		assert.equal(fake.calls.length, 40);
 	});
 });
 
@@ -339,7 +352,7 @@ test("runPhase__SubmitsOnlyMissingSamples__When__ManifestAlreadyHoldsSome", asyn
 		assert.equal(code, EXIT_OK);
 		// Only the web-explore run was missing.
 		assert.equal(fake.calls.length, 1);
-		assert.match(fake.calls[0].url ?? "", /wikipedia/);
+		assert.match(fake.calls[0].url ?? "", /app\.notion\.com/);
 	});
 });
 
