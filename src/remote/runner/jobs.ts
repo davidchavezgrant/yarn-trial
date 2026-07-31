@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { appSlug } from "../../paths.js";
-import { targetSlug } from "../../core/target.js";
+import { appmapSlug } from "../../core/target.js";
 import { mintRunKey } from "../../core/harness/run.js";
 import { readJsonOr } from "../../fsutil.js";
 import { outDir } from "../../paths.js";
@@ -271,33 +271,15 @@ export function createJob(init: JobInit, root = jobsDir()): JobRecord {
 function artifactsFor(id: string, init: JobInit): JobArtifacts {
 	const log = `out/jobs/${id}/log.txt`;
 	if (init.kind === "explore") {
-		// The slug MUST match what the pass itself writes, and for a web target appSlug does
-		// not: explore/state.ts names its output with targetSlug(), which is `web-<host>` for a
-		// URL — `web-app.notion.com` — while appSlug over the raw URL gives
-		// `https-app.notion.com`. The two disagreed silently, so a completed 369-action Notion
-		// pass was collected as "orphaned — no appmap", and phase 2's web-grounded arm would
-		// then have run with no grounding at all while looking like a grounded arm.
-		//
-		// Reconstructing the target from the record rather than importing the resolver: a job
-		// record carries `url` exactly when the run was a web target, which is the same fact
-		// the resolver branches on.
-		// `origin` is required by the Target type but unread by targetSlug, which derives the
-		// slug from the URL's host. Deriving it here anyway keeps the value honest rather than
-		// passing a placeholder that a future reader would trust.
-		const slug = init.url ? targetSlug({ kind: "web", url: init.url, origin: new URL(init.url).origin }) : appSlug(init.app);
-		// A vision-only pass writes its own `.vision.*` pair (explore/state.ts) so it can never
-		// overwrite the element-grounded map — the benchmark compares the two tiers, and one
-		// clobbering the other would destroy the artifact it is measured against. The record
-		// has to name the same file, or `pull` fetches the ELEMENT-grounded map and files it
-		// under the vision arm: on 2026-07-31 that archived a stale 96-action ax map as the
-		// vision arm's result, and phase 2's visionmap arm would then have found no `.vision`
-		// map at all and degraded to ungrounded while still labelled grounded.
-		const variant = init.noAx ? ".vision" : "";
+		// ONE derivation, shared with the pass that writes the file (explore/state.ts) and every
+		// reader that looks for it — see appmapSlug's header for the four-way divergence this
+		// replaced, and why each divergence surfaced as "no appmap" for a map that existed.
+		const slug = appmapSlug(init.url ?? init.app, { visionOnly: Boolean(init.noAx) });
 
 		return {
 			log,
-			appmap: `docs/appmaps/${slug}${variant}.md`,
-			appmapGraph: `docs/appmaps/${slug}${variant}.json`,
+			appmap: `docs/appmaps/${slug}.md`,
+			appmapGraph: `docs/appmaps/${slug}.json`,
 			checkpoint: `out/runs/${id}.checkpoint.json`,
 		};
 	}

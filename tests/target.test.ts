@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { appSlug } from "../src/core/harness.js";
-import {
+import { appmapSlug,
 	buildRunArgs,
 	electronTarget,
 	isBrowserApp,
@@ -216,4 +216,39 @@ test("isBrowserApp__Rejects__When__NameMerelyStartsWithABrowserWord", () => {
 	assert.equal(isBrowserApp("Safarinator"), false);
 	assert.equal(isBrowserApp("Yarn"), false);
 	assert.equal(isBrowserApp(""), false);
+});
+
+test("appmapSlug__MatchesWhatThePassWrites__When__TheTargetIsAUrlOrAnApp", () => {
+	// The slug was derived at four sites — the pass that writes the file, the job record that
+	// points at it, the collector that fetches it, and the dashboard that reads it — from
+	// different inputs, with nothing comparing them. They agreed on apps and diverged on web:
+	// `web-app.notion.com` from the writer, `https-app.notion.com` from everyone else. Every
+	// divergence read as "no appmap" for a map that existed, and in the grounding path that
+	// degrades to provenance "none" — an arm running ungrounded under a grounded label.
+	assert.equal(appmapSlug("https://app.notion.com"), "web-app.notion.com");
+	assert.equal(appmapSlug("https://www.wikipedia.org"), "web-www.wikipedia.org");
+	// Identical to what targetSlug produces for the resolved target, which is the writer's path.
+	assert.equal(appmapSlug("https://app.notion.com"), targetSlug({ kind: "web", url: "https://app.notion.com", origin: "https://app.notion.com" }));
+	// App names are unchanged — they never went through URL slugging.
+	assert.equal(appmapSlug("Yarn"), "yarn");
+	assert.equal(appmapSlug("Notion Calendar"), "notion-calendar");
+});
+
+test("appmapSlug__SelectsTheVisionPair__When__ThePassIsScreenshotsOnly", () => {
+	// A vision-only pass writes a SEPARATE artifact so it cannot overwrite the
+	// element-grounded map — the benchmark compares the two tiers against each other.
+	assert.equal(appmapSlug("Yarn", { visionOnly: true }), "yarn.vision");
+	assert.equal(appmapSlug("https://app.notion.com", { visionOnly: true }), "web-app.notion.com.vision");
+});
+
+test("appmapSlug__FallsBackToAppSlugging__When__TheUrlIsUnparseable", () => {
+	// The PROPERTY is what matters, not the exact string: naming a file must never throw. A
+	// wrong-looking filename is recoverable; a crash in the path that only computes a name
+	// takes down the run that was about to write it.
+	for (const bad of ["https://", "http://", "https://:::"]) {
+		const slug = appmapSlug(bad);
+		assert.ok(slug.length > 0, `${bad} must still yield a name`);
+		// And it must not masquerade as a real web slug, which would collide with a live map.
+		assert.ok(!slug.startsWith("web-"), `${bad} must not look like a resolved host`);
+	}
 });

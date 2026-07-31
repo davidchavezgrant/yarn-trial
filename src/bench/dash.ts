@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { readJournal } from "../core/journal.js";
 import type { FleetRow } from "../remote/control/fleet.js";
 import { appSlug, dataRoot } from "../paths.js";
+import { appmapSlug } from "../core/target.js";
 import { archiveDirFor } from "./collect.js";
 import { estimateCost, rollupCost, usd } from "./cost.js";
 import { type Arm, armById, flagsLine, MATRIX, type Phase } from "./matrix.js";
@@ -485,8 +486,12 @@ function resolveGraph(
 	} catch {
 		// No archive for that arm yet — fall through to the live map.
 	}
-	const live = readJsonFile(path.join(dataDir, "docs", "appmaps", `${appSlug(app)}.json`));
-	if (live?.nodes) return { graph: { nodes: live.nodes, edges: live.edges ?? [], ...(live.home ? { home: String(live.home) } : {}) }, source: `docs/appmaps/${appSlug(app)}.json (live)` };
+	// appmapSlug, not appSlug: a web arm's `app` is a URL, and appSlug turns
+	// https://app.notion.com into `https-app.notion.com` while the pass wrote
+	// `web-app.notion.com`. The dash then reported no map for a 471-node map that existed.
+	const slug = appmapSlug(app);
+	const live = readJsonFile(path.join(dataDir, "docs", "appmaps", `${slug}.json`));
+	if (live?.nodes) return { graph: { nodes: live.nodes, edges: live.edges ?? [], ...(live.home ? { home: String(live.home) } : {}) }, source: `docs/appmaps/${slug}.json (live)` };
 
 	return {};
 }

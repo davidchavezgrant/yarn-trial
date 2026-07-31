@@ -144,6 +144,39 @@ export function isBrowserApp(name: string): boolean {
  * far-fetched, but the prefix costs nothing and makes `docs/appmaps/web-*` a listable set,
  * which the shell uses to find grounded sites.
  */
+/**
+ * The appmap slug for an app name OR a URL, without needing a resolved Target.
+ *
+ * This exists because the slug was being derived independently at four call sites — the pass
+ * that writes the file (explore/state.ts), the job record that points at it (runner/jobs.ts),
+ * the collector that fetches it (bench/collect.ts), and the dashboard that reads it
+ * (bench/dash.ts) — from different inputs, with nothing comparing the results. All four
+ * agreed for app targets and diverged for web ones: `web-app.notion.com` from the writer,
+ * `https-app.notion.com` from everyone else. Each divergence surfaced as "no appmap" for a
+ * map that existed, and in the grounding path that degrades silently to provenance "none" —
+ * an arm running ungrounded while the report calls it grounded.
+ *
+ * Anything that names an appmap file should call THIS, so there is one derivation to be
+ * wrong rather than four to keep in step.
+ *
+ * `visionOnly` selects the `.vision` pair a screenshots-only pass writes, which is a separate
+ * artifact precisely so it cannot overwrite the element-grounded map.
+ */
+export function appmapSlug(appOrUrl: string, opts: { visionOnly?: boolean } = {}): string {
+	const variant = opts.visionOnly ? ".vision" : "";
+	// A URL is recognised by being one, not by a caller remembering to say so.
+	if (/^https?:\/\//i.test(appOrUrl.trim())) {
+		try {
+			return `${targetSlug({ kind: "web", url: appOrUrl, origin: new URL(appOrUrl).origin })}${variant}`;
+		} catch {
+			// Unparseable URL: fall through to app slugging rather than throw. A wrong-looking
+			// filename is recoverable; a crash in a path that only names a file is not.
+		}
+	}
+
+	return `${appSlug(appOrUrl)}${variant}`;
+}
+
 export function targetSlug(t: Target): string {
 	if (t.kind === "app") return appSlug(t.name);
 

@@ -3,6 +3,7 @@ import path from "node:path";
 import { findScopeAmbiguities } from "../core/harness.js";
 import { readJournal } from "../core/journal.js";
 import { appSlug, dataRoot as dataRootDir, outDir } from "../paths.js";
+import { appmapSlug } from "../core/target.js";
 import type { JobRecord } from "../remote/runner/jobs.js";
 import { armById } from "./matrix.js";
 import { benchDir, type Manifest, type ManifestEntry, readManifest, type RunMetrics, updateEntry, utcDate, writeManifest } from "./manifest.js";
@@ -367,7 +368,9 @@ function collectEntry(entry: ManifestEntry, job: JobRecord | undefined, dataDir:
 	if (arm?.kind === "explore") {
 		// The job record names the exact artifact paths; the slug fallback covers a job record
 		// that carries none (older runner, or a record written before the queue drain).
-		const md = path.join(dataDir, job?.artifacts?.appmap ?? `docs/appmaps/${appSlug(arm.app)}.md`);
+		// Falls back to the shared derivation when the record has no artifact path — a record
+		// written before the slug was unified, or one from a kind that does not list them.
+		const md = path.join(dataDir, job?.artifacts?.appmap ?? `docs/appmaps/${appmapSlug(arm.app, { visionOnly: Boolean(arm.dispatch.noAx) })}.md`);
 		const graphFile = job?.artifacts?.appmapGraph ? path.join(dataDir, job.artifacts.appmapGraph) : md.replace(/\.md$/, ".json");
 		try {
 			metrics = { ...metrics, ...parseAppmapStamp(fs.readFileSync(md, "utf8")) };
