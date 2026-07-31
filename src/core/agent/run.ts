@@ -14,6 +14,7 @@ import {
 	ensureObservable,
 	failedProvider,
 	findScopeAmbiguities,
+	homeVisible,
 	findWindow,
 	loadAppMapGraph,
 	makeClient,
@@ -293,12 +294,20 @@ export async function main(): Promise<void> {
 			// starts from wherever the last one stopped. Loaded unconditionally (not gated on
 			// grounding) to keep the A/B arms starting from the same normalised state.
 			const reset = cdp
-				? await cdp.goHome().then(
-						(detail): { result: HomeResetResult; detail: string } => ({
-							result: detail.startsWith("none") ? "none" : "reset",
-							detail,
-						}),
-					)
+				? await (async (): Promise<{ result: HomeResetResult; detail: string }> => {
+						const detail = await cdp!.goHome();
+						if (!detail.startsWith("none")) return { result: "reset", detail };
+						// An app target has no home URL to navigate, but usability is still
+						// checkable: the declared-home labels the driver path resets to are
+						// either on screen or they are not. Without this the sign-in-wall
+						// refusal below never fires on cdp — observed on mac1 (2026-07-31):
+						// the agent spent six steps clicking "Continue with Google" before
+						// the operator killed the run.
+						const probe = homeVisible(app, await doObserve(`${stepsDir}/home-probe`), loadAppMapGraph(slug));
+						if (probe.ready === undefined) return { result: "none", detail: probe.detail };
+
+						return probe.ready ? { result: "root-visible", detail: probe.detail } : { result: "failed", detail: probe.detail };
+					})()
 				: await resetToHome(driver!, win!, app, loadAppMapGraph(slug));
 			overlay.setDriving(false);
 			homeReset = reset.result;

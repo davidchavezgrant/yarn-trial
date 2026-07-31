@@ -174,6 +174,32 @@ function findHomeLine(text: string, wanted: string[]): string | undefined {
  * Nothing here knows what a sign-in looks like. It knows whether the app's own recorded landing
  * state can be seen, which is as app-agnostic as the reset it shares its rules with.
  */
+/**
+ * The same home question, answered from an observation already in hand — no driver, no
+ * clicks. Exists for the CDP path: an app target has no home URL for goHome to navigate,
+ * and its element lines are ref-shaped so findHomeLine's `[42] AXRole "label"` anchor never
+ * matches — but the observation's `interactive` list carries the same element LABELS on both
+ * backends (never values, which is the trap findHomeLine's anchor exists to avoid).
+ *
+ * `ready: undefined` means the question cannot be answered (no appmap / no landing surface);
+ * the caller keeps its "none" posture rather than refusing an unmapped app.
+ */
+export function homeVisible(
+	app: string,
+	obs: ObservationBundle,
+	graph: AppMap | undefined = loadAppMapGraph(appSlug(app)),
+): { ready: boolean | undefined; detail: string } {
+	const target = homeTargets(app, graph);
+	if (target.problem) return { ready: undefined, detail: target.problem };
+	if (obs.interactive.some((e) => target.wanted.includes(e.name.trim())))
+		return {
+			ready: true,
+			detail: target.home ? `home control "${target.home.control}" is on screen` : `the landing surface of "${app}" is on screen`,
+		};
+
+	return { ready: false, detail: `${target.wanted.map((l) => `"${l}"`).join(", ")} not on screen${onScreenSummary(obs)}` };
+}
+
 export async function probeHome(
 	driver: Driver,
 	win: WindowRef,

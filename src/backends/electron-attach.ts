@@ -135,6 +135,13 @@ const PORT_SCAN_SPAN = 20;
  *   app not running              -> launch it on a port nothing else is listening on
  *
  * Lingering helper processes after a cmd+Q count as "not running" — see mainProcessArgv.
+ *
+ * `BENCH_QUIT_PORTLESS=1` softens the middle case to a polite quit-and-relaunch. It exists
+ * for the benchmark fleet, where an ax arm leaves the app running portless and the cdp arm
+ * behind it in the queue owns the machine anyway (the runner's lease says so) — refusing
+ * there fails every cdp-after-ax arm for a reason no operator is present to fix. It stays
+ * opt-in because on an operator's own Mac the refusal is the right answer: the running app
+ * may hold their unsaved work, and quitting it is not this code's call.
  */
 export async function ensureElectronEndpoint(appName: string, preferredPort: number): Promise<{ endpoint: string; port: number }> {
 	const bin = appExecutable(appName);
@@ -142,17 +149,25 @@ export async function ensureElectronEndpoint(appName: string, preferredPort: num
 	const argv = mainProcessArgv(bin);
 	if (argv) {
 		const declared = debugPortFromArgv(argv);
-		if (declared === undefined)
-			throw new Error(
-				`${appName} is already running WITHOUT a debug port, and one cannot be added to a live process. ` +
-					`Quit ${appName} (cmd+Q) and re-run — the run relaunches it with --remote-debugging-port=${preferredPort}.`,
-			);
-		const endpoint = `http://127.0.0.1:${declared}`;
-		if (!(await endpointAlive(endpoint, 8, 250)))
-			throw new Error(`${appName} is running with --remote-debugging-port=${declared} but ${endpoint} is not answering`);
-		if (declared !== preferredPort) console.log(`${appName} already exposes its own debug port ${declared} — attaching there`);
+		if (declared === undefined) {
+			if (process.env.BENCH_QUIT_PORTLESS !== "1")
+				throw new Error(
+					`${appName} is already running WITHOUT a debug port, and one cannot be added to a live process. ` +
+						`Quit ${appName} (cmd+Q) and re-run — the run relaunches it with --remote-debugging-port=${preferredPort}.`,
+				);
+			console.log(`${appName} is running without a debug port — quitting it to relaunch with one (BENCH_QUIT_PORTLESS)`);
+			const { quitApp } = await import("../core/appctl.js");
+			await quitApp(appName);
+			// Fall through to the launch path below: mainProcessArgv would now return
+			// undefined, so the state is exactly the "not running" case.
+		} else {
+			const endpoint = `http://127.0.0.1:${declared}`;
+			if (!(await endpointAlive(endpoint, 8, 250)))
+				throw new Error(`${appName} is running with --remote-debugging-port=${declared} but ${endpoint} is not answering`);
+			if (declared !== preferredPort) console.log(`${appName} already exposes its own debug port ${declared} — attaching there`);
 
-		return { endpoint, port: declared };
+			return { endpoint, port: declared };
+		}
 	}
 
 	let port = preferredPort;

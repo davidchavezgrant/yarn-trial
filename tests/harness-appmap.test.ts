@@ -369,3 +369,54 @@ test("resetToHome__SaysTheAppIsEmpty__When__ThereIsNoContentAtAll", async () => 
 	const out = await resetToHome(driverShowing([]), { pid: 1, windowId: 2 }, "Anything", homeGraph);
 	assert.match(out.detail, /NO content elements/);
 });
+
+// The read-only, backend-agnostic home check the CDP path gates on. It matches element
+// LABELS from `interactive` (present on both backends), never rendered-line substrings —
+// so a combobox whose VALUE happens to read the home label cannot pass for the home.
+import { homeVisible } from "../src/core/harness.js";
+import type { ObservationBundle } from "../src/core/harness.js";
+
+const wallObs = {
+	appContent: 12,
+	interactive: [
+		{ handle: "e3", role: "button", name: "Continue with Google" },
+		{ handle: "e4", role: "button", name: "Sign in with SSO" },
+	],
+} as unknown as ObservationBundle;
+
+const homeObs = {
+	appContent: 40,
+	interactive: [
+		{ handle: "e2", role: "button", name: "Library" },
+		{ handle: "e9", role: "button", name: "New Draft" },
+	],
+} as unknown as ObservationBundle;
+
+const homedGraph = {
+	app: "Yarn",
+	capturedAt: "2026-07-30T00:00:00.000Z",
+	provenance: "explore",
+	home: { control: "Library", evidence: "clicked during exploration" },
+	nodes: [],
+	edges: [],
+} as any;
+
+test("homeVisible__Ready__When__DeclaredControlOnScreen", () => {
+	const r = homeVisible("Yarn", homeObs, homedGraph);
+	assert.equal(r.ready, true);
+	assert.match(r.detail, /"Library"/);
+});
+
+test("homeVisible__Fails__When__SignInWallHidesHome", () => {
+	const r = homeVisible("Yarn", wallObs, homedGraph);
+	assert.equal(r.ready, false);
+	// The refusal message must NAME what is on screen — that is how an operator reads
+	// "sign-in wall" off a log without a screenshot.
+	assert.match(r.detail, /Continue with Google/);
+});
+
+test("homeVisible__CannotAnswer__When__NoAppmap", () => {
+	const r = homeVisible("Nowhere", wallObs, undefined);
+	assert.equal(r.ready, undefined);
+	assert.match(r.detail, /no appmap/);
+});

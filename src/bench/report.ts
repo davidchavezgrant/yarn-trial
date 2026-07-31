@@ -32,6 +32,11 @@ interface ArmRollup {
 	rejections: number;
 	documentScopeMutations: number;
 	runsWithMutations: number;
+	/** The attention pair, averaged across the arm's runs. */
+	meanObsNodes?: number;
+	meanShownLines?: number;
+	/** Runs that did NOT start from the declared home state (homeReset none/failed/skipped). */
+	unnormalisedRuns: number;
 }
 
 const mean = (xs: number[]): number | undefined => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : undefined);
@@ -58,14 +63,19 @@ function rollup(arm: Arm, entries: ManifestEntry[]): ArmRollup {
 		// the judgment line belongs to the For Aman section, not to this counter.
 		documentScopeMutations: collected.flatMap((e) => e.metrics?.mutationScopes ?? []).filter((s) => s === "document").length,
 		runsWithMutations: withScopes.length,
+		meanObsNodes: mean(nums(collected, (m) => m.meanObservationNodes)),
+		meanShownLines: mean(nums(collected, (m) => m.meanListShownToModel)),
+		// A run that inherited the previous run's navigation is not comparable raw; the count
+		// flags the arm rather than hiding the caveat in per-run fields nobody reads.
+		unnormalisedRuns: collected.filter((e) => e.metrics?.homeReset && e.metrics.homeReset !== "reset").length,
 	};
 }
 
-const taskTableHeader = "| arm | flags | done | success | steps x̄ | s x̄ | calls x̄ | out-tok x̄ | rejections | doc-scope muts |";
-const taskTableRule = "|---|---|---|---|---|---|---|---|---|---|";
+const taskTableHeader = "| arm | flags | done | success | steps x̄ | s x̄ | calls x̄ | out-tok x̄ | rejections | doc-scope muts | obs-nodes x̄ | shown x̄ | unnormalised |";
+const taskTableRule = "|---|---|---|---|---|---|---|---|---|---|---|---|---|";
 
 const taskRow = (r: ArmRollup): string =>
-	`| ${r.arm.id} | ${flagsLine(r.arm)} | ${r.collected.length}/${r.arm.n} | ${pct(r.successes, r.collected.length)} | ${fmt(r.meanSteps)} | ${fmt(r.meanElapsedSec)} | ${fmt(r.meanModelCalls)} | ${fmt(r.meanOutputTokens)} | ${r.rejections} | ${r.documentScopeMutations} |`;
+	`| ${r.arm.id} | ${flagsLine(r.arm)} | ${r.collected.length}/${r.arm.n} | ${pct(r.successes, r.collected.length)} | ${fmt(r.meanSteps)} | ${fmt(r.meanElapsedSec)} | ${fmt(r.meanModelCalls)} | ${fmt(r.meanOutputTokens)} | ${r.rejections} | ${r.documentScopeMutations} | ${fmt(r.meanObsNodes)} | ${fmt(r.meanShownLines)} | ${r.unnormalisedRuns ? `⚠ ${r.unnormalisedRuns}` : "0"} |`;
 
 function taskTable(arms: Arm[], m: Manifest): string[] {
 	const rows = arms.map((a) => taskRow(rollup(a, m.entries.filter((e) => e.armId === a.id))));
@@ -190,6 +200,7 @@ export function renderReport(m: Manifest): string {
 		"     as TODOs until the final edit, made after the last collect. -->",
 		"",
 		"- TODO: which backend to build on (phase 1 discovery + phase 2 outcomes).",
+		"- TODO: leaner vs blinder — cdp's smaller per-screen observation (obs-nodes/shown columns) is a token win ONLY if phase 1 shows it DISCOVERED comparable functionality (controls actuated/seen + graph nodes vs ax). If cdp's frontier is materially smaller, the lean snapshot missed real controls.",
 		"- TODO: what grounding buys — actions, tokens, wrong-scope rate (doc-scope mutation counts above are raw; the cursor task implies the brand default).",
 		"- TODO: is the axdom sidecar worth shipping.",
 		"- TODO: what vision costs/buys per backend; the vision-only deploy story.",

@@ -31,6 +31,13 @@ const seconds = (from?: string, to?: string): number | undefined => {
 	return Number.isFinite(ms) ? Math.round(ms / 1000) : undefined;
 };
 
+/** Mean of a numeric step field, one decimal, or undefined when no step carries it. */
+const mean = (steps: Array<Record<string, any>>, field: string): number | undefined => {
+	const vals = steps.map((s) => s[field]).filter((v): v is number => typeof v === "number");
+
+	return vals.length ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10 : undefined;
+};
+
 /** Metrics off a task or replay run log (out/runs/<stamp>.json). Absent fields stay absent. */
 export function parseRunMetrics(runLog: Record<string, any>): RunMetrics {
 	const usage = runLog.usage ?? {};
@@ -57,6 +64,15 @@ export function parseRunMetrics(runLog: Record<string, any>): RunMetrics {
 		...(runLog.backend ? { backend: String(runLog.backend) } : {}),
 		...(typeof runLog.vision === "boolean" ? { vision: runLog.vision } : {}),
 		...(typeof runLog.ax === "boolean" ? { ax: runLog.ax } : {}),
+		// Comparability caveat, not a metric: the first cdp smoke reported `none` where ax
+		// reported `reset`, meaning the arms may not have started from the same app state.
+		// Carried per run so the report can flag arms whose runs were not normalised.
+		...(runLog.homeReset ? { homeReset: String(runLog.homeReset) } : {}),
+		// The attention question: how much did each backend's channel say about the same
+		// screen (observationNodes), and how much of that reached the prompt. Means over
+		// steps, because step counts differ across runs of one arm.
+		...(mean(steps, "observationNodes") !== undefined ? { meanObservationNodes: mean(steps, "observationNodes") } : {}),
+		...(mean(steps, "listShownToModel") !== undefined ? { meanListShownToModel: mean(steps, "listShownToModel") } : {}),
 		...(typeof runLog.finalCheck?.verified === "boolean" ? { finalCheckVerified: runLog.finalCheck.verified } : {}),
 		...(runLog.visualCheck?.verdict ? { visualVerdict: String(runLog.visualCheck.verdict) } : {}),
 		...(typeof runLog.recipeSteps === "number" ? { recipeSteps: runLog.recipeSteps } : {}),

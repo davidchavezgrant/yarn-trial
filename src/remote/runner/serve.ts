@@ -508,6 +508,11 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 						...(rec.noGrounding ? { NO_GROUNDING: "1" } : {}),
 						...(rec.useRecipe ? { USE_RECIPE: "1" } : {}),
 						...(rec.appmapVariant ? { APPMAP_VARIANT: rec.appmapVariant } : {}),
+						// Fleet posture: a dispatched cdp run owns the machine (the lease says so),
+						// and the app it finds running portless was left by the previous job —
+						// an ax arm, most often. Quit-and-relaunch beats failing every
+						// cdp-after-ax arm in the queue; no operator is present to cmd+Q.
+						BENCH_QUIT_PORTLESS: "1",
 					},
 					cwd: resourcesRoot(),
 				},
