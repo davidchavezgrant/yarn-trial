@@ -91,7 +91,11 @@ export async function main(): Promise<void> {
 	});
 	const records: StepRecord[] = [];
 	const startedAt = Date.now();
-	const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, modelCalls: 0 };
+	// cacheCreationTokens matters out of proportion to its size: cache WRITES bill at 1.25x
+	// input while reads bill at 0.1x, so a run's cost is dominated by what it wrote, not what
+	// it read — and with a 5-minute TTL a long run rewrites its prefix repeatedly. Without
+	// this field a run log cannot be costed at all, only bracketed.
+	const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, modelCalls: 0 };
 	// Unique per run: a single overwritten agent-run.json forced hand-copying to preserve
 	// A/B artifacts, which is how out/ab-grounded-script.json ended up a mislabeled
 	// duplicate of a different run and its real numbers were lost.
@@ -490,6 +494,7 @@ export async function main(): Promise<void> {
 			usage.inputTokens += response.usage?.input_tokens ?? 0;
 			usage.outputTokens += response.usage?.output_tokens ?? 0;
 			usage.cacheReadTokens += response.usage?.cache_read_input_tokens ?? 0;
+			usage.cacheCreationTokens += response.usage?.cache_creation_input_tokens ?? 0;
 
 			if (response.stop_reason === "refusal") throw new Error("model refused the request");
 

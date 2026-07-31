@@ -57,6 +57,7 @@ export function parseRunMetrics(runLog: Record<string, any>): RunMetrics {
 		...(typeof usage.inputTokens === "number" ? { inputTokens: usage.inputTokens } : {}),
 		...(typeof usage.outputTokens === "number" ? { outputTokens: usage.outputTokens } : {}),
 		...(typeof usage.cacheReadTokens === "number" ? { cacheReadTokens: usage.cacheReadTokens } : {}),
+		...(typeof usage.cacheCreationTokens === "number" ? { cacheCreationTokens: usage.cacheCreationTokens } : {}),
 		// Replay logs put modelCalls at the top level; live runs put it in usage.
 		...(typeof usage.modelCalls === "number"
 			? { modelCalls: usage.modelCalls }
@@ -82,6 +83,16 @@ export function parseRunMetrics(runLog: Record<string, any>): RunMetrics {
 		// steps, because step counts differ across runs of one arm.
 		...(mean(steps, "observationNodes") !== undefined ? { meanObservationNodes: mean(steps, "observationNodes") } : {}),
 		...(mean(steps, "listShownToModel") !== undefined ? { meanListShownToModel: mean(steps, "listShownToModel") } : {}),
+		// The attention proxy proper: how deep into the offered list the model actually
+		// reached. Steps that chose no element are absent from the field, so mean() skips
+		// them rather than scoring them as index 0 — see the StepRecord comment.
+		...(mean(steps, "chosenDepth") !== undefined ? { meanChosenDepth: mean(steps, "chosenDepth") } : {}),
+		...(mean(steps, "chosenIndex") !== undefined ? { meanChosenIndex: mean(steps, "chosenIndex") } : {}),
+		// The lever itself: the deepest index the arm ever needed. A list truncated below this
+		// would have broken THIS run — it is the empirical floor for the observation budget.
+		...(steps.some((st) => typeof st.chosenIndex === "number")
+			? { maxChosenIndex: Math.max(...steps.filter((st) => typeof st.chosenIndex === "number").map((st) => st.chosenIndex as number)) }
+			: {}),
 		...(typeof runLog.finalCheck?.verified === "boolean" ? { finalCheckVerified: runLog.finalCheck.verified } : {}),
 		...(runLog.visualCheck?.verdict ? { visualVerdict: String(runLog.visualCheck.verdict) } : {}),
 		...(typeof runLog.recipeSteps === "number" ? { recipeSteps: runLog.recipeSteps } : {}),
@@ -125,7 +136,10 @@ export function journalScopes(journalPath: string): string[] {
  *  controls: 47 actuated / 350 dismissed / 396 seen | surfaces: 34 | … -->`
  */
 export function parseAppmapStamp(md: string): RunMetrics {
-	const stamp = md.match(/<!--\s*provenance: explore\s*\|([^>]*)-->/)?.[1] ?? "";
+	// `explore-vision` must match too — the earlier `explore\s*\|` required the pipe right
+	// after "explore", so a vision-only pass's appmap parsed to NOTHING and p1-explore-vision
+	// would have collected no metrics at all while looking like a healthy arm.
+	const stamp = md.match(/<!--\s*provenance: explore(?:-vision)?\s*\|([^>]*)-->/)?.[1] ?? "";
 	const field = (name: string): string | undefined => stamp.match(new RegExp(`\\b${name}:\\s*([^|]+)`))?.[1]?.trim();
 	const num = (name: string): number | undefined => {
 		const n = Number(field(name));
@@ -137,6 +151,13 @@ export function parseAppmapStamp(md: string): RunMetrics {
 	return {
 		...(num("actions") !== undefined ? { exploreActions: num("actions") } : {}),
 		...(field("elapsed") ? { exploreElapsed: field("elapsed") } : {}),
+		// Token fields are absent from stamps written before 2026-07-31; an older appmap
+		// simply contributes no cost, which is what "unknown" should look like.
+		...(num("tokens-in") !== undefined ? { inputTokens: num("tokens-in") } : {}),
+		...(num("tokens-out") !== undefined ? { outputTokens: num("tokens-out") } : {}),
+		...(num("cache-read") !== undefined ? { cacheReadTokens: num("cache-read") } : {}),
+		...(num("cache-write") !== undefined ? { cacheCreationTokens: num("cache-write") } : {}),
+		...(num("calls") !== undefined ? { modelCalls: num("calls") } : {}),
 		...(controls ? { controlsActuated: Number(controls[1]), controlsDismissed: Number(controls[2]), controlsSeen: Number(controls[3]) } : {}),
 		...(num("surfaces") !== undefined ? { surfaces: num("surfaces") } : {}),
 	};

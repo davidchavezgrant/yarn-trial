@@ -45,6 +45,15 @@ export interface StepRecord {
 	 * because that is the one the model acted on.
 	 */
 	observationNodes?: number;
+	/**
+	 * How deep into the offered element list the model reached — `chosenIndex` raw, and
+	 * `chosenDepth` as a 0–1 fraction of `observationNodes`. Provider APIs expose no attention
+	 * weights, so this is the measurable proxy: picks clustered near the top mean the list is
+	 * mostly paid for and ignored; picks landing deep mean truncating it would break runs.
+	 * Absent when the step chose no element (vision-only, key press, coordinate click).
+	 */
+	chosenIndex?: number;
+	chosenDepth?: number;
 	listShownToModel?: number;
 	/**
 	 * Fraction of pixels (0..1) that changed vs the previous observation. Advisory: rendered

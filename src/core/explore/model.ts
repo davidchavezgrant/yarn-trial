@@ -10,8 +10,8 @@ import { type FinishInput, noteProvider, type Pass, type StopReason } from "./st
  * transcript, and the provider-routing ignore list. `extra` is the single key that differs by
  * call site — cache_control on the loop call, tool_choice on the pinned finish call.
  */
-export const streamCall = (p: Pass, client: ModelClient, model: string, extra: Record<string, unknown>): Promise<Anthropic.Message> =>
-	retryTransient(
+export const streamCall = async (p: Pass, client: ModelClient, model: string, extra: Record<string, unknown>): Promise<Anthropic.Message> => {
+	const msg = await retryTransient(
 		() =>
 			client.messages
 				.stream({
@@ -27,6 +27,18 @@ export const streamCall = (p: Pass, client: ModelClient, model: string, extra: R
 				.finalMessage(),
 		{ onRetry: (n, e) => noteProvider(p, n, e) },
 	);
+	// Tallied here because this is the pass's ONLY model call site — the loop call and the
+	// pinned finish call both route through it, so neither can be forgotten. Retries inside
+	// retryTransient are deliberately not counted: a retried request that never returned a
+	// usage block was never billed as a completion.
+	p.usage.modelCalls++;
+	p.usage.inputTokens += msg.usage?.input_tokens ?? 0;
+	p.usage.outputTokens += msg.usage?.output_tokens ?? 0;
+	p.usage.cacheReadTokens += msg.usage?.cache_read_input_tokens ?? 0;
+	p.usage.cacheCreationTokens += msg.usage?.cache_creation_input_tokens ?? 0;
+
+	return msg;
+};
 
 /**
  * Ask for the map when the loop ends for a reason other than the model choosing to

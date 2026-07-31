@@ -82,6 +82,11 @@ export const newPass = (target: Target, app: string, backendKind: string, vision
 		basePrompt: "",
 		actions: 0,
 		findCalls: 0,
+		// An explore pass had no token accounting whatsoever, which made the matrix's most
+		// expensive runs the only ones that could not be costed — estimates for them spanned
+		// 6x. Tallied in streamCall (the pass's single model call site) and emitted into the
+		// appmap stamp, which is the artifact bench already collects for explore arms.
+		usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, modelCalls: 0 },
 		chapters: 1,
 		refusals: 0,
 		startedAt,

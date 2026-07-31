@@ -30,8 +30,13 @@ export const provenanceHeader = (p: {
 	chapters: number;
 	gatedRead?: number;
 	gatedRefused?: number;
+	usage?: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number; modelCalls: number };
 }): string =>
-	`<!-- provenance: ${p.visionOnly ? "explore-vision" : "explore"} | app: ${p.app} | date: ${new Date().toISOString().slice(0, 10)} | backend: ${p.backend}${p.vision ? "" : " | vision: off"} | actions: ${p.actions} | elapsed: ${p.elapsed} | findings: ${p.findings} | finds: ${p.findCalls}` +
+	`<!-- provenance: ${p.visionOnly ? "explore-vision" : "explore"} | app: ${p.app} | date: ${new Date().toISOString().slice(0, 10)} | backend: ${p.backend}${p.vision ? "" : " | vision: off"} | actions: ${p.actions} | elapsed: ${p.elapsed}` +
+	(p.usage
+		? ` | calls: ${p.usage.modelCalls} | tokens-in: ${p.usage.inputTokens} | tokens-out: ${p.usage.outputTokens} | cache-read: ${p.usage.cacheReadTokens} | cache-write: ${p.usage.cacheCreationTokens}`
+		: "") +
+	` | findings: ${p.findings} | finds: ${p.findCalls}` +
 	` | controls${p.visionOnly ? " (DECLARED)" : ""}: ${p.actuated} actuated / ${p.dismissed} dismissed / ${p.seen} seen | surfaces: ${p.surfaces} | chapters: ${p.chapters} | stopped: ${p.stopped}` +
 	` | descent: ${DESCENT_ON && !p.visionOnly ? "on" : "off"} | gated: ${p.gatedRead ?? 0} read / ${p.gatedRefused ?? 0} refused` +
 	`${p.guidance ? " | operator-guidance: yes" : ""}${p.salvaged ? " | salvaged: session died before finish" : ""} -->\n` +
@@ -120,6 +125,7 @@ export const writeArtifacts = (p: Pass, out: FinishInput, stopped: StopReason, s
 			visionOnly: p.visionOnly,
 			guidance: p.guidance,
 			salvaged,
+			usage: p.usage,
 			...cov,
 		}) +
 		recovered.cleaned +

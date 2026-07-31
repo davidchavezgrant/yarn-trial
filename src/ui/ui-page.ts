@@ -304,11 +304,22 @@ let installForm = null;
 // Parallel to 'running' rather than inside it: four call sites and the tests key that map
 // by its string value, and an object value would break them all silently.
 let runMeta = {};
+// The exact options of OUR last accepted task-form submit, per host (host -> the bus.run
+// spec), so the automatic sign-in flow can restart a run that turned around at the door.
+// Lifecycle parallels runMeta: claimed on the started echo, migrated when 'auto' resolves,
+// dropped on done. A host occupied by a run that did NOT come through the task form — a
+// grounding pass, a followed job, a queue drain — has no entry: those are not ours to
+// restart. pendingRun holds the submit between the click and its started echo; the echo's
+// app+task match is what proves the host is running THAT submit and not something else.
+let runSpec = {}, pendingRun = null;
 // The host whose sign-in is mid-flight. Disabling the clicked button was not enough: the very
 // repaint that shows "opening mac2…" rebuilds the row from markup with the button enabled
 // again, and a second click double-opens screen shares. The rebuild consults this instead.
 let signinBusy = null;
-// The last run that turned around at the door — {app, host, msg, busy} — or null.
+// The last run that turned around at the door — {app, host, msg, busy, rerun} — or null.
+// 'rerun' is that run's own submit options when it came from the task form, and is what the
+// fix flow re-dispatches once the sign-in lands; absent, the flow ends at the sign-in and
+// the person runs again themselves.
 //
 // Deliberately NOT a judgement about what was on screen: the agent reports "not at home and I do
 // not know why", and guessing "that looks like a login" from the controls it listed would be
@@ -834,6 +845,13 @@ bus.onStarted((d) => {
   if (stateFor(d.app).task.trim() === d.task) stateFor(d.app).task = '';
   running[d.host] = d.app;
   runMeta[d.host] = Date.now();
+  // Claim or evict the resume spec. Only the echo of OUR submit proves the host is running
+  // it — anything else that starts here (ground, follow, queue drain) makes an old entry
+  // describe a run the host is no longer running, so it goes. Claiming consumes pendingRun,
+  // which is also what makes the resume single-shot: the restarted run has no entry, so a
+  // second refusal reopens the portal but never auto-dispatches a third run.
+  if (pendingRun && d.app === pendingRun.app && d.task === pendingRun.task) { runSpec[d.host] = pendingRun; pendingRun = null; }
+  else delete runSpec[d.host];
   check(); paintStatus(); renderJobs();
   // The previous refusal is answered by trying again, whatever the outcome of the retry.
   unready = null; unreadyGen++; renderUnready();
@@ -861,16 +879,23 @@ if (bus.onHost) bus.onHost((d) => {
   if (running['auto'] === d.app) delete running['auto'];
   running[d.host] = d.app;
   if (runMeta['auto'] !== undefined) { runMeta[d.host] = runMeta['auto']; delete runMeta['auto']; }
+  if (runSpec['auto'] !== undefined) { runSpec[d.host] = runSpec['auto']; delete runSpec['auto']; }
   check(); paintStatus(); renderJobs();
 });
 bus.onDone((d) => {
   // Tagged BEFORE the map entry goes: computed after, a shared buffer's finish line would
   // read as the only run the moment it stopped being one.
   const tag = hostTag(d.app, d.host);
+  // The refused run's own submit options, read before the bookkeeping below forgets them —
+  // this is what the sign-in flow re-dispatches. Remote only: the local refusal has no flow
+  // to hand it to, and stashing it there would make the panel's copy promise a restart
+  // nothing performs.
+  const spec = d.code === 3 && d.host !== 'local' ? runSpec[d.host] : null;
   // d.host is the run's CURRENT name — resolved, if onHost ever fired — so this is the same
   // key onStarted/onHost left in the map.
   delete running[d.host];
   delete runMeta[d.host];
+  delete runSpec[d.host];
   check(); paintStatus(); renderJobs();
   // Exit 3 is "needs a sign-in" — an expected, recoverable pause, not a failure, and the
   // sign-in window is about to open itself. Painting it as an error taught people to read
@@ -878,7 +903,7 @@ bus.onDone((d) => {
   line(tag + (d.code === 0 ? '■ finished' : d.code === 3 ? '■ paused — sign-in needed' : '■ exited with code ' + d.code) + ' after ' + d.elapsed + 's', d.app);
   // 3 is the agent's "not at home, reason unknown" — the one exit code with a remedy a person
   // can act on from here. Everything else is a run that ran.
-  unready = d.code === 3 ? { app: d.app, host: d.host, msg: null } : null;
+  unready = d.code === 3 ? { app: d.app, host: d.host, msg: null, rerun: spec || null } : null;
   unreadyGen++;
   renderUnready();
   // A remote refusal with a known app goes straight to the sign-in window — the person was
@@ -1151,7 +1176,10 @@ function renderUnready() {
   const where = unready.host && unready.host !== 'local' ? ' on ' + esc(unready.host) : ' on this Mac';
   box.innerHTML =
     '<div class="umsg">' + esc(unready.app || 'The app') + ' was not at its home screen' + where +
-      ', so the run stopped before touching anything. Put it back at its home screen — signing in, if that is what it is asking for — then run again.</div>' +
+      ', so the run stopped before touching anything. Put it back at its home screen — signing in, if that is what it is asking for — ' +
+      // With the submit captured, "run again" is the flow's job, and telling the person to
+      // do it too would race them against the automatic restart.
+      (unready.rerun ? 'the run starts again on its own once the app is home.' : 'then run again.') + '</div>' +
     // The busy leg here is a human signing in on another Mac — minutes, not seconds — and the
     // message alone ("waiting for Yarn to reach home") cannot say whether the wait is still
     // live or the flow died. The spinner is the liveness.
@@ -1482,10 +1510,13 @@ function busyButton(b, on) {
   }
 }
 
-el('go').onclick = () => dispatchOnce('go', () =>
+el('go').onclick = () => dispatchOnce('go', () => {
   // noVision is pinned false from the GUI: it exists as an A/B measurement arm, and the
   // checkbox for it read as a feature. The CLI's --no-vision remains for measurements.
-  bus.run({ app: sel, task: el('task').value.trim(), record: el('record').checked, humanize: el('human').checked, noVision: false, host: host, url: selUrl() }));
+  pendingRun = { app: sel, task: el('task').value.trim(), record: el('record').checked, humanize: el('human').checked, noVision: false, host: host, url: selUrl() };
+
+  return bus.run(pendingRun);
+});
 // A humanized render is a render OF the recording, so the pair moves together: ticking Human
 // cursor turns recording on, and turning recording off takes the render request with it.
 el('human').addEventListener('change', () => { if (el('human').checked) el('record').checked = true; });
@@ -1622,12 +1653,16 @@ el('cancelsignin').onclick = async () => {
 async function runUnreadyFix() {
   if (!unready || unready.busy) return;
   const target = { app: unready.app, host: unready.host };
+  // The refused run's submit options ride the flow as a local, not the panel state alone:
+  // show() rebuilds 'unready' on every progress write, and the restart must survive those —
+  // including the operator clicking Open again after a failed leg.
+  const rerun = unready.rerun || null;
   // The generation this flow owns. A new run or a newer refusal bumps unreadyGen, and every
   // write below re-checks it first: a signinWait leg resolving minutes later must not
   // reinstate a panel about a refusal the operator has already moved past.
   const gen = unreadyGen;
   const owns = () => unreadyGen === gen;
-  const show = (msg, busy) => { unready = { app: target.app, host: target.host, msg: msg, busy: busy }; renderUnready(); };
+  const show = (msg, busy) => { unready = { app: target.app, host: target.host, msg: msg, busy: busy, rerun: rerun }; renderUnready(); };
   show('opening ' + target.host + '…', true);
   let r;
   try {
@@ -1651,7 +1686,20 @@ async function runUnreadyFix() {
     done = { ok: false, message: errText(err) };
   }
   if (!owns()) return;
-  if (done.ok) { unready = null; renderUnready(); line('✓ ' + done.message); }
+  if (done.ok) {
+    unready = null; renderUnready(); line('✓ ' + done.message);
+    // The run that hit the wall executes now — the sign-in was a pause in it, not the
+    // outcome. Only for runs the task form submitted: with no captured spec (a grounding
+    // pass, a followed job, a deliberate Sign-in click) the flow ends here and the person
+    // runs again themselves. Straight to bus.run, not dispatchOnce — there is no button
+    // mid-flight to guard, and the started echo re-disables the form the moment it lands.
+    if (rerun) {
+      line('▶ restarting the paused run — ' + rerun.app + ' @ ' + target.host);
+      let err;
+      try { err = await bus.run(rerun); } catch (e) { err = errText(e); }
+      if (err) line('✗ ' + err);
+    }
+  }
   else show(done.message, false);
   loadFleet();
 }

@@ -3,6 +3,8 @@ import { auditTaskPrompt } from "../core/harness.js";
 import { outDir, relToData } from "../paths.js";
 import { AUTO_HOST, type DispatchOptions, dispatchNotes, type DispatchResult } from "../remote/control/dispatch.js";
 import { collect } from "./collect.js";
+import { rollupCost } from "./cost.js";
+import { fetchTrueCost, reconcile } from "./truecost.js";
 import {
 	type Arm,
 	armById,
@@ -337,6 +339,7 @@ const USAGE = `usage: ./run bench plan
        ./run bench phase <1|2|3|4|5> [--model <id>] [--go] [--force]
        ./run bench collect
        ./run bench judge
+       ./run bench truecost [--since <RFC3339>] [--bucket 1m|1h|1d]
 
 plan     print the resolved matrix — every arm, flags, n, phase. No side effects.
 phase    dispatch that phase's runs to the fleet queue. WITHOUT --go: preview and exit 2.
@@ -357,6 +360,13 @@ phase    dispatch that phase's runs to the fleet queue. WITHOUT --go: preview an
          \`npm run humanize -- <stamp>\` per filmed run.
 collect  pull artifacts for every uncollected manifest entry, compute metrics, rewrite
          the report skeleton. Idempotent; run it as often as you like while the queue drains.
+truecost reconciles the report's ESTIMATE against Anthropic's own accounting: token counts
+         from /v1/organizations/usage_report/messages (minute granularity, grouped by API key
+         and model) priced at published rates, plus the daily /cost_report total. Needs an
+         ADMIN credential in ANTHROPIC_ADMIN_KEY — not the run-time API key — and is skipped
+         without one. Definitive per-run DOLLARS do not exist: cost is daily and
+         workspace-level. Per-run TOKENS do, if each Mac has its own API key (the per-Mac
+         lease means one run at a time, so a (key, minute) belongs to exactly one run).
 judge    grades collected runs with the offline adversarial judge (pinned to
          azure/gpt-5.6-sol; JUDGE_MODEL overrides); idempotent — skips runs already
          judged. Run after runs land, before reading the report's Judge section.`;
@@ -384,6 +394,37 @@ async function main(argv: string[]): Promise<number> {
 		}
 
 		return runPhase(phase as Phase, { go: argv.includes("--go"), force: argv.includes("--force"), ...(model ? { model } : {}) });
+	}
+	if (cmd === "truecost") {
+		const adminKey = process.env.ANTHROPIC_ADMIN_KEY;
+		if (!adminKey) {
+			console.error("truecost needs ANTHROPIC_ADMIN_KEY (an Admin API credential, not the run-time key).");
+			console.error("Without it there is no way to read Anthropic's accounting — the report's estimate stands alone.");
+
+			return EXIT_REFUSED;
+		}
+		const si = argv.indexOf("--since");
+		// Default to the start of today UTC: the manifest is dated per day, so that is the
+		// window the current pass lives in.
+		const startingAt = si >= 0 && argv[si + 1] ? String(argv[si + 1]) : `${utcDate()}T00:00:00Z`;
+		const bi = argv.indexOf("--bucket");
+		const bucketWidth = (bi >= 0 ? argv[bi + 1] : "1h") as "1m" | "1h" | "1d";
+		const m = readManifest(utcDate(), outDir());
+		const estimated = rollupCost(
+			m.entries
+				.filter((e) => e.collected)
+				.map((e) => ({
+					inputTokens: e.metrics?.inputTokens,
+					outputTokens: e.metrics?.outputTokens,
+					cacheReadTokens: e.metrics?.cacheReadTokens,
+					cacheCreationTokens: e.metrics?.cacheCreationTokens,
+					...(e.metrics?.model ? { model: e.metrics.model } : e.model ? { model: e.model } : {}),
+				})),
+		);
+		const truth = await fetchTrueCost({ startingAt, adminKey, bucketWidth });
+		for (const line of reconcile(estimated.usd, truth)) console.log(line);
+
+		return EXIT_OK;
 	}
 	if (cmd === "collect") {
 		const outcome = await collect();

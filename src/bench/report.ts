@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { dataRoot } from "../paths.js";
+import { type CostRollup, rollupCost, usd } from "./cost.js";
 import { type Arm, flagsLine, MATRIX, phaseArms } from "./matrix.js";
 import type { Manifest, ManifestEntry, RunMetrics } from "./manifest.js";
 
@@ -35,10 +36,15 @@ interface ArmRollup {
 	/** The attention pair, averaged across the arm's runs. */
 	meanObsNodes?: number;
 	meanShownLines?: number;
+	/** How deep into the offered list the arm's picks landed (0–1), and the deepest it needed. */
+	meanChosenDepth?: number;
+	maxChosenIndex?: number;
 	/** Runs that did NOT start from the declared home state (homeReset none/failed/skipped). */
 	unnormalisedRuns: number;
 	/** `unready 2, crashed 1` — why the arm's failures failed. Empty string when none did. */
 	failureBreakdown: string;
+	/** Dollars across the arm's collected runs, plus what could not be priced. */
+	cost: CostRollup;
 }
 
 const mean = (xs: number[]): number | undefined => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : undefined);
@@ -67,9 +73,30 @@ function rollup(arm: Arm, entries: ManifestEntry[]): ArmRollup {
 		runsWithMutations: withScopes.length,
 		meanObsNodes: mean(nums(collected, (m) => m.meanObservationNodes)),
 		meanShownLines: mean(nums(collected, (m) => m.meanListShownToModel)),
+		meanChosenDepth: mean(nums(collected, (m) => m.meanChosenDepth)),
+		// MAX across the arm's runs, not a mean of maxima: the budget floor is set by the
+		// deepest pick any run needed, and averaging that away is how you ship a truncation
+		// that works on four runs out of five.
+		maxChosenIndex: (() => {
+			const xs = nums(collected, (m) => m.maxChosenIndex);
+
+			return xs.length ? Math.max(...xs) : undefined;
+		})(),
 		// A run that inherited the previous run's navigation is not comparable raw; the count
 		// flags the arm rather than hiding the caveat in per-run fields nobody reads.
 		unnormalisedRuns: collected.filter((e) => e.metrics?.homeReset && e.metrics.homeReset !== "reset").length,
+		cost: rollupCost(
+			collected.map((e) => ({
+				inputTokens: e.metrics?.inputTokens,
+				outputTokens: e.metrics?.outputTokens,
+				cacheReadTokens: e.metrics?.cacheReadTokens,
+				cacheCreationTokens: e.metrics?.cacheCreationTokens,
+				// The run log's model, never the manifest's: dispatch records what was ASKED
+				// for, and an arm that silently fell back to another model must not be priced
+				// against the rate card of the model it did not run.
+				...(e.metrics?.model ? { model: e.metrics.model } : {}),
+			})),
+		),
 		failureBreakdown: (() => {
 			const kinds = new Map<string, number>();
 			for (const e of collected) {
@@ -82,11 +109,19 @@ function rollup(arm: Arm, entries: ManifestEntry[]): ArmRollup {
 	};
 }
 
-const taskTableHeader = "| arm | model | flags | done | success | failures | steps x̄ | s x̄ | calls x̄ | out-tok x̄ | rejections | doc-scope muts | obs-nodes x̄ | shown x̄ | unnormalised |";
-const taskTableRule = "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|";
+const taskTableHeader =
+	"| arm | model | flags | done | success | failures | steps x̄ | s x̄ | calls x̄ | out-tok x̄ | $ | rejections | doc-scope muts | obs-nodes x̄ | shown x̄ | depth x̄ | max idx | unnormalised |";
+const taskTableRule = "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|";
 
 const taskRow = (r: ArmRollup, model: string): string =>
-	`| ${r.arm.id} | ${model} | ${flagsLine(r.arm)} | ${r.collected.length}/${r.arm.n} | ${pct(r.successes, r.collected.length)} | ${r.failureBreakdown || "—"} | ${fmt(r.meanSteps)} | ${fmt(r.meanElapsedSec)} | ${fmt(r.meanModelCalls)} | ${fmt(r.meanOutputTokens)} | ${r.rejections} | ${r.documentScopeMutations} | ${fmt(r.meanObsNodes)} | ${fmt(r.meanShownLines)} | ${r.unnormalisedRuns ? `⚠ ${r.unnormalisedRuns}` : "0"} |`;
+	`| ${r.arm.id} | ${model} | ${flagsLine(r.arm)} | ${r.collected.length}/${r.arm.n} | ${pct(r.successes, r.collected.length)} | ${r.failureBreakdown || "—"} | ${fmt(r.meanSteps)} | ${fmt(r.meanElapsedSec)} | ${fmt(r.meanModelCalls)} | ${fmt(r.meanOutputTokens)} | ${costCell(r.cost)} | ${r.rejections} | ${r.documentScopeMutations} | ${fmt(r.meanObsNodes)} | ${fmt(r.meanShownLines)} | ${r.meanChosenDepth === undefined ? "—" : `${Math.round(r.meanChosenDepth * 100)}%`} | ${fmt(r.maxChosenIndex)} | ${r.unnormalisedRuns ? `⚠ ${r.unnormalisedRuns}` : "0"} |`;
+
+/**
+ * `$4.12` — or `$4.12 +2?` when some of the arm's runs ran on a model with no rate card.
+ * The unpriced count rides along rather than being dropped, because a total that silently
+ * omits half the matrix looks exactly like a cheap matrix.
+ */
+const costCell = (c: CostRollup): string => (c.priced === 0 ? (c.unpriced ? `?×${c.unpriced}` : "—") : `${usd(c.usd)}${c.unpriced ? ` +${c.unpriced}?` : ""}`);
 
 /** The model passes present for an arm, in first-seen order; [undefined] when none ran yet. */
 const modelPasses = (m: Manifest, armId: string): Array<string | undefined> => {
@@ -97,6 +132,44 @@ const modelPasses = (m: Manifest, armId: string): Array<string | undefined> => {
 };
 
 const passLabel = (model: string | undefined): string => model ?? "(default)";
+
+/**
+ * What the whole manifest cost, split by model pass — the number David asked for, and the
+ * one that decides whether a second pass is affordable.
+ *
+ * Per-run dollars are summed; per-token counts deliberately are NOT, because Anthropic
+ * excludes cache reads from `input_tokens` and Azure includes them, so a cross-provider
+ * token total would be meaningless. Runs on a model with no rate card are counted and named
+ * rather than skipped: an Azure pass showing $0.00 would read as free when it is only
+ * unpriced.
+ */
+function costSection(m: Manifest): string[] {
+	const byPass = new Map<string, typeof m.entries>();
+	for (const e of m.entries) {
+		if (!e.collected) continue;
+		const key = passLabel(e.model);
+		byPass.set(key, [...(byPass.get(key) ?? []), e]);
+	}
+	const lines = ["## Cost", "", "> Estimates from published rates (src/bench/cost.ts), not an invoice. Azure/OpenAI", "> deployments bill through the subscription, so they appear as unpriced rather than as a", "> guess — a `?` count is runs whose model has no rate card.", "", "| pass | runs priced | runs unpriced | estimated |", "|---|---|---|---|"];
+	let grand = 0;
+	for (const [pass, entries] of byPass) {
+		const c = rollupCost(
+			entries.map((e) => ({
+				inputTokens: e.metrics?.inputTokens,
+				outputTokens: e.metrics?.outputTokens,
+				cacheReadTokens: e.metrics?.cacheReadTokens,
+				cacheCreationTokens: e.metrics?.cacheCreationTokens,
+				...(e.metrics?.model ? { model: e.metrics.model } : e.model ? { model: e.model } : {}),
+			})),
+		);
+		grand += c.usd;
+		lines.push(`| ${pass} | ${c.priced} | ${c.unpriced ? `${c.unpriced} (${c.unpricedModels.join(", ")})` : "0"} | ${usd(c.usd)} |`);
+	}
+	if (!byPass.size) lines.push("| — | 0 | 0 | — |");
+	lines.push("", `**Total across priced runs: ${usd(grand)}.**`);
+
+	return lines;
+}
 
 function taskTable(arms: Arm[], m: Manifest): string[] {
 	// One row per (arm, model pass): the two passes are separate self-grounded pipelines,
@@ -111,14 +184,16 @@ function taskTable(arms: Arm[], m: Manifest): string[] {
 }
 
 function exploreTable(arms: Arm[], m: Manifest): string[] {
-	const header = "| arm | model | flags | actions | elapsed | actuated/dismissed/seen | surfaces | nodes | edges | ambiguities |";
+	const header = "| arm | model | flags | actions | elapsed | calls | out-tok | $ | actuated/dismissed/seen | surfaces | nodes | edges | ambiguities |";
 	const rows = arms.flatMap((a) =>
 		modelPasses(m, a.id).map((model) => {
 			const e = m.entries.filter((x) => x.armId === a.id && x.model === model).find((x) => x.collected);
 			const mm = e?.metrics ?? {};
 			const controls = mm.controlsSeen !== undefined ? `${fmt(mm.controlsActuated)}/${fmt(mm.controlsDismissed)}/${fmt(mm.controlsSeen)}` : "—";
 
-			return `| ${a.id} | ${passLabel(model)} | ${flagsLine(a)} | ${fmt(mm.exploreActions)} | ${fmt(mm.exploreElapsed)} | ${controls} | ${fmt(mm.surfaces)} | ${fmt(mm.graphNodes)} | ${fmt(mm.graphEdges)} | ${fmt(mm.scopeAmbiguities)} |`;
+			const cost = rollupCost(e?.collected ? [{ ...mm, ...(mm.model ? { model: mm.model } : { model }) }] : []);
+
+			return `| ${a.id} | ${passLabel(model)} | ${flagsLine(a)} | ${fmt(mm.exploreActions)} | ${fmt(mm.exploreElapsed)} | ${fmt(mm.modelCalls)} | ${fmt(mm.outputTokens)} | ${costCell(cost)} | ${controls} | ${fmt(mm.surfaces)} | ${fmt(mm.graphNodes)} | ${fmt(mm.graphEdges)} | ${fmt(mm.scopeAmbiguities)} |`;
 		}),
 	);
 
@@ -224,6 +299,7 @@ export function renderReport(m: Manifest): string {
 	const nc = p2.filter((a) => a.id.startsWith("p2-nc-"));
 	const p3Replays = phaseArms(3).filter((a) => a.kind === "replay");
 	const p4 = phaseArms(4);
+	const p5 = phaseArms(5);
 
 	const submitted = m.entries.length;
 	const collected = m.entries.filter((e) => e.collected).length;
@@ -270,6 +346,21 @@ export function renderReport(m: Manifest): string {
 		...taskTable(p4.filter(isTask), m),
 		"",
 		...replayTable(p4.filter((a) => a.kind === "replay"), m),
+		"",
+		"## Phase 5 — filmed takes",
+		"",
+		"> These ran with `--record`, which is NOT a passive camera: it injects demo conduct",
+		"> (mouse-first, no keyboard shortcuts), swaps in an act tool without `set_value`, and",
+		"> changes actuation. Compare each row against the SAME arm in phase 2 — a config that",
+		"> succeeded there and fails here failed at demo conduct, not at the task. n=1 per",
+		"> config, so a reorder is a prompt to re-measure that arm filmed, not a conclusion.",
+		"> Cursor compositing is a separate manual step (`npm run humanize -- <stamp>`).",
+		"",
+		...taskTable(p5.filter(isTask), m),
+		"",
+		...replayTable(p5.filter((a) => a.kind === "replay"), m),
+		"",
+		...costSection(m),
 		"",
 		"## Judge",
 		"",

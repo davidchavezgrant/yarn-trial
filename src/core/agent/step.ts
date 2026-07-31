@@ -364,6 +364,25 @@ export async function executeAction(
 		// line count IS what the model saw; a vision-only arm shows it none of them.
 		observationNodes: prevObs.interactive.length,
 		listShownToModel: noAx ? 0 : prevObs.elementsText ? prevObs.elementsText.split("\n").length : 0,
+		/**
+		 * WHERE in the offered list the model reached, not how long the list was. True
+		 * attention weights are not exposed by any provider we call, so this is the honest
+		 * proxy: the index it actually picked, against the length it was offered.
+		 *
+		 * It answers the question the observation budget turns on. If picks cluster near the
+		 * top across an arm, most of the list is being paid for and ignored, and the budget
+		 * can shrink; if picks land deep, the long list is doing real work and truncating it
+		 * would break runs. That is a cost AND a reliability lever, and nothing else in the
+		 * matrix distinguishes the two cases — a big list and a USED list look identical in
+		 * observationNodes.
+		 *
+		 * Absent for vision-only steps and for actions that name no element (key presses,
+		 * raw coordinate clicks): those did not choose from the list at all, and scoring them
+		 * as index 0 would fake shallow attention.
+		 */
+		...(typeof input.action.element_index === "number" && prevObs.interactive.length > 0
+			? { chosenIndex: input.action.element_index, chosenDepth: input.action.element_index / prevObs.interactive.length }
+			: {}),
 		// Demo steps record the FRESH target — the geometry that was actually clicked and
 		// that the recording frames show — instead of the stale observation's rect.
 		// `targetSurface` comes off the observation element in BOTH branches, including the demo

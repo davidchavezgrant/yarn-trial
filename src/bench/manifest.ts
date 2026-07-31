@@ -29,7 +29,12 @@ export interface RunMetrics {
 	elapsedSec?: number;
 	inputTokens?: number;
 	outputTokens?: number;
+	meanChosenDepth?: number;
+	meanChosenIndex?: number;
+	maxChosenIndex?: number;
 	cacheReadTokens?: number;
+	/** Cache WRITES. Bills at 1.25x input against reads' 0.1x, so it dominates run cost. */
+	cacheCreationTokens?: number;
 	modelCalls?: number;
 	provenance?: string;
 	/** What actually ran, off the run log — the manifest entry's `model` is only what was asked for. */

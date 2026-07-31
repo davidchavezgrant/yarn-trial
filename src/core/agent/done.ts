@@ -17,7 +17,7 @@ export interface DoneContext {
 	model: string;
 	judgeMode: string;
 	task: string;
-	usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; modelCalls: number };
+	usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number; modelCalls: number };
 	startedAt: number;
 	groundingMeta: Record<string, unknown>;
 	vision: boolean;

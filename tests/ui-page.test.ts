@@ -1218,6 +1218,87 @@ test("openJobLog__AttachesUnderTheViewer__When__AJobRowIsClicked", async () => {
 	assert.equal(ui.nodes.taskform.style.display, "none");
 });
 
+// ---- the sign-in flow restarts the run that hit the wall ---------------------------------
+
+/** Mount with a sign-in flow that opens and lands, recording every dispatched run. */
+function signinFlowMount(runs: unknown[]): Harness {
+	return mount({
+		run: async (o: unknown) => {
+			runs.push(o);
+
+			return undefined;
+		},
+		signin: async () => ({ ok: true, message: "Opened a sign-in window for Yarn on mac1", watch: { host: "mac1", app: "Yarn" } }),
+		signinWait: async () => ({ ok: true, message: "Yarn is signed in on mac1." }),
+	});
+}
+
+test("SigninFlow__RestartsThePausedRun__When__TheRefusedRunCameFromTheTaskForm", async () => {
+	// A refused run auto-opens the portal, which reads as "the system will resume this" — and
+	// until 2026-07-31 it didn't: the sign-in landed, the panel cleared, and the run the person
+	// actually asked for never executed. The flow must re-dispatch the SAME submit, verbatim.
+	const runs: unknown[] = [];
+	const ui = signinFlowMount(runs);
+	await settle();
+	ui.apps = [{ name: "Yarn" }];
+	ui.sel = "Yarn";
+	ui.host = "mac1";
+	ui.nodes.task.value = "show me how to change the cursor type";
+	ui.check();
+	void ui.nodes.go.onclick!();
+	await settle();
+	assert.equal(runs.length, 1);
+	ui.events.started!({ app: "Yarn", task: "show me how to change the cursor type", host: "mac1" });
+	ui.events.done!({ code: 3, elapsed: 17, app: "Yarn", host: "mac1" });
+	await settle();
+	await settle();
+	assert.equal(runs.length, 2, "the sign-in landed but the paused run was never re-dispatched");
+	assert.deepEqual(runs[1], runs[0]);
+	// The panel is gone: the machine is ready and the run is already going again.
+	assert.equal(ui.nodes.unready.style.display, "none");
+});
+
+test("SigninFlow__StartsNothing__When__TheRefusedRunWasNotSubmittedFromTheForm", async () => {
+	// A grounding pass, a followed job or a queue drain also echoes 'started' — but its submit
+	// options were never ours, so there is nothing safe to re-dispatch. Those keep today's
+	// behavior: sign in, clear the panel, and the person runs again themselves.
+	const runs: unknown[] = [];
+	const ui = signinFlowMount(runs);
+	await settle();
+	ui.events.started!({ app: "Yarn", task: "ground Yarn", host: "mac1" });
+	ui.events.done!({ code: 3, elapsed: 17, app: "Yarn", host: "mac1" });
+	await settle();
+	await settle();
+	assert.equal(runs.length, 0, "a run the form never submitted must not be re-dispatched");
+});
+
+test("SigninFlow__ResumesOnlyOnce__When__TheRetryRefusesAgain", async () => {
+	// Single-shot on purpose: the spec is evicted when the retry starts, so a second refusal
+	// reopens the portal but never dispatches a third run by itself. Two refusals after a human
+	// signed in means home-detection is missing something, and looping the human hides it.
+	const runs: { task?: string }[] = [];
+	const ui = signinFlowMount(runs);
+	await settle();
+	ui.apps = [{ name: "Yarn" }];
+	ui.sel = "Yarn";
+	ui.host = "mac1";
+	ui.nodes.task.value = "t";
+	ui.check();
+	void ui.nodes.go.onclick!();
+	await settle();
+	ui.events.started!({ app: "Yarn", task: "t", host: "mac1" });
+	ui.events.done!({ code: 3, elapsed: 17, app: "Yarn", host: "mac1" });
+	await settle();
+	await settle();
+	assert.equal(runs.length, 2);
+	// The resumed run starts, then refuses again.
+	ui.events.started!({ app: "Yarn", task: "t", host: "mac1" });
+	ui.events.done!({ code: 3, elapsed: 9, app: "Yarn", host: "mac1" });
+	await settle();
+	await settle();
+	assert.equal(runs.length, 2, "a second refusal must not auto-dispatch a third run");
+});
+
 // ---- sign-in is a first-class action, not only a remedy ----------------------------------
 
 test("fleetPanel__OffersSignIn__When__AMacAppIsSelected", () => {
