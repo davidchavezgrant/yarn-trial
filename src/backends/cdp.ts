@@ -681,16 +681,35 @@ export class CdpBackend {
 							"el => el === document.activeElement || el.contains(document.activeElement) || (document.activeElement && document.activeElement.contains(el))";
 						const focused = (await loc.evaluate(FOCUS_CHECK).catch(() => false)) as boolean;
 						if (!focused) {
+							// Who holds focus BEFORE the click, so "did focus move" is answerable
+							// even when the clicked node itself is replaced (see below).
+							const ACTIVE_DESC =
+								"() => { const a = document.activeElement; return a ? a.tagName.toLowerCase() + (a.className ? '.' + String(a.className).trim().split(/\\s+/)[0] : '') : 'nothing'; }";
+							const before = (await this.page.evaluate(ACTIVE_DESC).catch(() => "")) as string;
 							await this.demoPointer(loc, "click", ref);
 							// Never type into whatever kept focus. Yarn's agent composer holds
 							// default focus and silently swallowed two runs' narration — the
 							// honest outcome of a click the field refused is a FAILED step
 							// naming the thief, not a paragraph in the wrong box.
-							const took = (await loc.evaluate(FOCUS_CHECK).catch(() => false)) as boolean;
+							//
+							// "Took" cannot be just containment against the clicked node: a rich
+							// editor REPLACES its placeholder node on focus (detaching what was
+							// clicked, so containment reads false forever), and focus can arrive a
+							// beat after mouseup. So poll briefly, and accept EITHER containment
+							// OR focus having MOVED onto something editable since before the click.
+							const MOVED_CHECK =
+								"() => { const a = document.activeElement; if (!a) return ''; const editable = a.isContentEditable || a.tagName === 'INPUT' || a.tagName === 'TEXTAREA'; return editable ? a.tagName.toLowerCase() + (a.className ? '.' + String(a.className).trim().split(/\\s+/)[0] : '') : ''; }";
+							let took = false;
+							for (let tries = 0; tries < 6 && !took; tries++) {
+								await new Promise((r) => setTimeout(r, 200));
+								if ((await loc.evaluate(FOCUS_CHECK).catch(() => false)) as boolean) took = true;
+								else {
+									const now = (await this.page.evaluate(MOVED_CHECK).catch(() => "")) as string;
+									if (now && now !== before) took = true;
+								}
+							}
 							if (!took) {
-								const thief = (await this.page
-									.evaluate("() => { const a = document.activeElement; return a ? a.tagName.toLowerCase() + (a.className ? '.' + String(a.className).trim().split(/\\s+/)[0] : '') : 'nothing'; }")
-									.catch(() => "unknown")) as string;
+								const thief = (await this.page.evaluate(ACTIVE_DESC).catch(() => "unknown")) as string;
 								throw new Error(
 									`clicked [${ref}] but keyboard focus stayed on <${thief}> — the target refused focus. ` +
 										`Nothing was typed. Click a control that takes the caret, or type_text WITHOUT a ref to type at the current caret deliberately.`,
