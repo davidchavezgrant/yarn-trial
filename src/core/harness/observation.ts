@@ -329,8 +329,9 @@ export async function observe(
 	opts: { webAreaOnly?: boolean } = {},
 ): Promise<ObservationBundle> {
 	const shotPath = `${OUT}/${shotName}.png`;
-	// Delete any same-named frame FIRST. Shot names carry no run stamp (`agent-step-3`,
-	// `home-probe`), so a PNG from an earlier run sits at this exact path. The existsSync guard
+	// Delete any same-named frame FIRST. Agent step shots are now namespaced per run
+	// (`runs/<stamp>-steps/agent-step-3`), but probe names (`home-probe`) still are not, so
+	// a PNG from an earlier run can sit at this exact path. The existsSync guard
 	// below exists precisely for the case the driver reports success but writes nothing — and
 	// against a stale file it passes, feeding a previous run's frame to the screenshot channel,
 	// pixelDelta and visualJudge. Removing it means existsSync tests only what THIS call wrote.

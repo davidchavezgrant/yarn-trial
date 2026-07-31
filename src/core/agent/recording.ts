@@ -72,21 +72,25 @@ export async function startRecording(opts: {
 		fs.writeFileSync(`${recordingDir}/recording-started.json`, JSON.stringify({ epochMs: Date.now() }));
 		rec.frameLoop = (async () => {
 			while (rec.active) {
-				if (!sync.busy) {
-					sync.busy = true;
-					const framePath = `${framesDir}/f-${String(rec.frameTimes.length).padStart(5, "0")}.png`;
-					try {
-						await cdp!.screenshot(framePath);
-						rec.frameTimes.push(Date.now());
-					} catch (err) {
-						rec.frameDrops.push(`error: ${err instanceof Error ? err.message.slice(0, 120) : String(err)}`);
-						fs.rmSync(framePath, { force: true });
-					} finally {
-						sync.busy = false;
-					}
+				// No mutex here, unlike the driver path below: there is no shared driver to
+				// contend for, and playwright serializes CDP commands per connection anyway.
+				// Capturing DURING an act is the point — the only frames that can show a
+				// half-typed field or a hover dwell are the ones taken while the act still
+				// holds sync.busy. (Demo typing is one pressSequentially call; skipping busy
+				// windows here would put the atomic "text dump" right back on film.)
+				const framePath = `${framesDir}/f-${String(rec.frameTimes.length).padStart(5, "0")}.png`;
+				try {
+					await cdp!.screenshot(framePath);
+					rec.frameTimes.push(Date.now());
+				} catch (err) {
+					rec.frameDrops.push(`error: ${err instanceof Error ? err.message.slice(0, 120) : String(err)}`);
+					fs.rmSync(framePath, { force: true });
 				}
+				// `sync.busy` counts as "responding": an act in flight is exactly when dense
+				// sampling pays, and lastActionAt only advances at act COMPLETION, so a long
+				// typing act would otherwise decay the cadence to the idle rate mid-word.
 				const sinceAction = Date.now() - sync.lastActionAt;
-				await new Promise((r) => setTimeout(r, sinceAction < RESPONSE_WINDOW_MS ? RESPONSE_POLL_MS : IDLE_POLL_MS));
+				await new Promise((r) => setTimeout(r, sync.busy || sinceAction < RESPONSE_WINDOW_MS ? RESPONSE_POLL_MS : IDLE_POLL_MS));
 			}
 		})();
 		console.log(`recording viewport frames -> ${framesDir}\n`);

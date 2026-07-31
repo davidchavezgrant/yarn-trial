@@ -7,6 +7,9 @@ import { envNum } from "../../env.js";
 import {
 	ACT_TOOL,
 	checkableCount,
+	DEMO_ACT_TOOL,
+	DEMO_DRIVER_RULES,
+	DEMO_VISION_ONLY_RULES,
 	DRIVER_RULES,
 	ensureObservable,
 	failedProvider,
@@ -90,6 +93,11 @@ export async function main(): Promise<void> {
 	const stamp = runKey("", app);
 	fs.mkdirSync(`${OUT}/runs`, { recursive: true });
 	const runLog = `${OUT}/runs/${stamp}.json`;
+	// Step screenshots live under the run's own stamp. The shared OUT/agent-step-N.png
+	// paths were overwritten by every later run, which is how the 43px-offset forensics
+	// ended up reading another run's pixels (docs/research/2026-07-31-library-page-ax-offset.md).
+	const stepsDir = `runs/${stamp}-steps`;
+	fs.mkdirSync(`${OUT}/${stepsDir}`, { recursive: true });
 	const sync: DriverSync = { busy: false, lastActionAt: 0 };
 	let homeReset: string = noReset ? "skipped" : "pending";
 	// Whether the axdom sidecar supplied DOM id/class this run. Recorded so a run's
@@ -146,6 +154,9 @@ export async function main(): Promise<void> {
 					task,
 					app,
 					backend: backendKind,
+					// The exact model id, because forensics on a bad run starts with "what was
+					// driving" and until now the logs only recorded token usage.
+					model,
 					vision,
 					// What the MODEL was shown, so an A/B analysis reads arms off the logs
 					// themselves instead of trusting a dispatch manifest.
@@ -159,6 +170,11 @@ export async function main(): Promise<void> {
 					sessionRevivals: driver?.revivals ?? 0,
 					expectationRejections,
 					findCalls,
+					// How often the model reached for a cmd/ctrl chord on a filmed run — the
+					// demo posture says the mouse is the default, and this is the counter that
+					// says whether the prompt rule is holding.
+					keyboardChords: records.filter((s) => s.chord).length,
+					...(cdp?.attachInfo ? { cdpAttach: cdp.attachInfo } : {}),
 					elapsedSec: Math.round((Date.now() - startedAt) / 1000),
 					usage,
 					...verificationTallies(records),
@@ -205,11 +221,20 @@ export async function main(): Promise<void> {
 	const warnings = graph ? scopeWarnings(graph) : "";
 	const ambiguities = graph ? findScopeAmbiguities(graph) : [];
 
+	// A recorded run is a filmed demo: every backend swaps in its demo rules/tool, and the
+	// prompt gains the DEMO CONDUCT section. Unrecorded runs are byte-identical to before.
 	const basePrompt = systemPrompt(
-		backendKind === "cdp" ? cdpMod!.CDP_RULES : backendKind === "dom" ? domMod!.DOM_RULES : noAx ? VISION_ONLY_RULES : DRIVER_RULES,
+		backendKind === "cdp"
+			? cdpMod!.cdpRules(record)
+			: backendKind === "dom"
+				? domMod!.DOM_RULES
+				: noAx
+					? (record ? DEMO_VISION_ONLY_RULES : VISION_ONLY_RULES)
+					: (record ? DEMO_DRIVER_RULES : DRIVER_RULES),
 		vision,
 		targetVocabulary(target),
 		!noAx,
+		record,
 	);
 	const system = grounding.notes
 		? `${basePrompt}\n\n# App grounding notes for ${app} (from a prior exploration pass — trust these to skip dead ends)\n${grounding.notes}${warnings}`
@@ -226,10 +251,10 @@ export async function main(): Promise<void> {
 	// AX path has neither need (get_window_state returns the whole tree).
 	const tools: Anthropic.Tool[] =
 		backendKind === "cdp"
-			? [cdpMod!.CDP_ACT_TOOL, cdpMod!.CDP_FIND_TOOL, CLAIM_TOOL, DONE_TOOL]
+			? [cdpMod!.cdpActTool(record), cdpMod!.CDP_FIND_TOOL, CLAIM_TOOL, DONE_TOOL]
 			: backendKind === "dom"
 				? [domMod!.DOM_ACT_TOOL, domMod!.FIND_TOOL, CLAIM_TOOL, DONE_TOOL]
-				: [ACT_TOOL, CLAIM_TOOL, DONE_TOOL];
+				: [record ? DEMO_ACT_TOOL : ACT_TOOL, CLAIM_TOOL, DONE_TOOL];
 
 	try {
 		// A web target has no app to launch: the driver brings up its own Chromium against a
@@ -241,7 +266,7 @@ export async function main(): Promise<void> {
 		// acquisition (launch-or-attach, tab pick, navigate) lives in CdpBackend.acquire.
 		let win: WindowRef | undefined;
 		if (backendKind === "cdp") {
-			cdp = await cdpMod!.CdpBackend.acquire(target);
+			cdp = await cdpMod!.CdpBackend.acquire(target, { demo: record });
 		} else if (target.kind === "web") {
 			// Loaded here, not at module top: the browser path is the only default-backend
 			// route into src/backends/, and an app-target run must not depend on it existing.
@@ -339,7 +364,7 @@ export async function main(): Promise<void> {
 		overlay.setDriving(true);
 		let obs: ObservationBundle;
 		try {
-			obs = await doObserve("agent-step-0");
+			obs = await doObserve(`${stepsDir}/agent-step-0`);
 		} finally {
 			overlay.setDriving(false);
 		}
@@ -347,7 +372,7 @@ export async function main(): Promise<void> {
 			obs,
 			// screenshotB64 is the "a frame really landed at this path" predicate: the DOM and
 			// CDP observers tolerate a missed capture, and the CDP one never clears the path first.
-			lastShot: obs.screenshotB64 ? `${OUT}/agent-step-0.png` : undefined,
+			lastShot: obs.screenshotB64 ? `${OUT}/${stepsDir}/agent-step-0.png` : undefined,
 			blindStreak: 0,
 		};
 		domEnrichment = { frames: obs.domEnriched, unavailable: obs.domUnavailable };
@@ -621,7 +646,7 @@ export async function main(): Promise<void> {
 			}
 
 			await executeAction(
-				{ driver, cdp, dom, win, app, doObserve, overlay, sync, rec, records, messages, vision, noAx, cleanupMode, journalPath, graph },
+				{ driver, cdp, dom, win, app, doObserve, overlay, sync, rec, records, messages, vision, noAx, cleanupMode, journalPath, graph, demo: record, stepsDir },
 				ls,
 				step,
 				toolUse,
