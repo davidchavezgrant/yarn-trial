@@ -94,7 +94,13 @@ async function main(): Promise<void> {
 	const maxLifetimeMs = process.env.LIVEVIEW_MAX_LIFETIME_MS ? Number(process.env.LIVEVIEW_MAX_LIFETIME_MS) : undefined;
 	const idleAfterCloseMs = process.env.LIVEVIEW_IDLE_AFTER_CLOSE_MS ? Number(process.env.LIVEVIEW_IDLE_AFTER_CLOSE_MS) : undefined;
 	const srv = await startLiveViewServer({ lan, fps, port, token, maxLifetimeMs, idleAfterCloseMs });
-	console.log(`\nviewer ready — open this in your browser:\n\n  ${srv.url}\n`);
+	// An env-supplied token means runner mode, where stdout lands in a persistent job log
+	// (out/jobs/.../log.txt) readable locally and via the runner's `logs` verb — printing the
+	// full URL would park a live capture+inject credential there for its whole lifetime. The
+	// runner already returned the real token to the caller over the socket. Only a token minted
+	// in-process (interactive local mode, stdout is a human's terminal) is safe to show.
+	const shownUrl = token ? srv.url.replace(`t=${token}`, "t=<redacted>") : srv.url;
+	console.log(`\nviewer ready — open this in your browser:\n\n  ${shownUrl}\n`);
 	console.log("it shows the frontmost window on this Mac. click it, sign in, close the tab when done.");
 	console.log("(Ctrl-C to stop the server.)");
 

@@ -9,7 +9,8 @@
 // whole reason they are split out here rather than inlined into the server's socket handlers.
 //
 // SCOPE, stated so nobody mistakes this for a general WebSocket library: no permessage-deflate,
-// no continuation frames (our messages fit one frame), no client role. Server-side only.
+// no continuation frames (our messages fit one frame — a fragmented, unmasked, or 64-bit-length
+// client frame FAILS the connection rather than mis-parsing), no client role. Server-side only.
 
 import { createHash } from "node:crypto";
 
@@ -69,15 +70,31 @@ export interface DecodedFrame {
 }
 
 /**
+ * Ceiling on bytes the decoder will hold while waiting for a frame to complete. The viewer only
+ * sends tiny JSON input events; anything that accumulates past this is a broken or hostile peer,
+ * and growing without bound would hand it the server's memory.
+ */
+export const WS_MAX_BUFFERED_BYTES = 1024 * 1024;
+
+/**
  * Incremental decoder for client->server frames. Client frames are ALWAYS masked; we unmask.
  * Returns complete frames and retains the partial tail, like FrameParser. Control frames
  * (close/ping) are surfaced so the server can respond.
+ *
+ * Protocol violations THROW — the caller must treat that as "fail the WebSocket connection"
+ * (RFC 6455 §7.1.7). Swallowing them would silently drop operator input mid-sign-in:
+ *  - FIN=0 or a continuation opcode (we never negotiate fragmentation; mis-parsing a fragment
+ *    loses the message and desyncs the stream)
+ *  - an unmasked client frame (RFC 6455 §5.1 REQUIRES the server to fail the connection)
+ *  - a 64-bit length claim (the viewer never sends one; reading only the low 32 bits desyncs)
+ *  - buffered bytes past WS_MAX_BUFFERED_BYTES
  */
 export class WsDecoder {
 	private buf: Buffer = Buffer.alloc(0);
 
 	push(chunk: Buffer): DecodedFrame[] {
 		this.buf = this.buf.length ? Buffer.concat([this.buf, chunk]) : chunk;
+		if (this.buf.length > WS_MAX_BUFFERED_BYTES) throw new Error(`ws buffer exceeded ${WS_MAX_BUFFERED_BYTES} bytes`);
 		const out: DecodedFrame[] = [];
 
 		for (;;) {
@@ -85,7 +102,8 @@ export class WsDecoder {
 			const b0 = this.buf[0];
 			const b1 = this.buf[1];
 			const opcode = OPCODES[b0 & 0x0f] ?? "binary";
-			const masked = (b1 & 0x80) !== 0;
+			if ((b0 & 0x80) === 0 || opcode === "cont") throw new Error("fragmented frame (FIN=0/continuation) not supported");
+			if ((b1 & 0x80) === 0) throw new Error("unmasked client frame");
 			let len = b1 & 0x7f;
 			let offset = 2;
 			if (len === 126) {
@@ -93,25 +111,16 @@ export class WsDecoder {
 				len = this.buf.readUInt16BE(offset);
 				offset += 2;
 			} else if (len === 127) {
-				if (this.buf.length < offset + 8) break;
-				// Low 32 bits are enough for anything the viewer sends.
-				len = this.buf.readUInt32BE(offset + 4);
-				offset += 8;
+				throw new Error("64-bit frame length not supported");
 			}
-			const maskLen = masked ? 4 : 0;
-			if (this.buf.length < offset + maskLen + len) break;
+			if (this.buf.length < offset + 4 + len) break;
 
-			let payload: Buffer;
-			if (masked) {
-				const mask = this.buf.subarray(offset, offset + 4);
-				const start = offset + 4;
-				payload = Buffer.alloc(len);
-				for (let i = 0; i < len; i++) payload[i] = this.buf[start + i] ^ mask[i & 3];
-			} else {
-				payload = this.buf.subarray(offset, offset + len);
-			}
+			const mask = this.buf.subarray(offset, offset + 4);
+			const start = offset + 4;
+			const payload = Buffer.alloc(len);
+			for (let i = 0; i < len; i++) payload[i] = this.buf[start + i] ^ mask[i & 3];
 			out.push({ opcode, payload });
-			this.buf = this.buf.subarray(offset + maskLen + len);
+			this.buf = this.buf.subarray(start + len);
 		}
 
 		return out;

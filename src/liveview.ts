@@ -21,7 +21,10 @@
 // as a fraction of the rendered image, the engine maps that same fraction onto the CURRENT
 // window bounds it already knows, and neither side ever learns the other's pixel dimensions.
 // The one rule this imposes — clamp to [0,1] so a drag that leaves the image cannot inject a
-// click onto the desktop behind the window — is enforced here and tested.
+// click onto the desktop behind the window — is enforced by the ENGINE in globalPoint, the one
+// point every input path funnels through. The pure helpers below clamp too so a viewer can be
+// written (and unit-tested) against them, but nothing forces a caller through them, so they are
+// a convenience, not the authority.
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { nativeDir } from "./paths.js";
@@ -43,7 +46,7 @@ export interface WindowEvent {
 export interface ErrorEvent {
 	ev: "error";
 	/** Typed so the caller can map to an operator remedy without parsing prose. */
-	kind: "no-screen-recording" | "no-window" | "capture-failed" | "stream-stopped" | string;
+	kind: "no-screen-recording" | "no-window" | "capture-failed" | "stream-stopped" | "spawn-failed" | string;
 	detail: string;
 }
 
@@ -114,6 +117,10 @@ export class FrameParser {
 	private buf: Buffer = Buffer.alloc(0);
 	private static readonly MARKER = 0x46; // 'F'
 	private static readonly HEADER = 5; // marker + uint32
+	// Resync can lock onto a 0x46 inside jpeg data, whose next four bytes then read as a length
+	// up to ~4GiB — and the parser would buffer forever waiting for a frame that never completes.
+	// Real frames are window-sized jpegs, well under this; anything bigger IS a desync.
+	private static readonly MAX_FRAME = 32 * 1024 * 1024;
 
 	push(chunk: Buffer): Buffer[] {
 		this.buf = this.buf.length ? Buffer.concat([this.buf, chunk]) : chunk;
@@ -133,6 +140,11 @@ export class FrameParser {
 				continue;
 			}
 			const len = this.buf.readUInt32BE(1);
+			if (len > FrameParser.MAX_FRAME) {
+				// False marker: treat as desync and resume scanning one byte later.
+				this.buf = this.buf.subarray(1);
+				continue;
+			}
 			if (this.buf.length < FrameParser.HEADER + len) break;
 			out.push(this.buf.subarray(FrameParser.HEADER, FrameParser.HEADER + len));
 			this.buf = this.buf.subarray(FrameParser.HEADER + len);
@@ -180,6 +192,8 @@ export function remedyFor(err: ErrorEvent): string {
 		case "capture-failed":
 		case "stream-stopped":
 			return `the capture stream stopped (${err.detail}) — retry, and check the app is still open`;
+		case "spawn-failed":
+			return `the engine binary would not start (${err.detail}) — it is gitignored, so run npm run build:native on that Mac`;
 		default:
 			return err.detail;
 	}
@@ -241,6 +255,23 @@ export function spawnEngine(opts: { fps?: number; quality?: number; maxWidth?: n
 	const frameCbs: ((j: Buffer) => void)[] = [];
 	const eventCbs: ((e: EngineEvent) => void)[] = [];
 
+	// The engine dies for mundane reasons: the binary is gitignored, so a fresh checkout spawns
+	// ENOENT, and a crashed engine breaks the stdin pipe, whose EPIPE arrives as an ASYNC 'error'
+	// event on the stream — not a sync throw any try/catch here could see. None of that may take
+	// down the detached server. Same degrade-gracefully contract as axdom's collect(): surface a
+	// typed event the caller can remedy, swallow the pipe error, and go inert.
+	let dead = false;
+	const gone = () => dead || child.exitCode !== null;
+	child.on("error", (err: NodeJS.ErrnoException) => {
+		dead = true;
+		const detail = `${err.code ?? err.message} (${bin})`;
+		for (const cb of eventCbs) cb({ ev: "error", kind: "spawn-failed", detail });
+	});
+	child.on("exit", () => {
+		dead = true;
+	});
+	child.stdin?.on("error", () => {});
+
 	const frameFd = child.stdio[3] as NodeJS.ReadableStream | null;
 	frameFd?.on("data", (c: Buffer) => {
 		for (const f of frames.push(c)) for (const cb of frameCbs) cb(f);
@@ -252,6 +283,7 @@ export function spawnEngine(opts: { fps?: number; quality?: number; maxWidth?: n
 	return {
 		child,
 		send(cmd) {
+			if (gone()) return;
 			child.stdin?.write(encodeCommand(cmd));
 		},
 		onFrame(cb) {
@@ -261,11 +293,8 @@ export function spawnEngine(opts: { fps?: number; quality?: number; maxWidth?: n
 			eventCbs.push(cb);
 		},
 		close() {
-			try {
-				child.stdin?.write(encodeCommand({ cmd: "quit" }));
-			} catch {
-				// stdin already gone; fall through to kill.
-			}
+			if (gone()) return;
+			child.stdin?.write(encodeCommand({ cmd: "quit" }));
 			child.kill("SIGTERM");
 		},
 	};

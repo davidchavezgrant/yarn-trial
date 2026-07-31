@@ -6,10 +6,13 @@ import { test } from "node:test";
 import {
 	clampFraction,
 	encodeCommand,
+	type EngineEvent,
+	type ErrorEvent,
 	EventParser,
 	FrameParser,
 	loginBlockedByRun,
 	remedyFor,
+	spawnEngine,
 	toEngineMouse,
 	toEngineScroll,
 } from "./liveview.js";
@@ -140,6 +143,18 @@ test("FrameParser__EmitsZeroLengthFrame__When__LengthIsZero", () => {
 	assert.equal(frames[0].length, 0);
 });
 
+test("FrameParser__Resyncs__When__LengthFieldIsImplausiblyLarge", () => {
+	// Resync can lock onto a 0x46 INSIDE jpeg data; the four bytes after it then read as a
+	// length up to ~4GiB and the parser would buffer forever waiting for a frame that never
+	// completes. An implausible length is itself a desync, not a frame to wait for.
+	const p = new FrameParser();
+	const bogus = Buffer.from([0x46, 0xff, 0xff, 0xff, 0xff]); // claims a ~4GiB frame
+	const payload = Buffer.from("real");
+	const frames = p.push(Buffer.concat([bogus, frameBytes(payload)]));
+	assert.equal(frames.length, 1);
+	assert.deepEqual(frames[0], payload);
+});
+
 // ---- EventParser ------------------------------------------------------------------------
 
 test("EventParser__ParsesWindowEvent__When__GivenOneLine", () => {
@@ -176,6 +191,11 @@ test("remedyFor__NamesScreenRecordingGrant__When__NoScreenRecording", () => {
 	assert.match(msg, /Screen Recording/);
 });
 
+test("remedyFor__NamesBuildStep__When__SpawnFailed", () => {
+	const msg = remedyFor({ ev: "error", kind: "spawn-failed", detail: "ENOENT (/x/native/liveview)" });
+	assert.match(msg, /build:native/);
+});
+
 test("remedyFor__FallsBackToDetail__When__KindUnknown", () => {
 	const msg = remedyFor({ ev: "error", kind: "weird", detail: "something specific" });
 	assert.equal(msg, "something specific");
@@ -193,6 +213,42 @@ test("encodeCommand__RoundTrips__When__MouseCommand", () => {
 	const parsed = JSON.parse(line);
 	assert.equal(parsed.cmd, "mouse");
 	assert.equal(parsed.x, 0.5);
+});
+
+// ---- spawnEngine: engine death must degrade the handle, never crash the server -----------
+
+test("spawnEngine__SurfacesTypedError__When__BinaryIsMissing", async () => {
+	// The binary is gitignored, so a fresh checkout has no engine. That must arrive as the same
+	// typed error event the engine itself emits — not an uncaught ENOENT that kills the detached
+	// server before the operator sees a remedy.
+	const handle = spawnEngine({ bin: "/nonexistent/liveview-engine" });
+	const ev = await new Promise<EngineEvent>((resolve, reject) => {
+		const t = setTimeout(() => reject(new Error("no engine event within 2s")), 2000);
+		handle.onEvent((e) => {
+			clearTimeout(t);
+			resolve(e);
+		});
+	});
+	assert.equal(ev.ev, "error");
+	const err = ev as ErrorEvent;
+	assert.equal(err.kind, "spawn-failed");
+	assert.match(err.detail, /ENOENT/);
+	// The handle is now inert: neither call may throw or schedule an async pipe error.
+	handle.send({ cmd: "follow" });
+	handle.close();
+});
+
+test("spawnEngine__SendAndCloseAreNoOps__When__EngineHasExited", async () => {
+	// Any short-lived executable stands in for a dying engine. Pipe failures arrive as 'error'
+	// EVENTS on stdin, not sync throws — emitting one is the deterministic stand-in for the
+	// EPIPE a broken pipe raises on its own schedule, and it throws right here unless
+	// spawnEngine registered a handler. Then the NORMAL teardown path (send quit, kill) runs
+	// against the dead child, which must be a no-op rather than a fresh write to a dead pipe.
+	const handle = spawnEngine({ bin: "/usr/bin/true" });
+	await new Promise<void>((resolve) => handle.child.once("exit", () => resolve()));
+	handle.child.stdin?.emit("error", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+	handle.send({ cmd: "follow" });
+	handle.close();
 });
 
 // ---- loginBlockedByRun: a login stream must never capture over a demo recording ----------

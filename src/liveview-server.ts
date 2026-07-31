@@ -24,11 +24,12 @@
 // recording is a SEPARATE capture that starts AFTER login (see the design doc) — this stream is
 // transient and exists only for the seconds a human is signing in.
 
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
+import { networkInterfaces } from "node:os";
 import type { Duplex } from "node:stream";
 import { type EngineEvent, remedyFor, spawnEngine } from "./liveview.js";
-import { encodeFrame, handshakeResponse, WsDecoder } from "./liveview-ws.js";
+import { type DecodedFrame, encodeFrame, handshakeResponse, type Opcode, WsDecoder } from "./liveview-ws.js";
 import { viewerHtml } from "./liveview-viewer.js";
 
 export interface ServerOptions {
@@ -73,8 +74,8 @@ export interface RunningServer {
 /**
  * The self-termination clock for a detached server, factored out as a pure state machine so its
  * decisions are unit-testable without sockets or timers. It answers one question — "should the
- * server exit now, and why" — from three facts: whether a viewer has ever connected, whether one
- * is connected now, and how long since each relevant moment.
+ * server exit now, and why" — from three facts: whether a viewer has ever connected, how many
+ * are connected now, and how long since each relevant moment.
  *
  * Two independent deadlines, because they guard different failures:
  *  - max-lifetime: a hard ceiling from START, so a server nobody ever opens (or a wedged one)
@@ -86,8 +87,24 @@ export interface RunningServer {
 export interface LifecycleState {
 	startedAtMs: number;
 	everConnected: boolean;
-	connectedNow: boolean;
+	/**
+	 * Live viewer count, not a boolean: connections overlap (a browser reconnecting through a
+	 * tunnel blip, a second tab), and a stale socket's close must not mark the server idle while
+	 * another viewer is mid-sign-in.
+	 */
+	openConnections: number;
 	lastCloseMs?: number;
+}
+
+export function connectionOpened(s: LifecycleState): void {
+	s.everConnected = true;
+	s.openConnections += 1;
+}
+
+/** Only the LAST close makes the server idle-eligible; earlier closes leave a live viewer. */
+export function connectionClosed(s: LifecycleState, nowMs: number): void {
+	s.openConnections = Math.max(0, s.openConnections - 1);
+	if (s.openConnections === 0) s.lastCloseMs = nowMs;
 }
 
 export function lifecycleVerdict(
@@ -96,8 +113,8 @@ export function lifecycleVerdict(
 	opts: { maxLifetimeMs?: number; idleAfterCloseMs?: number },
 ): "run" | "max-lifetime" | "idle" {
 	if (opts.maxLifetimeMs && opts.maxLifetimeMs > 0 && nowMs - s.startedAtMs >= opts.maxLifetimeMs) return "max-lifetime";
-	// Idle only applies once a viewer has connected AND is not connected now AND we know when it left.
-	if (opts.idleAfterCloseMs && opts.idleAfterCloseMs > 0 && s.everConnected && !s.connectedNow && s.lastCloseMs !== undefined)
+	// Idle only applies once a viewer has connected AND none is connected now AND we know when the last left.
+	if (opts.idleAfterCloseMs && opts.idleAfterCloseMs > 0 && s.everConnected && s.openConnections === 0 && s.lastCloseMs !== undefined)
 		if (nowMs - s.lastCloseMs >= opts.idleAfterCloseMs) return "idle";
 
 	return "run";
@@ -109,15 +126,42 @@ export function lifecycleVerdict(
  * closes, so a dropped tab tears down the capture on the Mac rather than leaking a process.
  */
 export function startLiveViewServer(opts: ServerOptions = {}): Promise<RunningServer> {
-	// A caller-supplied token (the runner) or a fresh one. Validated for shape either way — a
-	// token from the wire must never reach a header or the viewer HTML unchecked.
-	const token = opts.token && /^[A-Za-z0-9_-]{16,}$/.test(opts.token) ? opts.token : randomBytes(18).toString("base64url");
+	// A caller-supplied token (the runner) must pass the shape check or fail LOUDLY: silently
+	// minting a replacement would leave the caller holding a URL that 403s while a
+	// capture-capable server runs out its full lifetime under a token nobody knows.
+	if (opts.token !== undefined && !/^[A-Za-z0-9_-]{16,}$/.test(opts.token))
+		throw new Error("invalid supplied token: need >=16 chars of [A-Za-z0-9_-]");
+	const token = opts.token ?? randomBytes(18).toString("base64url");
 	const host = opts.lan ? "0.0.0.0" : (opts.host ?? "127.0.0.1");
 
+	// Constant-time comparison; hashing both sides first equalizes lengths, which
+	// timingSafeEqual requires.
+	const tokenDigest = createHash("sha256").update(token).digest();
+	const tokenOk = (supplied: string | null): boolean =>
+		supplied !== null && timingSafeEqual(createHash("sha256").update(supplied).digest(), tokenDigest);
+
+	// Parse the request target against a FIXED base: only the path and query matter here, and the
+	// Host header is client-controlled — a malformed one (`Host: a b^c`) would make `new URL`
+	// throw pre-auth, letting any local process crash the detached server mid-login and race a
+	// look-alike onto the freed port.
+	const parseTarget = (raw: string | undefined): URL | undefined => {
+		try {
+			return new URL(raw ?? "/", "http://127.0.0.1");
+		} catch {
+			return undefined;
+		}
+	};
+
 	const server = createServer((req, res) => {
-		const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
+		const url = parseTarget(req.url);
+		if (!url) {
+			res.writeHead(400, { "content-type": "text/plain" });
+			res.end("bad request");
+
+			return;
+		}
 		// The viewer page itself is gated by the token in the query string.
-		if (url.pathname === "/" && url.searchParams.get("t") === token) {
+		if (url.pathname === "/" && tokenOk(url.searchParams.get("t"))) {
 			res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
 			res.end(viewerHtml(token));
 
@@ -130,7 +174,10 @@ export function startLiveViewServer(opts: ServerOptions = {}): Promise<RunningSe
 	// Self-termination clock (see lifecycleVerdict). Tracks connection state and, on a 1s tick,
 	// exits the process when a deadline passes. Only armed if a deadline was actually set, so local
 	// `./run liveview` (Ctrl-C to stop) is unaffected.
-	const life: LifecycleState = { startedAtMs: Date.now(), everConnected: false, connectedNow: false };
+	const life: LifecycleState = { startedAtMs: Date.now(), everConnected: false, openConnections: 0 };
+	// Upgraded sockets, so close() can destroy them: server.close() only refuses NEW connections,
+	// and its callback never fires while a live viewer's socket is open.
+	const liveSockets = new Set<Duplex>();
 	let lifeTimer: NodeJS.Timeout | undefined;
 	const armLifecycle = () => {
 		if (!opts.maxLifetimeMs && !opts.idleAfterCloseMs) return;
@@ -148,20 +195,20 @@ export function startLiveViewServer(opts: ServerOptions = {}): Promise<RunningSe
 	};
 
 	server.on("upgrade", (req: IncomingMessage, socket: Duplex) => {
-		const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
+		const url = parseTarget(req.url);
 		const key = req.headers["sec-websocket-key"];
-		if (url.searchParams.get("t") !== token || typeof key !== "string") {
+		if (!url || !tokenOk(url.searchParams.get("t")) || typeof key !== "string") {
 			socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
 			socket.destroy();
 
 			return;
 		}
 		socket.write(handshakeResponse(key));
-		life.everConnected = true;
-		life.connectedNow = true;
+		connectionOpened(life);
+		liveSockets.add(socket);
 		socket.once("close", () => {
-			life.connectedNow = false;
-			life.lastCloseMs = Date.now();
+			liveSockets.delete(socket);
+			connectionClosed(life, Date.now());
 		});
 		bridge(socket, opts);
 	});
@@ -181,6 +228,7 @@ export function startLiveViewServer(opts: ServerOptions = {}): Promise<RunningSe
 				close: () =>
 					new Promise((r) => {
 						if (lifeTimer) clearInterval(lifeTimer);
+						for (const s of liveSockets) s.destroy();
 						server.close(() => r());
 					}),
 			});
@@ -188,14 +236,24 @@ export function startLiveViewServer(opts: ServerOptions = {}): Promise<RunningSe
 	});
 }
 
+/**
+ * When the viewer's socket has this many bytes queued, outbound JPEG frames are DROPPED. The live
+ * view only ever needs the newest frame, and ~15fps of JPEGs into a stalled ssh tunnel (TCP alive,
+ * reader wedged) would otherwise grow the write queue by hundreds of MB over a 20-minute lifetime.
+ */
+const MAX_QUEUED_SEND_BYTES = 1.5 * 1024 * 1024;
+
 /** Wire one WebSocket to one engine instance. */
 function bridge(socket: Duplex, opts: ServerOptions): void {
 	const engine = spawnEngine({ fps: opts.fps, quality: opts.quality, maxWidth: opts.maxWidth, bin: opts.bin });
 	const decoder = new WsDecoder();
 	let open = true;
 
-	const send = (payload: Buffer, kind: "binary" | "text") => {
+	const send = (payload: Buffer, kind: Opcode) => {
 		if (!open) return;
+		// Frames are disposable — drop them under backpressure. Small text/control messages are
+		// not, and always go through.
+		if (kind === "binary" && socket.writableLength > MAX_QUEUED_SEND_BYTES) return;
 		try {
 			socket.write(encodeFrame(payload, kind));
 		} catch {
@@ -211,11 +269,26 @@ function bridge(socket: Duplex, opts: ServerOptions): void {
 	});
 
 	socket.on("data", (chunk: Buffer) => {
-		for (const frame of decoder.push(chunk)) {
+		let frames: DecodedFrame[];
+		try {
+			frames = decoder.push(chunk);
+		} catch {
+			// Protocol violation (fragmented/unmasked/oversized frame): fail the connection per
+			// RFC 6455 rather than silently mis-parse operator input.
+			teardown();
+
+			return;
+		}
+		for (const frame of frames) {
 			if (frame.opcode === "close") {
 				teardown();
 
 				return;
+			}
+			if (frame.opcode === "ping") {
+				// RFC 6455 §5.5.3: a pong echoes the ping's payload.
+				send(frame.payload, "pong");
+				continue;
 			}
 			if (frame.opcode === "text") {
 				try {
@@ -232,6 +305,8 @@ function bridge(socket: Duplex, opts: ServerOptions): void {
 		open = false;
 		engine.close();
 		try {
+			// Complete the close handshake — a bare FIN reads as abnormal closure (1006) in the browser.
+			socket.write(encodeFrame(Buffer.alloc(0), "close"));
 			socket.end();
 		} catch {
 			// already closed
@@ -245,9 +320,7 @@ function bridge(socket: Duplex, opts: ServerOptions): void {
 
 /** First non-loopback IPv4, for the LAN-demo URL. Best-effort. */
 function hostAddress(): string {
-	// Deliberately tiny: import lazily to keep the pure path clean.
-	const os = require("node:os") as typeof import("node:os");
-	for (const ifaces of Object.values(os.networkInterfaces())) {
+	for (const ifaces of Object.values(networkInterfaces())) {
 		for (const i of ifaces ?? []) {
 			if (i.family === "IPv4" && !i.internal) return i.address;
 		}

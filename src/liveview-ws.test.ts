@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { acceptKey, encodeFrame, handshakeResponse, WsDecoder } from "./liveview-ws.js";
+import { acceptKey, encodeFrame, handshakeResponse, WS_MAX_BUFFERED_BYTES, WsDecoder } from "./liveview-ws.js";
 
 // ---- acceptKey: the RFC 6455 handshake hash (canonical vector from §1.3) -----------------
 
@@ -88,4 +88,43 @@ test("WsDecoder__ReturnsBoth__When__TwoFramesConcatenated", () => {
 	assert.equal(frames.length, 2);
 	assert.equal(frames[0].payload.toString(), "a");
 	assert.equal(frames[1].payload.toString(), "bb");
+});
+
+// ---- Protocol violations fail the connection (throw) rather than mis-parse ---------------
+// Silently swallowing a fragment or desyncing on a length form loses operator input mid-sign-in;
+// the bridge treats a throw as "fail the WebSocket connection" per RFC 6455 §7.1.7.
+
+test("WsDecoder__Throws__When__FrameNotFinal", () => {
+	// FIN=0: first fragment of a fragmented message. We never negotiate fragmentation.
+	const d = new WsDecoder();
+	const wire = maskedClientFrame(Buffer.from("part"));
+	wire[0] &= 0x7f; // clear FIN
+	assert.throws(() => d.push(wire), /fragmented/);
+});
+
+test("WsDecoder__Throws__When__ContinuationOpcode", () => {
+	const d = new WsDecoder();
+	assert.throws(() => d.push(maskedClientFrame(Buffer.from("tail"), 0x0)), /fragmented/);
+});
+
+test("WsDecoder__Throws__When__ClientFrameUnmasked", () => {
+	// RFC 6455 §5.1: client frames MUST be masked; the server MUST fail the connection otherwise.
+	const d = new WsDecoder();
+	const payload = Buffer.from("{}");
+	const wire = Buffer.concat([Buffer.from([0x81, payload.length]), payload]);
+	assert.throws(() => d.push(wire), /unmasked/);
+});
+
+test("WsDecoder__Throws__When__64BitLengthClaimed", () => {
+	// len==127 never comes from the viewer; keeping only the low 32 bits would desync the stream.
+	const d = new WsDecoder();
+	const header = Buffer.from([0x81, 0x80 | 127, 0, 0, 0, 1, 0, 0, 0, 0]);
+	assert.throws(() => d.push(header), /64-bit/);
+});
+
+test("WsDecoder__Throws__When__BufferedBytesExceedCap", () => {
+	// Nothing the viewer sends approaches the cap; unbounded buffering hands a hostile peer the
+	// server's memory.
+	const d = new WsDecoder();
+	assert.throws(() => d.push(Buffer.alloc(WS_MAX_BUFFERED_BYTES + 1)), /buffer exceeded/);
 });
