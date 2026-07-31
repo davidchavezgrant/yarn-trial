@@ -109,6 +109,17 @@ when it answers, SCK otherwise; `--cdp [url]` / `--sck` force a transport (flag 
 `LIVEVIEW_TRANSPORT=auto|cdp|sck` > auto; `LIVEVIEW_CDP_URL` names the endpoint, unset
 `CDP_PORT`/9222). Fleet-wired the same day: the choice rides the liveview verb's spec to the
 runner, which sets the env for the CLI it spawns and reports the requested transport in its
-reply. Caveat: the CDP engine binds ONE Chromium endpoint per session — a sign-in that hands
-off to a different browser process mid-flow (system-browser OAuth leg) needs SCK's
-window-following, so force `--sck` for those until endpoint-hopping exists.
+reply.
+
+**Endpoint-hopping (2026-07-31, branch `endpoint-hopping`)**: the CDP engine now follows the
+flow through target space, where the SCK engine follows it through screen space. Every
+`BrowserContext` is watched for new pages — newest page wins the stream, a closing page pops
+back to the most recent still-open one (the pure `FollowStack` in liveview-cdp.ts; the
+deep-link return to the app page IS the pop) — and a second, OPTIONAL browser endpoint is
+attached lazily (`LIVEVIEW_BROWSER_CDP_URL`, default `CDP_PORT`/9777 — the cdp backend's
+web-Chrome port; silent means re-probe on an interval, never an error). So auto/cdp follows
+the external-browser OAuth handoff WHEN the browser endpoint answers — which requires the
+fleet Mac's default browser to be the debug-flagged Chrome; provisioning for that is landing
+separately. onExit still fires only on primary-endpoint death; the browser leg dying just
+pops the follow stack. Native dialogs and passkey sheets remain SCK territory — force
+`--sck` for those.

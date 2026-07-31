@@ -3,10 +3,12 @@ import { test } from "node:test";
 import {
 	cdpModifiers,
 	cdpQuality,
+	FollowStack,
 	fractionToCss,
 	type FrameMeta,
 	keyEventParams,
 	mouseEventParams,
+	sameEndpoint,
 	wheelParams,
 } from "../src/remote/liveview-cdp.js";
 
@@ -247,4 +249,129 @@ test("cdpQuality__ReturnsDefault__When__UnsetOrUnusable", () => {
 	assert.equal(cdpQuality(undefined), 80);
 	assert.equal(cdpQuality(0), 80);
 	assert.equal(cdpQuality(Number.NaN), 80);
+});
+
+// ---- FollowStack: newest page wins, pop on close -------------------------------------------
+// The endpoint-hopping policy, pure. A sign-in flow is a stack of detours (app page → OAuth
+// popup → consent page); the human always works the most recently opened one, and a closing
+// page returns the stream to wherever the flow came from. Pages are plain strings here — the
+// policy must be testable without playwright.
+
+test("FollowStack__MakesNewestPageActive__When__Pushed", () => {
+	const s = new FollowStack<string>();
+	s.push("app", "primary");
+	assert.deepEqual(s.active, { page: "app", origin: "primary" });
+	s.push("oauth", "browser");
+	assert.deepEqual(s.active, { page: "oauth", origin: "browser" });
+	assert.equal(s.size, 2);
+});
+
+test("FollowStack__PopsToPreviousLivePage__When__ActivePageCloses", () => {
+	// The deep-link return: the OAuth page closing IS the way back to the app page.
+	const s = new FollowStack<string>();
+	s.push("app", "primary");
+	s.push("oauth", "browser");
+	s.dropClosed("oauth");
+	assert.deepEqual(s.active, { page: "app", origin: "primary" });
+	assert.equal(s.size, 1);
+});
+
+test("FollowStack__RemovesSilently__When__NonActivePageCloses", () => {
+	// The page UNDER the detour going away must not disturb what is streaming.
+	const s = new FollowStack<string>();
+	s.push("app", "primary");
+	s.push("oauth", "browser");
+	s.dropClosed("app");
+	assert.deepEqual(s.active, { page: "oauth", origin: "browser" });
+	assert.equal(s.size, 1);
+});
+
+test("FollowStack__GoesEmpty__When__LastPageCloses", () => {
+	const s = new FollowStack<string>();
+	s.push("app", "primary");
+	s.dropClosed("app");
+	assert.equal(s.active, undefined);
+	assert.equal(s.size, 0);
+});
+
+test("FollowStack__Ignores__When__UnknownPageCloses", () => {
+	// Close events arrive for pages the engine chose never to follow (devtools, filtered).
+	const s = new FollowStack<string>();
+	s.push("app", "primary");
+	s.dropClosed("devtools");
+	assert.deepEqual(s.active, { page: "app", origin: "primary" });
+	assert.equal(s.size, 1);
+});
+
+test("FollowStack__MovesToTopWithoutDuplicating__When__PagePushedTwice", () => {
+	// A re-push must not leave a second entry behind: its close must pop exactly once.
+	const s = new FollowStack<string>();
+	s.push("app", "primary");
+	s.push("tab", "browser");
+	s.push("app", "primary");
+	assert.equal(s.size, 2);
+	assert.deepEqual(s.active, { page: "app", origin: "primary" });
+	s.dropClosed("app");
+	assert.deepEqual(s.active, { page: "tab", origin: "browser" });
+	assert.equal(s.size, 1);
+});
+
+test("FollowStack__DropsEveryBrowserPage__When__BrowserOriginDies", () => {
+	// The secondary endpoint dying takes all its pages at once — their individual close
+	// events never crossed the dead connection — and the stream falls back to the app.
+	const s = new FollowStack<string>();
+	s.push("app", "primary");
+	s.push("oauth", "browser");
+	s.push("consent", "browser");
+	s.dropOrigin("browser");
+	assert.deepEqual(s.active, { page: "app", origin: "primary" });
+	assert.equal(s.size, 1);
+});
+
+test("FollowStack__KeepsActive__When__DeadOriginContributedNothing", () => {
+	const s = new FollowStack<string>();
+	s.push("app", "primary");
+	s.dropOrigin("browser");
+	assert.deepEqual(s.active, { page: "app", origin: "primary" });
+	assert.equal(s.size, 1);
+});
+
+test("FollowStack__DropsOnlyPrimaryPages__When__PrimaryOriginNamed", () => {
+	// The primary-vs-secondary death distinction lives in the ENGINE (primary death fires
+	// onExit; the browser leg dying only pops) — the drop itself is symmetric and must not
+	// touch the other origin's pages.
+	const s = new FollowStack<string>();
+	s.push("app", "primary");
+	s.push("oauth", "browser");
+	s.dropOrigin("primary");
+	assert.deepEqual(s.active, { page: "oauth", origin: "browser" });
+	assert.equal(s.size, 1);
+});
+
+test("FollowStack__RevivesWithNewPage__When__PushedAfterEmptying", () => {
+	// An emptied stack is not a dead session (only primary-endpoint death is): a page
+	// opening later streams again.
+	const s = new FollowStack<string>();
+	s.push("app", "primary");
+	s.dropClosed("app");
+	s.push("fresh", "primary");
+	assert.deepEqual(s.active, { page: "fresh", origin: "primary" });
+	assert.equal(s.size, 1);
+});
+
+// ---- sameEndpoint: attach once when both endpoints name one Chrome -------------------------
+// Two connections to the same Chrome would follow every page twice.
+
+test("sameEndpoint__MatchesByOrigin__When__OnlyTrailingSlashDiffers", () => {
+	assert.equal(sameEndpoint("http://127.0.0.1:9222", "http://127.0.0.1:9222/"), true);
+});
+
+test("sameEndpoint__Differs__When__PortsDiffer", () => {
+	// The default split: 9222 (app/Electron convention) vs 9777 (the cdp backend's Chrome).
+	assert.equal(sameEndpoint("http://127.0.0.1:9222", "http://127.0.0.1:9777"), false);
+});
+
+test("sameEndpoint__FallsBackToLiteralEquality__When__Unparseable", () => {
+	assert.equal(sameEndpoint("not a url", "not a url"), true);
+	assert.equal(sameEndpoint("not a url", "http://127.0.0.1:9222"), false);
 });

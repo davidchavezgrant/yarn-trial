@@ -36,8 +36,20 @@
 // maxWidth-downscaled JPEG changes nothing: fraction × viewport is correct at any scale.
 // Input arriving before the first frame is dropped — there is no metadata to map it against,
 // and no frame means the viewer has nothing to aim at yet.
+//
+// FOLLOWING THE FLOW. A sign-in that opens a new page — an in-app OAuth popup (new target,
+// same endpoint) or the external-browser handoff (macOS `open` → the persistent-profile
+// Chrome on a DIFFERENT endpoint) — must not leave the viewer staring at the original page.
+// Where the Swift engine follows the flow through screen space (frontmost window), this one
+// follows it through target space: every BrowserContext is watched for new pages, the newest
+// page wins the stream, and a closing page pops back to the most recent still-open one
+// (FollowStack below — the deep-link return to the app page IS that pop, no special casing).
+// The browser endpoint is optional by design and attached lazily: Chrome may not exist until
+// the handoff launches it, so a silent endpoint is re-probed on an interval, never an error.
+// onExit fires only when the PRIMARY endpoint dies — the sign-in target going away ends the
+// session; the browser leg dying just pops the follow stack.
 
-import { type Browser, type CDPSession, chromium } from "playwright-core";
+import { type Browser, type CDPSession, chromium, type Page } from "playwright-core";
 import { envNum } from "../env.js";
 import { clampFraction, type EngineCommand, type EngineEvent, type EngineHandle } from "./liveview.js";
 
@@ -50,6 +62,13 @@ export interface FrameMeta {
 export interface CdpEngineOptions {
 	/** Debug endpoint, e.g. http://127.0.0.1:9222. Falls back to CDP_URL, then CDP_PORT. */
 	endpoint?: string;
+	/**
+	 * The OPTIONAL second endpoint: the external browser an OAuth handoff lands in. Falls
+	 * back to LIVEVIEW_BROWSER_CDP_URL, then the CDP_PORT loopback default (9777 — the cdp
+	 * backend's web-Chrome port). Silent is not an error — it is probed lazily and the
+	 * session simply never hops until it answers.
+	 */
+	browserEndpoint?: string;
 	/** Prefer the page whose origin matches this URL; absent, the first real page wins. */
 	url?: string;
 	/** Display name for the viewer's title bar. */
@@ -220,12 +239,84 @@ export function cdpEndpoint(endpoint?: string): string {
 	return endpoint?.trim() || process.env.CDP_URL || `http://127.0.0.1:${envNum("CDP_PORT", 9222)}`;
 }
 
+/**
+ * Where the OPTIONAL browser endpoint is: explicit argument, then LIVEVIEW_BROWSER_CDP_URL,
+ * then the CDP_PORT loopback default — 9777, the cdp backend's web-Chrome port, with its
+ * exact env semantics (CDP_PORT wins when set, blank reads as unset via envNum). This is
+ * where the external-browser OAuth handoff lands when the Mac's default browser is the
+ * debug-flagged persistent-profile Chrome.
+ */
+export function browserCdpEndpoint(endpoint?: string): string {
+	return endpoint?.trim() || process.env.LIVEVIEW_BROWSER_CDP_URL?.trim() || `http://127.0.0.1:${envNum("CDP_PORT", 9777)}`;
+}
+
+/** Do two strings name the same debug endpoint? Origin equality when they parse (a trailing
+ *  slash is not a second endpoint), literal equality otherwise. Same-endpoint sessions
+ *  attach once — two connections to one Chrome would follow every page twice. */
+export function sameEndpoint(a: string, b: string): boolean {
+	try {
+		return new URL(a).origin === new URL(b).origin;
+	} catch {
+		return a.trim() === b.trim();
+	}
+}
+
+/** Which endpoint a followed page came from. Identical while streaming; they part ways at
+ *  death — the primary dying ends the session, the browser leg dying merely drops its pages. */
+export type FollowOrigin = "primary" | "browser";
+
+/**
+ * The follow policy, pure: NEWEST PAGE WINS, POP ON CLOSE. A sign-in flow is a stack of
+ * detours — app page → OAuth popup → maybe a consent page — and the human is always working
+ * the most recently opened one; when it closes, the flow has returned to wherever it came
+ * from, so the deep-link return to the app page IS the pop, no special casing. Kept free of
+ * playwright so the policy is unit-testable with plain values (tests/liveview-cdp.test.ts).
+ *
+ * De-duped by page identity: re-pushing a followed page moves it to the top WITHOUT
+ * duplicating (its close must pop exactly once), and dropping an unknown page is a no-op —
+ * close events arrive for pages the engine chose never to follow.
+ */
+export class FollowStack<T> {
+	private entries: { page: T; origin: FollowOrigin }[] = [];
+
+	/** The page the engine should be streaming right now; undefined when none remains. */
+	get active(): { page: T; origin: FollowOrigin } | undefined {
+		return this.entries.at(-1);
+	}
+
+	get size(): number {
+		return this.entries.length;
+	}
+
+	push(page: T, origin: FollowOrigin): void {
+		this.entries = this.entries.filter((e) => e.page !== page);
+		this.entries.push({ page, origin });
+	}
+
+	/** A page closed: the active one pops back to the most recent still-open page, a
+	 *  non-active one leaves silently. */
+	dropClosed(page: T): void {
+		this.entries = this.entries.filter((e) => e.page !== page);
+	}
+
+	/** An endpoint died: every page it contributed goes at once — their individual close
+	 *  events never crossed the dead connection. */
+	dropOrigin(origin: FollowOrigin): void {
+		this.entries = this.entries.filter((e) => e.origin !== origin);
+	}
+}
+
 /** How long the endpoint gets to answer /json/version. The target is already running (the
  *  runner foregrounds it before the viewer link goes out), so this is a liveness check, not
  *  a launch wait. */
 const PROBE_ATTEMPTS = 3;
 const PROBE_DELAY_MS = 300;
 const CONNECT_TIMEOUT_MS = 5_000;
+/** Cadence for re-probing a silent browser endpoint — Chrome may not exist until the OAuth
+ *  handoff launches it, so silence is re-checked on this interval, never reported. */
+const REPROBE_MS = 2_000;
+/** page.title() evaluates in the page; a hung renderer must not stall a hop announcement. */
+const TITLE_TIMEOUT_MS = 1_500;
 
 /** Exported for the CLI's auto-transport selection: answers → screencast, silent → SCK. */
 export async function endpointAnswers(url: string): Promise<boolean> {
@@ -266,6 +357,7 @@ function sameOrigin(pageUrl: string, targetUrl: string): boolean {
  */
 export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<EngineHandle> {
 	const endpoint = cdpEndpoint(opts.endpoint);
+	const browserEndpoint = browserCdpEndpoint(opts.browserEndpoint);
 
 	const frameCbs: ((j: Buffer) => void)[] = [];
 	const eventCbs: ((e: EngineEvent) => void)[] = [];
@@ -320,8 +412,8 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 	// app; an origin match wins when the caller declared a URL, otherwise the first real page.
 	const pages = browser.contexts().flatMap((c) => c.pages());
 	const usable = pages.filter((p) => !/^(devtools|chrome-extension):/.test(p.url()));
-	const page = (opts.url ? usable.find((p) => sameOrigin(p.url(), opts.url!)) : undefined) ?? usable[0];
-	if (!page) {
+	const first = (opts.url ? usable.find((p) => sameOrigin(p.url(), opts.url!)) : undefined) ?? usable[0];
+	if (!first) {
 		emit({
 			ev: "error",
 			kind: "no-page",
@@ -332,62 +424,210 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 		return inert();
 	}
 
-	let session: CDPSession;
-	try {
-		session = await page.context().newCDPSession(page);
-		await session.send("Page.enable");
-		await session.send("Page.startScreencast", {
-			format: "jpeg",
-			quality: cdpQuality(opts.quality),
-			...(opts.maxWidth ? { maxWidth: opts.maxWidth } : {}),
+	const appName = opts.app?.trim();
+	const hostOf = (u: string): string => {
+		try {
+			return new URL(u).host;
+		} catch {
+			return u;
+		}
+	};
+
+	const stack = new FollowStack<Page>();
+	/** What is streaming right now — undefined mid-hop, and after the stack empties. */
+	let streamed: { page: Page; session: CDPSession } | undefined;
+	let meta: FrameMeta | undefined;
+	let held = 0;
+	let closed = false;
+	let secondary: Browser | undefined;
+	let reprobe: NodeJS.Timeout | undefined;
+	/** Hops are serialized: two quick page events interleaving their session teardown/setup is
+	 *  the one race this design has, and a queue removes it wholesale. Every step converges the
+	 *  stream onto the stack's CURRENT active, so a hop that is stale by its turn is a no-op. */
+	let hopQueue: Promise<void> = Promise.resolve();
+
+	// The geometry fields are zeros on purpose: the viewer reads only app/title/settling from
+	// window events (frame arrival is what reveals the canvas), and this engine has no window
+	// geometry to report. Best-effort with a short timeout — page.title() evaluates in the
+	// page, and a busy renderer must not stall the announcement the title bar is waiting on.
+	const announce = (page: Page, origin: FollowOrigin) => {
+		void (async () => {
+			const title =
+				(await Promise.race([
+					page.title().catch(() => ""),
+					new Promise<string>((r) => setTimeout(r, TITLE_TIMEOUT_MS, "")),
+				])) || page.url();
+			const app = appName || hostOf(origin === "primary" ? endpoint : browserEndpoint);
+			emit({ ev: "window", id: 0, title, app, x: 0, y: 0, w: 0, h: 0, scale: 1 });
+		})();
+	};
+
+	/** Converge the screencast + input routing onto the stack's active page. */
+	const sync = () => {
+		hopQueue = hopQueue
+			.then(async () => {
+				const want = closed ? undefined : stack.active;
+				if (want?.page === streamed?.page) return;
+				if (streamed) {
+					const old = streamed.session;
+					streamed = undefined;
+					// Best-effort: the old session may already be dead (its page just closed).
+					old.send("Page.stopScreencast").catch(() => {});
+					void old.detach().catch(() => {});
+				}
+				// Stale metadata from the old page must never map a click onto the new one:
+				// mapping is unavailable until the new page's first frame arrives — input is
+				// dropped meanwhile, the same contract as the pre-first-frame window at connect.
+				// Held buttons die with the page they were pressed on.
+				meta = undefined;
+				held = 0;
+				if (!want) {
+					// The stack emptied with the primary endpoint still up. Same posture as an
+					// inert handle: the error stands, exit does NOT fire (only primary-endpoint
+					// death ends the session), and a page opening later revives the stream.
+					if (!closed) emit({ ev: "error", kind: "stream-stopped", detail: "every followed page closed" });
+
+					return;
+				}
+				try {
+					const s = await want.page.context().newCDPSession(want.page);
+					s.on("Page.screencastFrame", (p) => {
+						// Ack unconditionally — an unacked frame stops the stream cold — but
+						// forward only while this session is the streamed one: a frame in flight
+						// across a hop must not repaint the old page or poison the new mapping.
+						s.send("Page.screencastFrameAck", { sessionId: p.sessionId }).catch(() => {});
+						if (streamed?.session !== s) return;
+						meta = p.metadata;
+						const jpeg = Buffer.from(p.data, "base64");
+						for (const cb of frameCbs) cb(jpeg);
+					});
+					// Re-announced on every top-frame navigation so the title bar tracks an OAuth
+					// flow's redirects.
+					s.on("Page.frameNavigated", ({ frame }) => {
+						if (!frame.parentId && streamed?.session === s) announce(want.page, want.origin);
+					});
+					streamed = { page: want.page, session: s };
+					await s.send("Page.enable");
+					await s.send("Page.startScreencast", {
+						format: "jpeg",
+						quality: cdpQuality(opts.quality),
+						...(opts.maxWidth ? { maxWidth: opts.maxWidth } : {}),
+					});
+				} catch (e) {
+					if (streamed) {
+						void streamed.session.detach().catch(() => {});
+						streamed = undefined;
+					}
+					if (!closed) emit({ ev: "error", kind: "capture-failed", detail: (e as Error).message });
+
+					return;
+				}
+				announce(want.page, want.origin);
+			})
+			.catch(() => {}); // a failed hop must not wedge the queue — the next sync converges
+	};
+
+	/** Put a page under follow: wire its close to the pop, push it (newest wins), converge. */
+	const followed = new WeakSet<Page>();
+	const follow = (page: Page, origin: FollowOrigin) => {
+		if (closed || followed.has(page)) return;
+		if (/^(devtools|chrome-extension):/.test(page.url())) return;
+		followed.add(page);
+		page.on("close", () => {
+			stack.dropClosed(page);
+			sync();
 		});
-	} catch (e) {
-		emit({ ev: "error", kind: "capture-failed", detail: (e as Error).message });
+		stack.push(page, origin);
+		sync();
+	};
+
+	/** Follow every page a browser opens from here on. New pages land in EXISTING contexts (a
+	 *  popup shares its opener's), so watching those covers the flows this exists for. */
+	const watch = (b: Browser, origin: FollowOrigin) => {
+		for (const c of b.contexts()) c.on("page", (p) => follow(p, origin));
+	};
+
+	watch(browser, "primary");
+	follow(first, "primary");
+	// The first hop decides connect success exactly as the single-page engine did: a refused
+	// screencast on the chosen page is a dead engine with a typed remedy already emitted, not
+	// a live one showing nothing.
+	await hopQueue;
+	if (!streamed) {
 		await browser.close().catch(() => {});
 
 		return inert();
 	}
 
-	const app = opts.app?.trim() || "Chrome";
-	let meta: FrameMeta | undefined;
-	let held = 0;
-	let closed = false;
-
-	session.on("Page.screencastFrame", (p) => {
-		meta = p.metadata;
-		// Ack unconditionally, listener or not — an unacked frame stops the stream cold, and a
-		// stalled stream is indistinguishable from a dead one from the viewer's side.
-		session.send("Page.screencastFrameAck", { sessionId: p.sessionId }).catch(() => {});
-		const jpeg = Buffer.from(p.data, "base64");
-		for (const cb of frameCbs) cb(jpeg);
-	});
-
-	// The geometry fields are zeros on purpose: the viewer reads only app/title/settling from
-	// window events (frame arrival is what reveals the canvas), and this engine has no window
-	// geometry to report. Re-announced on every top-frame navigation so the title bar tracks
-	// an OAuth flow's redirects.
-	const announce = async () => {
-		const title = (await page.title().catch(() => "")) || page.url();
-		emit({ ev: "window", id: 0, title, app, x: 0, y: 0, w: 0, h: 0, scale: 1 });
-	};
-	session.on("Page.frameNavigated", ({ frame }) => {
-		if (!frame.parentId) void announce();
-	});
-	await announce();
-
 	browser.on("disconnected", fireExit);
-	page.on("close", () => {
-		emit({ ev: "error", kind: "stream-stopped", detail: "the streamed page closed" });
-		fireExit();
-	});
+
+	// The optional browser leg. Attached lazily and silently: no error events for an absent
+	// secondary — it is optional by design, and Chrome may not exist until the handoff
+	// launches it. Same-URL endpoints attach once; the primary watcher already covers them.
+	const attachSecondary = async (launchedMidFlow: boolean): Promise<void> => {
+		let b: Browser;
+		try {
+			b = await chromium.connectOverCDP(browserEndpoint, { timeout: CONNECT_TIMEOUT_MS });
+		} catch {
+			return; // answered the probe but refused the connect — the re-probe loop retries
+		}
+		if (closed) {
+			await b.close().catch(() => {});
+
+			return;
+		}
+		secondary = b;
+		b.on("disconnected", () => {
+			// The browser leg dying pops its pages (their close events never crossed the dead
+			// connection) — it does NOT end the session, and Chrome may come back for a later
+			// handoff, so the probe resumes.
+			if (secondary === b) secondary = undefined;
+			stack.dropOrigin("browser");
+			sync();
+			armReprobe();
+		});
+		watch(b, "browser");
+		// A Chrome that was silent at session start was launched mid-flow — by the handoff's
+		// `open`, carrying its page BEFORE this attach could see a `page` event. That page IS
+		// the flow's next leg: follow the newest one. A Chrome that answered at start holds
+		// the operator's old tabs; those are never followed, only pages opened from here on.
+		if (launchedMidFlow) {
+			const cand = b.contexts().flatMap((c) => c.pages()).filter((p) => !/^(devtools|chrome-extension):/.test(p.url()));
+			const newest = cand.at(-1);
+			if (newest) follow(newest, "browser");
+		}
+	};
+
+	const armReprobe = () => {
+		if (closed || reprobe) return;
+		reprobe = setTimeout(() => {
+			reprobe = undefined;
+			void probeSecondary(true);
+		}, REPROBE_MS);
+		reprobe.unref();
+	};
+	const probeSecondary = async (launchedMidFlow: boolean): Promise<void> => {
+		if (closed || secondary) return;
+		if (await endpointAnswers(browserEndpoint)) await attachSecondary(launchedMidFlow);
+		if (!closed && !secondary) armReprobe();
+	};
+	if (!sameEndpoint(endpoint, browserEndpoint)) void probeSecondary(false);
 
 	const close = () => {
 		if (closed) return;
 		closed = true;
+		if (reprobe) clearTimeout(reprobe);
 		void (async () => {
-			await session.send("Page.stopScreencast").catch(() => {});
-			await session.detach().catch(() => {});
+			// Let an in-flight hop land before tearing down what it installed.
+			await hopQueue.catch(() => {});
+			const s = streamed?.session;
+			streamed = undefined;
+			if (s) {
+				await s.send("Page.stopScreencast").catch(() => {});
+				await s.detach().catch(() => {});
+			}
 			await browser.close().catch(() => {}); // disconnect only; the browser survives
+			if (secondary) await secondary.close().catch(() => {});
 		})();
 	};
 
@@ -395,6 +635,9 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 		...base,
 		send(cmd) {
 			if (closed) return;
+			// Commands route to the ACTIVE session only; mid-hop (undefined) they are dropped,
+			// like input before the first frame.
+			const s = streamed?.session;
 			switch (cmd.cmd) {
 				case "quit":
 					close();
@@ -402,31 +645,34 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 					return;
 				case "follow":
 				case "pin":
-					// Page-scoped by construction — there is nothing to follow or pin.
+					// The follow stack decides what streams; the viewer's window verbs have
+					// nothing to pick.
 					return;
 				case "mouse": {
-					if (!meta) return; // no frame yet: nothing rendered, nowhere to aim
+					if (!s || !meta) return; // no frame from the current page yet: nowhere to aim
 					const t = mouseEventParams(cmd, meta, held);
 					held = t.held;
-					for (const ev of t.events) void session.send("Input.dispatchMouseEvent", ev).catch(() => {});
+					for (const ev of t.events) void s.send("Input.dispatchMouseEvent", ev).catch(() => {});
 
 					return;
 				}
 				case "scroll":
-					if (!meta) return;
-					void session.send("Input.dispatchMouseEvent", wheelParams(cmd, meta)).catch(() => {});
+					if (!s || !meta) return;
+					void s.send("Input.dispatchMouseEvent", wheelParams(cmd, meta)).catch(() => {});
 
 					return;
 				case "key": {
+					if (!s) return;
 					const ev = keyEventParams(cmd.down, cmd.code, cmd.flags);
-					if (ev) void session.send("Input.dispatchKeyEvent", ev).catch(() => {});
+					if (ev) void s.send("Input.dispatchKeyEvent", ev).catch(() => {});
 
 					return;
 				}
 				case "text":
 					// Paste-like insertion, no key events — exactly right for sign-in fields, and
 					// the same path the viewer's own paste handler already takes on the SCK engine.
-					void session.send("Input.insertText", { text: cmd.s }).catch(() => {});
+					if (!s) return;
+					void s.send("Input.insertText", { text: cmd.s }).catch(() => {});
 
 					return;
 			}

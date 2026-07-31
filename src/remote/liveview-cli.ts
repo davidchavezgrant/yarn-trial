@@ -44,9 +44,12 @@ const USAGE = `usage: ./run liveview [<mac>] ["<App Name>"] [--cdp [url] | --sck
   fleet: with a <mac>, the choice rides the spec to that host's runner and an endpoint means
   a port on THAT Mac.
 
-  CAVEAT: the CDP engine binds ONE Chromium endpoint for the whole session. A sign-in that
-  hands off to a different browser process mid-flow (the system-browser OAuth leg) needs
-  SCK's window-following — force --sck for those until endpoint-hopping exists.
+  The CDP engine follows the sign-in flow through target space: a page opened mid-flow (an
+  in-app OAuth popup, a new tab) streams the moment it appears, and closing it pops the view
+  back. The external-browser handoff is followed onto the persistent-profile Chrome WHEN its
+  debug endpoint answers (LIVEVIEW_BROWSER_CDP_URL, default CDP_PORT/9777) — that requires
+  the Mac's default browser to be the debug-flagged Chrome; provisioning for that lands
+  separately. Native dialogs and passkey sheets remain SCK territory — force --sck for those.
 
 Window-scoped sign-in: the teammate sees ONLY the window being signed into, drives it in their
 own browser, and closes the tab. The session lands in the app's own storage; nothing is stored
