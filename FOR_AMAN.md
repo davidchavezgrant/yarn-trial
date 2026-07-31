@@ -91,7 +91,7 @@ capability the driver has but doesn't expose. For a greenfield build:
 | Web apps (majority of customer targets) | **CDP direct** — playwright-core attaching to a Chrome you launch yourself with `--remote-debugging-port` and a persistent profile | Mature, hireable, no consent gate on your own profiles, no shared daemon, sign-ins persist in the profile |
 | Electron apps | **CDP direct** — Electron passes Chromium switches through (verified: `open -a App --args --remote-debugging-port=9222` works) | Same. AX fallback for apps that strip the flag |
 | Native-chrome bits (menus, dialogs, file pickers, OS shortcuts) | Thin Swift sidecar (AX + CGEvent primitives — all probe-verified from unsigned Swift) | CDP's Input domain reaches the renderer only; anything the OS handles never fires |
-| Native Mac apps | cua's actual moat — was out of scope (David, 2026-07-30); the blocking fix is now **built but not live-validated** | Our one native failure (Hex Fiend) was an activation-policy issue: cua's foreground delivery fronts the app at window-server level for <1ms, which never makes it key/main in the NSApp sense, so menu items stay disabled. Calculator worked. The fix is implemented in `AxBackend.acquire` (src/backends/ax.ts): ONE genuine AppKit activation at run start (System Events `set frontmost` by pid — sticky per the TextEdit probe), outcome logged as `activation`. Typecheck+unit verified; no Hex Fiend re-run yet, so don't declare native working until one passes |
+| Native Mac apps | cua's actual moat — was out of scope (David, 2026-07-30); the blocking fix is now **built but not live-validated** | Our one native failure (Hex Fiend) was an activation-policy issue: cua's foreground delivery fronts the app at window-server level for <1ms, which never makes it key/main in the NSApp sense, so menu items stay disabled. Calculator worked. The fix is implemented in `AxBackend.acquire` (src/backends/ax.ts): ONE genuine AppKit activation at run start (System Events `set frontmost` by pid — sticky per the TextEdit probe), outcome logged as `activation`. **Live-validated at the mechanism level 2026-07-31**: after an activated run, menu AXPress on a BACKGROUNDED TextEdit works (File ▸ New created a document, count 8→9; frontmost=false) — the exact operation the un-activated failure silently no-ops. The end-to-end native TASK still failed (0/11), but on a different class: multi-window targeting (driver attached to one of 8 open documents while actions landed in another; run `2026-07-31T10-29-05-036-textedit`). So: activation solved, window-targeting is the next native blocker — don't declare native working until a multi-window task passes |
 
 ### What CDP-direct deletes, by construction (`src/backends/cdp.ts`, ~630 lines, read the header)
 
@@ -191,11 +191,19 @@ it, there isn't one — pick `cdp` (port open) or `ax` (port closed).
   `fallbackEligible()` keyed on `EndpointUnavailableError` (src/backends/electron-attach.ts)
   — a TYPE check, because regex-over-error-prose broke twice — and the run log records
   `backend` (what actually drove) + `backendFallback: {from, reason, detail}`.
+  **Live-validated 2026-07-31** (run `2026-07-31T10-35-19-459-yarn`): `--backend cdp`
+  against a portless running Yarn printed the CDP UNAVAILABLE banner, continued on ax,
+  and logged `backend:"ax"` + `backendFallback:{from:"cdp", reason:"running-without-port"}`.
+  (That run then died on an unrelated pre-existing failure — the fallback window landed on
+  an inactive Space, `TargetNotObservableError` — which is the AX path's known capture
+  constraint, not the fallback's.)
 - **The activation-policy fix is implemented in AxBackend** (src/backends/ax.ts): acquire
   ends with ONE genuine AppKit activation — System Events `set frontmost` by pid, non-fatal
   on refusal, sticky per the TextEdit probe (menu items stay enabled after backgrounding) —
-  logged as `activation` in the run log. Typecheck+unit verified; NOT yet validated against
-  a live native app (no Hex Fiend re-run).
+  logged as `activation` in the run log. Live-validated at the mechanism level 2026-07-31:
+  post-run, menu AXPress on a BACKGROUNDED TextEdit created a document (8→9, frontmost=false)
+  — the operation the un-activated failure silently no-ops. End-to-end native tasks still
+  blocked on multi-window targeting (see the actuator table's native row).
 - **Warnings lie in both directions.** "Element does not advertise AXPress" clicks
   usually work; clicks that report success sometimes silently no-op. Only the next
   observation tells the truth — this is the core argument for verify-per-action. A
