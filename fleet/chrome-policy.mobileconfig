@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>PayloadContent</key>
+  <array>
+    <dict>
+      <key>PayloadType</key>
+      <string>com.google.Chrome</string>
+      <key>PayloadIdentifier</key>
+      <string>so.yarn.fleet.chrome.policy</string>
+      <key>PayloadUUID</key>
+      <string>1B0C6E5A-3F42-4C7E-9E21-7A5D4C8B2F10</string>
+      <key>PayloadVersion</key>
+      <integer>1</integer>
+      <key>PayloadDisplayName</key>
+      <string>Chrome: sync and browser sign-in disabled</string>
+      <key>SyncDisabled</key>
+      <true/>
+      <key>BrowserSignin</key>
+      <integer>0</integer>
+    </dict>
+  </array>
+  <key>PayloadType</key>
+  <string>Configuration</string>
+  <key>PayloadIdentifier</key>
+  <string>so.yarn.fleet.chrome</string>
+  <key>PayloadUUID</key>
+  <string>7D3E1F98-25A6-4B0D-8C13-6E9F0A4D7B52</string>
+  <key>PayloadVersion</key>
+  <integer>1</integer>
+  <key>PayloadDisplayName</key>
+  <string>Yarn fleet — Chrome credential lockdown</string>
+  <key>PayloadDescription</key>
+  <string>Disables Chrome sync and browser-level Google sign-in on shared colo Macs, so a personal account cannot download its saved-password vault onto a machine whose screen other people watch during sign-in demos. Website OAuth is unaffected.</string>
+  <key>PayloadOrganization</key>
+  <string>Yarn</string>
+  <key>PayloadScope</key>
+  <string>System</string>
+  <key>PayloadRemovalDisallowed</key>
+  <false/>
+</dict>
+</plist>

@@ -27,6 +27,21 @@
 # neither key accepts the recommended level at all: Chromium's template declares no
 # `can_be_recommended` for them, so a recommended write is rejected outright.
 #
+# macOS 26 CHANGED THE DELIVERY METHOD — read this before debugging a red check.
+# Measured 2026-07-31: mac1 runs macOS 15.5 and honours a hand-written plist in
+# /Library/Managed Preferences (forced=true). mac2 and mac3 run macOS 26.4.1 and IGNORE the
+# byte-identical file (same md5, same root:wheel 644) — it reads back fine from disk while
+# CFPreferencesAppValueIsForced returns false, because on 26 that directory is the MDM
+# subsystem's and an unmanaged file dropped there manages nothing. `profiles install` is gone
+# too ("profiles tool no longer supports installs. Use System Settings Profiles"). So on 26+
+# the only route is a configuration profile installed by a human:
+#
+#   fleet/chrome-policy.mobileconfig  ->  System Settings > General > Device Management
+#
+# This script's WRITE path therefore only helps on macOS 15 and earlier. Its --check path is
+# correct on every version and is what tells you which case you are in. Hours went into
+# comparing "identical" machines that differed by a major OS release; run `sw_vers` first.
+#
 # TWO TRAPS THIS SCRIPT EXISTS TO AVOID, both hit for real on 2026-07-31:
 #
 #   1. `sudo defaults write "/Library/Managed Preferences/com.google.Chrome" …` SILENTLY DOES
