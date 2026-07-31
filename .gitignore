@@ -37,3 +37,7 @@ __pycache__/
 # scripts/fit-motion.py. 185MB, kept out of history deliberately.
 data/cursor-keyboard-dataset-2026-07-30/
 data/cursor-smoothed-dataset/
+
+# Backups the claude-use-subscription script writes beside settings.local.json —
+# same secret-bearing content as the ignored original, so they must never track.
+.claude/settings.local.json.bak-*
