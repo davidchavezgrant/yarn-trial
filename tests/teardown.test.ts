@@ -294,3 +294,60 @@ test("runTeardown__PairsToolResults__When__ARestoreTakesSeveralModelTurns", asyn
 	// ordering cleanupSteps by index must see the sequence as it happened.
 	assert.deepEqual(steps.map((s) => s.index), [1, 2, 3, 4]);
 });
+
+test("runTeardown__RetriesTheModelCall__When__TheApiIsTransientlyOverloaded", async () => {
+	// Teardown was the ONE bare model call in core — explore, the visual judge, home and the
+	// agent loop all retry. It runs unattended AFTER the run has reported, so nothing above it
+	// retries either: a single 529 abandoned the restore and left the app dirty for the next
+	// job on that Mac, which is the failure cleanup exists to prevent.
+	const obs = obsWith([el("Cursor Style", "Pointer-first")]);
+	let attempts = 0;
+	const client = {
+		messages: {
+			create: async () => {
+				attempts++;
+				if (attempts === 1) {
+					// The shape retryTransient classifies as retryable, not a bare Error.
+					const err: Error & { status?: number } = new Error("overloaded_error");
+					err.status = 529;
+					throw err;
+				}
+
+				return {
+					content: [{ type: "tool_use", id: "tu_1", name: "act", input: { action: { name: "click", ref: "e1" } } }],
+					usage: { input_tokens: 0, output_tokens: 0 },
+				};
+			},
+		},
+	};
+	const cdp = {
+		observe: async () => obs,
+		act: async () => "clicked",
+		assertSupported: () => {},
+		requestForLog: () => ({ kind: "tool", name: "click", args: { ref: "e1" } }),
+	};
+	const realLog = console.log;
+	console.log = () => {};
+	try {
+		await runTeardown({
+			cdp: cdp as never,
+			client: client as never,
+			model: "m",
+			app: "Yarn",
+			journal: [mut("Cursor Style", "Arrow-first", "Pointer-first", 1)],
+			claimed: [],
+			steps: [] as never,
+			budget: 1,
+			mode: "advisory",
+			vision: false,
+			usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, modelCalls: 0 },
+			// Zero delay: the retry policy is what is under test, not the wall clock.
+			retryDelaysMs: [0],
+		});
+	} finally {
+		console.log = realLog;
+	}
+
+	// Two attempts means the 529 was retried rather than abandoning the restore.
+	assert.equal(attempts, 2);
+});

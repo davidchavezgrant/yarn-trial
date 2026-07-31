@@ -8,6 +8,7 @@ import {
 	findWindow,
 	observationBlocks,
 	observe,
+	retryTransient,
 	toActionRequest,
 	verify,
 } from "./harness.js";
@@ -127,6 +128,12 @@ export interface TeardownArgs {
 	steps: StepRecord[];
 	budget: number;
 	/**
+	 * Backoff between model retries. Exposed only so a test does not sleep through the real
+	 * 2s/8s/20s — the same reason `retryTransient` takes it as a parameter rather than a
+	 * constant. Production never sets it.
+	 */
+	retryDelaysMs?: number[];
+	/**
 	 * What produced this teardown, recorded in the receipt. An in-run pass passes its
 	 * `CLEANUP` setting; `src/core/cleanup.ts` passes "cli". Reading it out of the environment
 	 * here would label a standalone replay with whatever the shell happened to export.
@@ -227,13 +234,22 @@ async function restoreOne(a: TeardownArgs, m: Mutation, index: number): Promise<
 	const actTool = a.cdp ? (await import("../backends/cdp.js")).CDP_ACT_TOOL : ACT_TOOL;
 
 	for (let step = 1; step <= a.budget; step++) {
-		const r = await a.client.messages.create({
-			model: a.model,
-			max_tokens: 2000,
-			system: SYSTEM,
-			tools: [actTool],
-			messages,
-		});
+		// Retried, like every other model call in core — this was the only bare one. Teardown
+		// runs UNATTENDED after the run has already reported its verdict, so there is no human
+		// and no retry loop above it: a single transient 529 abandoned the restore and left the
+		// app dirty. On the fleet that is not cosmetic, it is the next job on that Mac starting
+		// from a workspace this run mutated, which is the exact failure cleanup exists to stop.
+		const r = await retryTransient(
+			() =>
+				a.client.messages.create({
+					model: a.model,
+					max_tokens: 2000,
+					system: SYSTEM,
+					tools: [actTool],
+					messages,
+				}),
+			a.retryDelaysMs ? { delaysMs: a.retryDelaysMs } : {},
+		);
 		a.usage.modelCalls++;
 		a.usage.inputTokens += r.usage.input_tokens;
 		a.usage.outputTokens += r.usage.output_tokens;
