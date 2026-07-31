@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import type { Driver } from "../core/driver.js";
-import { ensureObservable, findWindow, observe, type ObservationBundle, type WindowRef } from "../core/harness.js";
+import { ensureObservable, findWindow, observe, pickWindow, type ObservationBundle, type WindowRef } from "../core/harness.js";
 import type { Target } from "../core/target.js";
 
 /**
@@ -21,6 +21,9 @@ import type { Target } from "../core/target.js";
  * reach the driver the same way. The Driver itself is created and closed by the CALLER
  * (run.ts/explore.ts open it before backend selection and close it from their interrupt
  * handler and finally); this class never closes it.
+ *
+ * Known limitation: recording captures ax.win ONCE at start, so a run whose window moves
+ * (the per-observation follow below) records only the window it started on.
  */
 export class AxBackend {
 	private constructor(
@@ -33,6 +36,10 @@ export class AxBackend {
 		 *  forensics can rule activation in or out without re-running. */
 		readonly activation: { applied: boolean; error?: string },
 	) {}
+
+	/** Title of the last window the follow resolved, for the switch log's "from" side —
+	 *  WindowRef itself carries no title. */
+	private lastTitle?: string;
 
 	/** The window every observation targets. Reassigned by ensureObservable() when
 	 *  recovery relaunches the app onto a new window — read it fresh, never cache it. */
@@ -73,7 +80,38 @@ export class AxBackend {
 		this.currentWin = await ensureObservable(this.driver, this.currentWin, this.app);
 	}
 
-	observe(name: string): Promise<ObservationBundle> {
+	/**
+	 * Re-resolve to the app's FRONT window, then observe it.
+	 *
+	 * A run drives the app's front window the way a human reads the screen: whatever the
+	 * app brings forward — ⌘N opening a document, a dialog replacing it — is where the
+	 * next look must land. Pinning the window once at acquire is how run
+	 * 2026-07-31T10-29-05-036 read a stale TextEdit document for 11 straight steps while
+	 * its actions landed in the window ⌘N had actually opened (0/11 verified, pixels 0.0%).
+	 *
+	 * The follow is one list_windows round-trip per observation — cheap next to the
+	 * get_window_state that follows — and deliberately uncached: caching would recreate the
+	 * pin-once bug on a longer period. Pid-pinned, so two instances sharing a name cannot
+	 * cross-capture, and each follow re-resolves against whatever pid ensureObservable's
+	 * recovery last installed. Every switch is logged: the run transcript must show each
+	 * move, or a wrong-window run's forensics would have nothing to rule the follow in
+	 * or out with.
+	 */
+	async observe(name: string): Promise<ObservationBundle> {
+		try {
+			const windows = await this.driver.act({ kind: "tool", name: "list_windows", args: {} });
+			const front = pickWindow(JSON.parse(windows.structuredJson ?? "{}").windows ?? [], this.app, this.currentWin.pid);
+			// No pick (all windows gone mid-run) keeps the held ref: observe/ensureObservable
+			// already own that failure and report it with the recovery story attached.
+			if (front && front.window_id !== this.currentWin.windowId) {
+				console.log(`  window follow: "${this.lastTitle ?? ""}" -> "${front.title}" (id ${this.currentWin.windowId} -> ${front.window_id})`);
+				this.currentWin = { pid: front.pid, windowId: front.window_id, bounds: front.bounds };
+			}
+			this.lastTitle = front?.title ?? this.lastTitle;
+		} catch {
+			// A follow that cannot list windows must not fail the observation it serves.
+		}
+
 		return observe(this.driver, this.currentWin, name, {});
 	}
 }
