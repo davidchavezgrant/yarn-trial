@@ -148,6 +148,8 @@ export const CHROME = String.raw`<meta charset="utf-8">
   .fhead b { font-weight:600; flex:1; }
   .s-idle { color:var(--ok); }
   .s-busy { color:var(--accent); }
+  .s-queued { color:var(--warn); }
+  .job.queued { border-style:dashed; color:var(--dim); }
   .s-unknown { color:var(--dim); }
   /* The reason a host is degraded is the column this panel exists for, so it wraps in full
      rather than being clipped to the row width. */
@@ -942,6 +944,15 @@ function renderJobs() {
     // whose run it is more precisely than "theirs" ever did.
     if (r.state !== 'busy' || running[name]) continue;
     rows.push('<div class="job"><span class="s-busy">●</span><span>' + esc(name) + ' — ' + esc(r.detail || 'busy') + '</span></div>');
+  }
+  // Each Mac's queue, in drain order, directly under the running rows it waits behind. The
+  // fleet panel is where these are managed (cancel lives there); this list is the at-a-glance
+  // answer to "what is scheduled where", so a row is one line: host, what, how long waiting.
+  for (const name of Object.keys(fleetRows)) {
+    for (const q of fleetRows[name].queue || []) {
+      rows.push('<div class="job queued"><span class="s-queued">◌</span><span>' + esc(name) + ' — ' + esc(q.detail || q.jobId) + '</span>' +
+        '<span class="jmeta">queued</span></div>');
+    }
   }
   for (const id of Object.keys(hstates)) {
     if (hstates[id].state !== 'rendering') continue;

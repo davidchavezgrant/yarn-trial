@@ -897,6 +897,35 @@ test("renderJobs__ListsAnotherOperatorsRun__When__TheFleetProbeSeesOne", async (
 	assert.ok(!ui.nodes.jobs.innerHTML.includes("theirs"), "the redundant ownership badge stays gone");
 });
 
+test("renderJobs__ListsQueuedJobsUnderTheRunningOnes__When__AMacHasALine", async () => {
+	// The jobs list is the at-a-glance answer to "what is scheduled where": each Mac's queue
+	// renders in drain order under the running rows, visually distinct (dashed, ◌, "queued")
+	// so a stacked fleet reads at a glance. Management (cancel) stays in the fleet panel.
+	const rows = [
+		{
+			name: "mac1",
+			state: "busy",
+			detail: "david · Yarn · 2m 10s",
+			queue: [
+				{ jobId: "j-2", detail: "sam · explore Yarn · waiting 1m 04s" },
+				{ jobId: "j-3", detail: "eve · task Yarn · waiting 12s" },
+			],
+		},
+		{ name: "mac2", state: "busy", detail: "aman · Yarn · 9m 00s" },
+	];
+	const ui = mount({ loadFleet: async () => ({ rows, offers: [] }) });
+	await settle();
+	await ui.loadFleet();
+	const html = ui.nodes.jobs.innerHTML;
+	assert.match(html, /mac1 — sam · explore Yarn · waiting 1m 04s/);
+	assert.match(html, /mac1 — eve · task Yarn · waiting 12s/);
+	assert.ok(html.includes('class="job queued"'), "queued rows are visually distinct");
+	assert.match(html, /queued/);
+	// Order: every running row precedes every queued row, and drain order survives.
+	assert.ok(html.indexOf("aman · Yarn") < html.indexOf("sam · explore Yarn"), "queued rows render under the running ones");
+	assert.ok(html.indexOf("sam ·") < html.indexOf("eve ·"), "drain order preserved");
+});
+
 test("renderJobs__ListsTheRender__When__AHumanizeIsInFlight", async () => {
 	const ui = mount({
 		loadRuns: async () => [RUN],
