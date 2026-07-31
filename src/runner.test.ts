@@ -286,6 +286,24 @@ test("sweepOrphans__MarksJobOrphaned__When__PidIsGone", async () => {
 	});
 });
 
+test("listJobs__OrdersNewestFirst__When__ExploreAndTaskJobsCoexist", () => {
+	withTemp("yr-jobs-", (dir) => {
+		// `explore-` begins with a letter and letters outrank digits, so a raw lexicographic
+		// sort pinned every explore job above every task job regardless of age — `runnerctl
+		// logs` on an idle host streamed a week-old explore log instead of yesterday's run.
+		// Order must follow the timestamp portion of the id alone.
+		writeJob(job({ id: "explore-2026-07-23T10-00-00-000-yarn", kind: "explore" }), dir);
+		writeJob(job({ id: "2026-07-30T12-00-00-000-yarn" }), dir);
+		writeJob(job({ id: "explore-2026-07-30T13-00-00-000-yarn", kind: "explore" }), dir);
+
+		assert.deepEqual(listJobs(dir).map((j) => j.id), [
+			"explore-2026-07-30T13-00-00-000-yarn",
+			"2026-07-30T12-00-00-000-yarn",
+			"explore-2026-07-23T10-00-00-000-yarn",
+		]);
+	});
+});
+
 test("writeJob__NeverYieldsPartialRead__When__WriteIsInterrupted", () => {
 	withTemp("yr-jobs-", (dir) => {
 		const big = "x".repeat(200_000);
@@ -796,6 +814,69 @@ test("submit__RefusesAndFreesTheHost__When__TheProfileSwapFails", async () => {
 	});
 });
 
+/**
+ * createJob sits between acquire() and the spawn, and its registry write can fail on its own —
+ * ENOSPC, EACCES, or (here) something squatting on the jobs directory. The lease it would
+ * strand names pid=<the runner>, which is always alive, so reap() could never reclaim it and
+ * the Mac would advertise busy until someone restarted the runner.
+ */
+test("submit__FreesTheHost__When__TheJobRegistryWriteFails", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const prevData = process.env.YARN_RUNNER_DATA;
+		process.env.YARN_RUNNER_DATA = dir;
+		const spawner = fakeSpawner();
+		try {
+			const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
+			try {
+				// A file where the jobs directory should go: createJob's mkdir throws the way a
+				// full disk would — after the lease is taken, before any child exists.
+				fs.mkdirSync(path.join(dir, "out"), { recursive: true });
+				fs.writeFileSync(path.join(dir, "out", "jobs"), "not a directory");
+
+				const [res] = await request(runner.socketPath, "submit", { kind: "task", app: "Yarn", task: "t", operator: "dave" });
+				assert.equal(res.ok, false);
+				assert.equal(spawner.calls.length, 0, "nothing may spawn without a registry record");
+
+				const [status] = await request(runner.socketPath, "status");
+				assert.equal(status.state, "idle", "a failed registry write must not strand the lease");
+			} finally {
+				await runner.close();
+			}
+		} finally {
+			if (prevData === undefined) delete process.env.YARN_RUNNER_DATA;
+			else process.env.YARN_RUNNER_DATA = prevData;
+		}
+	});
+});
+
+test("submit__RecordsACrashAsFailed__When__TheChildDiesToAnUnrequestedSignal", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const prevData = process.env.YARN_RUNNER_DATA;
+		process.env.YARN_RUNNER_DATA = dir;
+		try {
+			const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: fakeSpawner().spawn });
+			try {
+				const [res] = await request(runner.socketPath, "submit", { kind: "task", app: "Yarn", task: "t", operator: "dave" });
+				assert.equal(res.ok, true);
+
+				// Nobody called stop. This is the SIGSEGV/OOM-kill shape, and recording it as
+				// "stopped" would file a crash under an operator's decision.
+				process.kill(res.pid, "SIGTERM");
+				const root = path.join(dir, "out", "jobs");
+				await waitFor("the exit to be finalised", () => readJob(res.jobId, root)?.state !== "running");
+				const rec = readJob(res.jobId, root);
+				assert.equal(rec?.state, "failed");
+				assert.equal(rec?.signal, "SIGTERM", "the record has to name which crash it was");
+			} finally {
+				await runner.close();
+			}
+		} finally {
+			if (prevData === undefined) delete process.env.YARN_RUNNER_DATA;
+			else process.env.YARN_RUNNER_DATA = prevData;
+		}
+	});
+});
+
 test("submit__IsRejected__When__AFlagArrivesAsSomethingOtherThanABoolean", async () => {
 	await withTempAsync("yr-serve-", async (dir) => {
 		const spawner = fakeSpawner();
@@ -918,6 +999,66 @@ test("startRunner__ReportsUnknownMethod__When__RequestIsNotAMethod", async () =>
 			assert.equal(res.ok, false);
 			assert.match(res.error, /unknown method/);
 			// Still serving: one bad request must not take down the process holding the grants.
+			const [after] = await request(runner.socketPath, "status");
+			assert.equal(after.state, "idle");
+		} finally {
+			await runner.close();
+		}
+	});
+});
+
+test("startRunner__KeepsTheTaskTextIntact__When__AChunkBoundarySplitsACharacter", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const spawner = fakeSpawner();
+		const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
+		let pid = 0;
+		try {
+			const task = "café ✓ — change the cursor";
+			const payload = Buffer.from(
+				`${JSON.stringify({ method: "submit", params: { kind: "task", app: "Yarn", task, operator: "dave" } })}\n`,
+				"utf8",
+			);
+			// Cut INSIDE the é. Decoding each chunk independently turns both halves into U+FFFD,
+			// and the run would execute — and report success — against corrupted task text.
+			const cut = payload.indexOf(Buffer.from("é", "utf8")) + 1;
+			const conn = net.createConnection({ path: runner.socketPath });
+			await new Promise<void>((resolve, reject) => {
+				conn.once("error", reject);
+				conn.once("connect", () => resolve());
+			});
+			conn.write(payload.subarray(0, cut));
+			await new Promise((r) => setTimeout(r, 25));
+			conn.write(payload.subarray(cut));
+			let buffer = "";
+			for await (const chunk of conn) buffer += (chunk as Buffer).toString("utf8");
+			const res = JSON.parse(buffer.trim().split("\n")[0]);
+			assert.equal(res.ok, true);
+			pid = res.pid;
+			assert.equal(spawner.calls[0].args.slice(-2)[0], task);
+		} finally {
+			if (pid) try { process.kill(-pid, "SIGKILL"); } catch {}
+			await runner.close();
+		}
+	});
+});
+
+test("startRunner__RefusesTheRequest__When__ItGrowsWithoutANewline", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const runner = await startRunner(dir, { ...noSwap, log: () => {} });
+		try {
+			const conn = net.createConnection({ path: runner.socketPath });
+			await new Promise<void>((resolve, reject) => {
+				conn.once("error", reject);
+				conn.once("connect", () => resolve());
+			});
+			// One byte past the cap and no newline anywhere: not a request, just growth. The
+			// runner must answer with an error frame and stop buffering, not hold it all.
+			conn.write(Buffer.alloc((1 << 20) + 1, 0x61));
+			let buffer = "";
+			for await (const chunk of conn) buffer += (chunk as Buffer).toString("utf8");
+			assert.match(buffer, /exceeded/);
+
+			// Still serving: the oversized peer cost itself its connection, nothing more.
 			const [after] = await request(runner.socketPath, "status");
 			assert.equal(after.state, "idle");
 		} finally {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DOM_ACT_TOOL, DOM_RULES, pickTab, viewportOrigin } from "./dom.js";
+import { DOM_ACT_TOOL, DOM_RULES, DomBackend, pickTab, viewportOrigin } from "./dom.js";
 
 const tab = (id: string, url: string, title = id) => ({ tab_id: id, url, title });
 
@@ -121,4 +121,84 @@ test("viewportOrigin__IgnoresAZeroSizedWebArea__When__ThePageHasNotRendered", ()
 test("viewportOrigin__ReturnsUndefined__When__NeitherSourceIsAvailable", () => {
 	// Skips the coordinate route entirely rather than clicking somewhere arbitrary.
 	assert.equal(viewportOrigin([], undefined), undefined);
+});
+
+/**
+ * A driver whose Nth snapshot call fails the way a live site fails a binding. Dispatches on
+ * `snapshot_format`: bind and rebind call get_browser_state WITHOUT it, reads carry it.
+ */
+function rebindableDriver(opts: { staleMessage: string }) {
+	let binds = 0;
+	let snapshotAttempts = 0;
+	const snapshotArgs: Array<Record<string, unknown>> = [];
+	const bindPayload = () => {
+		binds++;
+
+		return {
+			text: "",
+			structuredJson: JSON.stringify({
+				target_id: `t${binds}`,
+				binding_quality: "exact",
+				tabs: [{ tab_id: `tab-of-t${binds}`, title: "page", url: "https://x.example/" }],
+			}),
+		};
+	};
+
+	return {
+		snapshotArgs,
+		bindCount: () => binds,
+		act: async (req: { args: Record<string, unknown> }) => {
+			if (!("snapshot_format" in req.args)) return bindPayload();
+			snapshotAttempts++;
+			if (snapshotAttempts === 1) throw new Error(opts.staleMessage);
+			snapshotArgs.push(req.args);
+
+			return {
+				text: "",
+				structuredJson: JSON.stringify({
+					refs: [{ ref: "p1:1", role: "button", name: "Save", value: null, actions: ["click"], visibility: "in_viewport", frame: "" }],
+				}),
+			};
+		},
+	};
+}
+
+/** bind() and the rebind path narrate to the console; stub it for the same IPC reason as teardown.test.ts. */
+async function quietly<T>(fn: () => Promise<T>): Promise<T> {
+	const realLog = console.log;
+	console.log = () => {};
+	try {
+		return await fn();
+	} finally {
+		console.log = realLog;
+	}
+}
+
+test("DomBackend__RebindsAndRetries__When__TheBindingGoesStaleMidRun", async () => {
+	// Binding invalidation is routine on a live site — a redirect, an OAuth bounce, a tab
+	// dragged to another window — so one staleness error must cost a rebind, not the run.
+	const driver = rebindableDriver({ staleMessage: "driver error (browser_binding_stale): re-run get_browser_state" });
+	await quietly(async () => {
+		const backend = await DomBackend.bind(driver as never, { pid: 1, windowId: 2 });
+		const matches = await backend.find("Save");
+		assert.equal(matches[0]?.ref, "p1:1");
+		assert.equal(backend.rebinds, 1);
+		assert.equal(driver.bindCount(), 2);
+		// The retry must carry the ids the REBIND minted — retrying with the stale ones would
+		// just fail again with the same error.
+		assert.equal(driver.snapshotArgs[0].target_id, "t2");
+		assert.equal(driver.snapshotArgs[0].tab_id, "tab-of-t2");
+	});
+});
+
+test("DomBackend__PropagatesTheError__When__ItIsNotAStalenessError", async () => {
+	// Rebinding on an arbitrary failure would mask real faults behind a retry; only the
+	// driver's own staleness codes and prose earn the second attempt.
+	const driver = rebindableDriver({ staleMessage: "some unrelated driver failure" });
+	await quietly(async () => {
+		const backend = await DomBackend.bind(driver as never, { pid: 1, windowId: 2 });
+		await assert.rejects(() => backend.find("Save"), /some unrelated driver failure/);
+		assert.equal(backend.rebinds, 0);
+		assert.equal(driver.bindCount(), 1);
+	});
 });

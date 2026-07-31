@@ -389,6 +389,25 @@ test("fleetStatus__ReportsUnknown__When__RunnerIsMissingOrOutputIsNotJson", asyn
 	assert.match(rows[2].reason ?? "", /no pinned host key/);
 });
 
+test("fleetStatus__ReadsTheFrame__When__ABannerPrecedesIt", async () => {
+	// An MOTD or ssh warning ahead of the reply frame used to fail the whole-stdout parse,
+	// so a healthy idle host degraded to "unknown" — which `--host auto` reads as "no idle
+	// host in the fleet" while one is sitting there. Every other status reader already
+	// tolerates the banner; this pins fleetStatus to the same rule.
+	const rows = await fleetStatus({
+		inventory: inventory(host("mac1", "10.0.0.1")),
+		timeoutMs: 500,
+		run: async () => ({
+			code: 0,
+			stdout: `Last login: Tue Jul 29 08:14:02 on ttys001\n${JSON.stringify({ state: "idle", tccOk: true })}\n`,
+			stderr: "",
+		}),
+	});
+
+	assert.deepEqual(rows[0], { name: "mac1", reachable: true, state: "idle", tccOk: true });
+	assert.equal(pickIdleHost(rows)?.name, "mac1");
+});
+
 test("pickIdleHost__SkipsUnusableRows__When__FleetIsPartlyBusy", () => {
 	const rows: FleetRow[] = [
 		{ name: "mac1", reachable: true, state: "busy" },

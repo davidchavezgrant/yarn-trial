@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { appmapsDir, dataRoot, nativeDir, outDir, recipesDir, relToData, resourcesRoot } from "./paths.js";
+import { appmapsDir, appSlug, dataRoot, nativeDir, outDir, recipesDir, relToData, resourcesRoot } from "./paths.js";
 
 /**
  * The contract these tests defend is "no behaviour change in a checkout". paths.ts exists to
@@ -84,4 +84,15 @@ test("relToData__ReturnsInputUnchanged__When__PathIsOutsideDataRoot", () => {
 	withEnv({ YARN_RUNNER_DATA: "/tmp/root" }, () => {
 		assert.equal(relToData("/elsewhere/window.mp4"), "/elsewhere/window.mp4");
 	});
+});
+
+test("appSlug__FoldsPathSeparators__When__AppNameContainsSlash", () => {
+	// The slug is a single path component. A separator surviving into it turns every
+	// per-app artifact path into a write under a directory that does not exist — or, with
+	// enough dots, into one that escapes the data root.
+	assert.equal(appSlug("A/V Recorder"), "a-v-recorder");
+	assert.equal(appSlug("C:\\Legacy App"), "c-legacy-app");
+	assert.equal(appSlug("../../etc/passwd"), "..-..-etc-passwd");
+	// The names every existing artifact is filed under stay put.
+	assert.equal(appSlug("Notion Calendar"), "notion-calendar");
 });

@@ -16,6 +16,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { MotionTrack } from "./motion-types.js";
 
 export interface RenderResult {
@@ -45,7 +46,9 @@ export async function renderTrack(track: MotionTrack, framesDir: string, outPath
 	fs.mkdirSync(path.dirname(outPath), { recursive: true });
 	fs.writeFileSync(trackFile, JSON.stringify(track, null, 2));
 
-	const script = new URL("../scripts/render_cursor.py", import.meta.url).pathname;
+	// fileURLToPath, not .pathname: the URL form percent-encodes (a repo path with a space
+	// becomes %20) and the spawn fails ENOENT on a path that exists.
+	const script = fileURLToPath(new URL("../scripts/render_cursor.py", import.meta.url));
 	const compositor = spawn("python3", [script, trackFile, framesDir], {
 		stdio: ["ignore", "pipe", "inherit"],
 	});
@@ -72,6 +75,11 @@ export async function renderTrack(track: MotionTrack, framesDir: string, outPath
 		{ stdio: ["pipe", "inherit", "inherit"] },
 	);
 	compositor.stdout.pipe(encoder.stdin);
+	// ffmpeg dying mid-stream (bad frame size, full disk) closes its stdin while python is
+	// still writing; pipe() re-emits the EPIPE on encoder.stdin, and with no listener that is
+	// an uncaught exception killing the whole process instead of the "ffmpeg exited N"
+	// rejection below. The exit code carries the diagnosis; the write error adds nothing.
+	encoder.stdin.on("error", () => {});
 
 	const wait = (child: ReturnType<typeof spawn>, name: string): Promise<void> =>
 		new Promise((resolve, reject) => {
@@ -79,7 +87,15 @@ export async function renderTrack(track: MotionTrack, framesDir: string, outPath
 			child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`${name} exited ${code}`))));
 		});
 
-	await Promise.all([wait(compositor, "compositor"), wait(encoder, "ffmpeg")]);
+	try {
+		await Promise.all([wait(compositor, "compositor"), wait(encoder, "ffmpeg")]);
+	} catch (err) {
+		// Promise.all short-circuits on the first failure; the surviving sibling would linger
+		// blocked on a full pipe (or keep encoding a truncated stream) with nothing to reap it.
+		compositor.kill();
+		encoder.kill();
+		throw err;
+	}
 
 	return { outPath, frames: total, durationMs };
 }

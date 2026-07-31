@@ -74,6 +74,15 @@ test("livePaths__DropsTheIdentifier__When__ItContainsAPathSeparator", () => {
 	assert.deepEqual(livePaths({ name: "../../etc" }), []);
 });
 
+test("livePaths__ExcludesDotSegments__When__AppNameIsTraversal", () => {
+	// "Library/Application Support/.." IS ~/Library. An app named ".." — no separator, so the
+	// old filter passed it — would hand the swap the operator's entire Library to move into
+	// the profile store.
+	assert.deepEqual(livePaths({ name: ".." }), []);
+	assert.deepEqual(livePaths({ name: "." }), []);
+	assert.deepEqual(livePaths({ name: "Yarn", bundleId: ".." }).filter((p) => p.split("/").includes("..")), []);
+});
+
 test("capturePaths__ReturnsOnlyWhatExists__When__MostLocationsAreUnused", () => {
 	const dir = home("a");
 	assert.deepEqual(capturePaths({ name: "Yarn" }, dir), [HOME_REL]);
@@ -233,6 +242,35 @@ test("swapProfile__ContainsTheProfile__When__TheOperatorNameLooksLikeAPath", asy
 	const owner = Object.values(readOwners(root))[0];
 	assert.ok(!owner.includes(".."), `operator name escaped: ${owner}`);
 	assert.ok(profileDir(root, "../../etc", "yarn").startsWith(root));
+});
+
+/**
+ * The manifest is a plain file on disk that anything could have edited, and every path in it
+ * is fed to a recursive move joined against the home directory. An entry that traverses must
+ * be skipped — its data stays parked, which is the safe direction — never resolved.
+ */
+test("swapProfile__RefusesTheManifestEntry__When__ItEscapesTheProfileStore", async () => {
+	const h = home("bob-session");
+	const root = tmp();
+	await swapProfile({ app: "Yarn", operator: "bob", home: h, root, quit: quitter().quit });
+
+	// Alice's stored profile, built by hand the way a tampered one would look: one honest
+	// entry, one that walks out of her profile directory.
+	const mine = profileDir(root, "alice", "yarn");
+	fs.mkdirSync(path.join(mine, HOME_REL), { recursive: true });
+	fs.writeFileSync(path.join(mine, HOME_REL, "session.json"), "alice-session");
+	fs.writeFileSync(path.join(root, "escape-hatch"), "loot");
+	fs.writeFileSync(
+		path.join(mine, "manifest.json"),
+		JSON.stringify({ app: "Yarn", operator: "alice", storedAt: new Date().toISOString(), paths: ["../../escape-hatch", HOME_REL] }),
+	);
+
+	const back = await swapProfile({ app: "Yarn", operator: "alice", home: h, root, quit: quitter().quit });
+
+	assert.deepEqual(back.restored, [HOME_REL], "only the contained entry may move");
+	assert.equal(liveSession(h), "alice-session");
+	assert.equal(fs.readFileSync(path.join(root, "escape-hatch"), "utf8"), "loot", "the traversing source is untouched");
+	assert.equal(fs.existsSync(path.join(h, "..", "..", "escape-hatch")), false, "nothing landed outside the home directory");
 });
 
 test("readOwners__ReturnsEmpty__When__TheFileIsAbsent", () => {

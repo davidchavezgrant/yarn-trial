@@ -128,6 +128,13 @@ def sample_cursor(samples, t_ms):
         return None
     if t_ms <= samples[0]["tMs"]:
         return samples[0]
+    # Clamp the tail as well as the head. The timeline runs past the last action, and without
+    # this the final pair extrapolates (f > 1): the cursor drifts off along the last segment's
+    # direction for the whole post-click tail. Currently masked only because the producer
+    # happens to end tracks with two co-located samples — a contract this renderer must not
+    # depend on.
+    if t_ms >= samples[-1]["tMs"]:
+        return samples[-1]
     lo, hi = 0, len(samples) - 1
     while lo < hi - 1:
         mid = (lo + hi) // 2

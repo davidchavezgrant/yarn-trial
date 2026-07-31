@@ -126,6 +126,19 @@ export function exitCodeFor(summary: { attempted: number; failed: number }): num
 	return summary.attempted > 0 && summary.failed > 0 ? 1 : 0;
 }
 
+/**
+ * Artifacts in out/runs that belong to this exact stamp — run log, journal, receipts.
+ *
+ * An empty journal used to be the end of the story: a typo'd or truncated stamp built a path
+ * to a file that never existed, read as [], and the CLI printed "nothing to clean up" with
+ * exit 0 — indistinguishable from a genuinely clean run, for a run it never looked at. A
+ * fleet sweep that passes a job id instead of a stamp would poison the next job on that Mac
+ * while reporting success. Prefixes deliberately do NOT count: they name a different run.
+ */
+export function stampArtifacts(names: string[], stamp: string): string[] {
+	return names.filter((n) => n.startsWith(`${stamp}.`));
+}
+
 async function main(): Promise<void> {
 	const argv = process.argv.slice(2);
 	const dryRun = argv.includes("--dry-run");
@@ -147,6 +160,23 @@ async function main(): Promise<void> {
 	const journalPath = `${OUT}/runs/${stamp}.journal.jsonl`;
 	const journal = readJournal(journalPath);
 	if (journal.length === 0) {
+		// "Nothing to clean" is only a truthful answer for a run that EXISTS. A stamp nothing
+		// matches is a typo or a job id, and exiting 0 on it reports a cleanup that never
+		// looked at anything.
+		let names: string[] = [];
+		try {
+			names = fs.readdirSync(`${OUT}/runs`);
+		} catch {}
+		if (stampArtifacts(names, stamp).length === 0) {
+			console.error(`no run artifacts match stamp ${stamp} under ${OUT}/runs — check the stamp (a prefix or job id is not enough).`);
+			const recent = names
+				.filter((n) => n.endsWith(".journal.jsonl"))
+				.sort()
+				.slice(-5)
+				.map((n) => n.replace(/\.journal\.jsonl$/, ""));
+			if (recent.length) console.error(`recent journals:\n  ${recent.join("\n  ")}`);
+			process.exit(1);
+		}
 		// Not an error. Most runs change nothing worth journalling, and a caller sweeping a
 		// directory of stamps should not have to distinguish "clean" from "broken".
 		console.log(`no mutations recorded for ${stamp} (${journalPath}) — nothing to clean up`);

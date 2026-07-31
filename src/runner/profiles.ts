@@ -56,7 +56,10 @@ export interface AppIdentity {
  * cold start; missing one that held a session cookie costs the isolation this module exists for.
  */
 export function livePaths(id: AppIdentity): string[] {
-	const keys = [id.name, id.bundleId].filter((k): k is string => !!k && !k.includes("/"));
+	// No separators, and no `.`/`..`: the key becomes one path segment under ~/Library, and an
+	// app named ".." would make `Library/Application Support/..` — ~/Library itself — a
+	// candidate for the swap's recursive move.
+	const keys = [id.name, id.bundleId].filter((k): k is string => !!k && !k.includes("/") && k !== "." && k !== "..");
 	const out: string[] = [];
 	for (const key of keys) {
 		out.push(
@@ -184,6 +187,20 @@ function readManifest(dir: string): ProfileManifest | undefined {
 }
 
 /**
+ * A manifest entry is trusted at exactly one point — the restore, where it is joined to both
+ * the profile store and the home directory and fed to a recursive move. The manifest is a
+ * plain file on disk that anything could have edited, so an absolute entry or one with `.`
+ * or `..` segments is refused rather than resolved: a `Library/../.ssh` entry restored
+ * "into" home would overwrite real credentials with store contents, and the reverse move on
+ * the next stash would carry them out. Fresh `livePaths` output always passes.
+ */
+function safeManifestPath(rel: unknown): rel is string {
+	if (typeof rel !== "string" || !rel || path.isAbsolute(rel)) return false;
+
+	return rel.split("/").every((seg) => seg !== "" && seg !== "." && seg !== "..");
+}
+
+/**
  * Move a path, falling back to copy-and-delete.
  *
  * `rename` is the right call — atomic, and instant regardless of how large a browser cache has
@@ -261,6 +278,9 @@ export async function swapProfile(opts: SwapOptions): Promise<ProfileSwap> {
 	// starts factory-fresh — which is the sign-in case, and is a success, not a fallback.
 	const restored: string[] = [];
 	for (const rel of stored?.paths ?? []) {
+		// Skipped, not fatal: the entry's data stays parked in the store, which is the safe
+		// direction, and the rest of the profile still comes back.
+		if (!safeManifestPath(rel)) continue;
 		const from = path.join(mine, rel);
 		if (!fs.existsSync(from)) continue;
 		move(from, path.join(home, rel));

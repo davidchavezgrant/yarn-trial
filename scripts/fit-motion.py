@@ -225,6 +225,11 @@ def extract_keys(path):
     for e in keys:
         ident = (e.get("keyType"), e.get("keySymbol"))
         if e["keyboardEventType"] == "down":
+            # Repeats are synthetic downs from the held key; overwriting the original press time
+            # with each one shrinks the measured hold to last-repeat->up. The IKI path above
+            # already filters them for the same reason.
+            if e.get("isARepeat"):
+                continue
             pending_keys[ident] = e["time"]["seconds"]
         elif ident in pending_keys:
             held = e["time"]["seconds"] - pending_keys.pop(ident)

@@ -21,8 +21,12 @@ export interface UiBus {
 	 */
 	ground(app: string, host: string, url?: string): Promise<string | undefined>;
 	run(opts: { app: string; task: string; record: boolean; noVision: boolean; host: string; url?: string }): Promise<string | undefined>;
-	/** Ends the run wherever it is. Closing the window only detaches; a remote job survives that. */
-	stop(): void;
+	/**
+	 * Ends the run wherever it is. Closing the window only detaches; a remote job survives that.
+	 * Resolves to an error string when the stop could not be delivered — a failed stop rendered
+	 * as nothing is an operator watching a run they believe they ended.
+	 */
+	stop(): Promise<string | undefined>;
 	/** Selector contents: always `local`, plus `auto` and the inventory when a fleet is configured. */
 	loadHosts(): Promise<{ hosts: string[]; error?: string }>;
 	/** One probe of every host. Never rejects — a dead fleet is an `error` string or degraded rows. */
@@ -82,6 +86,12 @@ export const CHROME = String.raw`<meta charset="utf-8">
   main { display:grid; grid-template-columns:250px 1fr 330px; gap:0; height:calc(100vh - 51px); }
   .col { padding:16px; overflow:auto; }
   .col + .col { border-left:1px solid var(--line); }
+  /* The middle column is a flex stack so #log can be its own scrollbox. The autoscroll pin
+     reads and writes the LOG's scroll geometry; if the log merely grows and the column does
+     the scrolling, scrollTop clamps to 0, scroll events fire on the column and never bubble,
+     and the pin can neither follow nor release. */
+  .col.mid { display:flex; flex-direction:column; }
+  .col.mid > * { flex:0 0 auto; }
   label { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); margin:0 0 6px; }
   input, textarea, button, select { font:inherit; color:var(--fg); background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:8px 10px; width:100%; }
   input:focus, textarea:focus, select:focus { outline:none; border-color:var(--accent); }
@@ -104,7 +114,7 @@ export const CHROME = String.raw`<meta charset="utf-8">
   button.go:disabled { opacity:.5; cursor:not-allowed; }
   button.stop { margin-top:8px; background:transparent; color:var(--bad); border-color:#5c3230; cursor:pointer; }
   #warn { margin-top:10px; padding:9px 11px; border-radius:6px; background:#3a2f1c; border:1px solid #6b552c; color:#f0d9a8; font-size:12.5px; display:none; }
-  #log { font:12.5px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; word-break:break-word; }
+  #log { font:12.5px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; word-break:break-word; flex:1 1 0; min-height:80px; overflow-y:auto; }
   #log div { padding:1px 0; }
   .t-step { color:var(--accent); }
   .t-ok { color:var(--ok); }
@@ -167,7 +177,7 @@ export const CHROME = String.raw`<meta charset="utf-8">
     <input id="q" placeholder="Search apps…" autocomplete="off">
     <ul id="apps"></ul>
   </div>
-  <div class="col">
+  <div class="col mid">
     <div id="urlrow" style="display:none">
       <label for="url">Website to drive</label>
       <input id="url" placeholder="https://www.notion.so" autocomplete="off" spellcheck="false">
@@ -218,13 +228,23 @@ let offers = [], fleetRows = {}, dismissed = new Set(), probing = false;
 // read. 'paints' counts repaints so the message can also retire: without that it outlived its
 // moment, and "opening mac2…" sat under the panel for the rest of the session.
 let signinMsg = null;
-// The last run that turned around at the door — {app, host, msg} — or null.
+// The host whose sign-in is mid-flight. Disabling the clicked button was not enough: the very
+// repaint that shows "opening mac2…" rebuilds the row from markup with the button enabled
+// again, and a second click double-opens screen shares. The rebuild consults this instead.
+let signinBusy = null;
+// The last run that turned around at the door — {app, host, msg, busy} — or null.
 //
 // Deliberately NOT a judgement about what was on screen: the agent reports "not at home and I do
 // not know why", and guessing "that looks like a login" from the controls it listed would be
 // app-specific logic. The remedy is the same for every cause, so the panel offers it for every
 // cause: put a human in front of that Mac.
-let unready = null;
+//
+// The generation counter is for the panel's own fix flow, whose signinWait leg resolves when a
+// person finishes an SSO round trip — minutes later. By then this panel can be about a NEWER
+// refusal, or gone because a new run started; a continuation still holding the old target must
+// not write over that. Every write from outside the flow bumps the generation, and the flow
+// re-checks it before each write.
+let unready = null, unreadyGen = 0;
 
 const esc = (s) => String(s == null ? '' : s).replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
 
@@ -262,6 +282,13 @@ function selUrl() {
   // A browser is only a target once it has somewhere to go, so the URL box wins for one.
   if (hit && isBrowser(hit.name)) return urlBoxValue();
   if (hit && hit.kind === 'web') return hit.url;
+  // A fresh web selection is never in 'apps' — its URL was stashed at selection time.
+  // Re-deriving it from the search box let an edit to the box silently strip the URL from a
+  // selection that still read "Run on www.notion.so": the dispatch then treated the host name
+  // as a Mac app. The host check keeps a browser's saved site from leaking in when the apps
+  // list failed to load and the browser flag with it.
+  const saved = sel && uiState.byApp[sel] && uiState.byApp[sel].url;
+  if (saved) { try { if (new URL(saved).host === sel) return saved; } catch {} }
   const typed = typedUrl();
 
   return typed && new URL(typed).host === sel ? typed : undefined;
@@ -344,7 +371,9 @@ async function loadApps() {
   } catch (e) {
     // An unreachable Mac used to leave "Searching mac2…" up forever with nothing in the log
     // to say the request died rather than being slow — and the rejection escaped unhandled.
-    if (asked === host) { el('q').placeholder = 'Search apps…'; line('✗ listing apps on ' + asked + ': ' + errText(e)); }
+    // Owner is the SELECTION, like the note below: defaulting would file this under whatever
+    // app is mid-run, invisibly, instead of the pane the operator is looking at.
+    if (asked === host) { el('q').placeholder = 'Search apps…'; line('✗ listing apps on ' + asked + ': ' + errText(e), sel); }
 
     return;
   }
@@ -384,8 +413,10 @@ async function restore() {
 // resolve. Called after every loadApps(), which is the moment 'apps' becomes trustworthy.
 function dropStaleSelection() {
   if (!sel || apps.some(a => a.name === sel)) return;
-  // A typed URL is a legitimate selection that is never in 'apps'; keep it.
+  // A typed URL is a legitimate selection that is never in 'apps'; keep it. The stashed URL
+  // counts the same way — the selection stays a valid web target after the search box moves on.
   if (typedUrl() && new URL(typedUrl()).host === sel) return;
+  if (selUrl()) return;
   // A run in flight owns the pane and its own app name; resolve the mismatch when it ends.
   if (running) return;
   const gone = sel;
@@ -397,12 +428,20 @@ function dropStaleSelection() {
   line('· ' + gone + ' is not on ' + host + ' — pick a target from the list', null);
 }
 
-function selectApp(name) {
-  if (name === sel) return;
+function selectApp(name, url) {
+  // Re-clicking the selected entry after retyping its URL is a real re-target, not a no-op.
+  if (name === sel) {
+    if (url && stateFor(name).url !== url) { stateFor(name).url = url; el('url').value = url; check(); flush(); }
+    return;
+  }
   // Keep what was typed for the app being left — both fields, or switching to Chrome and back
   // loses the site you had already chosen.
   if (sel) { stateFor(sel).task = el('task').value; stateFor(sel).url = el('url').value.trim(); }
   sel = name;
+  // A web entry's URL becomes part of the selection HERE, not re-derived from the search box
+  // later: the box is free to change after the click, and a selection that silently loses its
+  // URL dispatches the host name as a Mac app.
+  if (url) stateFor(name).url = url;
   el('task').value = stateFor(name).task;
   el('url').value = stateFor(name).url || '';
   renderLog(name);
@@ -423,13 +462,16 @@ function render() {
     ? [{ name: typedHost, grounded: false, running: false, kind: 'web', url: typed }]
     : [];
   el('apps').innerHTML = [...fresh, ...hits].map(a =>
-    '<li data-n="' + encodeURIComponent(a.name) + '" class="' + (a.name === sel ? 'sel' : '') + '">' +
+    // data-u rides along for web entries so the URL is captured AT the click. The fresh entry
+    // exists only in this markup — nothing else remembers what was typed once the box changes.
+    '<li data-n="' + encodeURIComponent(a.name) + '"' + (a.kind === 'web' && a.url ? ' data-u="' + encodeURIComponent(a.url) + '"' : '') +
+    ' class="' + (a.name === sel ? 'sel' : '') + '">' +
     '<span style="flex:1">' + esc(a.name) + '</span>' +
     (a.kind === 'web' ? '<span class="badge w">web</span>' : '') +
     (a.grounded ? '<span class="badge g">grounded</span>' : '') +
     (a.running ? '<span class="badge r">open</span>' : '') + '</li>').join('');
   for (const li of el('apps').children) {
-    li.onclick = () => selectApp(decodeURIComponent(li.dataset.n));
+    li.onclick = () => selectApp(decodeURIComponent(li.dataset.n), li.dataset.u ? decodeURIComponent(li.dataset.u) : undefined);
   }
 }
 
@@ -516,6 +558,12 @@ function trimLog() {
 // measuring — trim and scroll — coalesces.
 let paintQueued = false;
 function schedulePaint() {
+  // A hidden window gets no animation frames — Electron throttles rAF to zero — so during
+  // exactly the workload the cap exists for (a 40-minute pass running while the operator does
+  // something else) the queued paint never runs and appends grow the DOM without bound. Trim
+  // synchronously once the pane is well past the cap; the deferred paint still handles the
+  // common visible case without per-line reflow.
+  if (el('log').children.length > LOG_LINES_KEPT * 2) trimLog();
   if (paintQueued) return;
   paintQueued = true;
   const paint = () => {
@@ -578,7 +626,7 @@ const bus = window.__bus;   // {onStarted,onLine,onDone,loadApps,loadState,saveS
 bus.onStarted((d) => {
   running = true; runningApp = d.app; check(); renderAttach();
   // The previous refusal is answered by trying again, whatever the outcome of the retry.
-  unready = null; renderUnready();
+  unready = null; unreadyGen++; renderUnready();
   el('stop').style.display = 'block';
   el('status').textContent = 'running: ' + d.app;
   // A new run replaces that app's terminal rather than appending to the last one.
@@ -596,6 +644,7 @@ bus.onDone((d) => {
   // 3 is the agent's "not at home, reason unknown" — the one exit code with a remedy a person
   // can act on from here. Everything else is a run that ran.
   unready = d.code === 3 ? { app: d.app, host: d.host, msg: null } : null;
+  unreadyGen++;
   renderUnready();
   runningApp = null;
   flush();
@@ -620,7 +669,8 @@ async function loadHostList() {
   el('host').innerHTML = list.map(h => '<option value="' + esc(h) + '"' + (h === host ? ' selected' : '') + '>' + esc(h) + '</option>').join('');
   // An inventory that exists but does not parse is loud on purpose: silently offering only
   // 'local' looks exactly like having no fleet, and sends the operator to the wrong problem.
-  if (info && info.error) line('✗ hosts.json: ' + info.error);
+  // Filed under the selection — this is about the window, not about whatever run is in flight.
+  if (info && info.error) line('✗ hosts.json: ' + info.error, sel);
   check();
   // The saved host arrives after boot's loadApps() has already asked, so re-ask once it is
   // known. Without this the window opens showing THIS Mac's apps under a selector reading
@@ -672,7 +722,7 @@ async function loadFleet() {
           : r.tccOk === false ? '<span class="bad" title="Accessibility / Screen Recording not granted">no TCC</span>' : '') +
         // Screen sharing, not a run: safe while the host is busy, and the only way past an app
         // that wants a human to type a password into it.
-        '<button class="mini" data-signin="' + esc(r.name) + '" title="Open this Mac over screen sharing to sign in by hand">Sign in</button>' +
+        '<button class="mini" data-signin="' + esc(r.name) + '"' + (signinBusy === r.name ? ' disabled' : '') + ' title="Open this Mac over screen sharing to sign in by hand">Sign in</button>' +
       '</div>' +
       (r.detail ? '<div class="fdetail">' + esc(r.detail) + '</div>' : '') +
       (r.reason ? '<div class="freason">' + esc(r.reason) + '</div>' : '') +
@@ -727,7 +777,9 @@ function renderUnready() {
       ', so the run stopped before touching anything. Put it back at its home screen — signing in, if that is what it is asking for — then run again.</div>' +
     (unready.msg ? '<div class="fdetail">' + esc(unready.msg) + '</div>' : '') +
     (unready.host && unready.host !== 'local'
-      ? '<button class="mini" data-fix="1">Open ' + esc(unready.host) + '</button>'
+      // Disabled while its own flow is in flight: renderUnready() rebuilds this button on
+      // every progress message, and a rebuilt-enabled button double-opens screen shares.
+      ? '<button class="mini" data-fix="1"' + (unready.busy ? ' disabled' : '') + '>Open ' + esc(unready.host) + '</button>'
       : '');
 }
 
@@ -845,7 +897,9 @@ async function loadRuns(force) {
   }
 }
 
-el('q').addEventListener('input', render);
+// check() too: a typed-URL selection reads through the box (typedUrl), so editing it can
+// change what Run would dispatch — the button must not keep a label the box no longer backs.
+el('q').addEventListener('input', () => { render(); check(); });
 // Same coverage as the task box: 'input' alone misses paste and IME paths, and the Run button
 // must not stay enabled next to a URL that will be refused.
 for (const ev of ['input', 'change', 'keyup', 'paste']) el('url').addEventListener(ev, () => setTimeout(() => { check(); saveSoon(); }, 0));
@@ -880,7 +934,17 @@ async function dispatchOnce(id, send) {
 
 el('go').onclick = () => dispatchOnce('go', () =>
   bus.run({ app: sel, task: el('task').value.trim(), record: el('record').checked, noVision: el('novision').checked, host: host, url: selUrl() }));
-el('stop').onclick = () => bus.stop();
+// A stop that could not be delivered must land in the pane: silence here is an operator
+// watching a run they believe they ended. The button stays up — the run really is still going.
+el('stop').onclick = async () => {
+  let err;
+  try {
+    err = await bus.stop();
+  } catch (e) {
+    err = errText(e);
+  }
+  if (err) line('✗ stop failed: ' + err);
+};
 el('refresh').onclick = () => loadRuns(true);
 el('ground').onclick = () => dispatchOnce('ground', () => bus.ground(sel, host, selUrl()));
 // loadApps too: the list is per-host, so switching machines must re-ask rather than leave the
@@ -891,8 +955,11 @@ el('fleetrefresh').onclick = () => loadFleet();
 // The selected app rides along so the Mac opens with it already in front of you.
 el('fleet').onclick = async (e) => {
   const b = e.target.closest ? e.target.closest('button[data-signin]') : null;
-  if (!b) return;
+  if (!b || signinBusy) return;
+  // b.disabled alone does not survive the repaint two lines down — the row is rebuilt from
+  // markup. signinBusy is what keeps the rebuilt button disabled until the flow settles.
   b.disabled = true;
+  signinBusy = b.dataset.signin;
   signinMsg = { ok: true, text: 'opening ' + b.dataset.signin + '…', paints: 0 };
   loadFleet();
   let r;
@@ -901,6 +968,7 @@ el('fleet').onclick = async (e) => {
   } catch (err) {
     r = { ok: false, message: errText(err) };
   }
+  signinBusy = null;
   signinMsg = { ok: r.ok, text: r.message, paints: 0 };
   loadFleet();
 };
@@ -909,19 +977,25 @@ el('fleet').onclick = async (e) => {
 // whatever happens to be selected in the list on the left.
 el('unready').onclick = async (e) => {
   const b = e.target.closest ? e.target.closest('button[data-fix]') : null;
-  if (!b || !unready) return;
+  if (!b || !unready || unready.busy) return;
   const target = { app: unready.app, host: unready.host };
-  b.disabled = true;
-  unready = { app: target.app, host: target.host, msg: 'opening ' + target.host + '…' };
-  renderUnready();
+  // The generation this flow owns. A new run or a newer refusal bumps unreadyGen, and every
+  // write below re-checks it first: a signinWait leg resolving minutes later must not
+  // reinstate a panel about a refusal the operator has already moved past.
+  const gen = unreadyGen;
+  const owns = () => unreadyGen === gen;
+  const show = (msg, busy) => { unready = { app: target.app, host: target.host, msg: msg, busy: busy }; renderUnready(); };
+  show('opening ' + target.host + '…', true);
   let r;
   try {
     r = await bus.signin(target.host, target.app || undefined);
   } catch (err) {
     r = { ok: false, message: errText(err) };
   }
-  unready = { app: target.app, host: target.host, msg: r.message };
-  renderUnready();
+  if (!owns()) return;
+  // Still busy while the wait leg runs: the screen share is open and a second Open would
+  // stack another viewer on top of it.
+  show(r.message, !!r.watch);
   loadFleet();
   if (!r.watch) return;
 
@@ -933,8 +1007,9 @@ el('unready').onclick = async (e) => {
   } catch (err) {
     done = { ok: false, message: errText(err) };
   }
+  if (!owns()) return;
   if (done.ok) { unready = null; renderUnready(); line('✓ ' + done.message); }
-  else { unready = { app: target.app, host: target.host, msg: done.message }; renderUnready(); }
+  else show(done.message, false);
   loadFleet();
 };
 // Delegated: the offer list is rebuilt on every probe, so per-button handlers would be

@@ -76,8 +76,16 @@ export const EMPTY: DomEnrichment = { byFrame: new Map(), rows: 0, unavailable: 
 /**
  * Frame geometry is the only identifier both walks observe: element_index is per-walk
  * ordering and the two walks visit different node sets, so indices are not comparable.
+ *
+ * The sidecar emits whole points — Swift's `.rounded()`, half away from zero — so the
+ * driver's raw frame values must round the same way before keying, or any sub-point AX
+ * coordinate silently unjoins its element (it just stays anonymous, and the measured join
+ * rate holds only while driver frames happen to be integral). `Math.round` alone is not
+ * that rounding: it takes -0.5 to 0 where Swift takes it to -1.
  */
-const frameKey = (x: number, y: number, w: number, h: number) => `${x},${y},${w},${h}`;
+const round = (n: number) => Math.sign(n) * Math.round(Math.abs(n));
+const frameKey = (x: number, y: number, w: number, h: number) =>
+	`${round(x)},${round(y)},${round(w)},${round(h)}`;
 
 /**
  * Class lists are noisy in both directions: framework chrome (`RootView`, `ClientView`)

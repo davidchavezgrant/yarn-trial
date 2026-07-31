@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { openApp } from "../appctl.js";
 import { sidecarStatus } from "../axdom.js";
 import { screenIsLocked } from "../harness.js";
@@ -76,6 +77,31 @@ const RESTART_DELAY_MS = 250;
  * mid-dialog with, and AX calls against those are exactly the ones that block forever.
  */
 const READY_PROBE_MS = 45_000;
+/**
+ * Cap on one request line. A submit spec is a few KiB even with a long task; anything growing
+ * past this without a newline is not a request, and an unbounded buffer would hand whatever
+ * can write to the socket this process's memory.
+ */
+const MAX_REQUEST_BYTES = 1 << 20;
+
+/**
+ * Serialises every profile swap in this process. The lease serialises JOBS, but `signin`
+ * deliberately checks the lease without taking it (see the note on `signin`), so nothing else
+ * stops a signin racing a submit — or a second signin — into `swapProfile`, which awaits a
+ * quit of the target app for many seconds mid-swap. Two interleaved swaps both read
+ * owners.json before either writes it: the loser stashes nothing and writes a manifest with
+ * `paths: []`, stranding the previous owner's profile in the store forever, and `move()`'s
+ * rm-before-rename can delete the winner's just-restored live profile. One chain, no
+ * reordering — a swap enters behind whatever swap is already in flight, failures included.
+ */
+let profileSwapChain: Promise<unknown> = Promise.resolve();
+
+function withProfileLock<T>(fn: () => Promise<T>): Promise<T> {
+	const r = profileSwapChain.then(fn, fn);
+	profileSwapChain = r.then(() => undefined, () => undefined);
+
+	return r;
+}
 
 /** First non-empty line, for turning a child's noise into one reportable sentence. */
 function firstLineOf(text: string): string {
@@ -195,14 +221,16 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 	const stopping = new Set<string>();
 	const sockets = new Set<net.Socket>();
 
-	function finalise(id: string, state: JobRecord["state"], exitCode: number | null): void {
-		const rec = readJob(id, root);
-		if (!rec || rec.state !== "running") return;
-		updateJob(id, { state, exitCode, endedAt: new Date().toISOString() }, root);
+	function finalise(id: string, state: JobRecord["state"], exitCode: number | null, signal?: string): void {
+		// Ahead of the terminal-record check: a job another path already finalised still has to
+		// drop its in-memory tracking here, or the `stopping` entry outlives the job it names.
 		children.delete(id);
 		stopping.delete(id);
+		const rec = readJob(id, root);
+		if (!rec || rec.state !== "running") return;
+		updateJob(id, { state, exitCode, endedAt: new Date().toISOString(), ...(signal ? { signal } : {}) }, root);
 		release(runnerDir, id);
-		log(`job ${id} ${state}${exitCode === null ? "" : ` (exit ${exitCode})`}`);
+		log(`job ${id} ${state}${exitCode === null ? "" : ` (exit ${exitCode})`}${signal ? ` (${signal})` : ""}`);
 	}
 
 	/**
@@ -292,14 +320,24 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			};
 		if (claim.reclaimed) log(`reclaimed lease from dead pid ${claim.reclaimed.pid} (job ${claim.reclaimed.jobId})`);
 
-		const job = createJob({ id, kind, app, task, operator, record }, root);
+		// The registry write itself can fail — ENOSPC, EACCES — and handle()'s generic catch
+		// knows nothing about the lease. Left held it names pid=<this runner>, which is always
+		// alive, so reap() never reclaims it and the host stays busy until a runner restart.
+		let job: JobRecord;
+		try {
+			job = createJob({ id, kind, app, task, operator, record }, root);
+		} catch (e) {
+			release(runnerDir, id);
+			throw e;
+		}
 
 		// Under the lease and before the spawn. Under, because two operators swapping the same
 		// app's data at once would interleave two sets of directory moves; before, because the
-		// agent reads the app's state the moment it starts.
+		// agent reads the app's state the moment it starts. The lock, not the lease, is what
+		// serialises this against `signin`'s swap — signin never takes the lease.
 		let swap: ProfileSwap;
 		try {
-			swap = await swapProfileFor(app, operator);
+			swap = await withProfileLock(() => swapProfileFor(app, operator));
 		} catch (e) {
 			// Refuse rather than continue. A failed swap means the app may still hold the previous
 			// operator's session, and a demo recorded against someone else's account is a worse
@@ -337,8 +375,11 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		adopt(id, spawned.pid, runnerDir);
 		children.set(id, spawned);
 		spawned.child.on("exit", (code, signal) => {
-			const stopped = stopping.has(id) || signal !== null;
-			finalise(id, stopped ? "stopped" : code === 0 ? "done" : "failed", code);
+			// Only a stop that was ASKED for reads as "stopped". A SIGSEGV or an OOM kill also
+			// arrives as a signal, and filing those under an operator stop hides the crash; an
+			// unrequested signal is a failure, with the signal's name kept in the record.
+			const stopped = stopping.has(id);
+			finalise(id, stopped ? "stopped" : code === 0 ? "done" : "failed", code, signal ?? undefined);
 		});
 		log(`job ${id} started: ${kind} ${app} (pid ${spawned.pid}, operator ${operator})`);
 
@@ -395,9 +436,12 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 				elapsedSec: holder.heldSec,
 			};
 
+		// Behind the swap lock like submit's, and for a sharper reason here: this path holds no
+		// lease at all, so without the lock a signin racing a submit (or another signin) would
+		// interleave two sets of directory moves — see the note on `withProfileLock`.
 		let swap: ProfileSwap;
 		try {
-			swap = await swapProfileFor(app, operator);
+			swap = await withProfileLock(() => swapProfileFor(app, operator));
 		} catch (e) {
 			// Refuse. Signing in on top of the wrong profile is the exact outcome this verb exists
 			// to prevent, so a swap that did not happen must not be followed by a launch.
@@ -475,6 +519,10 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 	}
 
 	function stop(params: Params): RunnerResponse {
+		// Defaulting to the current lease holder is a CLI convenience — `runnerctl stop` on the
+		// host means "stop whatever this Mac is doing". A controller acting for one operator must
+		// always pass an explicit jobId: in the window before its own dispatch reply arrives, the
+		// current holder may be someone else's run entirely.
 		const id = typeof params.jobId === "string" ? params.jobId : currentJobId();
 		if (!id) return { ok: false, error: "nothing is running" };
 		const rec = readJob(id, root);
@@ -763,15 +811,29 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		sockets.add(conn);
 		conn.on("close", () => sockets.delete(conn));
 		conn.on("error", () => conn.destroy());
+		// StringDecoder, not toString per chunk: the request is UTF-8 off a stream, and a chunk
+		// boundary landing inside a multi-byte character would decode each half as U+FFFD — a
+		// submit spec big enough to straddle chunks would run with silently corrupted task text.
+		// The same rule streamPump and dispatch.follow already treat as load-bearing.
+		const decoder = new StringDecoder("utf8");
 		let buffer = "";
 		let served = false;
 		conn.on("data", (data) => {
-			buffer += data.toString("utf8");
+			// One request per connection: `ctl` opens, asks, reads, exits. Once served, nothing
+			// more is buffered — a `logs --follow` stream must not be interleaved with replies,
+			// and a peer that keeps writing must not grow this process's memory.
+			if (served) return;
+			buffer += decoder.write(data);
+			if (buffer.length > MAX_REQUEST_BYTES) {
+				served = true;
+				buffer = "";
+				send(conn, { ok: false, error: `request exceeded ${MAX_REQUEST_BYTES} bytes before a newline` });
+				conn.end();
+
+				return;
+			}
 			const nl = buffer.indexOf("\n");
-			// One request per connection: `ctl` opens, asks, reads, exits. Ignoring anything
-			// after the first line keeps a `logs --follow` stream from being interleaved with
-			// replies to requests that arrived while it was pumping.
-			if (nl < 0 || served) return;
+			if (nl < 0) return;
 			served = true;
 			handle(conn, buffer.slice(0, nl));
 		});

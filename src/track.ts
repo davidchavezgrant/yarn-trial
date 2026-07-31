@@ -387,9 +387,6 @@ const SETTLE_FRAMES = 6;
  */
 export const DEPART_AFTER_MS = 250;
 
-/** Ceiling on how long the pointer waits at its destination before clicking. */
-export const MAX_LINGER_MS = 900;
-
 /** Below this a frame counts as motionless, for trimming the spring's spin-up. Pixels. */
 const STILL_PX = 0.5;
 
@@ -801,8 +798,12 @@ export function toOutputMs(
 ): number {
 	if (plan.length === 0) return 0;
 	for (let i = 0; i < plan.length; i++) {
-		const start = frameTimes[i];
-		const end = i + 1 < frameTimes.length ? frameTimes[i + 1] : start + GAP_BEAT_MS;
+		// By the entry's OWN frame index, not the loop position: buildFramePlan's keepFrom can
+		// skip leading frames, after which plan[i].frameIndex > i and positional indexing would
+		// map every instant against the wrong frame's real interval.
+		const idx = plan[i].frameIndex;
+		const start = frameTimes[idx];
+		const end = idx + 1 < frameTimes.length ? frameTimes[idx + 1] : start + GAP_BEAT_MS;
 		if (epochMs < start) return plan[i].startMs;
 		if (epochMs <= end) {
 			if (anchorToEnd) return Math.max(plan[i].startMs, plan[i].endMs - CLICK_LEAD_MS);
@@ -998,7 +999,26 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 					height: Math.round(((turn.captureWidth ?? input.captureSize.width) * input.frameSize.height) / input.frameSize.width),
 				})
 			: undefined;
-		const target = fixed ? jitterWithin(toFrame(fixed, turn.captureWidth), step?.targetRect, rand) : undefined;
+		/**
+		 * Agreement between the corrected point and the recorded rect is judged BEFORE jitter.
+		 * jitterWithin clamps into the rect, so testing afterwards is tautological — and worse,
+		 * the clamp would drag a point correctToChange just moved OFF a stale rect straight back
+		 * onto the stale geometry (the two-Save-Changes case: click_point and targetRect both
+		 * 41px above the visible button). No agreement → no jitter and no hover rect; the
+		 * corrected point is used as-is, being the best evidence there is about the landing.
+		 */
+		const landed = fixed ? toFrame(fixed, turn.captureWidth) : undefined;
+		const rect = step?.targetRect;
+		const rectAgrees =
+			!!landed
+			&& !!rect
+			&& rect.w > 0
+			&& rect.h > 0
+			&& landed.x >= rect.x - HOVER_SLOP_PX
+			&& landed.x <= rect.x + rect.w + HOVER_SLOP_PX
+			&& landed.y >= rect.y - HOVER_SLOP_PX
+			&& landed.y <= rect.y + rect.h + HOVER_SLOP_PX;
+		const target = landed ? (rectAgrees ? jitterWithin(landed, rect, rand) : landed) : undefined;
 
 		if (target) {
 			const distance = Math.hypot(target.x - at.x, target.y - at.y);
@@ -1021,31 +1041,32 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 			 * shortly after the previous click puts the idle time at the destination, where a
 			 * viewer reads it as "about to click this" instead of "stuck on that".
 			 */
+			// The move must fit strictly between the previous action and its own click. Floored
+			// at zero rather than at lastActionMs, it could start before cursor samples already
+			// pushed — the final sort interleaves them, so the rendered pointer advances, snaps
+			// back to the old control for a sample, and re-arrives — or end after its own
+			// dispatch, drawing the click ring before arrival. When the output gap is shorter
+			// than the sampled duration, the move is time-compressed into the gap rather than
+			// allowed to spill either side.
+			const fit = Math.max(dispatchMs - lastActionMs, 0);
+			const squeeze = duration > fit && duration > 0 ? fit / duration : 1;
 			const earliest = lastActionMs + DEPART_AFTER_MS;
-			// Depart as soon as allowed, and only start later if the move would otherwise overshoot
-			// the click. Clamping toward the click instead leaves the whole gap on the OLD control.
-			const latest = dispatchMs - duration;
-			const moveStart = Math.max(0, Math.min(earliest, Math.max(latest, 0)));
+			// Depart as soon as allowed, and only start earlier if the move would otherwise
+			// overshoot the click. Clamping toward the click instead leaves the whole gap on
+			// the OLD control.
+			const latest = dispatchMs - duration * squeeze;
+			const moveStart = Math.max(lastActionMs, Math.min(earliest, latest));
 			/**
 			 * The control this action targets, if its recorded rect is trustworthy.
 			 *
 			 * AX geometry can be stale or ambiguous: one run's tree carried TWO "Save Changes"
 			 * buttons and the agent pressed the offscreen one, so both click_point and targetRect
-			 * pointed 41px above the visible button. Requiring the rect to agree with where the
-			 * click actually landed catches that; without agreement there is no rect to cross into,
-			 * so neither the pointer change nor the highlight fires.
+			 * pointed 41px above the visible button. Agreement was tested against the UN-jittered
+			 * corrected point above — jitter clamps into the rect, so testing here would always
+			 * pass. Without agreement there is no rect to cross into, so neither the pointer
+			 * change nor the highlight fires.
 			 */
-			const rect = step?.targetRect;
-			const rectForHover =
-				rect &&
-				rect.w > 0 &&
-				rect.h > 0 &&
-				target.x >= rect.x - HOVER_SLOP_PX &&
-				target.x <= rect.x + rect.w + HOVER_SLOP_PX &&
-				target.y >= rect.y - HOVER_SLOP_PX &&
-				target.y <= rect.y + rect.h + HOVER_SLOP_PX
-					? rect
-					: undefined;
+			const rectForHover = rectAgrees ? rect : undefined;
 
 			/**
 			 * Switch pointer type on ENTRY to the control, not on the click.
@@ -1061,7 +1082,7 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 			const nextType = pointerTypeForRole(step?.targetRole);
 			const enterAt = rectForHover ? enterTime(move, rectForHover) : Infinity;
 			for (const m of move)
-				cursor.push({ tMs: moveStart + m.tMs, x: m.x, y: m.y, type: m.tMs >= enterAt ? nextType : type });
+				cursor.push({ tMs: moveStart + m.tMs * squeeze, x: m.x, y: m.y, type: m.tMs >= enterAt ? nextType : type });
 			type = nextType;
 			at = target;
 			cursor.push({ tMs: dispatchMs, x: at.x, y: at.y, type });
@@ -1085,7 +1106,7 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 			 * window for 12 of 164 frames. A cursor resting on a control that stays inert reads as
 			 * not really being there.
 			 */
-			const hoverFrom = moveStart + enterAt;
+			const hoverFrom = moveStart + enterAt * squeeze;
 			// The click can precede the pointer's arrival when an action's footage was trimmed, and
 			// a span that ends before it starts renders as a permanent highlight.
 			if (rectForHover && completeMs > hoverFrom)

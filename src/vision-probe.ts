@@ -40,6 +40,14 @@ const scaleIdx = argv.indexOf("--scale");
  * the cap, which is exactly why sending it unmodified measured best.
  */
 const SCALE = scaleIdx >= 0 ? Number(argv[scaleIdx + 1]) : 1;
+// A missing or garbled value makes SCALE NaN, which every Math.min clamp passes straight
+// through and the Python resizer dies on, far from the cause. Same posture as envNum: a knob
+// wrong enough not to parse is a knob the operator thinks is doing something.
+if (!Number.isFinite(SCALE) || SCALE <= 0) {
+	console.error(`--scale must be a positive number, got "${argv[scaleIdx + 1] ?? ""}"`);
+	console.error('usage: tsx src/vision-probe.ts <image> "<what to find>" [--scale N]');
+	process.exit(2);
+}
 const rest = argv.filter((_, i) => scaleIdx < 0 || (i !== scaleIdx && i !== scaleIdx + 1));
 const IMAGE = rest[0];
 const TARGET = rest[1];
@@ -123,12 +131,35 @@ async function main(): Promise<void> {
 	}
 
 	// Clamp rather than refuse: the caller asked for magnification, and the largest the API
-	// will honour is still the best available answer to that request.
-	const srcW = Number(execFileSync("python3", ["-c", "import sys;from PIL import Image;print(Image.open(sys.argv[1]).width)", IMAGE], { encoding: "utf8" }).trim());
-	const scale = Math.min(SCALE, API_MAX_EDGE / srcW);
-	if (scale < SCALE) console.log(`scale clamped ${SCALE} -> ${scale.toFixed(2)} (API resamples above ${API_MAX_EDGE}px)`);
+	// will honour is still the best available answer to that request. The cap is on the LONGEST
+	// edge, so both dimensions are measured — clamping by width alone lets a tall image through
+	// to the server-side resample and the 1.69–1.99x coordinate errors the header describes.
+	const [srcW, srcH] = execFileSync(
+		"python3",
+		["-c", "import sys;from PIL import Image;im=Image.open(sys.argv[1]);print(im.width,im.height)", IMAGE],
+		{ encoding: "utf8" },
+	)
+		.trim()
+		.split(/\s+/)
+		.map(Number);
+	const longEdge = Math.max(srcW, srcH);
+	if (longEdge > API_MAX_EDGE)
+		console.error(
+			`warning: ${srcW}x${srcH} exceeds the ${API_MAX_EDGE}px cap unscaled — sent as-is the API would resample it ` +
+				"and return coordinates in a frame neither end agreed on; scaling down client-side instead",
+		);
+	const scale = Math.min(SCALE, API_MAX_EDGE / longEdge);
+	if (scale < SCALE) console.log(`scale clamped ${SCALE} -> ${scale.toFixed(2)} (API resamples above ${API_MAX_EDGE}px on the longest edge)`);
 	const sent = scale === 1 ? IMAGE : "/tmp/vision-probe-sent.png";
 	if (scale !== 1) upscale(IMAGE, sent, scale);
+
+	// At scale 1 the file's own bytes go up, and nothing guarantees they are PNG — a JPEG
+	// submitted labeled image/png gets an unhelpful 400. The magic number is the fact; the
+	// extension is a claim. (Any scaled image is PIL's re-save and carries the PNG magic.)
+	const sentBytes = fs.readFileSync(sent);
+	const mediaType = sentBytes.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+		? ("image/png" as const)
+		: ("image/jpeg" as const);
 
 	const { client, model } = makeClient();
 	const response = await client.messages.create({
@@ -150,7 +181,7 @@ async function main(): Promise<void> {
 					},
 					{
 						type: "image",
-						source: { type: "base64", media_type: "image/png", data: fs.readFileSync(sent).toString("base64") },
+						source: { type: "base64", media_type: mediaType, data: sentBytes.toString("base64") },
 					},
 				],
 			},

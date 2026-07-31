@@ -1,6 +1,7 @@
 import { app, BrowserWindow, desktopCapturer, ipcMain, net, protocol, shell, systemPreferences } from "electron";
 import fs from "node:fs";
-import { listApps, listRecordedRuns, readUiState, resolveVideo, RunController, writeUiState, type RunHandlers, type RunOptions } from "../src/ui-core.js";
+import { Readable } from "node:stream";
+import { listApps, listRecordedRuns, parseByteRange, readUiState, resolveVideo, RunController, writeUiState, type RunHandlers, type RunOptions } from "../src/ui-core.js";
 import { page } from "../src/ui-page.js";
 import { describeCredentials, provisionFromBundle } from "../src/remote/team.js";
 import {
@@ -209,27 +210,39 @@ function registerVideoProtocol(): void {
 		// body and no Accept-Ranges, and Chromium will not seek a resource it cannot range
 		// -request — the symptom is a scrubber that does nothing, most visibly in
 		// fullscreen where the timeline is the only control.
-		const size = fs.statSync(full).size;
-		const range = request.headers.get("range");
-		const match = range ? /bytes=(\d*)-(\d*)/.exec(range) : null;
-		if (match) {
-			const start = match[1] ? Number(match[1]) : 0;
-			const end = match[2] ? Math.min(Number(match[2]), size - 1) : size - 1;
-			if (start >= size || start > end)
-				return new Response(null, { status: 416, headers: { "content-range": `bytes */${size}` } });
-
-			return new Response(fs.readFileSync(full).subarray(start, end + 1), {
+		//
+		// Streamed, never readFileSync: this handler runs on the MAIN process, and a sync read
+		// of a whole recording blocks every IPC in flight — including the live `line` events of
+		// a run — once per seek.
+		//
+		// resolveVideo checked existence, but the file can go between that check and this stat —
+		// a recording pruned mid-scrub has to answer 404, not throw inside the protocol handler.
+		let size: number;
+		try {
+			size = fs.statSync(full).size;
+		} catch {
+			return new Response("not found", { status: 404 });
+		}
+		// A zero-byte mp4 is a recording mid-write. createReadStream rejects end:-1 where the
+		// old readFileSync path served it, so answer the empty body directly.
+		if (size === 0) return new Response(null, { status: 200, headers: { "content-type": "video/mp4", "accept-ranges": "bytes", "content-length": "0" } });
+		const stream = (start: number, end: number): ReadableStream =>
+			Readable.toWeb(fs.createReadStream(full, { start, end })) as ReadableStream;
+		const range = parseByteRange(request.headers.get("range"), size);
+		if (range.kind === "unsatisfiable")
+			return new Response(null, { status: 416, headers: { "content-range": `bytes */${size}` } });
+		if (range.kind === "part")
+			return new Response(stream(range.start, range.end), {
 				status: 206,
 				headers: {
 					"content-type": "video/mp4",
-					"content-range": `bytes ${start}-${end}/${size}`,
+					"content-range": `bytes ${range.start}-${range.end}/${size}`,
 					"accept-ranges": "bytes",
-					"content-length": String(end - start + 1),
+					"content-length": String(range.end - range.start + 1),
 				},
 			});
-		}
 
-		return new Response(fs.readFileSync(full), {
+		return new Response(stream(0, size - 1), {
 			status: 200,
 			headers: { "content-type": "video/mp4", "accept-ranges": "bytes", "content-length": String(size) },
 		});

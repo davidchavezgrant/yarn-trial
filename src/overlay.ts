@@ -63,22 +63,22 @@ const COUNTDOWN_RGB = "0.10,0.40,0.85";
 const SCRIPT = `
 ObjC.import("AppKit");
 ObjC.import("stdlib");
+ObjC.import("unistd");
 
 /**
  * Is the parent still running? NSRunningApplication is NOT the way to ask: it only knows
  * registered GUI applications, so a node process reads as dead the instant the banner
- * appears (measured — the panel vanished within one tick). kill -0 asks the kernel, which
- * knows about every process. $.kill is not bridged into JXA, hence the subprocess.
+ * appears (measured — the panel vanished within one tick). kill -0 was wrong too, one step
+ * more subtly: it answers "does SOME process with this pid exist", and macOS recycles pids,
+ * so after a SIGKILL of the agent a same-user process inheriting the number keeps a
+ * stranded bar up indefinitely — the exact failure the self-destruct exists to prevent.
+ * This process is spawned as a DIRECT CHILD of the agent, so the agent's death reparents it
+ * to launchd (pid 1) and its own ppid stops being the agent's. getppid() asks exactly that
+ * question, in-process — no fork, and pid reuse cannot fool it.
  */
 function parentAlive(pid) {
   if (!(pid > 0)) return true;
-  const t = $.NSTask.alloc.init;
-  t.launchPath = "/bin/kill";
-  t.arguments = ["-0", String(pid)];
-  t.standardError = $.NSFileHandle.fileHandleWithNullDevice;
-  t.launch;
-  t.waitUntilExit;
-  return t.terminationStatus === 0;
+  return $.getppid() === pid;
 }
 
 const env = $.NSProcessInfo.processInfo.environment;
@@ -106,7 +106,8 @@ const total = parseInt(read("OVERLAY_COUNTDOWN", "0"), 10) || 0;
 const goFile = read("OVERLAY_GO", "");
 let left = -1; // -1 = waiting for go, >0 = ticking, 0 = run in progress
 if (total <= 0) left = 0;
-let ticks = 0;
+// A no-countdown run starts already flipped: the panels below are built in mode colour.
+let flipped = left === 0;
 
 const app = $.NSApplication.sharedApplication;
 // Accessory policy: no Dock tile, no menu bar, and crucially no activation, so showing
@@ -202,24 +203,29 @@ while (true) {
   // Never hide during the countdown — that phase exists to be seen.
   if (left === 0 && pauseFile) setHidden(exists(pauseFile));
   if (left < 0 && exists(goFile)) left = total;
-  if (left > 0) {
+  const ticking = left > 0;
+  // Flip on the tick AFTER the final rendered second: "starting in 1" has had its full
+  // second on screen by now, and the parent's countdown() sleep ends at the same moment, so
+  // the colour change coincides with the pointer actually being taken — which is what the
+  // flip is documented to mean. Flipping inside the render branch overwrote "1" in the same
+  // iteration and released the colour a second early.
+  if (left === 0 && !flipped) {
+    flipped = true;
+    for (let i = 0; i < labels.length; i++) {
+      labels[i].label.setStringValue(text);
+      labels[i].view.layer.backgroundColor = fill(rgb);
+    }
+  }
+  if (ticking) {
     const s = text + "  —  starting in " + left;
     for (let i = 0; i < labels.length; i++) labels[i].label.setStringValue(s);
     left--;
-    if (left === 0)
-      for (let i = 0; i < labels.length; i++) {
-        labels[i].label.setStringValue(text);
-        labels[i].view.layer.backgroundColor = fill(rgb);
-      }
   }
-  // 1s while counting down (the countdown decrements once per tick); 0.2s afterwards, so
-  // show/hide tracks individual actions instead of lagging a second behind them.
-  $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(left > 0 ? 1 : 0.2));
-  // parentAlive forks /bin/kill, so keep it at roughly 1Hz rather than every fast tick.
-  // A stranded banner for one extra second is cheaper than five subprocesses a second.
-  if (++ticks % 5 === 0 || left > 0) {
-    if (!parentAlive(parentPid)) $.exit(0);
-  }
+  // 1s per rendered count, so each number gets its full second on screen — the sleep keys
+  // off ticking, captured BEFORE the decrement; 0.2s otherwise, so show/hide tracks
+  // individual actions instead of lagging a second behind them.
+  $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(ticking ? 1 : 0.2));
+  if (!parentAlive(parentPid)) $.exit(0);
 }
 `;
 

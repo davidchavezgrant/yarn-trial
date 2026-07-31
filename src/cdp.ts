@@ -107,8 +107,10 @@ const INTERACTIVE_ROLES = new Set([
 export function parseAiSnapshot(snapshot: string): { rows: SnapshotRow[]; texts: string[] } {
 	const rows: SnapshotRow[] = [];
 	const texts: string[] = [];
-	// (indent, name) of every open ancestor; surface lookup walks it backwards.
-	const stack: Array<{ indent: number; name: string }> = [];
+	// (indent, name, row) of every open ancestor; surface lookup walks the names, the
+	// [selected]-option value-lift walks the rows — ancestry is what the indentation
+	// encodes, and reverse document-order search is not ancestry.
+	const stack: Array<{ indent: number; name: string; row?: SnapshotRow }> = [];
 
 	for (const raw of snapshot.split("\n")) {
 		const m = raw.match(/^(\s*)- (.*)$/);
@@ -137,10 +139,18 @@ export function parseAiSnapshot(snapshot: string): { rows: SnapshotRow[]; texts:
 			rest = rest.slice(nameMatch[0].length);
 		}
 
+		// The node's own value sits after the last bracket; a bare ":" only announces
+		// children. Located FIRST: bracket groups are only meaningful before the separator,
+		// and a value that happens to contain a literal "[disabled]" or "[box=…]" must not
+		// scan as a flag or geometry.
+		const valueMatch = rest.match(/(?:^|\])\s*:\s(.+)$/);
+		const value = valueMatch ? unquote(valueMatch[1].trim()) : "";
+		const flagRegion = valueMatch ? rest.slice(0, valueMatch.index! + (valueMatch[0].startsWith("]") ? 1 : 0)) : rest;
+
 		const flags = new Set<string>();
 		let ref = "";
 		let box = { x: 0, y: 0, w: 0, h: 0 };
-		for (const b of rest.matchAll(/\[([^\]]+)\]/g)) {
+		for (const b of flagRegion.matchAll(/\[([^\]]+)\]/g)) {
 			const body = b[1];
 			if (body.startsWith("ref=")) ref = body.slice(4);
 			else if (body.startsWith("box=")) {
@@ -149,19 +159,20 @@ export function parseAiSnapshot(snapshot: string): { rows: SnapshotRow[]; texts:
 			} else flags.add(body);
 		}
 
-		// The node's own value sits after the last bracket; a bare ":" only announces children.
-		const valueMatch = rest.match(/(?:^|\])\s*:\s(.+)$/);
-		let value = valueMatch ? unquote(valueMatch[1].trim()) : "";
-
 		// A closed <select> renders its options as children; the [selected] one IS the
-		// combobox's value, and the value is what the mutation journal diffs.
-		if (flags.has("selected") && name && rows.length) {
-			const parent = [...rows].reverse().find((r) => r.role === "combobox" || r.role === "listbox");
+		// combobox's value, and the value is what the mutation journal diffs. Only `option`
+		// rows qualify — every active TAB also carries [selected] — and the receiver must
+		// be an ANCESTOR on the stack: the nearest combobox in document order can be an
+		// unrelated control in a page header, and lifting onto it makes switching tabs
+		// read as a combobox mutation the teardown then tries to "restore".
+		if (role === "option" && flags.has("selected") && name) {
+			const parent = [...stack].reverse().find((s) => s.row?.role === "combobox" || s.row?.role === "listbox")?.row;
 			if (parent && !parent.value) parent.value = name;
 		}
 
+		let row: SnapshotRow | undefined;
 		if (ref || name || value) {
-			rows.push({
+			row = {
 				ref,
 				role,
 				name,
@@ -171,9 +182,10 @@ export function parseAiSnapshot(snapshot: string): { rows: SnapshotRow[]; texts:
 				flags,
 				interactive:
 					!!ref && !flags.has("disabled") && (INTERACTIVE_ROLES.has(role) || flags.has("cursor=pointer")),
-			});
+			};
+			rows.push(row);
 		}
-		stack.push({ indent, name });
+		stack.push({ indent, name, row });
 	}
 
 	return { rows, texts };
@@ -199,6 +211,19 @@ export function playwrightKey(key: string, modifiers?: string[]): string {
 	const mods = (modifiers ?? []).map((m) => MODS[m.toLowerCase()] ?? m);
 
 	return [...mods, base].join("+");
+}
+
+/**
+ * Exact-origin equality, the same comparison pickTab makes in src/dom.ts. A prefix match
+ * (`startsWith`) adopts https://x.community as https://x.com and then drives it; anything
+ * unparseable (a page that has not committed a URL) never matches.
+ */
+export function originMatches(pageUrl: string, origin: string): boolean {
+	try {
+		return new URL(pageUrl).origin === origin;
+	} catch {
+		return false;
+	}
 }
 
 /** Poll a debugging endpoint until it answers, or give up. */
@@ -242,20 +267,31 @@ export class CdpBackend {
 	 * else's app with injected switches is not something to do implicitly.
 	 */
 	static async acquire(target: Target): Promise<CdpBackend> {
-		const port = DEFAULT_PORT;
-		const endpoint = process.env.CDP_URL ?? `http://127.0.0.1:${target.kind === "app" ? 9222 : port}`;
+		// An explicit CDP_PORT wins for BOTH kinds — the operator who launched their
+		// Electron app with --remote-debugging-port=9333 means it. Unset (or blank, which
+		// envNum already treats as unset), the kinds keep their separate defaults: 9777 for
+		// the Chrome this backend launches, 9222 for the documented `open -a` example.
+		const portConfigured = (process.env.CDP_PORT ?? "").trim() !== "";
+		const port = target.kind === "app" && !portConfigured ? 9222 : DEFAULT_PORT;
+		const endpoint = process.env.CDP_URL ?? `http://127.0.0.1:${port}`;
 
 		if (target.kind === "web" && !process.env.CDP_URL && !(await endpointAlive(endpoint, 1, 0))) {
 			fs.mkdirSync(PROFILE_DIR, { recursive: true });
 			console.log(`launching Chrome (profile ${PROFILE_DIR}, port ${port})`);
 			// Detached and left running on close: the browser is the session holder, and a
 			// signed-in session that dies with the run defeats the reason the profile exists.
-			spawn(CHROME_BIN, [
+			const child = spawn(CHROME_BIN, [
 				`--remote-debugging-port=${port}`,
 				`--user-data-dir=${PROFILE_DIR}`,
 				"--no-first-run",
 				"--no-default-browser-check",
-			], { stdio: "ignore", detached: true }).unref();
+			], { stdio: "ignore", detached: true });
+			// A missing CHROME_BIN emits an async ENOENT that would otherwise be an uncaught
+			// exception, killing the process before agent.ts's finally writes the run log.
+			// The endpointAlive poll below already produces the honest failure message; the
+			// spawn error adds nothing but the crash.
+			child.on("error", () => {});
+			child.unref();
 			if (!(await endpointAlive(endpoint, 50, 200)))
 				throw new Error(`Chrome did not expose a debugging endpoint at ${endpoint} within 10s`);
 		}
@@ -263,40 +299,48 @@ export class CdpBackend {
 		if (!(await endpointAlive(endpoint, 1, 0)))
 			throw new Error(
 				`no CDP endpoint at ${endpoint}. For an Electron app, launch it with the flag first:\n` +
-					`  open -a "<App>" --args --remote-debugging-port=9222\n` +
+					`  open -a "<App>" --args --remote-debugging-port=${port}\n` +
 					`or point CDP_URL at an existing endpoint.`,
 			);
 
 		const browser = await chromium.connectOverCDP(endpoint);
-		const context = browser.contexts()[0];
-		if (!context) throw new Error(`attached to ${endpoint} but it has no browser context`);
+		try {
+			const context = browser.contexts()[0];
+			if (!context) throw new Error(`attached to ${endpoint} but it has no browser context`);
 
-		let page: Page;
-		if (target.kind === "web") {
-			const origin = target.origin;
-			const matching = context.pages().filter((p) => p.url().startsWith(origin));
-			// Two tabs on the target site: driving the wrong one looks like it worked, the
-			// same trap pickTab refuses in src/dom.ts. Refuse identically.
-			if (matching.length > 1)
-				throw new Error(`${matching.length} tabs are open on ${origin} — close the spares so the target is unambiguous`);
-			page = matching[0]
-				?? context.pages().find((p) => p.url() === "about:blank")
-				?? (await context.newPage());
-			if (!page.url().startsWith(origin)) await page.goto(target.url, { waitUntil: "domcontentloaded" });
-		} else {
-			// Electron: one window is one page; take the largest-URL... no — take the first
-			// non-devtools page, which is the app's window.
-			page = context.pages().find((p) => !p.url().startsWith("devtools://")) ?? context.pages()[0];
-			if (!page) throw new Error(`attached to ${endpoint} but found no page`);
+			let page: Page;
+			if (target.kind === "web") {
+				const origin = target.origin;
+				const matching = context.pages().filter((p) => originMatches(p.url(), origin));
+				// Two tabs on the target site: driving the wrong one looks like it worked, the
+				// same trap pickTab refuses in src/dom.ts. Refuse identically.
+				if (matching.length > 1)
+					throw new Error(`${matching.length} tabs are open on ${origin} — close the spares so the target is unambiguous`);
+				page = matching[0]
+					?? context.pages().find((p) => p.url() === "about:blank")
+					?? (await context.newPage());
+				if (!originMatches(page.url(), origin)) await page.goto(target.url, { waitUntil: "domcontentloaded" });
+			} else {
+				// Electron: one window is one page; take the largest-URL... no — take the first
+				// non-devtools page, which is the app's window.
+				page = context.pages().find((p) => !p.url().startsWith("devtools://")) ?? context.pages()[0];
+				if (!page) throw new Error(`attached to ${endpoint} but found no page`);
+			}
+
+			// Chrome throttles rendering for backgrounded tabs, and a throttled tab times out
+			// every screenshot — observed on the first run that ATTACHED instead of launching
+			// (the launched-Chrome case worked only because a fresh tab starts frontmost). The
+			// snapshot channel is unaffected either way; this is for the pixel channel.
+			await page.bringToFront().catch(() => {});
+
+			return new CdpBackend(browser, page, target.kind === "web" ? target.url : undefined);
+		} catch (e) {
+			// Every refusal above would otherwise leave the CDP connection dangling. close()
+			// on an attached browser only disconnects — the browser itself, and the signed-in
+			// profile it holds, survive for the next attempt.
+			await browser.close().catch(() => {});
+			throw e;
 		}
-
-		// Chrome throttles rendering for backgrounded tabs, and a throttled tab times out
-		// every screenshot — observed on the first run that ATTACHED instead of launching
-		// (the launched-Chrome case worked only because a fresh tab starts frontmost). The
-		// snapshot channel is unaffected either way; this is for the pixel channel.
-		await page.bringToFront().catch(() => {});
-
-		return new CdpBackend(browser, page, target.kind === "web" ? target.url : undefined);
 	}
 
 	/** Where a run starts. Web targets have a declared home BY CONSTRUCTION — the URL. */
@@ -351,6 +395,14 @@ export class CdpBackend {
 		}
 		haystackParts.push(...texts);
 
+		// Same contract as observe() in harness.ts: a name shared by several elements
+		// poisons the entry with NaN, so framesShifted can never mis-identify a mover.
+		const frames = new Map<string, { x: number; y: number }>();
+		for (const r of interactive) {
+			if (!r.name || !(r.w > 0)) continue;
+			frames.set(r.name, frames.has(r.name) ? { x: NaN, y: NaN } : { x: r.x, y: r.y });
+		}
+
 		return {
 			elementsText:
 				`URL: ${this.url}\n\nInteractive refs:\n${lines.join("\n")}\n\n` +
@@ -374,7 +426,7 @@ export class CdpBackend {
 			appContent: rows.length,
 			domEnriched: 0,
 			domUnavailable: "not applicable — CDP backend reads the DOM directly",
-			frames: new Map(interactive.filter((r) => r.name && r.w > 0).map((r) => [r.name, { x: r.x, y: r.y }])),
+			frames,
 		};
 	}
 

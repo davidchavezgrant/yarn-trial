@@ -237,3 +237,60 @@ test("runTeardown__Throws__When__BothOrNeitherActuatorIsGiven", async () => {
 		/exactly one of driver\/cdp/,
 	);
 });
+
+test("runTeardown__PairsToolResults__When__ARestoreTakesSeveralModelTurns", async () => {
+	// The follow-up user message must lead with a tool_result naming the assistant's
+	// tool_use id — the API rejects an unanswered tool_use with a 400, which killed every
+	// restore that needed a second action (nearly all of them: navigate → open → select).
+	process.env.CLEANUP_SETTLE_MS = "0";
+	const obs = obsWith([el("Cursor Style", "Pointer-first")]);
+	const seen: Array<Array<{ role: string; content: any }>> = [];
+	const client = {
+		messages: {
+			create: async (req: { messages: Array<{ role: string; content: any }> }) => {
+				seen.push(req.messages.map((m) => m));
+				return {
+					content: [{ type: "tool_use", id: `tu_${seen.length}`, name: "act", input: { action: { name: "click", ref: "e1" } } }],
+					usage: { input_tokens: 0, output_tokens: 0 },
+				};
+			},
+		},
+	};
+	const cdp = {
+		observe: async () => obs,
+		act: async () => "clicked",
+		requestForLog: () => ({ kind: "tool", name: "click", args: { ref: "e1" } }),
+	};
+	const steps: Array<{ index: number }> = [];
+	// runTeardown narrates each entry to the console; under the test runner's per-file child
+	// protocol that volume of stdout intermittently corrupts the message stream (observed as
+	// "Unable to deserialize cloned data"). Captured, not suppressed silently.
+	const realLog = console.log;
+	console.log = () => {};
+	try {
+		await runTeardown({
+			cdp: cdp as never,
+			client: client as never,
+			model: "m",
+			app: "Yarn",
+			journal: [mut("Cursor Style", "Arrow-first", "Pointer-first", 1), mut("Motion Blur", "On", "Off", 2)],
+			claimed: [],
+			steps: steps as never,
+			budget: 2,
+			mode: "advisory",
+			vision: false,
+			usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, modelCalls: 0 },
+		});
+	} finally {
+		console.log = realLog;
+	}
+	// The second model call of an entry carries the first call's answered tool_use.
+	const second = seen[1];
+	const lastUser = second[second.length - 1];
+	assert.equal(lastUser.role, "user");
+	assert.equal(lastUser.content[0].type, "tool_result");
+	assert.equal(lastUser.content[0].tool_use_id, "tu_1");
+	// And restore steps number continuously across entries, not 1,2,1,2 — a consumer
+	// ordering cleanupSteps by index must see the sequence as it happened.
+	assert.deepEqual(steps.map((s) => s.index), [1, 2, 3, 4]);
+});

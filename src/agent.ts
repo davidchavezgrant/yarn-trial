@@ -226,7 +226,17 @@ for i, p in enumerate(sorted(glob.glob("${framesDir}/f-*.png"))):
         else: break
     if band > 6: print(i)
 `;
-	const out = execSync(`python3 -c '${script.replace(/'/g, "'\\''")}'`).toString().trim();
+	let out: string;
+	try {
+		out = execSync(`python3 -c '${script.replace(/'/g, "'\\''")}'`).toString().trim();
+	} catch {
+		// python3/PIL is optional everywhere else (pixelDelta and dragMoved degrade to
+		// undefined without it); a missing interpreter here must cost the black-band
+		// filter, not the whole video.
+		console.log("black-band frame filter skipped (python3/PIL unavailable) — frames pass unfiltered");
+
+		return new Set();
+	}
 
 	return new Set(out ? out.split("\n").map(Number) : []);
 }
@@ -616,6 +626,11 @@ async function main(): Promise<void> {
 					console.error("  Most often this is an app that has never been signed in on this machine, or a modal");
 					console.error("  the previous run left open. Driving it anyway makes the obstacle the task.");
 					console.error(`  Sign in once on this Mac (./run signin <mac> "${app}"), or pass --allow-unready to drive it as-is.`);
+					// process.exit skips the finally below, and an open session holds its 300s
+					// TTL against the next job on this Mac — the unready path IS the fleet
+					// path, so it must not leak one. The overlay covers itself with an exit
+					// hook; the driver does not.
+					await driver?.close().catch(() => {});
 					process.exit(UNREADY_EXIT);
 				}
 				console.log("  WARNING: start state is whatever the previous run left behind — NOT comparable for A/B measurement.");
@@ -724,7 +739,12 @@ async function main(): Promise<void> {
 								name: "get_window_state",
 								args: { pid: win!.pid, window_id: win!.windowId, screenshot_out_file: framePath },
 							});
-							frameTimes.push(Date.now());
+							// The driver reports success but writes no file when the window is
+							// not composited — the same gap observe() guards. Pushing a timestamp
+							// for a frame that never landed shifts every later frame's duration,
+							// since assembly pairs times to files positionally.
+							if (fs.existsSync(framePath)) frameTimes.push(Date.now());
+							else frameDrops.push("driver reported success but wrote no frame");
 						} catch (err) {
 							frameDrops.push(`error: ${err instanceof Error ? err.message.slice(0, 120) : String(err)}`);
 							fs.rmSync(framePath, { force: true });
@@ -751,6 +771,15 @@ async function main(): Promise<void> {
 		}
 
 		let blindStreak = 0;
+		/**
+		 * The frame the LAST successful observation of THIS run wrote, or undefined when it
+		 * wrote none. Never derived from the step number: rejected turns (no tool call, an
+		 * unchecked expectation) consume a step without observing, out/ persists across runs,
+		 * and a staged window keeps its dimensions run to run — so `agent-step-${step - 1}.png`
+		 * can silently name a PREVIOUS run's frame, and every pixel channel downstream
+		 * (pixelDelta, dragMoved, the trajectory copies) would compare against it.
+		 */
+		let lastShot: string | undefined;
 		// The first observation is the last thing that touches the app before the first model
 		// call, so it owns the handoff: without this the banner — which starts visible and is
 		// only ever hidden by a setDriving(false) — stays up through the whole opening think.
@@ -761,6 +790,9 @@ async function main(): Promise<void> {
 		} finally {
 			overlay.setDriving(false);
 		}
+		// screenshotB64 is the "a frame really landed at this path" predicate: the DOM and
+		// CDP observers tolerate a missed capture, and the CDP one never clears the path first.
+		lastShot = obs.screenshotB64 ? `${OUT}/agent-step-0.png` : undefined;
 		domEnrichment = { frames: obs.domEnriched, unavailable: obs.domUnavailable };
 		console.log(`dom enrichment: ${obs.domEnriched} frames${obs.domUnavailable ? ` (${obs.domUnavailable})` : ""}`);
 		const messages: Anthropic.MessageParam[] = [
@@ -989,6 +1021,29 @@ async function main(): Promise<void> {
 						continue;
 					}
 
+					// The judge being unavailable must not read as the judge approving: block
+					// mode exists to require the independent check, and a transient judge
+					// failure (or a missed final frame) would otherwise degrade it to "off" at
+					// exactly the moment it was opted into. The claim stays unproven until a
+					// verdict lands or the model downgrades it.
+					if (judgeMode === "block" && !visual) {
+						console.log("    -> done(success) NOT ACCEPTED: VISUAL_JUDGE=block and no verdict was returned");
+						messages.push({
+							role: "user",
+							content: [
+								{
+									type: "tool_result",
+									tool_use_id: toolUse.id,
+									is_error: true,
+									content:
+										"DONE NOT ACCEPTED — this run requires an independent visual verdict (VISUAL_JUDGE=block) and the judge " +
+										"was unavailable, so your success claim is unproven. Re-issue done to retry the check, or call done(success: false).",
+								},
+							],
+						});
+						continue;
+					}
+
 					if (!finalCheck.verified) {
 						console.log(`    -> done(success) REFUTED by final observation: ${finalCheck.note}`);
 						// A run carried by pixel evidence lands here by construction: the final
@@ -1038,6 +1093,33 @@ async function main(): Promise<void> {
 			}
 
 			const input = toolUse.input as { reasoning?: string; action: any; expectation: Expectation };
+
+			// Same provider gap as the expectation gate below: OpenRouter does not always
+			// enforce required tool fields, so an act call can arrive with no action object at
+			// all — and dereferencing action.name would abort the whole run for one bad turn.
+			if (!input.action || typeof input.action.name !== "string") {
+				console.log("    -> ✗ rejected: act call carried no action object");
+				messages.push({
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: toolUse.id,
+							is_error: true,
+							content: [
+								{
+									type: "text",
+									text:
+										"ACTION NOT EXECUTED — the act call carried no action object. " +
+										"Every act call needs an action with a string `name` plus its arguments. " +
+										"Re-issue the call with a complete action.",
+								},
+							],
+						},
+					],
+				});
+				continue;
+			}
 			console.log(`[${step}] ${input.reasoning ?? ""}`);
 			console.log(`    ${input.action.name} ${JSON.stringify({ ...input.action, name: undefined })}`);
 
@@ -1106,19 +1188,6 @@ async function main(): Promise<void> {
 			let resultText = "";
 			let isError = false;
 			let request: ActionRequest | null = null;
-			try {
-				// The CDP backend acts directly (no driver dispatch), so its "request" is
-				// only what the run log records; the unsupported-verb check still runs here
-				// so a bad name is rejected before anything executes, same as the others.
-				if (cdp) {
-					cdp.assertSupported(input.action.name);
-					request = input.action.name === "wait" ? null : cdp.requestForLog(input.action);
-				} else request = dom ? await dom.toRequest(input.action) : toActionRequest(input.action, win!);
-			} catch (err) {
-				// Unsupported action: report it back so the model can pick a real one.
-				resultText = `ACTION REJECTED: ${err instanceof Error ? err.message : String(err)}`;
-				isError = true;
-			}
 
 			const prevHaystack = obs.haystack;
 			// The whole bundle, not just the derived views below: the mutation journal needs
@@ -1130,7 +1199,7 @@ async function main(): Promise<void> {
 			// reassigned to the post-action observation below, and element handles are only
 			// meaningful in the snapshot that produced them.
 			const target = actionTarget(input.action, obs);
-			const prevShot = `${OUT}/agent-step-${step - 1}.png`;
+			const prevShot = lastShot;
 			while (driverBusy) await new Promise((r) => setTimeout(r, 50));
 			driverBusy = true;
 			// Banner up only while the pointer is actually ours: this block is the whole
@@ -1140,6 +1209,24 @@ async function main(): Promise<void> {
 			const dispatchedAt = Date.now();
 			let actedAt = dispatchedAt;
 			try {
+				try {
+					// The CDP backend acts directly (no driver dispatch), so its "request" is
+					// only what the run log records; the unsupported-verb check still runs here
+					// so a bad name is rejected before anything executes, same as the others.
+					// dom.toRequest is driver I/O (find → snapshot, plus an AX-centre probe), so
+					// it belongs inside the mutex with the act itself: the recording frame
+					// poller shares the driver, and a request resolved outside the hold
+					// interleaves with its captures.
+					if (cdp) {
+						cdp.assertSupported(input.action.name);
+						request = input.action.name === "wait" ? null : cdp.requestForLog(input.action);
+					} else request = dom ? await dom.toRequest(input.action) : toActionRequest(input.action, win!);
+				} catch (err) {
+					// Unsupported action: report it back so the model can pick a real one.
+					resultText = `ACTION REJECTED: ${err instanceof Error ? err.message : String(err)}`;
+					isError = true;
+				}
+
 				if (!isError) {
 					try {
 						resultText = cdp
@@ -1169,6 +1256,11 @@ async function main(): Promise<void> {
 				lastActionAt = Date.now();
 				overlay.setDriving(false);
 			}
+			// This step's frame, by the same predicate as step 0; becomes the next step's
+			// "before". On the CDP path a missed capture leaves whatever file was already at
+			// this path, so the path alone proves nothing.
+			const curShot = obs.screenshotB64 ? `${OUT}/agent-step-${step}.png` : undefined;
+			lastShot = curShot;
 			// `wait` legitimately changes nothing, so exempt it from the discrimination
 			// requirement (its point is that already-true state persists).
 			let verdict: VerifyResult = isError
@@ -1191,9 +1283,12 @@ async function main(): Promise<void> {
 			if (!verdict.verified && !isError && input.action.name === "drag" && request?.kind === "tool") {
 				const args = request.args as Record<string, number>;
 				const g = framesShifted(prevFrames, obs.frames, args.to_x - args.from_x, args.to_y - args.from_y);
-				const m = g.shifted
+				// A missing frame on either side skips the fallback outright: reaching for the
+				// step-numbered path instead would let a previous run's frame at the same
+				// staged dimensions fabricate `verified: true` on the pixel channel.
+				const m = g.shifted || !prevShot || !curShot
 					? undefined
-					: dragMoved(prevShot, `${OUT}/agent-step-${step}.png`, { x: args.from_x, y: args.from_y }, { x: args.to_x, y: args.to_y });
+					: dragMoved(prevShot, curShot, { x: args.from_x, y: args.from_y }, { x: args.to_x, y: args.to_y });
 				if (g.shifted)
 					verdict = {
 						verified: true,
@@ -1228,14 +1323,18 @@ async function main(): Promise<void> {
 					...(pointer && target && target.w > 0 ? { clickPoint: { x: target.x + target.w / 2, y: target.y + target.h / 2 } } : {}),
 					startedAtMs: dispatchedAt,
 					endedAtMs: actedAt,
+					// Both optional in the writer; a path is only passed when THIS run's frame
+					// is known to sit there, so a stale file is never copied into the artifact.
 					beforePng: prevShot,
-					afterPng: `${OUT}/agent-step-${step}.png`,
+					afterPng: curShot,
 					resultSummary: resultText,
 				});
 			}
 			// Advisory pixel signal: the AX text channel does not carry rendered content, so a
 			// canvas that failed to repaint is invisible to verify(). Recorded, never a gate.
-			const delta = pixelDelta(prevShot, `${OUT}/agent-step-${step}.png`);
+			// Skipped when either side lacks a real frame from THIS run — pixelDelta itself
+			// only checks existence, which a previous run's file at the same path satisfies.
+			const delta = prevShot && curShot ? pixelDelta(prevShot, curShot) : undefined;
 			const deltaNote = delta === undefined ? "" : ` [pixels ${(delta * 100).toFixed(1)}%${delta < 0.001 && !isError ? " — screen essentially unchanged" : ""}]`;
 			console.log(`    -> ${verdict.verified ? "✓ verified" : `✗ ${verdict.note}`}${deltaNote}`);
 
@@ -1312,7 +1411,9 @@ async function main(): Promise<void> {
 	} finally {
 		if (record) {
 			recordingActive = false;
-			await frameLoop;
+			// The loop's own try/catch absorbs capture errors; anything that still escapes
+			// must not take the assembly and the log write below with it.
+			await frameLoop?.catch((err) => console.error("frame loop failed:", err));
 			if (frameDrops.length > 0) {
 				const counts = new Map<string, number>();
 				for (const d of frameDrops) counts.set(d, (counts.get(d) ?? 0) + 1);
@@ -1384,8 +1485,16 @@ async function main(): Promise<void> {
 			}
 		}
 
-		await driver?.close();
+		// Each cleanup step is isolated so no step can prevent the ones after it: a close()
+		// rejection (a daemon already dead is a real failure class) must not replace the
+		// run's own error, and the log write below must survive every exit.
+		try {
+			await driver?.close();
+		} catch (err) {
+			console.error("driver close failed:", err);
+		}
 		// Disconnects only — the browser stays up holding the signed-in profile (src/cdp.ts).
+		// Internally guarded (browser.close().catch), so it cannot reject past this line.
 		await cdp?.close();
 		overlay.stop();
 

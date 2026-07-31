@@ -64,9 +64,14 @@ function repoRoot(): string {
  * Here rather than in harness.ts (which re-exports it, so no call site moved) because the
  * runner needs it too, and harness.ts pulls in the Anthropic SDK and the driver at import
  * time. A long-lived daemon should not load either to lowercase a string.
+ *
+ * Path separators and `:` fold into the dash alongside whitespace: "filename-safe" has to
+ * mean it, or an app named "A/V Recorder" turns `out/runs/<stamp>-a/v-recorder.json` into a
+ * write under a directory that does not exist — ENOENT at the exact moment a run or a
+ * 40-minute explore pass saves its artifact — and a crafted name walks out of the data root.
  */
 export function appSlug(app: string): string {
-	return app.toLowerCase().replace(/\s+/g, "-");
+	return app.toLowerCase().replace(/[\s/\\:]+/g, "-");
 }
 
 /** Writable root. Everything under it is generated and safe to delete. */

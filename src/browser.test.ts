@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BrowserUnavailableError, pickWindowByPid, prepareArgs, preparedPid, readPrepareReport, refusalOf } from "./browser.js";
+import { BrowserUnavailableError, mintApprovalToken, pickWindowByPid, prepareArgs, preparedPid, readPrepareReport, refusalOf } from "./browser.js";
 
 test("prepareArgs__AsksForANamedIsolatedProfile__When__Defaulted", () => {
 	// isolated_named, not isolated_new: a fresh profile every run would throw away the login
@@ -165,4 +165,18 @@ test("BrowserUnavailableError__NamesTheApprovalCommand__When__ConsentIsRequired"
 	// The remedy is a specific one-time command, so the message must carry it rather than
 	// leaving an operator to search the driver's docs for it.
 	assert.match(new BrowserUnavailableError("browser_consent_required", "x").message, /browser-approve --pid/);
+});
+
+test("mintApprovalToken__RefusesTheProfileName__When__ItIsNotAPlainToken", () => {
+	// The name reaches expect as argv (no shell), but it also names an on-disk profile
+	// directory and a CLI flag value — a value with separators or metacharacters is an
+	// operator config error, and it must die loudly here, before anything is spawned.
+	const saved = process.env.YARN_BROWSER_AUTO_APPROVE;
+	delete process.env.YARN_BROWSER_AUTO_APPROVE;
+	try {
+		for (const bad of ["../escape", "a profile", "x;rm", "a}b", "$HOME", ""])
+			assert.throws(() => mintApprovalToken(4242, bad), /profile name/, `accepted "${bad}"`);
+	} finally {
+		if (saved !== undefined) process.env.YARN_BROWSER_AUTO_APPROVE = saved;
+	}
 });

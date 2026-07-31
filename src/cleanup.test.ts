@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { appForStamp, exitCodeFor, formatPlan, planRestores } from "./cleanup.js";
+import { appForStamp, exitCodeFor, formatPlan, planRestores, stampArtifacts } from "./cleanup.js";
 import type { Mutation } from "./journal.js";
 
 // Synthetic fixtures describing the CLASS of journal rather than any historical run, so the
@@ -89,4 +89,25 @@ test("exitCodeFor__ReturnsZero__When__EveryAttemptSucceeded", () => {
 
 test("exitCodeFor__ReturnsNonZero__When__AnAttemptFailed", () => {
 	assert.equal(exitCodeFor({ attempted: 3, failed: 1 }), 1);
+});
+
+// --- the unknown-stamp guard. "Nothing to clean" is only truthful for a run that exists.
+
+test("stampArtifacts__FindsRunLogAndJournal__When__StampIsExact", () => {
+	const names = [
+		"2026-07-30T20-54-28-yarn.json",
+		"2026-07-30T20-54-28-yarn.journal.jsonl",
+		"2026-07-30T21-00-00-yarn.json",
+	];
+	assert.deepEqual(stampArtifacts(names, "2026-07-30T20-54-28-yarn"), [
+		"2026-07-30T20-54-28-yarn.json",
+		"2026-07-30T20-54-28-yarn.journal.jsonl",
+	]);
+});
+
+test("stampArtifacts__MatchesNothing__When__StampIsOnlyAPrefix", () => {
+	// A truncated stamp or a job id names a DIFFERENT run (or none). Matching it by prefix
+	// would revive the silent exit-0 this guard exists to close.
+	const names = ["2026-07-30T20-54-28-yarn.json", "2026-07-30T20-54-28-yarn.journal.jsonl"];
+	assert.deepEqual(stampArtifacts(names, "2026-07-30T20-54"), []);
 });

@@ -241,6 +241,9 @@ function applyModelKey(key: string | undefined): ApplyResult["modelKey"] {
 	// Single-quoted: an OpenRouter key is base64-ish and safe, but this file is read by a shell
 	// on the provisioning path too, and quoting it there costs nothing.
 	fs.writeFileSync(file, `${existing}${existing && !existing.endsWith("\n") ? "\n" : ""}OPENROUTER_API_KEY='${key}'\n`, { mode: 0o600 });
+	// Chmods as well as passing `mode`, because `mode` applies at CREATION only: a hand-made
+	// env file that already existed at 0644 would keep it with the key appended.
+	fs.chmodSync(file, 0o600);
 
 	return "written";
 }
@@ -341,6 +344,9 @@ export function exportCredentials(target: string, openrouterKey?: string, vncPas
 	};
 	fs.mkdirSync(path.dirname(target), { recursive: true });
 	fs.writeFileSync(target, `${JSON.stringify(creds, null, 2)}\n`, { mode: 0o600 });
+	// Chmods as well as passing `mode`, because `mode` applies at CREATION only: re-exporting
+	// over an existing looser-permission file would leave the private key at that mode.
+	fs.chmodSync(target, 0o600);
 
 	return target;
 }

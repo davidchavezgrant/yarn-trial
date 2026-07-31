@@ -32,13 +32,19 @@ async function main(): Promise<void> {
 
 	const driver = await Driver.start("browser-login");
 	// Ctrl-C is the documented way to end this, so it must close the session rather than leave
-	// it to expire — the next run would otherwise collide with it (LIMITATIONS §6).
-	onInterrupt(() => driver.close());
+	// it to expire — the next run would otherwise collide with it (LIMITATIONS §6). onInterrupt
+	// only sets a flag for a run loop to read, and this file has no run loop, so the poll below
+	// is it: parked on a forever-promise instead, the first Ctrl-C waits out the whole grace
+	// period and a second one exits with the session still open.
+	const interrupted = onInterrupt(() => driver.close());
 	try {
 		await browserLogin(driver, target);
-		// Hold the process open. The driver session heartbeats itself, and the browser window
-		// belongs to the driver-owned profile, so leaving is what would end the sign-in.
-		await new Promise(() => {});
+		// Hold the process open until the operator is done. The driver session heartbeats
+		// itself, and the browser window belongs to the driver-owned profile, so leaving is
+		// what would end the sign-in.
+		while (!interrupted()) await new Promise((r) => setTimeout(r, 300));
+		await driver.close();
+		process.exit(0);
 	} catch (err) {
 		console.error(`\nbrowser-login failed: ${err instanceof Error ? err.message : String(err)}`);
 		await driver.close();

@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { CdpBackend } from "./cdp.js";
 import { CDP_ACT_TOOL } from "./cdp.js";
 import type { Driver } from "./driver.js";
+import { envNum } from "./env.js";
 import {
 	ACT_TOOL,
 	destructiveTarget,
@@ -267,7 +268,9 @@ async function restoreOne(a: TeardownArgs, m: Mutation, index: number): Promise<
 				resultText = `ACTION FAILED: ${err instanceof Error ? err.message : String(err)}`;
 			}
 		}
-		await new Promise((res) => setTimeout(res, SETTLE_MS));
+		// Read per step rather than at module load: the fake-actuator tests zero it so they do
+		// not spend real seconds settling, and a Mac with a slow target can raise it the same way.
+		await new Promise((res) => setTimeout(res, envNum("CLEANUP_SETTLE_MS", SETTLE_MS)));
 		obs = await doObserve(`cleanup-${index}-${step}`);
 
 		// The harness's check, not the model's — `wanted` came from the journal before this

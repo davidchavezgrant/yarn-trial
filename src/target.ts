@@ -118,9 +118,9 @@ export function isBrowserApp(name: string): boolean {
  * The app branch delegates to `appSlug` UNCHANGED and must keep doing so. That function has
  * six call sites across the runner, the fleet and the shell, and `paths.test.ts` pins the
  * paths it produces — so a Mac app's artifacts have to land exactly where they landed before
- * this type existed. Web targets get the sanitisation `appSlug` never needed: it only folds
- * whitespace, and a host is full of dots while a raw URL carries `:` and `/` that would
- * escape the directory.
+ * this type existed. Web targets still get their own sanitisation: `appSlug` now folds path
+ * separators and colons too, but a host is full of dots and the slug here is derived from
+ * the URL's host rather than trusting a raw string at all.
  *
  * Keyed on HOST, not the full URL: one exploration pass maps a site, and `notion.so/foo` and
  * `notion.so/bar` are two routes through one map rather than two apps. The `web-` prefix

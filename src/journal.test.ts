@@ -186,6 +186,105 @@ test("detectMutation__ResolvesTargetByCoordinates__When__ActionCarriesNoHandle",
 	assert.equal(m?.after, "Pointer-first");
 });
 
+test("detectMutation__JournalsTheCombobox__When__TheClickedOptionVanishedWithItsMenu", () => {
+	// The canonical cursor-style interaction: the action's own target is the menu OPTION,
+	// which closes with the menu — the change lands on the combobox the menu belonged to.
+	// A target-only diff sees nothing here, and the run that motivated the journal (the
+	// brand-wide Cursor Style left changed) mutates exactly this way.
+	const prev = obsWith([
+		ie("Cursor Style", "Screen Clip Settings", { handle: 5, value: "Pointer-first" }),
+		ie("Arrow-first", "Cursor Style menu", { handle: 110 }),
+	]);
+	const next = obsWith([ie("Cursor Style", "Screen Clip Settings", { handle: 7, value: "Arrow-first" })]);
+	const m = detectMutation({ name: "click", element_index: 110 }, prev, next, undefined, 3);
+	assert.equal(m?.control, "Cursor Style");
+	assert.equal(m?.before, "Pointer-first");
+	assert.equal(m?.after, "Arrow-first");
+});
+
+test("detectMutation__JournalsNothing__When__TwoControlsCommitTheSameOptionLabel", () => {
+	// Two comboboxes newly reading the clicked label: (name, surface) evidence cannot say
+	// which one the option belonged to, and a guess would send teardown to the wrong control.
+	const prev = obsWith([
+		ie("Cursor Style", "Screen Clip Settings", { handle: 5, value: "Pointer-first" }),
+		ie("Entrance Cursor", "Screen Clip Settings", { handle: 6, value: "Hand" }),
+		ie("Arrow-first", "Cursor Style menu", { handle: 110 }),
+	]);
+	const next = obsWith([
+		ie("Cursor Style", "Screen Clip Settings", { value: "Arrow-first" }),
+		ie("Entrance Cursor", "Screen Clip Settings", { value: "Arrow-first" }),
+	]);
+	assert.equal(detectMutation({ name: "click", element_index: 110 }, prev, next, undefined, 3), undefined);
+});
+
+test("detectMutation__JournalsNothing__When__SameNameTwinsDisagreeAfterTheAction", () => {
+	// Two "X" steppers on one surface (shadow offsets). Matching by (name, surface) cannot
+	// tell which twin the action operated; pairing with whichever the walk lists first would
+	// fabricate a diff between two different controls' values.
+	const prev = obsWith([
+		ie("X", "Screen Shadow", { handle: 1, value: "0" }),
+		ie("X", "Screen Shadow", { handle: 2, value: "12" }),
+	]);
+	const next = obsWith([
+		ie("X", "Screen Shadow", { handle: 1, value: "0" }),
+		ie("X", "Screen Shadow", { handle: 2, value: "24" }),
+	]);
+	assert.equal(detectMutation({ name: "click", element_index: 2 }, prev, next, undefined, 4), undefined);
+});
+
+test("detectMutation__StillJournals__When__TheTreeRendersTheControlTwice", () => {
+	// AX trees routinely render duplicate entries for one control. Copies that AGREE on the
+	// value diff unambiguously — declining here would lose a real mutation to a render quirk.
+	const prev = obsWith([ie("Cursor Style", "Screen Clip Settings", { handle: 5, value: "Arrow-first" })]);
+	const next = obsWith([
+		ie("Cursor Style", "Screen Clip Settings", { handle: 5, value: "Pointer-first" }),
+		ie("Cursor Style", "Screen Clip Settings", { handle: 9, value: "Pointer-first" }),
+	]);
+	const m = detectMutation({ name: "click", element_index: 5 }, prev, next, undefined, 2);
+	assert.equal(m?.after, "Pointer-first");
+});
+
+/**
+ * The committed Yarn map's ACTUAL shape (stamped explore output): parent titles are decorated
+ * display strings ("Brand Kit → Screen Clips (Screen Clip Settings)") and the document twin's
+ * own title carries "(project)". The tie-break has to work against these — whole-string
+ * equality never matched them, so scope silently came back unset (or worse, brand) for every
+ * real dual-scope mutation while the clean fixture above kept passing.
+ */
+const decorated: AppMap = {
+	app: "Yarn",
+	capturedAt: "2026-07-30T00:00:00.000Z",
+	provenance: "explore",
+	nodes: [
+		{ id: "brand-kit/screen-clips", title: "Brand Kit → Screen Clips (Screen Clip Settings)", kind: "surface", scope: "brand" },
+		{ id: "brand-kit/screen-clips/cursor-style", title: "Cursor Style", kind: "control", scope: "brand", settingKey: "cursor-style" },
+		{ id: "brand-kit/screen-clips/motion-blur", title: "Motion Blur", kind: "control", scope: "brand", settingKey: "motion-blur" },
+		{ id: "editor/project-clip-settings", title: "Screen Recording Settings (per project)", kind: "surface", scope: "document" },
+		{ id: "editor/project-clip-settings/cursor-style", title: "Cursor Style (project)", kind: "control", scope: "document", settingKey: "cursor-style" },
+		{ id: "editor/project-clip-settings/motion-blur", title: "Motion Blur", kind: "control", scope: "document", settingKey: "motion-blur" },
+	],
+	edges: [],
+};
+
+test("detectMutation__BreaksTheScopeTie__When__ParentTitlesAreDecorated", () => {
+	const prev = obsWith([ie("Motion Blur", "Screen Clip Settings", { handle: 8, value: "On" })]);
+	const next = obsWith([ie("Motion Blur", "Screen Clip Settings", { handle: 8, value: "Off" })]);
+	const m = detectMutation({ name: "click", element_index: 8 }, prev, next, decorated, 2);
+	assert.equal(m?.settingKey, "motion-blur");
+	assert.equal(m?.scope, "brand");
+});
+
+test("detectMutation__ResolvesDocumentScope__When__TheTwinTitleCarriesADecoration", () => {
+	// "Cursor Style (project)" is a decoration the AX tree never renders. It must still be a
+	// candidate, or the brand node is the ONLY candidate and a document-panel mutation gets
+	// scope "brand" — precisely the wrong-store attribution the tie-break exists to prevent.
+	const prev = obsWith([ie("Cursor Style", "Screen Recording Settings", { handle: 8, value: "Arrow-first" })]);
+	const next = obsWith([ie("Cursor Style", "Screen Recording Settings", { handle: 8, value: "Pointer-first" })]);
+	const m = detectMutation({ name: "click", element_index: 8 }, prev, next, decorated, 2);
+	assert.equal(m?.settingKey, "cursor-style");
+	assert.equal(m?.scope, "document");
+});
+
 // --- the journal on disk. Append-per-mutation exists because runs get killed; these pin that
 // a partial file still reads.
 
@@ -243,4 +342,12 @@ test("restoreRoute__PicksTheScopedNode__When__SettingExistsAtTwoScopes", () => {
 	// The document node's route is not recorded in this fixture, so the two scopes must give
 	// different answers — proof the scope argument selects rather than being ignored.
 	assert.equal(restoreRoute(yarnish, "cursor-style", "document"), "(route not recorded)");
+});
+
+test("restoreRoute__ReturnsEmpty__When__ScopeIsUnsetAndTheKeyIsAmbiguous", () => {
+	// The journal leaves scope unset exactly when it could not tell which twin was operated.
+	// Handing over the first node's route would walk the unattended restore model to
+	// whichever scope the map lists first — "" means "navigate on your own", which degrades
+	// the restore instead of aiming it at the wrong store.
+	assert.equal(restoreRoute(yarnish, "cursor-style"), "");
 });

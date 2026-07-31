@@ -1,5 +1,6 @@
 import net from "node:net";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { defaultRunnerDir } from "./lease.js";
 
@@ -168,9 +169,14 @@ function connect(socketPath: string): Promise<net.Socket> {
 
 /** NDJSON frames off the socket. A `logs --follow` reply is many; everything else is one. */
 async function* frames(conn: net.Socket): AsyncGenerator<Record<string, any>> {
+	// StringDecoder, not toString per chunk: a multi-byte character straddling a chunk boundary
+	// would decode each half as U+FFFD and corrupt the frame it lands in. Log payloads dodge
+	// this by riding as base64 (see `streamLogs`), but the frames themselves must not rely on
+	// where the kernel happens to cut a read.
+	const decoder = new StringDecoder("utf8");
 	let buffer = "";
 	for await (const data of conn) {
-		buffer += (data as Buffer).toString("utf8");
+		buffer += decoder.write(data as Buffer);
 		let nl: number;
 		while ((nl = buffer.indexOf("\n")) >= 0) {
 			const line = buffer.slice(0, nl);

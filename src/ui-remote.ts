@@ -517,9 +517,19 @@ export class RemoteRunController {
 	async stop(): Promise<string | undefined> {
 		const current = this.active;
 		if (!current) return undefined;
-		const result = await this.deps.stopRemote(current.host, current.jobId);
+		// The window between submit and the dispatch reply is real — seconds of ssh — and the
+		// page shows Stop the moment `started` echoes. In that window `host` can still read
+		// `auto` (not a machine; stopRemote would throw resolving it) and `jobId` is unset,
+		// which stopRemote treats as "stop whatever that Mac is doing" — possibly someone
+		// else's run, the very one whose lease was about to refuse this dispatch.
+		if (!current.jobId) return "the dispatch has not been accepted yet — try again in a moment";
+		try {
+			const result = await this.deps.stopRemote(current.host, current.jobId);
 
-		return result.ok ? undefined : result.error;
+			return result.ok ? undefined : result.error;
+		} catch (e) {
+			return (e as Error).message;
+		}
 	}
 
 	/** Stop watching. The remote job is untouched — this is what a closing window does. */
@@ -578,7 +588,12 @@ export class RemoteRunController {
 		beat.unref?.();
 
 		try {
-			for (let attempt = 0; ; attempt++) {
+			// CONSECUTIVE failures, not lifetime attempts. A lifetime counter declared the stream
+			// lost on the sixth transient drop of a 40-minute pass even when every reattach in
+			// between worked and streamed for minutes — progress has to buy the budget back.
+			let failures = 0;
+			for (;;) {
+				const before = offset;
 				let result: FollowResult;
 				try {
 					result = await this.deps.follow(host, jobId, emit, { fromByte: offset, signal: abort.signal });
@@ -600,8 +615,13 @@ export class RemoteRunController {
 					return this.finish(handlers, `⏸ detached — ${jobId} keeps running on ${host}. Re-attach from the fleet panel.`, 0);
 				}
 
-				if (attempt >= FOLLOW_RETRIES)
+				failures = offset > before ? 1 : failures + 1;
+				if (failures > FOLLOW_RETRIES) {
+					// Flush like every other exit: the pending partial line is often the run's last words.
+					for (const line of splitter.flush()) handlers.onLine(line);
+
 					return this.finish(handlers, `✗ lost the log stream from ${host} (${result.error ?? "stream ended"}) — ${jobId} may still be running`, 1);
+				}
 
 				handlers.onLine(`log stream dropped (${result.error ?? "stream ended"}) — reattaching from byte ${offset}`);
 				await this.deps.sleep(RETRY_DELAY_MS);

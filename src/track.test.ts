@@ -432,6 +432,127 @@ test("buildTrack__SkipsActions__When__TheyPrecedeTheFirstUsableFrame", () => {
 	assert.ok(clicks[0].tMs > 0, "and it must not be pinned to the timeline start");
 });
 
+test("buildTrack__LeavesTheClickAtTheCorrectedPoint__When__TargetRectIsStale", () => {
+	// The two-Save-Changes case: click_point AND targetRect agree with each other and are both
+	// ~40px off the visible button, so correctToChange moves the point onto the changed pixels.
+	// jitterWithin clamps INTO its rect — jittering against the stale rect would drag the
+	// corrected point straight back onto the stale geometry. No agreement means no jitter and
+	// no hover rect; the corrected point is the best evidence there is about the landing.
+	const base = 1_000_000;
+	const staleRect = { x: 1214, y: 12, w: 190, h: 30 };
+	const track = buildTrack({
+		stamp: "t",
+		app: "Yarn",
+		task: "t",
+		runLog: "",
+		steps: [
+			{ index: 1, timestamp: "", action: { kind: "tool", name: "click" }, targetRole: "AXButton", targetRect: staleRect },
+		],
+		turns: [{
+			tool: "click",
+			arguments: {},
+			clickPoint: { x: 1279, y: 27 },
+			startMs: 0,
+			endMs: 200,
+			epochMs: base + 2000,
+			dir: "",
+			captureWidth: 1568,
+			// The pixels that actually changed sit ~50px below both the click point and the rect.
+			changeBox: { x: 1214, y: 63, w: 190, h: 30 },
+		}],
+		frameTimes: [base, base + 2000, base + 3000],
+		frameSize: { width: 1568, height: 882 },
+		captureSize: { width: 1568, height: 882 },
+		constants: CONSTANTS,
+		library: { fittedFrom: { dataset: "t", generatedAt: "" }, segments: [] },
+	});
+	const clicks = track.events.filter((e) => e.kind === "mousedown") as Array<{ tMs: number; x: number; y: number }>;
+	assert.equal(clicks.length, 1);
+	// The click sits on the changeBox centre, where the control visibly is.
+	assert.ok(Math.abs(clicks[0].x - 1309) < 0.5 && Math.abs(clicks[0].y - 78) < 0.5, `landed at ${clicks[0].x},${clicks[0].y}`);
+	// The last cursor sample at the click must be there too, and OFF the stale rect.
+	const atClick = track.cursor.filter((s) => s.tMs <= clicks[0].tMs).at(-1);
+	assert.ok(atClick, "the pointer should arrive before the click");
+	const inStale =
+		atClick.x >= staleRect.x
+		&& atClick.x <= staleRect.x + staleRect.w
+		&& atClick.y >= staleRect.y
+		&& atClick.y <= staleRect.y + staleRect.h;
+	assert.ok(!inStale, `the corrected point must survive, was clamped to ${atClick.x},${atClick.y}`);
+	// A rect that disagrees with the landing is no hover target either.
+	assert.equal(track.hovers.length, 0);
+});
+
+test("buildTrack__KeepsCursorMonotonicAroundActions__When__TheGapIsShorterThanTheMove", () => {
+	// Two clicks a long reach apart (~1490px, sampled duration at least 383ms) with only ~300ms
+	// of output timeline between them — a long think compressed to a beat. The move has to be
+	// time-compressed into that gap: floored at zero instead of the previous action, its samples
+	// sorted in BEFORE the first click, so the rendered pointer advanced, snapped back to the
+	// old control for a sample, and re-arrived.
+	const base = 1_000_000;
+	const mk = (epochMs: number, x: number, y: number): TrajectoryTurn => ({
+		tool: "click",
+		arguments: {},
+		clickPoint: { x, y },
+		startMs: 0,
+		endMs: 200,
+		epochMs,
+		dir: "",
+		captureWidth: 1568,
+	});
+	const track = buildTrack({
+		stamp: "t",
+		app: "Yarn",
+		task: "t",
+		runLog: "",
+		steps: [
+			{ index: 1, timestamp: "", action: { kind: "tool", name: "click" }, targetRole: "AXButton", targetRect: { x: 40, y: 780, w: 150, h: 30 } },
+			{ index: 2, timestamp: "", action: { kind: "tool", name: "click" }, targetRole: "AXButton", targetRect: { x: 1340, y: 85, w: 120, h: 30 } },
+		],
+		turns: [mk(base + 300, 100, 800), mk(base + 600, 1400, 100)],
+		frameTimes: [base, base + 300, base + 600, base + 900],
+		frameSize: { width: 1568, height: 882 },
+		captureSize: { width: 1568, height: 882 },
+		constants: CONSTANTS,
+		library: { fittedFrom: { dataset: "t", generatedAt: "" }, segments: [] },
+		seed: 41,
+	});
+	const clicks = track.events.filter((e) => e.kind === "mousedown") as Array<{ tMs: number; x: number; y: number }>;
+	assert.equal(clicks.length, 2);
+	for (let i = 1; i < track.cursor.length; i++)
+		assert.ok(track.cursor[i].tMs >= track.cursor[i - 1].tMs, "cursor times must never go backwards");
+	// A sample sits exactly at each click, on the click point — the move ended before dispatch.
+	for (const c of clicks) {
+		const at = track.cursor.find((s) => s.tMs === c.tMs && Math.hypot(s.x - c.x, s.y - c.y) < 0.01);
+		assert.ok(at, `a cursor sample must sit on the click at t=${c.tMs}`);
+	}
+	// The second move departs FROM the first target, no earlier than the first action: the first
+	// sample after the first click is still at that click, not mid-flight toward the second.
+	const afterFirst = track.cursor.find((s) => s.tMs > clicks[0].tMs);
+	assert.ok(afterFirst, "the second move should produce samples");
+	assert.ok(
+		Math.hypot(afterFirst.x - clicks[0].x, afterFirst.y - clicks[0].y) < 50,
+		`pointer left the first target early: at ${afterFirst.x},${afterFirst.y} by t=${afterFirst.tMs}`,
+	);
+	// And nothing after the second click is still in flight toward it.
+	for (const s of track.cursor.filter((s) => s.tMs >= clicks[1].tMs))
+		assert.ok(Math.hypot(s.x - clicks[1].x, s.y - clicks[1].y) < 0.01, "no sample after the click may still be approaching");
+});
+
+test("toOutputMs__MapsByFrameIndex__When__PlanSkipsLeadingFrames", () => {
+	// buildFramePlan's keepFrom drops leading frames, after which plan[i].frameIndex > i.
+	// Positional indexing read frameTimes[0] for plan[0], so every instant was tested against
+	// the wrong frame's real interval and fell through to the timeline's end.
+	const base = 1_000_000;
+	const frameTimes = [base, base + 1000, base + 2000, base + 3000];
+	const plan = buildFramePlan(frameTimes, [], undefined, base + 2000);
+	assert.equal(plan[0].frameIndex, 2, "the first two frames should be skipped");
+	// Halfway through the third frame's real interval maps halfway through its output span.
+	const out = toOutputMs(plan, frameTimes, base + 2500);
+	assert.ok(out >= plan[0].startMs && out <= plan[0].endMs, `mapped to ${out}, outside the frame's span`);
+	assert.equal(out, plan[0].startMs + (plan[0].endMs - plan[0].startMs) / 2);
+});
+
 test("correctToChange__MovesOntoTheControl__When__AxGeometryIsStale", () => {
 	// One run's tree carried TWO "Save Changes" buttons; the agent pressed the offscreen one, so
 	// click_point AND targetRect both landed 41px above the visible button — wrong together, which

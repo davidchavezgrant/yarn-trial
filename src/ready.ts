@@ -58,14 +58,26 @@ async function main(): Promise<void> {
 	// having no window yet, or being mid-relaunch are all normal mid-sign-in states, and a
 	// poller that has to distinguish a thrown error from a negative answer will get it wrong.
 	const verdict: Verdict = await checkReady(app).catch((e) => ({ ready: false, detail: (e as Error).message }));
-	process.stdout.write(`${JSON.stringify(verdict)}\n`);
+	await emit(verdict);
+}
+
+/**
+ * Write the verdict and wait for it to leave the process. stdout to a pipe is asynchronous,
+ * and `process.exit()` does not drain it — an exit racing the write can hand the poller half
+ * a JSON line, which breaks the one contract this file has. The write callback fires once
+ * the data is out of Node's buffer, so exiting after it is safe. Exit still has to be
+ * explicit rather than falling off the event loop: the driver's native library is not
+ * guaranteed to release its handles even after shutdown, and a poller's child that lingers
+ * is a poller that hangs.
+ */
+function emit(verdict: Verdict): Promise<void> {
+	return new Promise((resolve) => {
+		process.stdout.write(`${JSON.stringify(verdict)}\n`, () => resolve());
+	});
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href)
 	main().then(
 		() => process.exit(0),
-		(err) => {
-			process.stdout.write(`${JSON.stringify({ ready: false, detail: String(err) })}\n`);
-			process.exit(0);
-		},
+		(err) => emit({ ready: false, detail: String(err) }).then(() => process.exit(0)),
 	);

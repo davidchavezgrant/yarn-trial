@@ -307,6 +307,20 @@ const hm = (ms: number): string => {
 	return m >= 60 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m` : `${m}m`;
 };
 
+/**
+ * Resolve a query-addressed action to the handle it operated, in the observation the model
+ * saw. Both backends resolve `query` internally (dom.resolveRef / CdpBackend.resolveRef)
+ * with this same case-insensitive containment test and refuse ambiguity, so an act that
+ * succeeded matched exactly one candidate there; demanding uniqueness HERE means a miss
+ * (say, the backend matched a non-interactive row) credits nothing rather than guessing.
+ */
+const uniqueQueryHandle = (query: string, obs: ObservationBundle): string | number | undefined => {
+	const q = query.toLowerCase();
+	const hits = obs.interactive.filter((e) => e.name.toLowerCase().includes(q) || e.value.toLowerCase().includes(q));
+
+	return hits.length === 1 ? hits[0].handle : undefined;
+};
+
 async function main(): Promise<void> {
 	const argv = process.argv.slice(2);
 	const backendIdx = argv.indexOf("--backend");
@@ -434,6 +448,10 @@ async function main(): Promise<void> {
 	 */
 	const stamp = runKey("explore-", app);
 	const checkpointPath = `${OUT}/runs/${stamp}.checkpoint.json`;
+	// Where a pass that must not replace the committed map writes instead — the checkpoint's
+	// naming family, promoted by hand. See the demotion decision in writeArtifacts.
+	const salvageProsePath = `${OUT}/runs/${stamp}.salvage.md`;
+	const salvageGraphPath = `${OUT}/runs/${stamp}.salvage.json`;
 	// Descent's mutation journal, shared with the task agent's format so `npm run cleanup` can
 	// replay a crashed descent; `claimed` mirrors the agent's ledger.
 	const journalPath = `${OUT}/runs/${stamp}.journal.jsonl`;
@@ -480,11 +498,28 @@ async function main(): Promise<void> {
 			provenanceHeader({ app, actions, elapsed, findings: findings.length, backend: backendKind, findCalls, vision, guidance, salvaged, ...cov }) +
 			recovered.cleaned +
 			gatedSection(gated);
-		fs.writeFileSync(outPath, prose);
+		/**
+		 * Destination decision. A salvaged pass must never replace docs/appmaps/: the map it
+		 * asks for carries a FRESH capturedAt, and beats() in remote/appmaps.ts compares stamps,
+		 * so a two-finding map overwriting a committed 150-node one would then fan out to every
+		 * Mac — the exact loss the checkpoint comment above promises to prevent. Only the model
+		 * choosing to finish (frontier-empty or frontier-conceded) has actually swept the
+		 * frontier; any other ending that also produced under half the committed node count is
+		 * demoted to the salvage files alongside it, promoted by hand.
+		 */
+		let committedNodes = 0;
+		try {
+			committedNodes = ((JSON.parse(fs.readFileSync(graphPath, "utf8")) as AppMap).nodes ?? []).length;
+		} catch {} // no committed map, or an unparseable one — nothing to protect
+		const modelFinished = stopped === "frontier-empty" || stopped === "frontier-conceded";
+		const demoted = salvaged || (!modelFinished && graphNodes.size * 2 < committedNodes);
+		const prosePath = demoted ? salvageProsePath : outPath;
+		const jsonPath = demoted ? salvageGraphPath : graphPath;
+		fs.writeFileSync(prosePath, prose);
 		console.log(`\n=== exploration ${salvaged ? "SALVAGED" : "finished"} after ${actions} actions, ${elapsed}, ${findings.length} findings ===`);
 		console.log(`stopped: ${stopped} | controls: ${cov.actuated} actuated / ${cov.dismissed} dismissed / ${cov.seen} seen across ${cov.surfaces} surfaces | chapters: ${chapters}`);
 		if (refusals > 0) console.log(`safety guard refused ${refusals} action(s) on destructive-looking labels`);
-		console.log(`grounding notes: ${outPath}`);
+		console.log(`grounding notes: ${prosePath}`);
 
 		const graph: AppMap = {
 			app,
@@ -498,10 +533,15 @@ async function main(): Promise<void> {
 			edges: [...graphEdges.values()],
 			...(gated.length ? { gated } : {}),
 		};
-		fs.writeFileSync(graphPath, JSON.stringify(graph, null, 2));
+		fs.writeFileSync(jsonPath, JSON.stringify(graph, null, 2));
 		if (gated.length) console.log(`gated boundaries: ${cov.gatedRead} read / ${cov.gatedRefused} refused`);
 		const ambiguities = findScopeAmbiguities(graph);
-		console.log(`structured graph: ${graphPath} (${graph.nodes.length} nodes, ${graph.edges.length} edges)`);
+		console.log(`structured graph: ${jsonPath} (${graph.nodes.length} nodes, ${graph.edges.length} edges)`);
+		if (demoted) {
+			console.log(`kept OUT of docs/appmaps/ (${salvaged ? "pass did not finish on its own" : `${graphNodes.size} nodes vs ${committedNodes} committed`}); promote by hand if it is the better map:`);
+			console.log(`  cp ${prosePath} ${outPath}`);
+			console.log(`  cp ${jsonPath} ${graphPath}`);
+		}
 		if (ambiguities.length > 0) {
 			console.log(`scope ambiguities found (${ambiguities.length}) — the task agent will be warned about these:`);
 			for (const a of ambiguities)
@@ -926,12 +966,13 @@ async function main(): Promise<void> {
 			// mutation detection and boundary classification are all only meaningful against it,
 			// and `obs` is reassigned to the post-action snapshot below.
 			const preObs = obs;
-			// Credit before acting: the handle and the geometry are only meaningful against
-			// the observation the model was looking at when it chose this action.
-			const credited = frontierCredit(ledger, input.action, obs);
 
 			let resultText: string;
 			let isError = false;
+			// The handle the DOM backend resolved a `query` to. frontierCredit reads only
+			// element_index/ref/coordinates, so a query-addressed action credits nothing
+			// unless the resolution is carried back to it (see the credit below).
+			let resolvedRef: string | undefined;
 			// Banner up only while the pointer is ours. Exploration is as intrusive as a task
 			// run, and just as thinking-dominated, so it gets the same treatment: visible for
 			// the act/settle/re-observe window, hidden for the model call between.
@@ -944,6 +985,9 @@ async function main(): Promise<void> {
 						resultText = (await cdp.act(input.action)).slice(0, 400);
 					} else {
 						const request = dom ? await dom.toRequest(input.action) : toActionRequest(input.action, win!);
+						// dom.toRequest resolves `query` to a concrete ref and puts it on the
+						// request; keep it so the credit below names the element actually operated.
+						if (dom && request?.kind === "tool" && typeof request.args.ref === "string") resolvedRef = request.args.ref;
 						resultText = request
 							? (await driver!.act(request)).text.slice(0, 400)
 							: "waited (no driver action)";
@@ -962,6 +1006,28 @@ async function main(): Promise<void> {
 				// routine here) would otherwise strand the banner up for the rest of the pass.
 				overlay.setDriving(false);
 			}
+
+			// Credit AFTER the act, against the PRE-act observation. The keys are only
+			// meaningful against what the model saw — which needs the `preObs` binding held
+			// above, not the ordering — and an action that threw (stale handle, driver
+			// refusal) never operated its control: crediting it would retire a frontier entry
+			// unvisited, and the stamp's headline `controls: N actuated` would overstate
+			// coverage. Failure always arrives here as a throw (Driver.act and CdpBackend.act
+			// both throw; the "ACTION FAILED:" string is built from the catch), so !isError is
+			// the whole gate. A query-addressed action carries no handle of its own: attach
+			// the ref the backend resolved (DOM), or the query's unique match in preObs (the
+			// CDP backend resolves internally and returns only prose) — a non-unique match
+			// credits nothing, which under-counts rather than guessing.
+			let credited: string[] = [];
+			if (!isError) {
+				let creditAction = input.action;
+				if (creditAction?.query !== undefined && creditAction.ref === undefined && creditAction.element_index === undefined) {
+					const ref = resolvedRef ?? uniqueQueryHandle(String(creditAction.query), preObs);
+					if (ref !== undefined) creditAction = { ...creditAction, ref };
+				}
+				credited = frontierCredit(ledger, creditAction, preObs);
+			}
+
 			if (obs.appContent === 0) {
 				// AX tree collapsed (e.g. a modal/other window took over). Acting now means
 				// acting blind — stop rather than let the model flail against a menu bar.
@@ -1150,10 +1216,12 @@ async function main(): Promise<void> {
 				true,
 			);
 		} catch (rescueErr) {
-			// Last resort: the raw findings, unshaped. Still better than nothing.
+			// Last resort: the raw findings, unshaped — and to the salvage files, never
+			// docs/appmaps/: overwriting the committed .md alone would leave the committed
+			// .json pairing a proseSha256 that no longer matches the prose beside it.
 			console.error(`salvage call failed: ${rescueErr instanceof Error ? rescueErr.message : String(rescueErr)}`);
 			fs.writeFileSync(
-				outPath,
+				salvageProsePath,
 				provenanceHeader({
 					app,
 					actions,
@@ -1167,8 +1235,20 @@ async function main(): Promise<void> {
 					...coverageNow("error"),
 				}) + `# ${app} — grounding notes (raw findings only)\n\n${findings.map((f) => `- ${f}`).join("\n")}`,
 			);
-			console.log(`wrote ${findings.length} raw findings to ${outPath}`);
-			console.log(`graph checkpoint (not promoted to docs/appmaps): ${checkpointPath}`);
+			const rawGraph: AppMap = {
+				app,
+				capturedAt: new Date().toISOString(),
+				provenance: "explore",
+				coverage: coverageNow("error"),
+				nodes: [...graphNodes.values()],
+				edges: [...graphEdges.values()],
+				...(gated.length ? { gated } : {}),
+			};
+			fs.writeFileSync(salvageGraphPath, JSON.stringify(rawGraph, null, 2));
+			console.log(`wrote ${findings.length} raw findings to ${salvageProsePath}`);
+			console.log(`graph: ${salvageGraphPath} (${rawGraph.nodes.length} nodes); promote by hand if it is the better map:`);
+			console.log(`  cp ${salvageProsePath} ${outPath}`);
+			console.log(`  cp ${salvageGraphPath} ${graphPath}`);
 		}
 	} finally {
 		// Put the app back BEFORE closing the backends — teardown needs one of them. Only under

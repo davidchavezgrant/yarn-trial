@@ -245,13 +245,23 @@ export async function pickWindowByPid(driver: Driver, pid: number): Promise<Wind
  */
 export function mintApprovalToken(pid: number, profile = PROFILE_NAME): string | undefined {
 	if (process.env.YARN_BROWSER_AUTO_APPROVE === "0") return undefined;
+	// The profile name travels as argv (no shell), but it also names an on-disk profile
+	// directory and a CLI flag value, so a value with separators or metacharacters is an
+	// operator config error. Same posture as envNum: a knob wrong enough not to parse is a
+	// knob the operator thinks is doing something, and the loud path is the honest one.
+	if (!/^[\w-]+$/.test(profile)) throw new Error(`profile name must match [\\w-]+, got "${profile}" — check YARN_BROWSER_PROFILE`);
 
+	// Values reach the script as argv, never by string interpolation: a space in CUA_DRIVER_BIN
+	// splices into extra spawn words and the catch below swallows the failure — minting degrades
+	// to "no token" and the run fails later blaming consent — and Tcl runs [...]/$ substitution
+	// on anything pasted into source. `lindex $argv N` reads each value as one word whatever it
+	// contains.
 	const script =
 		`set timeout 30\n` +
-		`spawn ${DRIVER_BIN} browser-approve --pid ${pid} --profile-mode isolated_named --profile-name ${profile}\n` +
+		`spawn [lindex $argv 0] browser-approve --pid [lindex $argv 1] --profile-mode isolated_named --profile-name [lindex $argv 2]\n` +
 		`expect {\n  -re "APPROVE to continue" { send "APPROVE\\r"; exp_continue }\n  eof\n}\n`;
 	try {
-		const out = execFileSync("expect", ["-"], { input: script, encoding: "utf8", timeout: 40_000, stdio: ["pipe", "pipe", "pipe"] });
+		const out = execFileSync("expect", ["-", DRIVER_BIN, String(pid), profile], { input: script, encoding: "utf8", timeout: 40_000, stdio: ["pipe", "pipe", "pipe"] });
 		// The token is the last non-empty line: a UUID, printed after the prompt transcript.
 		const token = out.trim().split("\n").map((l) => l.trim()).filter(Boolean).at(-1);
 
@@ -328,7 +338,19 @@ export async function ensureBrowser(driver: Driver, target: Target, opts: { cdp?
 	// The prepared pid is what we drive when the driver launched its OWN isolated process; when
 	// it reused the one we seeded, the two are the same. Either way the pid — never the app
 	// name — decides the window, because both processes are called "Google Chrome".
-	const pid = preparedPid(prepared.raw) ?? seed.pid;
+	//
+	// The seed fallback is only sound when the driver worked on the process we seeded. When the
+	// prepare says it launched (or restarted) a browser and reports no pid for it, the seed is
+	// a NAME match that may be the operator's own Chrome — the very profile browser_prepare
+	// promises never to touch — so refuse rather than guess.
+	const reported = preparedPid(prepared.raw);
+	if (reported === undefined && prepared.effects.some((e) => e === "launched_browser" || e === "restarted_browser"))
+		throw new BrowserUnavailableError(
+			"",
+			`the driver reported ${prepared.effects.join(", ")} but no pid for the browser it launched; ` +
+				`refusing to pick a window by name — "${BROWSER_APP}" also matches the operator's own browser`,
+		);
+	const pid = reported ?? seed.pid;
 	let win: WindowRef | undefined;
 	for (let i = 0; i < 20 && !win; i++) {
 		win = await pickWindowByPid(driver, pid);

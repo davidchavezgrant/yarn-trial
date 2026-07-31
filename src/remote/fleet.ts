@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url";
 import { type HostEntry, type Inventory, loadHosts } from "./hosts.js";
-import { DEFAULT_SSH_TIMEOUT_MS, firstLine, runnerArgv, runSsh, type SshResult, type SshRunner } from "./ssh.js";
+import { DEFAULT_SSH_TIMEOUT_MS, firstLine, lastFrame, runnerArgv, runSsh, type SshResult, type SshRunner } from "./ssh.js";
 
 /**
  * Fleet-wide status, and the host pick that follows from it.
@@ -82,14 +82,13 @@ async function hostStatus(host: HostEntry, run: SshRunner, timeoutMs: number): P
 
 	// Record<string, unknown>, not any: this is a remote process's stdout, so every field below
 	// is checked before use and `any` would silently let a future field skip that check.
-	let parsed: Record<string, unknown>;
-	try {
-		parsed = JSON.parse(result.stdout) as Record<string, unknown>;
-	} catch {
-		// runnerctl does not exist yet, and when it does a login banner or a warning on
-		// stdout is a live possibility. Either way this is a degraded row, not a crash.
-		return { name: host.name, reachable: true, state: "unknown", reason: "status output was not JSON" };
-	}
+	// `lastFrame` rather than JSON.parse over the whole stdout, because a login banner or an
+	// ssh warning ahead of the reply frame used to throw here — degrading a healthy idle host
+	// to "unknown", which `--host auto` reads as no idle host in the fleet at all.
+	const parsed: Record<string, unknown> | undefined = lastFrame(result.stdout);
+	// runnerctl does not exist yet, and a host without it answers with nothing parseable.
+	// That is a degraded row, not a crash.
+	if (!parsed) return { name: host.name, reachable: true, state: "unknown", reason: "status output was not JSON" };
 
 	const state: FleetState = parsed?.state === "idle" || parsed?.state === "busy" ? parsed.state : "unknown";
 

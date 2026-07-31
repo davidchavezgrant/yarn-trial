@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { appmapsDir, dataRoot, outDir } from "./paths.js";
-import { listApps, listRecordedRuns, pruneUiState, readUiState, RunController, streamPump, writeUiState } from "./ui-core.js";
+import { listApps, listRecordedRuns, parseByteRange, pruneUiState, readUiState, RunController, streamPump, writeUiState } from "./ui-core.js";
 
 /**
  * Each test gets its own data root rather than writing out/ui-state.json into the checkout.
@@ -245,4 +245,34 @@ test("streamPump__EmitsTheFinalLine__When__TheStreamEndsWithoutANewline", () => 
 	pump.push(Buffer.from("exit reason: session lease lost"));
 	pump.end();
 	assert.deepEqual(got, ["exit reason: session lease lost"]);
+});
+
+test("parseByteRange__ServesThePart__When__BothEndsAreNamed", () => {
+	assert.deepEqual(parseByteRange("bytes=10-19", 100), { kind: "part", start: 10, end: 19 });
+	// An end past the file clamps rather than 416s — RFC 9110 says so, and Chromium asks.
+	assert.deepEqual(parseByteRange("bytes=90-500", 100), { kind: "part", start: 90, end: 99 });
+});
+
+test("parseByteRange__ServesTheTail__When__OnlyAStartIsNamed", () => {
+	// The form Chromium's media stack actually sends when scrubbing.
+	assert.deepEqual(parseByteRange("bytes=40-", 100), { kind: "part", start: 40, end: 99 });
+});
+
+test("parseByteRange__ServesTheLastNBytes__When__TheRangeIsASuffix", () => {
+	// bytes=-500 names the LAST 500 bytes. The old parse treated it as 0-500 and served the
+	// head of the file labelled as its tail.
+	assert.deepEqual(parseByteRange("bytes=-30", 100), { kind: "part", start: 70, end: 99 });
+	// A suffix longer than the file is the whole file, not an error (RFC 9110 §14.1.2).
+	assert.deepEqual(parseByteRange("bytes=-500", 100), { kind: "part", start: 0, end: 99 });
+});
+
+test("parseByteRange__AnswersWhole__When__ThereIsNoRangeToHonour", () => {
+	assert.deepEqual(parseByteRange(null, 100), { kind: "whole" });
+	assert.deepEqual(parseByteRange("bytes=-", 100), { kind: "whole" });
+	assert.deepEqual(parseByteRange("lines=1-2", 100), { kind: "whole" });
+});
+
+test("parseByteRange__Refuses__When__TheRangeStartsPastTheFile", () => {
+	assert.deepEqual(parseByteRange("bytes=100-", 100), { kind: "unsatisfiable" });
+	assert.deepEqual(parseByteRange("bytes=50-10", 100), { kind: "unsatisfiable" });
 });

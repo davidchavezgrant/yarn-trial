@@ -241,11 +241,17 @@ export class DomBackend {
 	}
 
 	private async snapshot(extra: Record<string, unknown>): Promise<any> {
-		const r = await this.driver.act({
-			kind: "tool",
-			name: "get_browser_state",
-			args: { ...this.target, snapshot_format: "semantic_v2", ...extra },
-		});
+		// Every CDP read funnels through here — snapshotPaged and find have no driver call of
+		// their own — so this is the one place the stale-binding recovery has to live.
+		// `this.target` is read INSIDE the closure: after a rebind the retry must carry the
+		// refreshed ids, not the ones the first attempt failed with.
+		const r = await this.withRebind(() =>
+			this.driver.act({
+				kind: "tool",
+				name: "get_browser_state",
+				args: { ...this.target, snapshot_format: "semantic_v2", ...extra },
+			}),
+		);
 
 		return JSON.parse(r.structuredJson ?? "{}");
 	}
@@ -360,6 +366,15 @@ export class DomBackend {
 		this.url = snap.url;
 
 		const shotPath = `${OUT}/${shotName}.png`;
+		// Delete any same-named frame FIRST (same rationale as harness.observe). Shot names carry
+		// no run stamp (`agent-step-3`), so a PNG from an earlier run sits at this exact path —
+		// and the existsSync guard below, which exists for the case the driver reports success
+		// but writes nothing, would pass against the stale file and feed a PREVIOUS run's frame
+		// to the model, pixelDelta and visualJudge. Removing it means existsSync tests only what
+		// THIS call wrote.
+		try {
+			fs.rmSync(shotPath, { force: true });
+		} catch {}
 		await this.driver.act({
 			kind: "tool",
 			name: "get_window_state",

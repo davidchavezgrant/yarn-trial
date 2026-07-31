@@ -21,6 +21,12 @@ interface FakeEl {
 	disabled: boolean;
 	checked: boolean;
 	children: FakeEl[];
+	// Scroll geometry, so the autoscroll pin is observable: notePin reads all three and the
+	// paint writes scrollTop. Zero everywhere means "unlaid-out", which notePin treats as pinned.
+	clientHeight: number;
+	scrollHeight: number;
+	scrollTop: number;
+	dataset: Record<string, string>;
 	onclick?: () => unknown;
 	addEventListener(): void;
 	querySelector(): null;
@@ -39,6 +45,10 @@ const el = (): FakeEl => ({
 	disabled: false,
 	checked: false,
 	children: [],
+	clientHeight: 0,
+	scrollHeight: 0,
+	scrollTop: 0,
+	dataset: {},
 	addEventListener() {},
 	querySelector: () => null,
 	appendChild(c: FakeEl) {
@@ -68,6 +78,9 @@ interface Harness {
 	line(text: string, owner?: string | null): void;
 	errText(e: unknown): string;
 	dropStaleSelection(): void;
+	selectApp(name: string, url?: string): void;
+	notePin(): void;
+	pinned: boolean;
 	host: string;
 }
 
@@ -117,7 +130,8 @@ function mount(): Harness {
 		"setTimeout",
 		`${APP_JS.replace(/<\/script>\s*$/, "")}
 		return { get sel(){return sel}, set sel(v){sel=v}, set apps(v){apps=v}, get host(){return host}, set host(v){host=v},
-			check, syncUrlRow, selUrl, isBrowser, appendLine, line, errText, dropStaleSelection };`,
+			get pinned(){return pinned}, set pinned(v){pinned=v},
+			check, syncUrlRow, selUrl, isBrowser, appendLine, line, errText, dropStaleSelection, selectApp, notePin };`,
 	);
 	const noTimer = () => 0;
 	const api = fn({ __bus: bus, addEventListener() {} }, document, noTimer, noTimer) as Harness;
@@ -292,4 +306,74 @@ test("dropStaleSelection__KeepsSel__When__TheSelectionIsATypedUrl", () => {
 	ui.sel = "www.notion.so";
 	ui.dropStaleSelection();
 	assert.equal(ui.sel, "www.notion.so");
+});
+
+test("selUrl__SurvivesTheSearchBoxChanging__When__AWebTargetWasSelected", () => {
+	// The fresh web entry exists only in the list markup, so its URL used to be re-derived
+	// from the search box on every dispatch. Editing the box then silently stripped the URL
+	// from a selection still labelled "Run on www.notion.so" — and the host, handed no url,
+	// spawned an agent against a Mac app named after the site.
+	const ui = mount();
+	ui.apps = [];
+	ui.selectApp("www.notion.so", "https://www.notion.so/");
+	ui.nodes.q.value = "something else entirely";
+	assert.equal(ui.selUrl(), "https://www.notion.so/");
+	// And the selection is not stale either: the stashed URL keeps it a valid target.
+	ui.dropStaleSelection();
+	assert.equal(ui.sel, "www.notion.so");
+});
+
+test("selectApp__UpdatesTheStashedUrl__When__TheSameEntryIsReclickedWithANewUrl", () => {
+	// Retyping a URL and clicking the same host entry again is a re-target, not a no-op.
+	const ui = mount();
+	ui.apps = [];
+	ui.selectApp("www.notion.so", "https://www.notion.so/");
+	ui.selectApp("www.notion.so", "https://www.notion.so/product");
+	assert.equal(ui.selUrl(), "https://www.notion.so/product");
+});
+
+test("notePin__ReleasesThePin__When__TheOperatorScrollsUp", () => {
+	// Autoscroll used to be unconditional: scroll up to read step 6 and the next line yanks
+	// the view back down, once a second, for the whole run.
+	const ui = mount();
+	const log = ui.nodes.log;
+	log.clientHeight = 200;
+	log.scrollHeight = 1000;
+	log.scrollTop = 100; // far from the bottom
+	ui.notePin();
+	assert.equal(ui.pinned, false);
+	// Appending while unpinned must not move the view.
+	ui.appendLine("[7] click");
+	assert.equal(log.scrollTop, 100);
+});
+
+test("notePin__ReArmsThePin__When__ScrolledBackNearTheBottom", () => {
+	const ui = mount();
+	const log = ui.nodes.log;
+	log.clientHeight = 200;
+	log.scrollHeight = 1000;
+	log.scrollTop = 780; // within the one-line slack of the bottom
+	ui.notePin();
+	assert.equal(ui.pinned, true);
+	// A pinned pane follows: the paint writes scrollTop to the (fake) full height.
+	ui.appendLine("[8] click");
+	assert.equal(log.scrollTop, log.scrollHeight);
+});
+
+test("appendLine__StillCapsTheDom__When__NoAnimationFrameEverFires", () => {
+	// Electron throttles rAF to zero for hidden windows — during exactly the workload the cap
+	// exists for. The synchronous overflow trim has to hold the line without any paint.
+	const ui = mount();
+	// Simulate "rAF never fires": queue a paint that is never delivered by giving the harness
+	// a requestAnimationFrame that swallows its callback.
+	(globalThis as { requestAnimationFrame?: unknown }).requestAnimationFrame = () => 0;
+	try {
+		for (let i = 0; i < 1200; i++) ui.appendLine(`[${i}] click`);
+		assert.ok(
+			ui.nodes.log.children.length <= 801,
+			`hidden-window pane grew to ${ui.nodes.log.children.length} nodes; the overflow trim is 2× the 400 cap`,
+		);
+	} finally {
+		delete (globalThis as { requestAnimationFrame?: unknown }).requestAnimationFrame;
+	}
 });

@@ -388,6 +388,102 @@ test("stop__EndsTheRemoteJob__When__TheOperatorAsks", async () => {
 	await s.done;
 });
 
+test("stop__Refuses__When__TheDispatchHasNotBeenAcceptedYet", async () => {
+	// The page shows Stop the moment `started` echoes — seconds before the ssh dispatch
+	// resolves. In that window the host can still read `auto` (stopRemote would throw resolving
+	// it) and there is no jobId, which stopRemote treats as "stop whatever that Mac is doing" —
+	// possibly someone ELSE's run. Neither is acceptable; the stop waits.
+	let dispatched: (v: DispatchResult) => void = () => {};
+	const gate = new Promise<DispatchResult>((r) => {
+		dispatched = r;
+	});
+	const stops: (string | undefined)[] = [];
+	const deps = fakeDeps({
+		dispatch: () => gate,
+		stopRemote: async (_h, jobId) => {
+			stops.push(jobId);
+
+			return { ok: true } as StopResult;
+		},
+	});
+	const s = sink();
+	const controller = new RemoteRunController(deps);
+	controller.start({ host: "auto", app: "Yarn", task: "t", kind: "task", record: false, noVision: false }, s.handlers);
+
+	assert.match((await controller.stop()) ?? "", /not been accepted yet/);
+	assert.deepEqual(stops, [], "a stop before the jobId exists reached the remote");
+	dispatched(accepted("j-1"));
+	await s.done;
+});
+
+test("stop__AnswersWithTheFailure__When__TheStopItselfThrows", async () => {
+	// A rejected stopRemote used to escape through the IPC handler as an unhandled rejection;
+	// the operator watched a run they believed they had ended.
+	const deps = fakeDeps({
+		dispatch: async () => accepted("j-2"),
+		follow: async () => {
+			await new Promise((r) => setTimeout(r, 5));
+
+			return { nextOffset: 0, done: true, state: "stopped", exitCode: null } as FollowResult;
+		},
+		stopRemote: async () => {
+			throw new Error("ssh exited 255");
+		},
+	});
+	const s = sink();
+	const controller = new RemoteRunController(deps);
+	controller.start({ host: "mac1", app: "Yarn", task: "t", kind: "task", record: false, noVision: false }, s.handlers);
+	await new Promise((r) => setImmediate(r));
+
+	assert.match((await controller.stop()) ?? "", /ssh exited 255/);
+	await s.done;
+});
+
+test("start__KeepsRetrying__When__DropsAreTransientAndTheStreamMakesProgress", async () => {
+	// A lifetime attempt counter declared the stream lost on the sixth drop of a 40-minute
+	// pass even when every reattach worked. Progress must buy the budget back: eight drops,
+	// each followed by real bytes, end with the run's own `done`, not with "lost the stream".
+	let calls = 0;
+	const deps = fakeDeps({
+		follow: async (_h, _j, onChunk, opts?: FollowOptions): Promise<FollowResult> => {
+			calls++;
+			const at = opts?.fromByte ?? 0;
+			if (calls > 8) return { nextOffset: at, done: true, state: "done", exitCode: 0 };
+			onChunk(`chunk ${calls}\n`);
+
+			return { nextOffset: at + 10, done: false, error: "ssh exited 255" };
+		},
+	});
+	const s = sink();
+	new RemoteRunController(deps).start({ host: "mac1", app: "Yarn", task: "t", kind: "task", record: false, noVision: false }, s.handlers);
+
+	assert.equal((await s.done).code, 0, "a stream that always recovered was declared lost");
+	assert.equal(calls, 9);
+});
+
+test("start__FlushesTheTail__When__TheStreamIsDeclaredLost", async () => {
+	// The lost-stream exit was the one terminal path that dropped the splitter's pending
+	// partial line — often the run's last words, since a dying stream rarely ends on a newline.
+	// The chunk arrives once, on the first attempt: retries resume from the same offset and a
+	// truly dead stream hands over nothing more.
+	let first = true;
+	const deps = fakeDeps({
+		follow: async (_h, _j, onChunk): Promise<FollowResult> => {
+			if (first) {
+				first = false;
+				onChunk("half a final line");
+			}
+
+			return { nextOffset: 0, done: false, error: "gone" };
+		},
+	});
+	const s = sink();
+	new RemoteRunController(deps).start({ host: "mac1", app: "Yarn", task: "t", kind: "task", record: false, noVision: false }, s.handlers);
+
+	assert.equal((await s.done).code, 1);
+	assert.ok(s.lines.includes("half a final line"), "the pending partial line was dropped on the lost-stream exit");
+});
+
 test("lastRunHost__StillNamesTheMac__When__TheRunHasAlreadyFinished", async () => {
 	// `attached` is cleared before `done` fires, and `done` is exactly when a caller needs the
 	// host: a run that refuses to drive names a machine someone has to go and look at. With

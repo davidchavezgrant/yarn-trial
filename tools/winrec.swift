@@ -85,8 +85,24 @@ Task {
 			exit(2)
 		}
 
-		// SCWindow.frame is in points; capture at the window's backing scale.
-		let scale = window.frame.width > 0 ? 2.0 : 2.0
+		// SCWindow.frame is in points; capture at the backing scale of the display the
+		// window actually sits on, or a 1x screen gets a 2x-upscaled stream — double the
+		// resolution and file size for pixels that do not exist. SCWindow.frame is top-left
+		// CG space while NSScreen frames are bottom-left AppKit space, so flip each screen
+		// against the primary before intersecting; the screen holding most of the window
+		// wins. 2.0 only when nothing overlaps (mid-drag between displays, stale frame).
+		let scale: CGFloat = {
+			guard let primary = NSScreen.screens.first else { return 2.0 }
+			var best: (area: CGFloat, scale: CGFloat) = (0, 2.0)
+			for screen in NSScreen.screens {
+				let f = screen.frame
+				let cg = CGRect(x: f.minX, y: primary.frame.maxY - f.maxY, width: f.width, height: f.height)
+				let overlap = cg.intersection(window.frame)
+				let area = overlap.isNull ? 0 : overlap.width * overlap.height
+				if area > best.area { best = (area, screen.backingScaleFactor) }
+			}
+			return best.scale
+		}()
 		let width = (Int(window.frame.width * scale)) & ~1
 		let height = (Int(window.frame.height * scale)) & ~1
 

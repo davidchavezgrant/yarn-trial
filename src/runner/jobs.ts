@@ -75,6 +75,12 @@ export interface JobRecord {
 	endedAt?: string;
 	/** Null when the child was signalled rather than exiting, or when nobody collected it. */
 	exitCode?: number | null;
+	/**
+	 * The signal the child died to, when it died to one. Kept because an UNREQUESTED signal —
+	 * a SIGSEGV, an OOM kill — is a `failed`, not a `stopped`, and the record has to say which
+	 * crash it was or the distinction is unactionable.
+	 */
+	signal?: string;
 	artifacts: JobArtifacts;
 }
 
@@ -242,7 +248,12 @@ export function updateJob(id: string, patch: Partial<JobRecord>, root = jobsDir(
 	return next;
 }
 
-/** Newest first — the id sorts lexicographically by time, so this needs no stat calls. */
+/**
+ * Newest first. The id's timestamp portion sorts lexicographically by time, but explore ids
+ * carry an `explore-` prefix and `e` outranks every digit — sorted raw, every explore job sat
+ * above every task job regardless of age, and `runnerctl logs` on an idle host streamed a
+ * week-old explore log. Compare on the timestamp with the prefix stripped; still no stat calls.
+ */
 export function listJobs(root = jobsDir()): JobRecord[] {
 	let names: string[];
 	try {
@@ -250,11 +261,11 @@ export function listJobs(root = jobsDir()): JobRecord[] {
 	} catch {
 		return [];
 	}
+	const stamp = (n: string): string => (n.startsWith("explore-") ? n.slice("explore-".length) : n);
 
 	return names
 		.filter((n) => SAFE_ID.test(n))
-		.sort()
-		.reverse()
+		.sort((a, b) => (stamp(a) < stamp(b) ? 1 : stamp(a) > stamp(b) ? -1 : 0))
 		.map((n) => readJob(n, root))
 		.filter((r): r is JobRecord => r !== undefined);
 }

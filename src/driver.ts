@@ -61,6 +61,10 @@ export class Driver {
 	private inner: CuaDriverLike;
 	private session: string;
 	private heartbeat?: NodeJS.Timeout;
+	/** Set the moment close() begins; a tick that fires after this must not re-declare the session. */
+	private closing = false;
+	/** The heartbeat call currently on the wire, so close() can wait it out before tearing down. */
+	private heartbeatInFlight?: Promise<unknown>;
 
 	private constructor(inner: CuaDriverLike, session: string) {
 		this.inner = inner;
@@ -114,7 +118,13 @@ export class Driver {
 	}
 
 	async close(): Promise<void> {
+		// clearInterval only stops FUTURE ticks. A heartbeat already on the wire would
+		// otherwise resolve after endSession — re-declaring a session nobody will ever end,
+		// against a uniffi handle that may already be destroyed. Flag first so the next tick
+		// stays home, then drain the one in flight before tearing anything down.
+		this.closing = true;
 		if (this.heartbeat) clearInterval(this.heartbeat);
+		if (this.heartbeatInFlight) await this.heartbeatInFlight.catch(() => {});
 		await this.inner.endSession(EndSessionInput.new({ session: this.session }));
 		await this.inner.shutdown();
 		if (this.inner instanceof CuaDriver) this.inner.uniffiDestroy();
@@ -134,7 +144,9 @@ export class Driver {
 	 */
 	private startHeartbeat(): void {
 		this.heartbeat = setInterval(() => {
-			this.inner
+			if (this.closing) return;
+
+			this.heartbeatInFlight = this.inner
 				.startSession(StartSessionInput.new({ session: this.session }))
 				// Swallowed deliberately: if the driver is genuinely gone, the next real
 				// action reports it with a real error. A failed heartbeat is not itself news.

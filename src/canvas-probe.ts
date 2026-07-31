@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { Driver } from "./driver.js";
 import { envNum } from "./env.js";
-import { findWindow, pixelDelta } from "./harness.js";
+import { findWindow, onInterrupt, pixelDelta } from "./harness.js";
 import { startOverlay } from "./overlay.js";
 import * as axdom from "./axdom.js";
 import { outDir } from "./paths.js";
@@ -290,6 +290,11 @@ async function main(): Promise<void> {
 	// A probe reads mostly, but it clicks and drags too — the machine is still not yours.
 	const overlay = startOverlay("probe", `Agent probing ${APP} — do not touch`);
 	const driver = await Driver.start("canvas-probe");
+	// The probe sleeps a lot, and a Ctrl-C mid-sleep would otherwise exit without end_session,
+	// leaking the driver session for its 300s lifetime and colliding with the next run on the
+	// host (LIMITATIONS §6). onInterrupt only sets a flag, so the phase seams below read it and
+	// return through the ordinary finally, which is what closes the session.
+	const interrupted = onInterrupt(() => driver.close());
 
 	try {
 		await driver.act({ kind: "tool", name: "launch_app", args: { name: APP } });
@@ -298,6 +303,7 @@ async function main(): Promise<void> {
 		console.log(`target: ${APP} pid=${win.pid} window=${win.windowId}`);
 		// Last chance to take your hands off before the probe owns the pointer.
 		await overlay.countdown();
+		if (interrupted()) return;
 
 		const snap = async (name: string): Promise<{ rows: Row[]; shot: string }> => {
 			const shot = `${OUT}/${name}.png`;
@@ -334,6 +340,7 @@ async function main(): Promise<void> {
 			});
 			await new Promise((r) => setTimeout(r, 2500));
 		} else console.log(`no nav item matching ${NAV} — probing from wherever the app opened`);
+		if (interrupted()) return;
 
 		// A fresh launch lands on the app's document list, and the canvas lives one level in.
 		// Match the document by title so the probe is self-contained and repeatable; a card's
@@ -356,6 +363,7 @@ async function main(): Promise<void> {
 		} else {
 			console.log(`could not find a "${DOC}" document — probing whatever is on screen.`);
 		}
+		if (interrupted()) return;
 
 		// Widen the canvas viewport before dumping. Yarn's timeline, for instance, opens showing
 		// ~20s of a 3:22 video, so most clips (and every sync point on them) sit outside the
@@ -424,9 +432,11 @@ async function main(): Promise<void> {
 			 * which is what lets an operator read a target off one run and use it in the next.
 			 * Overshooting is free: a viewport clamps at its own edge.
 			 */
-			for (let i = 0; i < HOME; i++) await pan("left");
+			for (let i = 0; i < HOME && !interrupted(); i++) await pan("left");
+			if (interrupted()) return;
 			await snap(surveyAt(0));
 			for (let i = 1; i <= SURVEY; i++) {
+				if (interrupted()) return;
 				await pan("right");
 				await snap(surveyAt(i));
 			}
@@ -529,6 +539,7 @@ async function main(): Promise<void> {
 				console.log(`  [${r.index}] ${r.role} "${r.label}" value="${r.value}" @(${r.frame})`);
 		} else console.log("\nno DECOY_X/DECOY_Y given — cannot distinguish target-specific text from any-click churn");
 
+		if (interrupted()) return;
 		// Selecting a sync point is what would reveal a readout, if one exists.
 		await driver.act({
 			kind: "tool",
@@ -575,7 +586,7 @@ async function main(): Promise<void> {
 		 * DECOY drag too: whatever a drag over inert canvas produces is the floor the real
 		 * drag has to clear.
 		 */
-		if (DRAG_DX !== 0) {
+		if (DRAG_DX !== 0 && !interrupted()) {
 			const dragFrom = async (fx: number, fy: number, tag: string) => {
 				const pre = await snap(`canvas-probe-${tag}-pre`);
 				await driver.act({

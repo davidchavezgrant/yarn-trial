@@ -47,6 +47,30 @@ const titleEq = (a: string, b: string): boolean =>
 	a.trim().toLowerCase() === b.trim().toLowerCase();
 
 /**
+ * Explore titles control nodes with decorations the AX tree never renders — the committed
+ * Yarn map holds "Cursor Style (project)" for a control observed as "Cursor Style". Compare
+ * with a trailing parenthetical removed too, or the decorated twin is not a candidate at all
+ * and a document-panel mutation is silently attributed to the ONLY candidate left: brand.
+ * Only the trailing parenthetical is stripped — one mid-name is content, not decoration.
+ */
+const titleMatchesControl = (title: string, control: string): boolean =>
+	titleEq(title, control) || titleEq(title.replace(/\s*\([^)]*\)\s*$/, ""), control);
+
+/**
+ * Does a surface node's title name this observed AX surface?
+ *
+ * Explore writes display titles, not AX labels: the committed map's brand parent reads
+ * "Brand Kit → Screen Clips (Screen Clip Settings)" while the observation carries
+ * "Screen Clip Settings". Whole-string equality never matches those — which silently killed
+ * the scope tie-break; every dual-scope mutation journaled with scope unset. So the observed
+ * surface is compared against each SEGMENT of the title (arrow steps and parentheticals).
+ * A segment must equal the surface in full, so "Settings" still matches nothing.
+ */
+const titleMatchesSurface = (title: string, surface: string): boolean =>
+	titleEq(title, surface)
+	|| title.split(/→|\(|\)/).some((seg) => seg.trim() !== "" && titleEq(seg, surface));
+
+/**
  * The surface a control node hangs off, as a name comparable to `InteractiveElement.surface`.
  *
  * Node ids are paths, so the parent is the id minus its last segment. That parent is usually
@@ -80,7 +104,7 @@ function graphFields(
 ): { settingKey?: string; scope?: SurfaceScope } {
 	if (!map) return {};
 
-	const candidates = map.nodes.filter((n) => n.kind === "control" && titleEq(n.title, control));
+	const candidates = map.nodes.filter((n) => n.kind === "control" && titleMatchesControl(n.title, control));
 	if (candidates.length === 0) return {};
 
 	const keys = new Set(candidates.map((n) => n.settingKey).filter((k): k is string => !!k));
@@ -90,7 +114,7 @@ function graphFields(
 	if (scopes.size === 1) return { settingKey, scope: [...scopes][0] };
 
 	const onSurface = surface
-		? candidates.filter((n) => titleEq(parentSurface(map, n.id), surface))
+		? candidates.filter((n) => titleMatchesSurface(parentSurface(map, n.id), surface))
 		: [];
 
 	return { settingKey, scope: onSurface.length === 1 ? onSurface[0].scope : undefined };
@@ -127,8 +151,22 @@ export function detectMutation(
 	// the wrong control.
 	if (!target.name) return undefined;
 
-	const after = nextObs.interactive.find((e) => e.name === target.name && e.surface === target.surface);
-	if (!after || after.value === target.value) return undefined;
+	const after = nextObs.interactive.filter((e) => e.name === target.name && e.surface === target.surface);
+	// The clicked element is gone from the next observation. Usually that is a menu closing —
+	// no mutation — but a click that lands on a menu/dropdown OPTION commits its change to a
+	// DIFFERENT control: the combobox the menu belonged to, which is still present. The
+	// canonical cursor-style task mutates exactly this way, so absence hands off to the
+	// option-commit scan rather than returning early.
+	if (after.length === 0) return optionCommit(target.name, prevObs, nextObs, graph, step);
+	// Same name, same surface, more than one element: (name, surface) cannot say which twin
+	// the action operated. Copies that AGREE on a value (AX trees routinely render duplicate
+	// entries for one control) diff unambiguously anyway; copies that disagree journal
+	// nothing, rather than pairing the operated control with whichever twin the walk order
+	// happens to list first — a fabricated diff between two different controls' values.
+	const values = new Set(after.map((e) => e.value));
+	if (values.size > 1) return undefined;
+	const afterValue = [...values][0];
+	if (afterValue === target.value) return undefined;
 
 	return {
 		kind: "setting",
@@ -136,9 +174,55 @@ export function detectMutation(
 		surface: target.surface,
 		...graphFields(graph, target.name, target.surface),
 		before: target.value,
-		after: after.value,
+		after: afterValue,
 		step,
 	};
+}
+
+/**
+ * The mutation a menu-option click commits.
+ *
+ * The clicked option vanishes with its menu, so the target-only diff above sees nothing —
+ * yet the combobox the menu belonged to now reads the option's label. That control, present
+ * in BOTH observations with its value newly equal to the clicked label, is the mutation.
+ * Exactly one such control is evidence; zero or several journals nothing, because a guess
+ * would send teardown to the wrong control. This is what puts the canonical cursor-style
+ * task's change — select "Arrow-first" from the Cursor Style menu — into the journal at all.
+ */
+function optionCommit(
+	optionLabel: string,
+	prevObs: ObservationBundle,
+	nextObs: ObservationBundle,
+	graph: AppMap | undefined,
+	step: number,
+): Mutation | undefined {
+	const candidates: Mutation[] = [];
+	const seen = new Set<string>();
+	for (const e of nextObs.interactive) {
+		if (!e.name || !titleEq(e.value ?? "", optionLabel)) continue;
+		const key = JSON.stringify([e.surface, e.name]);
+		if (seen.has(key)) continue;
+		seen.add(key);
+		const before = prevObs.interactive.filter((p) => p.name === e.name && p.surface === e.surface);
+		// Absent before the click means it appeared WITH the menu's closing — not a change we
+		// can prove; disagreeing twins are skipped for the reason detectMutation skips them.
+		if (before.length === 0) continue;
+		const prior = new Set(before.map((p) => p.value));
+		if (prior.size !== 1) continue;
+		const beforeValue = [...prior][0];
+		if (beforeValue === e.value) continue;
+		candidates.push({
+			kind: "setting",
+			control: e.name,
+			surface: e.surface,
+			...graphFields(graph, e.name, e.surface),
+			before: beforeValue,
+			after: e.value,
+			step,
+		});
+	}
+
+	return candidates.length === 1 ? candidates[0] : undefined;
 }
 
 /**
@@ -189,9 +273,16 @@ export function readJournal(file: string): Mutation[] {
  * missing route degrades a restore rather than invalidating it.
  */
 export function restoreRoute(graph: AppMap, settingKey: string, scope?: SurfaceScope): string {
-	const node =
-		graph.nodes.find((n) => n.kind === "control" && n.settingKey === settingKey && (!scope || n.scope === scope))
-		?? (scope ? undefined : graph.nodes.find((n) => n.kind === "control" && n.settingKey === settingKey));
+	const candidates = graph.nodes.filter((n) => n.kind === "control" && n.settingKey === settingKey);
+	// With a scope, the scoped node speaks for the store that was written. Without one, only
+	// an unambiguous key may route: the journal leaves scope unset precisely when it could not
+	// tell which twin was operated, and handing over the first node's route would walk the
+	// unattended restore model to whichever scope the map happens to list first.
+	const node = scope
+		? candidates.find((n) => n.scope === scope)
+		: candidates.length === 1
+			? candidates[0]
+			: undefined;
 	if (!node) return "";
 
 	return routeTo(graph, node.id);
