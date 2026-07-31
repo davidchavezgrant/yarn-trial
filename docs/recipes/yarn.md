@@ -121,5 +121,20 @@ Settings…**.
   probe spawned a canvas text overlay instead of script. The harness now refuses ref-less
   typing whose caret is not in the field you last clicked, so a focus miss costs one
   honest error instead of stray text.
+- **Yarn's comment-thread inputs are ProseMirror editors too** (classes like
+  `editor-timeline-commentsThread-input-…`). If a typing abort names one as the thief, a
+  comment thread on the timeline grabbed focus mid-typing — press escape once, then re-click
+  the field you meant. (Observed live 2026-07-31: focus jumped there 14 chars into a script
+  sentence.)
+- **After an interrupted typing action, do NOT undo.** The characters that landed are
+  progress; cmd+z can remove the whole scene and leave focus on `<body>` permanently (a live
+  run then burned 6 steps on clicks that changed nothing). Instead: re-observe, click ON the
+  landed text itself (its line may have MOVED after the re-render — old coordinates go
+  stale), and continue typing the remainder.
+- **If script-editor clicks stop doing anything** (repeated "focus is on <body>", 0.0% pixel
+  steps), the editor is wedged for this draft view. The reliable recovery is the composer
+  flow: click the "Ask, edit, or make something…" box, type an instruction telling Yarn's
+  agent what script to write, and send — verified live, the agent authors the scenes while
+  the script editor is unresponsive.
 - Creating a draft via "New draft" opens the editor immediately with the title "Untitled";
   the sidebar entry updates after the title field is committed (click away / switch tabs).

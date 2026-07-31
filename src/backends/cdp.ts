@@ -817,9 +817,9 @@ export class CdpBackend {
 					// hatch. Falls back to whatever the focus click recorded (or nothing).
 					const caret = (await this.page
 						.evaluate(
-							"(() => { const s = window.getSelection(); const a = document.activeElement; const f = a ? a.getBoundingClientRect() : null; let r = null; if (s && s.rangeCount > 0) { const c = s.getRangeAt(0).getBoundingClientRect(); if (c.width || c.height) r = c; } const b = r || f; if (!b) return null; return { x: b.x, y: b.y, w: Math.max(b.width, 2), h: Math.max(b.height, 14), field: f ? { x: f.x, y: f.y, w: f.width, h: f.height } : null }; })()",
+							"(() => { const s = window.getSelection(); const a = document.activeElement; const f = a ? a.getBoundingClientRect() : null; let r = null; if (s && s.rangeCount > 0) { const c = s.getRangeAt(0).getBoundingClientRect(); if (c.width || c.height) r = c; } const b = r || f; if (!b) return null; return { x: b.x, y: b.y, w: Math.max(b.width, 2), h: Math.max(b.height, 14), fromCaret: !!r, field: f ? { x: f.x, y: f.y, w: f.width, h: f.height } : null }; })()",
 						)
-						.catch(() => null)) as { x: number; y: number; w: number; h: number; field: { x: number; y: number; w: number; h: number } | null } | null;
+						.catch(() => null)) as { x: number; y: number; w: number; h: number; fromCaret: boolean; field: { x: number; y: number; w: number; h: number } | null } | null;
 					// Click-caret coherence, for the REF-LESS path only (a ref names its own
 					// target): the viewer just watched the pointer click somewhere, so the text
 					// must land in the field that click focused — on film the composer kept the
@@ -846,7 +846,24 @@ export class CdpBackend {
 							);
 						}
 					}
-					if (caret) this.lastActuation = { point: { x: caret.x + caret.w / 2, y: caret.y + caret.h / 2 }, box: { x: caret.x, y: caret.y, w: caret.w, h: caret.h } };
+					if (caret) {
+						// A collapsed caret in an empty editor reports a zero rect, so `caret`
+						// may really be the FIELD's rect — and centering on a pane-sized
+						// ProseMirror parked the pointer in empty panel space on film (round
+						// 16, t≈24s). When the true caret rect is unavailable, anchor at the
+						// last click point (the coherence check above proved the field
+						// contains it) or the field's text origin — never the rect center.
+						let p = { x: caret.x + caret.w / 2, y: caret.y + caret.h / 2 };
+						let box = { x: caret.x, y: caret.y, w: caret.w, h: caret.h };
+						const f = caret.field;
+						if (!caret.fromCaret && f) {
+							const c = this.lastClickPoint;
+							const inField = c && c.x >= f.x && c.x <= f.x + f.w && c.y >= f.y && c.y <= f.y + f.h;
+							p = inField && c ? { x: c.x, y: c.y } : { x: f.x + 12, y: f.y + 14 };
+							box = { x: p.x - 1, y: p.y - 8, w: 2, h: 16 };
+						}
+						this.lastActuation = { point: p, box };
+					}
 					const { chunks } = chunkText(text);
 					let typed = "";
 					for (const chunk of chunks) {
