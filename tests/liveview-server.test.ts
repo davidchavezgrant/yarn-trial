@@ -180,3 +180,10 @@ test("viewerHtml__SignalsTheShellThroughTheTitle__When__Dismissed", () => {
 	const html = viewerHtml("t".repeat(16));
 	assert.ok(html.includes(VIEWER_DISMISS_TITLE), "the dismiss sentinel is not in the page");
 });
+
+test("viewerHtml__CarriesNoHintText__When__Rendered", () => {
+	// Second pass on the overlay (David, 2026-07-31): no instructional text at all — "it
+	// should feel like we own the window". Esc/⌘] still work; they live in the CLI help.
+	const html = viewerHtml("t".repeat(16));
+	assert.doesNotMatch(html, /click the window|type your login|next page/);
+});

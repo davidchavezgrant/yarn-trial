@@ -10,11 +10,12 @@
 // for why).
 //
 // The page is a NATURAL OVERLAY, not a panel (set by David 2026-07-31: the bordered card with a
-// title bar, status line and hint strip read as "something we dumped on top" inside the shell).
+// title bar, status line and hint strip read as "something we dumped on top" inside the shell —
+// and a second pass removed the hints entirely: "it should feel like we own the window").
 // The only painted things are the stream itself — floating with a shadow on the shell-matched
-// background — a dismiss button hanging off its corner, and a transient toast that carries what
-// the status bar used to: errors with remedies, "signed in — closing", window hops. Live and
-// healthy shows NOTHING but the window.
+// background — a dismiss button hanging off its corner, and a toast that speaks ONLY when
+// something is wrong (errors with remedies, disconnection) or decisive ("signed in — closing",
+// an auto-press). Live and healthy shows NOTHING but the window, ever.
 
 /**
  * What the page sets `document.title` to when the operator dismisses it. The embedded
@@ -161,9 +162,9 @@ export function viewerHtml(token: string): string {
         painted = true;
         setSettling(false);
         placeClose();
-        // The old hint strip, said once and gone: by the second frame of their second
-        // sign-in nobody needs it on screen permanently.
-        toast('click the window to focus it, then type your login · Esc stays in the app · ⌘] next page');
+        // No hint, no greeting (set by David 2026-07-31: "it should feel like we own the
+        // window"). Esc and ⌘] still work — they are documented in the CLI's own help text,
+        // not on the stream.
       }
     });
   };
@@ -174,10 +175,8 @@ export function viewerHtml(token: string): string {
       // settling again). It cannot clear it — only a painted frame does, above: the engine
       // says frames are allowed a moment before one actually arrives, and revealing an empty
       // canvas in that gap is the flash this whole mechanism exists to remove.
+      // No hop toast either: a hop repaints the entire stream, which is its own announcement.
       if (ev.settling) { painted = false; setSettling(true); }
-      // A hop mid-flow is worth a breath of context — the title bar that used to carry it
-      // permanently is gone.
-      else if (painted && ev.title) toast(ev.title);
     }
     else if (ev.ev === 'auto') { toast('pressed “' + ev.pressed + '” for you'); }
     // The sign-in landed and the server is about to close this. Say so plainly: a stream that
