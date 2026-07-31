@@ -25,7 +25,15 @@ import { readManifest, utcDate } from "./manifest.js";
  * them. JUDGE_MODEL in the env still wins, as the operator override.
  */
 
-export const BENCH_JUDGE_MODEL = "openai/gpt-5.6-sol";
+/**
+ * The same model, reached over the transport that actually works. It was
+ * `openai/gpt-5.6-sol` (OpenRouter) until 2026-07-31, when a pre-flight check found that
+ * key dead (401 "User not found") — which would have failed the judge step for every run
+ * in the matrix AFTER all 62 had been spent. `azure/` routes to the Responses transport
+ * (src/core/harness/responses.ts); the pinning argument is unchanged, since the point is
+ * that ONE judge grades every arm.
+ */
+export const BENCH_JUDGE_MODEL = "azure/gpt-5.6-sol";
 
 /** Terminal job states — same set collect uses; a run still in flight has no log to judge. */
 const TERMINAL = new Set(["done", "failed", "stopped", "orphaned"]);

@@ -297,8 +297,9 @@ export async function judgeRun(stamp: string, opts?: { noFrames?: boolean; model
 		});
 	}
 
-	const { client, model } = makeClient();
-	const judgeModel = opts?.model ?? process.env.JUDGE_MODEL ?? model;
+	// The model is chosen BEFORE the client, because the id decides the transport: asking an
+	// Anthropic client for an `azure/*` id answers 404 for a model that provider never had.
+	const { client, model: judgeModel } = makeClient(opts?.model ?? process.env.JUDGE_MODEL);
 	// 3000, not visualJudge's 2000: same reasoning-eats-output lesson, but this judge writes a
 	// verdict per channel plus citations over a whole trajectory, and a cap it hits on exactly
 	// the hardest runs is the worst direction for the bias to run.

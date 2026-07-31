@@ -662,7 +662,18 @@ function sourcesFor(job: JobRecord): Source[] {
 	// The whole job directory, not just log.txt: job.json is the record of what was asked for
 	// and what it exited with, and reading a pulled log without it is guesswork.
 	const out: Source[] = [{ key: "job", rel: `out/jobs/${job.id}`, dir: true }];
-	if (a.runLog) out.push({ key: "runLog", rel: a.runLog, dir: false });
+	if (a.runLog) {
+		out.push({ key: "runLog", rel: a.runLog, dir: false });
+		// The run's step frames, DERIVED like appmapGraph rather than declared, so records
+		// written before this line still pull them: run.ts always writes them to
+		// `out/runs/<stamp>-steps/`, and the stamp IS the job id.
+		//
+		// Without this every fleet run reached the offline judge with no trustworthy frames —
+		// it believes a screenshot path only when it names a per-run `-steps/` directory
+		// (judge.ts), precisely so one run cannot grade another's pixels — so VISUAL came back
+		// UNAVAILABLE for the whole matrix and half the judge's signal was silently blank.
+		out.push({ key: "stepFrames", rel: `out/runs/${job.id}-steps`, dir: true });
+	}
 	// A replay's mutation journal. Absent from the disk when the replay changed nothing, which
 	// classifyRsync reads as `missing` — the ordinary per-file outcome, not a failed pull.
 	if (a.journal) out.push({ key: "journal", rel: a.journal, dir: false });

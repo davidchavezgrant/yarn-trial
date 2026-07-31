@@ -27,8 +27,15 @@ import { AZURE_ENDPOINT_ENV, AZURE_KEY_ENV, type ModelClient, responsesClient } 
  */
 export type Transport = "anthropic" | "openrouter" | "azure-responses";
 
-export function makeClient(): { client: ModelClient; model: string; transport: Transport } {
-	const requested = process.env.AGENT_MODEL?.trim();
+/**
+ * `want` overrides AGENT_MODEL for callers that have their own model — the judge pins one so
+ * every arm is graded by the same grader. It must go through HERE rather than being swapped in
+ * downstream: the id picks the transport, so a caller that changed only the id got a client
+ * for the wrong provider and a 404 naming a model that provider never had (exactly what
+ * `JUDGE_MODEL=azure/...` did until 2026-07-31).
+ */
+export function makeClient(want?: string): { client: ModelClient; model: string; transport: Transport } {
+	const requested = want?.trim() || process.env.AGENT_MODEL?.trim();
 	const anthropicKey = process.env.ANTHROPIC_API_KEY;
 	const openrouter = process.env.OPENROUTER_API_KEY;
 	const azureEndpoint = process.env[AZURE_ENDPOINT_ENV]?.trim();
@@ -37,7 +44,10 @@ export function makeClient(): { client: ModelClient; model: string; transport: T
 	// reach. :nitro is OpenRouter's throughput-first routing (fastest provider hosting the
 	// model, premium pricing) — a model-id suffix, not a different model. Composes with
 	// providerRouting(): nitro sets the sort, the ignore list still excludes watched failures.
-	const model = requested || (anthropicKey ? "claude-fable-5" : "openai/gpt-5.6-sol:nitro");
+	// The keyless-Anthropic fallback names Azure rather than OpenRouter: the OpenRouter key
+	// was found dead on 2026-07-31 (401 "User not found"), so defaulting there produced a
+	// confusing mid-run 401 instead of a clear "no key for this transport" refusal.
+	const model = requested || (anthropicKey ? "claude-fable-5" : azureKey ? "azure/gpt-5.6-sol" : "openai/gpt-5.6-sol:nitro");
 
 	// `azure/<deployment>` is the third transport: OpenAI's Responses API, translated at the
 	// boundary (src/core/harness/responses.ts) so no call site knows the difference. The

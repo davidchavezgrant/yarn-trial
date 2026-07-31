@@ -340,7 +340,7 @@ const USAGE = `usage: ./run bench plan
 plan     print the resolved matrix — every arm, flags, n, phase. No side effects.
 phase    dispatch that phase's runs to the fleet queue. WITHOUT --go: preview and exit 2.
          --model runs the pass under that model (AGENT_MODEL on every child; e.g.
-         claude-fable-5 or openai/gpt-5.6-sol:nitro). Each model is a SEPARATE
+         claude-fable-5 or azure/gpt-5.6-sol). Each model is a SEPARATE
          self-grounded pass: its own explores, its own maps, its own sample counts —
          run the whole matrix under one model, then again under the other. Sequencing
          matters: docs/appmaps/ holds one live map per app, so a pass's phase 2 must
@@ -350,7 +350,7 @@ phase    dispatch that phase's runs to the fleet queue. WITHOUT --go: preview an
 collect  pull artifacts for every uncollected manifest entry, compute metrics, rewrite
          the report skeleton. Idempotent; run it as often as you like while the queue drains.
 judge    grades collected runs with the offline adversarial judge (pinned to
-         openai/gpt-5.6-sol; JUDGE_MODEL overrides); idempotent — skips runs already
+         azure/gpt-5.6-sol; JUDGE_MODEL overrides); idempotent — skips runs already
          judged. Run after runs land, before reading the report's Judge section.`;
 
 async function main(argv: string[]): Promise<number> {

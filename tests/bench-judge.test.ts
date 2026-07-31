@@ -36,7 +36,9 @@ test("armById__ResolvesFixtureArms__When__JudgeTestsRun", () => {
 
 test("BENCH_JUDGE_MODEL__PinsTheJudgeModel__When__Exported", () => {
 	// Frozen by the contract: the judge is a fixed model, not whatever AGENT_MODEL says.
-	assert.equal(BENCH_JUDGE_MODEL, "openai/gpt-5.6-sol");
+	// `azure/` since 2026-07-31 — same model, but the OpenRouter key it used to ride was
+	// found dead in a pre-flight check, and the id decides the transport (makeClient).
+	assert.equal(BENCH_JUDGE_MODEL, "azure/gpt-5.6-sol");
 });
 
 // --- fixtures ---

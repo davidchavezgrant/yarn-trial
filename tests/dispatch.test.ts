@@ -567,10 +567,19 @@ test("pull__WritesUnderTheSameKey__When__JobProducedArtifacts", async () => {
 		});
 
 		assert.equal(result.ok, true);
-		assert.deepEqual(result.artifacts.map((a) => a.key), ["job", "runLog", "recording"]);
+		// stepFrames rides with every runLog: the offline judge trusts a screenshot path only
+		// when it names a per-run `-steps/` dir, so a fleet run that left its frames behind
+		// graded VISUAL as UNAVAILABLE — half the judge's signal, silently blank.
+		assert.deepEqual(result.artifacts.map((a) => a.key), ["job", "runLog", "stepFrames", "recording"]);
+		assert.equal(result.artifacts.find((a) => a.key === "stepFrames")?.rel, "out/runs/2026-07-30T12-00-00-yarn-steps");
 		assert.deepEqual(
 			result.artifacts.map((a) => a.rel),
-			["out/jobs/2026-07-30T12-00-00-yarn", "out/runs/2026-07-30T12-00-00-yarn.json", "out/recording/2026-07-30T12-00-00-yarn"],
+			[
+				"out/jobs/2026-07-30T12-00-00-yarn",
+				"out/runs/2026-07-30T12-00-00-yarn.json",
+				"out/runs/2026-07-30T12-00-00-yarn-steps",
+				"out/recording/2026-07-30T12-00-00-yarn",
+			],
 		);
 		for (const a of result.artifacts) assert.equal(a.local.startsWith(dest), true, `${a.local} landed outside the data root`);
 
@@ -651,7 +660,7 @@ test("pull__FetchesTheJournal__When__TheJobWasAReplay", async () => {
 			rsync: async (_f, argv) => (argv.some((a) => a.endsWith(".journal.jsonl")) ? { code: 23, stdout: "", stderr: 'rsync: link_stat "...journal.jsonl" failed: No such file or directory (2)\n' } : { code: 0, stdout: "", stderr: "" }),
 		});
 
-		assert.deepEqual(result.artifacts.map((a) => a.key), ["job", "runLog", "journal"]);
+		assert.deepEqual(result.artifacts.map((a) => a.key), ["job", "runLog", "stepFrames", "journal"]);
 		assert.equal(result.artifacts.find((a) => a.key === "journal")?.rel, "out/runs/replay-2026-07-31T12-00-00-000-yarn.journal.jsonl");
 		assert.equal(result.artifacts.find((a) => a.key === "journal")?.state, "missing");
 		assert.equal(result.ok, true);
