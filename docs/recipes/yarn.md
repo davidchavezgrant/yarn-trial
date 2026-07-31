@@ -114,8 +114,12 @@ Settings…**.
   typed their narration into it. Tab-traversal toward the editor does NOT reach it (it
   reaches the comment composer on the canvas instead). The placeholder row's ref resolves
   but its element measures NO box by any means, so if `type_text` with its ref fails,
-  **click the empty script-panel area by coordinate** (the whitespace directly under the
-  "Type script or # for new scene" line, read off the screenshot), then `type_text`
-  without a ref at the caret.
+  **click by coordinate ON the placeholder line's text itself** ("Type script or # for
+  new scene", read off the screenshot — e.g. the middle of those words), then `type_text`
+  without a ref at the caret. The empty whitespace BELOW the line does NOT take focus:
+  verified live, a click there left the caret blinking in the composer and the typed
+  probe spawned a canvas text overlay instead of script. The harness now refuses ref-less
+  typing whose caret is not in the field you last clicked, so a focus miss costs one
+  honest error instead of stray text.
 - Creating a draft via "New draft" opens the editor immediately with the title "Untitled";
   the sidebar entry updates after the title field is committed (click away / switch tabs).

@@ -289,6 +289,10 @@ export class CdpBackend {
 	 * re-deriving a point from the (possibly stale) observation box.
 	 */
 	lastActuation?: { point: { x: number; y: number }; box: { x: number; y: number; w: number; h: number } };
+	/** Where the last real CLICK landed, retained across acts (lastActuation is per-act).
+	 *  Ref-less typing checks the caret against this: "click here, then type" must put the
+	 *  text where the pointer story says, or put nothing. */
+	private lastClickPoint?: { x: number; y: number };
 
 	private lastRows: SnapshotRow[] = [];
 
@@ -662,6 +666,7 @@ export class CdpBackend {
 					}
 					await this.page.mouse.click(x, y, { button: plan.button, clickCount: plan.clickCount, delay: this.demo ? plan.pressMs : undefined });
 					this.lastActuation = { point: { x, y }, box: { x: x - 1, y: y - 1, w: 2, h: 2 } };
+					this.lastClickPoint = { x, y };
 
 					return `${a.name} at (${x}, ${y})`;
 				}
@@ -803,10 +808,28 @@ export class CdpBackend {
 					// hatch. Falls back to whatever the focus click recorded (or nothing).
 					const caret = (await this.page
 						.evaluate(
-							"(() => { const s = window.getSelection(); if (!s || s.rangeCount === 0) return null; const r = s.getRangeAt(0).getBoundingClientRect(); const a = document.activeElement; const b = (r.width || r.height) ? r : (a ? a.getBoundingClientRect() : null); return b ? { x: b.x, y: b.y, w: Math.max(b.width, 2), h: Math.max(b.height, 14) } : null; })()",
+							"(() => { const s = window.getSelection(); const a = document.activeElement; const f = a ? a.getBoundingClientRect() : null; let r = null; if (s && s.rangeCount > 0) { const c = s.getRangeAt(0).getBoundingClientRect(); if (c.width || c.height) r = c; } const b = r || f; if (!b) return null; return { x: b.x, y: b.y, w: Math.max(b.width, 2), h: Math.max(b.height, 14), field: f ? { x: f.x, y: f.y, w: f.width, h: f.height } : null }; })()",
 						)
-						.catch(() => null)) as { x: number; y: number; w: number; h: number } | null;
-					if (caret) this.lastActuation = { point: { x: caret.x + caret.w / 2, y: caret.y + caret.h / 2 }, box: caret };
+						.catch(() => null)) as { x: number; y: number; w: number; h: number; field: { x: number; y: number; w: number; h: number } | null } | null;
+					// Click-caret coherence, for the REF-LESS path only (a ref names its own
+					// target): the viewer just watched the pointer click somewhere, so the text
+					// must land in the field that click focused — on film the composer kept the
+					// blinking caret while the pointer stood on the script panel, and a typed
+					// probe spawned a canvas overlay. If the caret's field does not contain the
+					// last click, nothing is typed and the error says where the caret really is.
+					if (!(a.ref || a.query) && this.lastClickPoint && caret?.field) {
+						const f = caret.field;
+						const p = this.lastClickPoint;
+						const PAD = 16;
+						if (p.x < f.x - PAD || p.x > f.x + f.w + PAD || p.y < f.y - PAD || p.y > f.y + f.h + PAD) {
+							const thief = (await this.page.evaluate(ACTIVE_DESC).catch(() => "unknown")) as string;
+							throw new Error(
+								`the caret is in <${thief}> at (${Math.round(f.x)}, ${Math.round(f.y)}), which does not contain your last click at (${Math.round(p.x)}, ${Math.round(p.y)}) — that click did not focus the field you meant. Nothing was typed. ` +
+									`Click the field's visible text itself (not empty panel space), or pass its ref.`,
+							);
+						}
+					}
+					if (caret) this.lastActuation = { point: { x: caret.x + caret.w / 2, y: caret.y + caret.h / 2 }, box: { x: caret.x, y: caret.y, w: caret.w, h: caret.h } };
 					const { chunks } = chunkText(text);
 					let typed = "";
 					for (const chunk of chunks) {
@@ -912,6 +935,7 @@ export class CdpBackend {
 		await new Promise((r) => setTimeout(r, plan.dwellMs));
 		await this.page.mouse.click(plan.point.x, plan.point.y, { button: plan.button, clickCount: plan.clickCount, delay: plan.pressMs });
 		this.lastActuation = { point: plan.point, box: { x: box.x, y: box.y, w: box.width, h: box.height } };
+		this.lastClickPoint = plan.point;
 
 		return plan.point;
 	}
