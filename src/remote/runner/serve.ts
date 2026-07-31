@@ -509,6 +509,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 						...(rec.useRecipe ? { USE_RECIPE: "1" } : {}),
 						...(rec.appmapVariant ? { APPMAP_VARIANT: rec.appmapVariant } : {}),
 						...(rec.model ? { AGENT_MODEL: rec.model } : {}),
+						...(rec.steps ? { AGENT_STEPS: String(rec.steps) } : {}),
 						// Fleet posture: a dispatched cdp run owns the machine (the lease says so),
 						// and the app it finds running portless was left by the previous job —
 						// an ax arm, most often. Quit-and-relaunch beats failing every
@@ -666,6 +667,11 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		if (params.model !== undefined && (typeof params.model !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._\/:-]{0,127}$/.test(params.model)))
 			return { ok: false, error: `model must be a model id, got ${JSON.stringify(params.model)}` };
 		const model = params.model as string | undefined;
+		// A step budget crosses as a number and becomes an env VALUE (AGENT_STEPS); bounded
+		// so a typo cannot ask a fleet Mac for a thousand-step run.
+		if (params.steps !== undefined && (typeof params.steps !== "number" || !Number.isInteger(params.steps) || params.steps < 1 || params.steps > 100))
+			return { ok: false, error: `steps must be an integer 1..100, got ${JSON.stringify(params.steps)}` };
+		const steps = params.steps as number | undefined;
 
 		// The URL is child argv, but it is not free text: the child's own webTarget() gate
 		// rejects non-http(s) later, and this earlier copy exists because by then the lease
@@ -711,6 +717,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			...(url !== undefined ? { url } : {}),
 			...(appmapVariant !== undefined ? { appmapVariant } : {}),
 			...(model !== undefined ? { model } : {}),
+			...(steps !== undefined ? { steps } : {}),
 		};
 		const claim = acquire(
 			{ jobId: id, operator, kind, app, startedAt: new Date().toISOString(), pid: process.pid },

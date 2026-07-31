@@ -93,6 +93,8 @@ export interface DispatchOptions {
 	noGrounding?: boolean;
 	/** `USE_RECIPE=1`: ground from the curated docs/recipes/<app>.md notes instead. */
 	useRecipe?: boolean;
+	/** Step budget override for the child run (AGENT_STEPS on the runner). */
+	steps?: number;
 	/** Replay only: recipe file path RELATIVE to the data root — the same key on both machines. */
 	recipe?: string;
 	/** Replay only: `--no-rescue`, the unattended posture — a broken step fails instead of calling the model. */
@@ -242,6 +244,7 @@ export async function dispatch(opts: DispatchOptions): Promise<DispatchResult> {
 		...(opts.url ? { url: opts.url } : {}),
 		...(opts.appmapVariant ? { appmapVariant: opts.appmapVariant } : {}),
 		...(opts.model ? { model: opts.model } : {}),
+		...(opts.steps ? { steps: opts.steps } : {}),
 		operator: opts.operator ?? defaultOperator(),
 	};
 	const wantQueue = opts.queue !== false;
@@ -856,6 +859,9 @@ async function main(argv: string[]): Promise<number> {
 			// The curated-recipe grounding tier (docs/recipes/<app>.md), same knob the bench
 			// arms use — app method knowledge belongs there, never in the task prompt.
 			useRecipe: argv.includes("--use-recipe"),
+			// --steps N: budget override for runs whose recovery overhead outgrows the
+			// default 15 (validated to 1..100 on the runner).
+			...(argv.includes("--steps") ? { steps: Number(argv[argv.indexOf("--steps") + 1]) || undefined } : {}),
 		};
 
 	const result = await dispatch(opts);

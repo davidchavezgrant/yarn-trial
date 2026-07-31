@@ -126,6 +126,8 @@ export interface JobRecord {
 	appmapVariant?: "vision";
 	/** `AGENT_MODEL=<id>` in the child's environment. Absent = the child's default model. */
 	model?: string;
+	/** Step budget override for the child run (AGENT_STEPS). */
+	steps?: number;
 	artifacts: JobArtifacts;
 }
 
@@ -152,6 +154,8 @@ export interface JobInit {
 	url?: string;
 	appmapVariant?: "vision";
 	model?: string;
+	/** Step budget override for the child run (AGENT_STEPS). */
+	steps?: number;
 	/** Accepted behind a held lease: the record starts `queued` and the drain spawns it later. */
 	queued?: boolean;
 }
@@ -254,6 +258,7 @@ export function createJob(init: JobInit, root = jobsDir()): JobRecord {
 		...(init.url ? { url: init.url } : {}),
 		...(init.appmapVariant ? { appmapVariant: init.appmapVariant } : {}),
 		...(init.model ? { model: init.model } : {}),
+		...(init.steps ? { steps: init.steps } : {}),
 		artifacts: artifactsFor(id, init),
 	};
 	writeJob(rec, root);

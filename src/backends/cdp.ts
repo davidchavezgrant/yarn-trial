@@ -8,6 +8,7 @@ import type { Target } from "../core/target.js";
 import { webTarget } from "../core/target.js";
 import type { ActionRequest } from "../types.js";
 import { endpointAlive, ensureElectronEndpoint, KEEP_RENDERING_FLAGS, type PageCandidate, pickMainPage } from "./electron-attach.js";
+import { chunkText } from "../core/harness/fresh-target.js";
 
 // Re-exported so the runner's cdp→ax fallback can make its decision through the lazily
 // loaded cdp module (run.ts reaches backends ONLY through its selection-branch imports) —
@@ -682,6 +683,10 @@ export class CdpBackend {
 			case "type_text": {
 				const text = String(a.text ?? "");
 				if (this.demo) {
+					// Who holds the caret, as tag.class — an IIFE because evaluate strings
+					// are expressions (see FOCUS_CHECK below).
+					const ACTIVE_DESC =
+						"(() => { const a = document.activeElement; return a ? a.tagName.toLowerCase() + (a.className ? '.' + String(a.className).trim().split(/\\s+/)[0] : '') : 'nothing'; })()";
 					// Focus arrives by a visible click, then the text by real keystrokes.
 					// The keystrokes are page.keyboard events, NOT locator.pressSequentially:
 					// the locator form runs playwright's editability check, which rejects
@@ -716,9 +721,6 @@ export class CdpBackend {
 						if (!focused) {
 							// Who holds focus BEFORE the click, so "did focus move" is answerable
 							// even when the clicked node itself is replaced (see below).
-							// IIFE, because page.evaluate strings are EXPRESSIONS (see above).
-							const ACTIVE_DESC =
-								"(() => { const a = document.activeElement; return a ? a.tagName.toLowerCase() + (a.className ? '.' + String(a.className).trim().split(/\\s+/)[0] : '') : 'nothing'; })()";
 							const before = (await this.page.evaluate(ACTIVE_DESC).catch(() => "")) as string;
 							await this.demoPointer(loc, "click", ref);
 							// Never type into whatever kept focus. Yarn's agent composer holds
@@ -768,7 +770,27 @@ export class CdpBackend {
 							}
 						}
 					}
-					await this.page.keyboard.type(text, { delay: DEMO_TYPE_DELAY_MS });
+					// Chunked, with the caret holder re-checked between chunks — the AX path
+					// types this way for frame capture; here it is for INTEGRITY: Yarn's
+					// scene-splitting re-render blurred the editor mid-sentence on a live
+					// round and the tail of the narration leaked wherever focus went. A
+					// holder change stops the typing at a chunk boundary and reports exactly
+					// how much landed, instead of spraying the rest.
+					const holder = (await this.page.evaluate(ACTIVE_DESC).catch(() => "")) as string;
+					const { chunks } = chunkText(text);
+					let typed = "";
+					for (const chunk of chunks) {
+						if (typed) {
+							const now = (await this.page.evaluate(ACTIVE_DESC).catch(() => "")) as string;
+							if (now !== holder)
+								throw new Error(
+									`typing interrupted after ${typed.length} of ${text.length} characters — focus moved from <${holder}> to <${now}>. ` +
+										`Landed so far: "…${typed.slice(-40)}". Re-observe, put the caret back, and continue with the REMAINING text only.`,
+								);
+						}
+						await this.page.keyboard.type(chunk, { delay: DEMO_TYPE_DELAY_MS });
+						typed += chunk;
+					}
 
 					return `typed at the caret${a.ref ? ` after clicking [${a.ref}]` : ""} (existing content NOT replaced — cmd+a first if it must be cleared)`;
 				}
