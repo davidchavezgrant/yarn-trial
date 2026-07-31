@@ -526,3 +526,55 @@ keyed by APP NAME, so two concurrent runs of the *same app* on different hosts i
 in one terminal buffer. Also note `./run dispatch` is exempt from the local
 run-in-flight guard by design — the far side's lease is the authority.
 
+
+## 18. A sign-in stream can show the watcher the browser's saved form data
+
+**LEAK · OBSERVED** · found 2026-07-31 on mac2, partially mitigated the same day
+(`src/remote/chrome-policy.ts`, provisioning step `browser`)
+
+During a liveview sign-in on mac2, Chrome's autofill dropdown appeared in the stream listing
+real team members' email addresses. Liveview is window-scoped and working as designed — the
+leak is that the browser volunteers everything it has ever been told, unprompted, into a
+channel a *different* person is watching.
+
+State of the fleet when this was found (read-only measurement, counts only):
+
+| host | `Login Data`.`logins` | `Web Data`.`autofill` |
+|------|----------------------:|----------------------:|
+| mac1 | 801 | 1969 |
+| mac2 | 801 | 2123 (1200 distinct, 80 email-shaped) |
+| mac3 | 797 | 1849 |
+
+All three are signed into a Google account with sync active and `passwords` in the synced
+set. On mac2 every one of the 801 credentials carries a row in the login database's own
+`sync_entities_metadata` — the server knows about all of them.
+
+**Two dropdowns, two switches, and only one of them can be closed by policy:**
+
+- *Single-field form history* (`Web Data`.`autofill`) is keyed on the FIELD NAME, not the
+  site — a box called `email` on any page offers every address ever typed into any box
+  called `email`. That is the only store that explains one list containing several
+  different people. **Closed** by `AutofillAddressEnabled: false`.
+- *Saved passwords* (`Login Data`) are offered per-site. **NOT closed.**
+  `PasswordManagerEnabled: false` only stops new saves — its own documentation says
+  previously saved passwords still work, and **no Chrome policy disables password filling.**
+  It is set anyway so a shared Mac stops accumulating more, but a login form on a site with
+  a saved credential will still offer it. Closing that half means clearing the store, which
+  is deliberately not automated — see below.
+
+**The policy is RECOMMENDED, not mandatory, and can be silently defeated.** Mandatory needs
+`/Library/Managed Preferences`, i.e. root: measured on mac2 the fleet account has no
+passwordless sudo, that directory does not exist, and the Mac is not MDM-enrolled — while
+provisioning is a `BatchMode` ssh that cannot answer a password prompt. Recommended sits
+BELOW the user store, so an explicit user preference — including one arriving via sync —
+wins. `./run provision --doctor` re-reads the *effective* value on the host for exactly this
+reason and reports an override rather than assuming the write won. Enforcing it properly
+needs an MDM configuration profile.
+
+**Clearing the saved passwords is NOT automated, and must not be.** Deleting rows through a
+running Chrome commits a sync tombstone, which deletes the credential from the real Google
+account's vault and every other device that person owns. Deleting the file instead destroys
+`sync_model_metadata`, so the next launch re-runs initial sync and downloads everything back
+from the server. Neither is a provisioning script's decision to make. The safe procedure is
+to sign the profile out of Chrome FIRST (choosing to keep local data), confirm sync has
+stopped, and only then clear — with a human at the machine.

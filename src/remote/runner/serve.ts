@@ -1,13 +1,15 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { openApp } from "../../core/appctl.js";
 import { sidecarStatus } from "../../core/axdom.js";
 import { screenIsLocked } from "../../core/harness.js";
 import { dataRoot, resourcesRoot } from "../../paths.js";
+import { type ChromePolicyState, inspectChromePolicy } from "../chrome-policy.js";
 import { firstLine } from "../control/ssh.js";
 import { listApps } from "../../ui/ui-core.js";
 import {
@@ -1066,6 +1068,10 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			// idle, the host grades clean. Before this line the only way to find out was to spend
 			// a dispatch and read the failure.
 			screenLocked: screenIsLocked(),
+			// Read back from cfprefsd, not from what provisioning believes it wrote — the two
+			// disagree exactly when a user or synced preference outranks a recommended policy,
+			// which is the case worth catching (see src/remote/chrome-policy.ts).
+			chromePolicy: chromePolicyHere(),
 			permissions: opts.permissions?.() ?? null,
 			staleGrants: staleGrants(bootPermissions, opts.permissions?.()),
 			lease: inspect(runnerDir),
@@ -1388,6 +1394,49 @@ export function socketIsLive(socketPath: string, timeoutMs = 1000): Promise<bool
 		probe.setTimeout(timeoutMs, () => finish(true));
 		probe.once("connect", () => finish(true));
 		probe.once("error", (err) => finish(!DEAD_SOCKET_CODES.has((err as NodeJS.ErrnoException).code ?? "")));
+	});
+}
+
+/**
+ * Chrome's effective autofill/password policy on this Mac, for `doctor`.
+ *
+ * Exists because provisioning cannot answer this question about itself: it writes a RECOMMENDED
+ * policy, and a recommended policy is outranked by any explicit user preference — including one
+ * delivered by Chrome sync. So the host is asked what it will actually do, via the same
+ * preference daemon Chrome reads. Rationale in full: src/remote/chrome-policy.ts.
+ *
+ * Every probe is wrapped. This runs inside the process holding the fleet's TCC grants, and a
+ * diagnostic that can throw is a diagnostic that can take the fleet down.
+ */
+function chromePolicyHere(): ChromePolicyState {
+	const readDefault = (domain: string, key: string): string | undefined => {
+		try {
+			// `defaults` exits nonzero for an unset key, which execFileSync turns into a throw —
+			// that is the "unset" answer, not an error.
+			return execFileSync("defaults", ["read", domain, key], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
+		} catch {
+			return undefined;
+		}
+	};
+	const running = ((): boolean | undefined => {
+		try {
+			execFileSync("pgrep", ["-x", "Google Chrome"], { timeout: 5000, stdio: "ignore" });
+
+			return true;
+		} catch (e) {
+			// pgrep exits 1 for "no match" and something else when it could not run at all. Only
+			// the first is an answer; the second must stay undefined rather than become "no".
+			return (e as { status?: number }).status === 1 ? false : undefined;
+		}
+	})();
+
+	return inspectChromePolicy({
+		home: os.homedir(),
+		user: os.userInfo().username,
+		readDefault,
+		exists: (p) => fs.existsSync(p),
+		chromeInstalled: fs.existsSync("/Applications/Google Chrome.app"),
+		...(running === undefined ? {} : { chromeRunning: running }),
 	});
 }
 

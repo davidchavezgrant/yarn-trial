@@ -18,6 +18,7 @@ import {
 	stageProvisioningFiles,
 	LAUNCH_LABEL,
 	REMOTE_CHECKOUT,
+	STAGE_DIR,
 } from "../src/remote/control/provision.js";
 import { rsyncShell, type SshResult } from "../src/remote/control/ssh.js";
 import { host, inTempDir, inventory, ok } from "./fixtures.js";
@@ -60,6 +61,7 @@ function fleetDouble(source: string, reply: (argv: string[]) => SshResult | unde
 			if (argv[0] === "true" || argv[0] === "mkdir") return ok();
 			if (argv[0] === "sh" && argv[1].endsWith("install-runnerctl.sh")) return ok("runnerctl=/usr/local/bin/runnerctl\n");
 			if (argv[0] === "sh" && argv[1].endsWith("install-launchagent.sh")) return ok(`launchagent=/Users/administrator/Library/LaunchAgents/${LAUNCH_LABEL}.plist\n`);
+			if (argv[0] === "sh" && argv[1].endsWith("install-chrome-policy.sh")) return ok("chromePolicy=3/3 chrome=present running=no\n");
 			if (argv[0] === "runnerctl" && argv[1] === "status") return ok(`${JSON.stringify({ ok: true, state: "idle" })}\n`);
 
 			return { code: 1, stdout: "", stderr: `unexpected remote argv ${JSON.stringify(argv)}` };
@@ -92,10 +94,10 @@ test("provisionHost__CompletesEveryStep__When__TheHostAnswers", async () => {
 		const result = await provisionHost(host("mac1"), rec.opts);
 
 		assert.equal(result.ok, true, JSON.stringify(result.steps));
-		assert.deepEqual(stepNames(result), ["reach", "sync", "runnerctl", "launchagent", "ready"]);
+		assert.deepEqual(stepNames(result), ["reach", "sync", "runnerctl", "launchagent", "browser", "ready"]);
 		// The last row is the only proof that matters: launchd accepted the job AND the socket
 		// the job holds is answering.
-		assert.match(result.steps[4].detail ?? "", /runner is idle/);
+		assert.match(result.steps[5].detail ?? "", /runner is idle/);
 
 		// Repo first, then the provisioning payload into the checkout's staging dir.
 		assert.equal(rec.rsync.length, 2);
@@ -184,11 +186,11 @@ test("provisionHost__ReportsNotReady__When__TheRunnerNeverAnswers", async () => 
 		const result = await provisionHost(host("mac1"), rec.opts);
 
 		assert.equal(result.ok, false);
-		assert.deepEqual(stepNames(result), ["reach", "sync", "runnerctl", "launchagent", "ready"]);
+		assert.deepEqual(stepNames(result), ["reach", "sync", "runnerctl", "launchagent", "browser", "ready"]);
 		assert.equal(result.steps[2].ok, true, "an unreachable socket is not a missing shim");
 		// First boot installs dependencies and compiles the shell, so the operator has to be
 		// told this is plausibly "not yet" rather than "broken".
-		assert.match(result.steps[4].detail ?? "", /npm install/);
+		assert.match(result.steps[5].detail ?? "", /npm install/);
 	});
 });
 
@@ -263,7 +265,7 @@ test("provisionHost__ShipsAnExecutableElectronServeAgent__When__StagingThePayloa
 test("stageProvisioningFiles__WritesTheWholePayload__When__GivenAnEmptyDirectory", async () => {
 	await inTempDir("yarn-source-", (dir) => {
 		const names = stageProvisioningFiles(dir);
-		assert.deepEqual(names.sort(), ["com.yarn.runner.plist.in", "install-launchagent.sh", "install-runnerctl.sh", "runnerctl", "yarn-runner-serve"]);
+		assert.deepEqual(names.sort(), ["com.yarn.runner.plist.in", "install-chrome-policy.sh", "install-launchagent.sh", "install-runnerctl.sh", "runnerctl", "yarn-runner-serve"]);
 		// Idempotent: a second provision reuses the same names, and writeFileSync's mode does
 		// not apply to a file that already exists.
 		fs.chmodSync(path.join(dir, "runnerctl"), 0o600);
@@ -388,6 +390,100 @@ test("provisionFleet__IsolatesFailure__When__OneHostIsUnreachable", async () => 
 	});
 });
 
+// --- Chrome autofill policy. Added after a liveview sign-in on mac2 streamed Chrome's
+// autofill dropdown — real people's email addresses — to a teammate's browser. The policy
+// table and its graders live in src/remote/chrome-policy.ts and are unit-tested there; what
+// belongs here is that provisioning ships and runs the installer, and how it treats a refusal.
+
+test("provisionHost__AppliesTheChromePolicy__When__ProvisioningAHost", async () => {
+	await inTempDir("yarn-source-", async (source) => {
+		const rec = fleetDouble(source);
+		const result = await provisionHost(host("mac1"), rec.opts);
+
+		const browser = result.steps.find((s) => s.step === "browser");
+		assert.equal(browser?.ok, true, JSON.stringify(result.steps));
+		assert.match(browser?.detail ?? "", /chromePolicy=3\/3/);
+
+		// AFTER the runner is installed and BEFORE `ready`. Before launchagent, a Chrome problem
+		// could stop a Mac becoming a runner; after `ready`, which legitimately times out for
+		// three minutes on a first boot, it would be the step a slow host never reached — so the
+		// privacy control would be missing on exactly the machines nobody watched finish.
+		const order = stepNames(result);
+		assert.ok(order.indexOf("browser") > order.indexOf("launchagent"));
+		assert.ok(order.indexOf("browser") < order.indexOf("ready"));
+
+		// It runs the script rsync put inside the checkout, like every other installer here —
+		// never a command line carrying the policy, which sshd would flatten into shell text.
+		assert.ok(rec.remote.some((argv) => argv[0] === "sh" && argv[1] === `${REMOTE_CHECKOUT}/${STAGE_DIR}/install-chrome-policy.sh`));
+	});
+});
+
+test("provisionHost__StillFinishes__When__TheChromePolicyCannotBeApplied", async () => {
+	await inTempDir("yarn-source-", async (source) => {
+		// A Mac that cannot be told to stop offering autofill is still a working runner.
+		// Abandoning the provision over it would leave the host with no runner AND the dropdown.
+		const rec = fleetDouble(source, (argv) =>
+			argv[0] === "sh" && argv[1].endsWith("install-chrome-policy.sh") ? { code: 1, stdout: "chromePolicy=0/3 chrome=present running=yes missing: AutofillAddressEnabled\n", stderr: "" } : undefined,
+		);
+		const result = await provisionHost(host("mac1"), rec.opts);
+
+		// The pass CONTINUES rather than truncating — `ready` still ran and passed.
+		assert.deepEqual(stepNames(result), ["reach", "sync", "runnerctl", "launchagent", "browser", "ready"]);
+		assert.equal(result.steps.find((s) => s.step === "ready")?.ok, true);
+		// ...and is still graded a failure, so `./run provision` exits nonzero and nobody reads
+		// a silent skip as a success.
+		assert.equal(result.ok, false);
+		assert.match(result.steps.find((s) => s.step === "browser")?.detail ?? "", /chrome policy not applied/);
+	});
+});
+
+test("stageProvisioningFiles__ShipsAPolicyScriptThatTouchesNoProfileData__When__StagingThePayload", async () => {
+	await inTempDir("yarn-source-", (dir) => {
+		stageProvisioningFiles(dir);
+		const script = fs.readFileSync(path.join(dir, "install-chrome-policy.sh"), "utf8");
+		// Comments stripped: the script's header names these files precisely to say it does not
+		// touch them, and that prose is the documentation this assertion exists to protect. What
+		// must be clean is what RUNS.
+		const code = script.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
+
+		// It writes POLICY. The profile stores are synced to real people's Google accounts —
+		// on mac2 all 801 saved credentials carry sync metadata (measured 2026-07-31) — so a
+		// deletion here would propagate off the machine and out of our reach. No command in
+		// this script may ever name those files.
+		for (const store of ["Login Data", "Web Data", "Affiliation Database"])
+			assert.equal(code.includes(store), false, `the policy script must never name ${store}`);
+		for (const verb of ["rm ", "sqlite3", "DELETE", "mv ", "cp "]) assert.equal(code.includes(verb), false, `the policy script must not ${verb.trim()}`);
+
+		// ...and it must not write the profile's own Preferences JSON either, which is the
+		// tempting shortcut: `credentials_enable_service` is a SYNCABLE_PRIORITY_PREF, so that
+		// write WOULD reach the signed-in account's other devices.
+		assert.equal(code.includes("credentials_enable_service"), false);
+		assert.equal(code.includes("Application Support"), false);
+
+		// One key at a time. All three Macs already have a Chrome-written plist holding
+		// LastRunAppBundlePath; writing the whole plist would take it with us.
+		assert.match(script, /defaults write "\$DOMAIN" AutofillAddressEnabled -bool false/);
+		assert.match(script, /defaults write "\$DOMAIN" PasswordManagerEnabled -bool false/);
+
+		// The report is the read-back, not the write's exit status: `defaults write` can fail
+		// without a nonzero exit. And the script exits nonzero when a key did not take.
+		assert.match(script, /defaults read "\$DOMAIN"/);
+		assert.match(script, /\[ -z "\$MISSING" \]/);
+
+		// Same first-line contract as the other installers — provisionHost reports firstLine().
+		assert.match(script, /^echo "chromePolicy=/m);
+	});
+});
+
+test("stageProvisioningFiles__WritesTheChromePolicyScriptExecutable__When__StagingThePayload", async () => {
+	await inTempDir("yarn-source-", (dir) => {
+		stageProvisioningFiles(dir);
+		// rsync --archive carries the mode across; a shim that arrives non-executable fails as
+		// "Permission denied" on the far side, minutes later.
+		assert.equal(fs.statSync(path.join(dir, "install-chrome-policy.sh")).mode & 0o777, 0o755);
+	});
+});
+
 /** What serve.ts's `doctor` returns from a host that is fully set up. */
 const HEALTHY: RemoteDoctor = {
 	runnerDir: "/Users/administrator/.yarn-runner",
@@ -503,6 +599,30 @@ test("doctorProblems__StaysQuiet__When__TheSidecarIsFineOrUnreported", () => {
 	// treating a missing field as a failure would light up the whole fleet over nothing.
 	assert.deepEqual(doctorProblems({ ...HEALTHY, sidecar: { usable: true } }), []);
 	assert.deepEqual(doctorProblems(HEALTHY), []);
+});
+
+test("doctorProblems__FlagsTheAutofillDropdown__When__ChromePolicyWasNeverApplied", () => {
+	// The state every Mac was in on 2026-07-31. HEALTHY otherwise, so before this the host
+	// graded clean while a sign-in stream could show a teammate saved form data.
+	const problems = doctorProblems({
+		...HEALTHY,
+		chromePolicy: { chromeInstalled: true, keys: [{ key: "AutofillAddressEnabled", level: "unset" }] },
+	});
+
+	assert.equal(problems.length, 1);
+	assert.match(problems[0], /AutofillAddressEnabled/);
+	assert.match(problems[0], /sign-in stream/);
+});
+
+test("doctorProblems__StaysQuiet__When__TheRunnerIsTooOldToReportChromePolicy", () => {
+	// HEALTHY carries no `chromePolicy` at all — an older runner answering doctor without the
+	// field. Grading a question that was never asked would light up the whole fleet over
+	// nothing, the same rule `sidecar` and `screenLocked` follow.
+	assert.deepEqual(doctorProblems(HEALTHY), []);
+	assert.deepEqual(
+		doctorProblems({ ...HEALTHY, chromePolicy: { chromeInstalled: true, keys: [{ key: "AutofillAddressEnabled", level: "recommended", value: false }] } }),
+		[],
+	);
 });
 
 test("restartFleet__LeavesHealthyHostsAlone__When__NoGrantIsStale", async () => {

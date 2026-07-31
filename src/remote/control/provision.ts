@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { resourcesRoot } from "../../paths.js";
+import { CHROME_DOMAIN, CHROME_POLICY, type ChromePolicyState, chromePolicyProblems, chromePolicyWriteLines, describeChromePolicy } from "../chrome-policy.js";
 import { attempt, type Attempt } from "./attempt.js";
 import { type HostEntry, type Inventory, loadHosts, resolveHost } from "./hosts.js";
 import { firstLine, runnerArgv, type RsyncRunner, runRsync, runSsh, rsyncDestination, rsyncShell, SPAWN_FAILED_EXIT, type SshRunner, TIMEOUT_EXIT } from "./ssh.js";
@@ -83,9 +84,16 @@ const SYNC_TIMEOUT_MS = 900_000;
 const READY_TIMEOUT_MS = 180_000;
 const READY_POLL_MS = 3_000;
 
-export type StepName = "reach" | "sync" | "runnerctl" | "launchagent" | "ready";
+/**
+ * `browser` sits between `launchagent` and `ready` deliberately. It has to be AFTER the runner
+ * is installed, so a Chrome problem cannot stop a Mac becoming a runner at all — and BEFORE
+ * `ready`, which polls for up to three minutes and legitimately times out on a first boot. Last
+ * in the list, it would be the step a slow host silently never reached, and the privacy control
+ * would be missing on exactly the machines nobody watched finish.
+ */
+export type StepName = "reach" | "sync" | "runnerctl" | "launchagent" | "browser" | "ready";
 
-const STEP_ORDER: StepName[] = ["reach", "sync", "runnerctl", "launchagent", "ready"];
+const STEP_ORDER: StepName[] = ["reach", "sync", "runnerctl", "launchagent", "browser", "ready"];
 
 export interface ProvisionStep {
 	step: StepName;
@@ -182,6 +190,15 @@ export async function provisionHost(host: HostEntry, opts: ProvisionOptions = {}
 	if (!agent.ok) return fail("launchagent", agent.detail);
 	steps.push({ step: "launchagent", ok: true, detail: firstLine(agent.stdout) || LAUNCH_LABEL });
 
+	// Recorded, not `fail()`ed — the difference being that the pass CONTINUES to `ready` instead
+	// of truncating here. A Mac that cannot be told to stop offering autofill is still a working
+	// runner, and abandoning the provision over it would leave the host with no runner AND the
+	// dropdown: worse on both counts. The row still grades the result non-ok, so `./run provision`
+	// exits nonzero and nobody reads a silent skip as a success. `--doctor` then re-checks the
+	// EFFECTIVE policy on the host rather than trusting this step's word that it wrote something.
+	const browser = await attempt(() => run(host, ["sh", `${REMOTE_CHECKOUT}/${STAGE_DIR}/install-chrome-policy.sh`], { timeoutMs }));
+	steps.push({ step: "browser", ok: browser.ok, detail: browser.ok ? firstLine(browser.stdout) || "chrome policy applied" : `chrome policy not applied: ${browser.detail}` });
+
 	const ready = await waitForRunner(host, run, timeoutMs, opts.readyTimeoutMs ?? READY_TIMEOUT_MS);
 	if (!ready.ok) return fail("ready", ready.detail);
 	steps.push({ step: "ready", ok: true, detail: ready.detail });
@@ -231,6 +248,12 @@ export interface RemoteDoctor {
 	sidecar?: { path?: string; usable?: boolean; problem?: string };
 	/** Whether the login window owns the display. Absent from older runners, which is not false. */
 	screenLocked?: boolean;
+	/**
+	 * Chrome's effective autofill/password policy, read back from the preference system on the
+	 * host — NOT what provisioning believes it wrote. The two differ exactly when something
+	 * outranks a recommended policy, which is the failure mode worth catching.
+	 */
+	chromePolicy?: ChromePolicyState;
 	lease?: { holder?: { lease?: { operator?: string; app?: string }; heldSec?: number } };
 }
 
@@ -361,6 +384,11 @@ export function doctorProblems(report: RemoteDoctor): string[] {
 	if (report.sidecar && report.sidecar.usable === false)
 		problems.push(`DOM enrichment sidecar unusable (${report.sidecar.problem ?? "unknown"}) — runs work but anonymous controls stay unnamed`);
 
+	// A privacy problem, not a capability one: the host runs fine, and what is wrong is what a
+	// teammate can see during a sign-in. Kept out of `doctorProblems`' own body so the rules live
+	// next to the policy table they grade — see chrome-policy.ts.
+	problems.push(...chromePolicyProblems(report.chromePolicy));
+
 	// Last because it is the most total: a locked host cannot run anything, whatever else it has.
 	// Tested against `=== true` rather than truthiness so a runner too old to report the field
 	// stays silent instead of being graded clean on a question it was never asked.
@@ -408,6 +436,7 @@ export function stageProvisioningFiles(dir: string, modelKey?: string): string[]
 		[`${LAUNCH_LABEL}.plist.in`, LAUNCH_PLIST, 0o644],
 		["install-runnerctl.sh", INSTALL_RUNNERCTL, 0o755],
 		["install-launchagent.sh", INSTALL_LAUNCHAGENT, 0o755],
+		["install-chrome-policy.sh", installChromePolicyScript(), 0o755],
 	];
 
 	// The key rides along as a FILE for the same reason the shims do, only more so. Anything in
@@ -701,6 +730,80 @@ launchctl kickstart "gui/$U/$LABEL" 2>/dev/null || true
 # have quietly replaced the launchagent path in every provision summary.
 echo "launchagent=$PLIST modelKey=$KEY"
 `;
+
+/**
+ * Tell Chrome to stop offering saved form data on a machine whose screen other people watch.
+ *
+ * The rationale — which dropdown, which policy, why not the profile JSON, why recommended
+ * level, and why nothing here deletes anything — is in the header of `src/remote/chrome-policy.ts`.
+ * The short version: a liveview sign-in on mac2 streamed Chrome's autofill dropdown, listing
+ * real people's email addresses, to a teammate's browser.
+ *
+ * The write lines are GENERATED from the same table the doctor grades against, so the script and
+ * the check cannot drift into disagreeing about which keys exist. A host reporting itself clean
+ * while a key was quietly only in one of the two lists is the failure that would make this
+ * control worse than not having it.
+ *
+ * Idempotent, and narrow: `defaults write` of one key rewrites one key. All three Macs already
+ * have a `~/Library/Preferences/com.google.Chrome.plist` that Chrome itself wrote (it holds
+ * `LastRunAppBundlePath`, 103 bytes, measured 2026-07-31) — writing the whole plist would take
+ * that with it, so each key goes in on its own and the rest of the file is left alone.
+ */
+function installChromePolicyScript(): string {
+	return `#!/bin/sh
+# Installed by src/remote/control/provision.ts. Edit there, not here — a re-provision overwrites this.
+#
+# Stops Google Chrome offering saved form data and passwords in a sign-in stream a teammate
+# watches. Writes POLICY only. It does not read, move, export or delete one byte of
+# "Login Data", "Web Data" or any other profile file: those stores are synced to real people's
+# Google accounts, and a deletion there propagates off this machine. See src/remote/chrome-policy.ts.
+set -eu
+DOMAIN=${CHROME_DOMAIN}
+
+# No Chrome, no problem — but the policy is written anyway, so installing Chrome later cannot
+# silently reopen the hole. This is only a report line.
+#
+# if/then rather than \`[ … ] && CHROME=present\`: under \`set -e\` a bare failing test as the
+# last command of a script is fatal, and the && form is one edit away from being exactly that.
+CHROME=absent
+if [ -d "/Applications/Google Chrome.app" ]; then
+	CHROME=present
+fi
+
+# Written to the USER preference domain, which Chrome reads at RECOMMENDED level. The mandatory
+# location is /Library/Managed Preferences, which needs root: measured on mac2 (2026-07-31) the
+# fleet account has no passwordless sudo and the Mac is not MDM-enrolled, and provisioning is a
+# BatchMode ssh that cannot answer a password prompt. Recommended is what is reachable here, and
+# all three keys accept it. A user preference (or one arriving via sync) outranks recommended —
+# that is why doctor re-reads the EFFECTIVE value instead of assuming this write won.
+APPLIED=0
+MISSING=""
+check() {
+	# Read it back. \`defaults write\` to a plist owned by another uid, or on a read-only home,
+	# fails in ways that do not always set a nonzero exit — so the only trustworthy report is the
+	# value the preference system hands back afterwards.
+	if [ "$(defaults read "$DOMAIN" "$1" 2>/dev/null || echo missing)" = "0" ]; then
+		APPLIED=$((APPLIED + 1))
+	else
+		MISSING="$MISSING $1"
+	fi
+}
+
+${chromePolicyWriteLines().join("\n")}
+
+# cfprefsd caches preference files, so a running Chrome can still be serving the previous answer.
+# Nothing here restarts or quits Chrome: on a shared colo Mac that could be someone's half-finished
+# sign-in. The line below just reports it, and doctor repeats the warning.
+RUNNING=no
+if pgrep -x "Google Chrome" >/dev/null 2>&1; then
+	RUNNING=yes
+fi
+
+# One line, first line: provisionHost reports firstLine(stdout) as this step's detail.
+echo "chromePolicy=$APPLIED/${CHROME_POLICY.length} chrome=$CHROME running=$RUNNING${"${MISSING:+ missing:$MISSING}"}"
+[ -z "$MISSING" ]
+`;
+}
 
 /**
  * Poll until the socket answers. Separate from loading the agent because the two fail for
