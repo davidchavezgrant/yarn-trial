@@ -295,8 +295,10 @@ test("listJobs__OrdersNewestFirst__When__ExploreAndTaskJobsCoexist", () => {
 		writeJob(job({ id: "explore-2026-07-23T10-00-00-000-yarn", kind: "explore" }), dir);
 		writeJob(job({ id: "2026-07-30T12-00-00-000-yarn" }), dir);
 		writeJob(job({ id: "explore-2026-07-30T13-00-00-000-yarn", kind: "explore" }), dir);
+		writeJob(job({ id: "replay-2026-07-30T14-00-00-000-yarn", kind: "replay" }), dir);
 
 		assert.deepEqual(listJobs(dir).map((j) => j.id), [
+			"replay-2026-07-30T14-00-00-000-yarn",
 			"explore-2026-07-30T13-00-00-000-yarn",
 			"2026-07-30T12-00-00-000-yarn",
 			"explore-2026-07-23T10-00-00-000-yarn",
