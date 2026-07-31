@@ -8,6 +8,7 @@ import { openApp } from "../../core/appctl.js";
 import { sidecarStatus } from "../../core/axdom.js";
 import { screenIsLocked } from "../../core/harness.js";
 import { dataRoot, resourcesRoot } from "../../paths.js";
+import { firstLine } from "../remote/ssh.js";
 import { listApps } from "../../ui/ui-core.js";
 import {
 	acquire,
@@ -125,10 +126,6 @@ const LIVEVIEW_MAX_LIFETIME_MS = 20 * 60_000;
 /** After the tab closes, exit unless it reopens within this. A closed tab is "done"; linger briefly. */
 const LIVEVIEW_IDLE_AFTER_CLOSE_MS = 30_000;
 
-/** First non-empty line, for turning a child's noise into one reportable sentence. */
-function firstLineOf(text: string): string {
-	return text.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
-}
 
 export interface Permissions {
 	accessibility: boolean;
@@ -195,6 +192,11 @@ export interface ServeOptions {
 	 * already up" branch is testable without binding a real socket.
 	 */
 	portInUse?: (port: number) => Promise<boolean>;
+	/**
+	 * Kill whatever holds the liveview port and report whether it freed. Injected so the
+	 * preemption branches are testable without real processes to signal.
+	 */
+	freeLiveviewPort?: () => Promise<boolean>;
 	/**
 	 * Sign an operator out of an app: quit it and delete their data. Injected for the same
 	 * reason as `swap` — the real one quits applications and deletes `~/Library` directories,
@@ -353,6 +355,62 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 				probe.once("timeout", () => done(false));
 				probe.once("error", () => done(false));
 			}));
+
+	/** The engine this runner last spawned, so preemption can name it before reaching for lsof. */
+	let liveviewPid: number | undefined;
+
+	/**
+	 * Kill whatever serves the liveview port and wait for it to actually free. The tracked pid
+	 * covers the ordinary case; the lsof sweep covers an orphan from a previous runner
+	 * incarnation, which the restart-heavy provision flow produces routinely — the port is a
+	 * fixed constant of ours, so whatever answers on it is ours to end. Injected for tests.
+	 */
+	const freeLiveviewPort =
+		opts.freeLiveviewPort ??
+		(async (): Promise<boolean> => {
+			const pids = new Set<number>();
+			if (liveviewPid && pidAlive(liveviewPid)) pids.add(liveviewPid);
+			liveviewPid = undefined;
+			const swept = await new Promise<string>((resolve) =>
+				execFile("lsof", ["-ti", `tcp:${LIVEVIEW_PORT}`], { timeout: 5000 }, (_err, stdout) => resolve(stdout ?? "")),
+			);
+			for (const lin of swept.split("\n")) {
+				const pid = Number(lin.trim());
+				if (Number.isInteger(pid) && pid > 0 && pid !== process.pid) pids.add(pid);
+			}
+			for (const pid of pids) {
+				try {
+					process.kill(pid, "SIGTERM");
+				} catch {
+					// Already gone, or not ours to signal — the port poll below is the verdict.
+				}
+			}
+			for (let i = 0; i < 16; i++) {
+				if (!(await portInUse(LIVEVIEW_PORT))) return true;
+				await new Promise((r) => setTimeout(r, 250));
+			}
+
+			return false;
+		});
+
+	/**
+	 * End the liveview engine on request — the "operator backed out" half of preemption. The
+	 * GUI portal calls this the moment its window closes, so the port frees NOW rather than
+	 * after the engine's own idle timeout (30s once a viewer connected, the full 20-minute
+	 * lifetime if one never did). No lease interaction: stopping a login never conflicts
+	 * with a run.
+	 */
+	async function liveviewStop(): Promise<RunnerResponse> {
+		if (!(await portInUse(LIVEVIEW_PORT))) {
+			liveviewPid = undefined;
+
+			return { ok: true, stopped: false, note: "no liveview server was running" };
+		}
+		if (!(await freeLiveviewPort())) return { ok: false, error: `the liveview server on port ${LIVEVIEW_PORT} did not exit` };
+		log("liveview: server stopped on request");
+
+		return { ok: true, stopped: true };
+	}
 
 	async function submit(params: Params): Promise<RunnerResponse> {
 		if (params.kind !== undefined && params.kind !== "explore" && params.kind !== "task")
@@ -573,19 +631,17 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 				elapsedSec: holder.heldSec,
 			};
 
-		// Before the swap, not after: a second liveview call while a login is already up must NOT
-		// quit the app to re-swap the profile — that would kill the window the first operator is
-		// signing into. If the port is taken a server is already serving; report that rather than
-		// spawning a second one that will die on EADDRINUSE (observed on the fleet, 2026-07-31).
-		// The token is not recoverable from here (it lives in the running server), so the caller is
-		// told to reuse the existing session or wait for it to lapse.
-		if (await portInUse(LIVEVIEW_PORT))
-			return {
-				ok: false,
-				error: `a liveview server is already running on this Mac (port ${LIVEVIEW_PORT}) — reuse that sign-in, or wait for it to close (it exits on idle or after ${LIVEVIEW_MAX_LIFETIME_MS / 60_000} min)`,
-				alreadyRunning: true,
-				port: LIVEVIEW_PORT,
-			};
+		// Last request wins. The port being held means an earlier sign-in's engine is still up —
+		// walked away from, or superseded by this very request ("run it again"). The operator
+		// asking NOW is the one at a keyboard, and the old server is a capture-capable process
+		// nobody is watching; refusing (the old behavior) stranded the port for up to the
+		// 20-minute lifetime with no way to start over. Preempted BEFORE the swap, so the kill
+		// can never land after the app has been handed to the new operator.
+		if (await portInUse(LIVEVIEW_PORT)) {
+			log(`liveview: preempting the server holding port ${LIVEVIEW_PORT}`);
+			if (!(await freeLiveviewPort()))
+				return { ok: false, error: `could not free the liveview port ${LIVEVIEW_PORT} — the old server did not exit` };
+		}
 
 		// Under the profile lock like every other swap call site: liveview, like signin, checks
 		// the lease without taking it, so the lock is the only thing keeping a concurrent
@@ -609,7 +665,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		const token = randomBytes(18).toString("base64url");
 		const cmd = resolveRunCommand("src/fleet/liveview-cli.ts");
 		try {
-			spawnRun(
+			liveviewPid = spawnRun(
 				{ command: cmd.command, args: [...cmd.args] },
 				{
 					logFile: logPath(`liveview-${operator}`, root),
@@ -622,7 +678,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 						LIVEVIEW_IDLE_AFTER_CLOSE_MS: String(LIVEVIEW_IDLE_AFTER_CLOSE_MS),
 					},
 				},
-			);
+			).pid;
 		} catch (e) {
 			return { ok: false, error: `could not start the liveview server: ${(e as Error).message}`, profile: describeSwap(swap) };
 		}
@@ -768,7 +824,8 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 					} catch {
 						// Fall through: an unparseable line is a probe that broke, not an app that is ready.
 					}
-					resolve({ ok: true, app, ready: false, detail: firstLineOf(stderr) || firstLineOf(line) || (err ? err.message : "the readiness probe said nothing") });
+					// firstLine turns the child's noise into one reportable sentence.
+				resolve({ ok: true, app, ready: false, detail: firstLine(stderr) || firstLine(line) || (err ? err.message : "the readiness probe said nothing") });
 				},
 			);
 		});
@@ -1021,6 +1078,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			submit: () => submit(params),
 			signin: () => signin(params),
 			liveview: () => liveview(params),
+			"liveview-stop": () => liveviewStop(),
 			ready: () => ready(params),
 			// Lowercase on the wire: `runnerArgv` only carries bare [a-z0-9-] subcommands, so the
 			// method name IS the subcommand and cannot carry a capital.

@@ -18,7 +18,9 @@ export const CHROME = String.raw`<meta charset="utf-8">
   header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:12px; }
   h1 { font-size:15px; margin:0; font-weight:600; }
   header span { color:var(--dim); font-size:12px; }
-  main { display:grid; grid-template-columns:250px 1fr 330px; gap:0; height:calc(100vh - 51px); }
+  /* The left column sizes to its content (bounded, so a pathological app name cannot eat the
+     window) — a fixed 250px put horizontal scrollbars under ordinary badge rows. */
+  main { display:grid; grid-template-columns:fit-content(420px) 1fr 330px; gap:0; height:calc(100vh - 51px); }
   .col { padding:16px; overflow:auto; }
   .col + .col { border-left:1px solid var(--line); }
   /* The middle column is a flex stack so #log can be its own scrollbox. The autoscroll pin
@@ -82,6 +84,10 @@ export const CHROME = String.raw`<meta charset="utf-8">
   .fold summary { color:var(--dim); cursor:pointer; padding:2px 0; }
   .fold > div { border-left:2px solid var(--line); margin-left:4px; padding-left:8px; }
   .hostrow { display:flex; gap:8px; align-items:center; margin-top:12px; }
+  /* One action per line, full width: four abbreviated buttons crammed on one row were
+     unreadable, and the label IS the safety feature on a destructive action. */
+  .factions { display:flex; flex-direction:column; gap:4px; margin:4px 0 6px; }
+  .factions button { width:100%; text-align:left; }
   .hostrow span { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); white-space:nowrap; }
   .hostrow select { width:auto; padding:5px 8px; }
   #attach { display:none; margin-top:12px; padding:8px 10px; border-radius:6px; background:#1d2a44; border:1px solid #3a4a7a; font-size:12.5px; }
@@ -113,9 +119,16 @@ export const CHROME = String.raw`<meta charset="utf-8">
 <header>
   <h1>Self-driving demo agent</h1>
   <span id="status">idle</span>
+  <button id="cancelsignin" class="mini" style="display:none;margin-left:auto" title="Close the sign-in view and stop its server">✕ cancel sign-in</button>
 </header>
 <main>
   <div class="col">
+    <!-- The host decides everything below it — which apps are listed, where Run lands — so
+         it sits above the search rather than buried in the middle column. -->
+    <div class="hostrow" style="margin:0 0 12px">
+      <span>Run on</span>
+      <select id="host"><option value="local">local</option></select>
+    </div>
     <label for="q">Target app</label>
     <input id="q" placeholder="Search apps…" autocomplete="off">
     <ul id="apps"></ul>
@@ -135,12 +148,9 @@ export const CHROME = String.raw`<meta charset="utf-8">
     <label for="task">Task (state the GOAL only — not the steps)</label>
     <textarea id="task" placeholder="show me how to change the cursor type"></textarea>
     <div id="warn"></div>
-    <div class="hostrow">
-      <span>Run on</span>
-      <select id="host"><option value="local">local</option></select>
-    </div>
     <div class="row">
       <label><input type="checkbox" id="record"> Record video</label>
+      <label title="Render the humanized cursor over the recording when the run finishes"><input type="checkbox" id="human"> Human cursor</label>
       <label><input type="checkbox" id="novision"> No screenshots</label>
     </div>
     <button class="stop" id="stop" style="display:none">Stop run</button>
@@ -150,9 +160,14 @@ export const CHROME = String.raw`<meta charset="utf-8">
   </div>
   <div class="col">
     <div id="fleetwrap" style="display:none;margin-bottom:18px">
-      <div class="panehead"><label>Fleet</label><button id="fleetrefresh" class="mini" title="Probe every host now">↻</button></div>
-      <div id="fleet"><span class="empty">probing…</span></div>
-      <details class="fold" style="margin-top:10px"><summary>Credentials</summary><div id="creds"></div></details>
+      <!-- A fold, not an always-open panel: three Macs × five actions drowned the gallery,
+           which is the column's actual deliverable. Closed by default; the state a person
+           needs mid-run (busy/unready) surfaces through the attach offers and unready panel. -->
+      <details class="fold" id="fleetfold">
+        <summary>Fleet <button id="fleetrefresh" class="mini" title="Probe every host now">↻</button></summary>
+        <div id="fleet"><span class="empty">probing…</span></div>
+        <details class="fold" style="margin-top:10px"><summary>Credentials</summary><div id="creds"></div></details>
+      </details>
     </div>
     <div class="panehead"><label>Recorded runs</label><button id="refresh" class="mini" title="Rescan out/runs">↻</button></div>
     <div id="runs"><span class="empty">No recordings yet — tick “Record video”.</span></div>
@@ -596,6 +611,9 @@ function appendLine(text) {
   let cls = '';
   if (/^\[\d+\]/.test(text)) cls = 't-step';
   else if (/✓|PASSED|=== DONE/.test(text)) cls = 't-ok';
+  // Before the failure bucket: the readiness refusal is the agent declining to guess at a
+  // sign-in wall — expected and recoverable (the sign-in window opens itself), not a failure.
+  else if (/^REFUSING TO RUN|sign-in needed/.test(text)) cls = 't-meta';
   else if (/✗|FAIL|WARNING|REFUS|error/i.test(text)) cls = 't-bad';
   else if (/^(stats|verification|home reset|target|task|loaded|recording|run log|visual judge)/.test(text)) cls = 't-meta';
   d.className = cls;
@@ -680,7 +698,10 @@ bus.onDone((d) => {
   // key onStarted/onHost left in the map.
   delete running[d.host];
   check(); renderAttach(); paintStatus();
-  line(tag + (d.code === 0 ? '■ finished' : '■ exited with code ' + d.code) + ' after ' + d.elapsed + 's', d.app);
+  // Exit 3 is "needs a sign-in" — an expected, recoverable pause, not a failure, and the
+  // sign-in window is about to open itself. Painting it as an error taught people to read
+  // a routine first-run-on-a-Mac as something breaking.
+  line(tag + (d.code === 0 ? '■ finished' : d.code === 3 ? '■ paused — sign-in needed' : '■ exited with code ' + d.code) + ' after ' + d.elapsed + 's', d.app);
   // 3 is the agent's "not at home, reason unknown" — the one exit code with a remedy a person
   // can act on from here. Everything else is a run that ran.
   unready = d.code === 3 ? { app: d.app, host: d.host, msg: null } : null;
@@ -764,21 +785,19 @@ async function loadFleet() {
         (r.staleGrants && r.staleGrants.length
           ? '<span class="bad" title="' + esc(r.staleGrants.join(' and ')) + ' was granted after the runner started, so it is not in effect. Run: ./run provision --restart">stale TCC</span>'
           : r.tccOk === false ? '<span class="bad" title="Accessibility / Screen Recording not granted">no TCC</span>' : '') +
-        // Screen sharing, not a run: safe while the host is busy, and the only way past an app
+        // A sign-in, not a run: safe while the host is busy, and the only way past an app
         // that wants a human to type a password into it.
-        '<button class="mini" data-signin="' + esc(r.name) + '"' + (signinBusy === r.name ? ' disabled' : '') + ' title="Open this Mac over screen sharing to sign in by hand">Sign in</button>' +
-        // Overflow of app/auth management actions. A <select> rather than buttons because the
-        // row is rebuilt every probe and four more buttons per host would drown the state the
-        // panel exists to show. The destructive entries confirm() before firing — see onchange.
-        // Disabled while ANY action is mid-flight: these quit and delete things, and two at
-        // once on different Macs is not worth the ambiguity in the one shared message slot.
-        '<select class="mini" data-act="' + esc(r.name) + '"' + (signinBusy ? ' disabled' : '') + ' title="App and sign-in management on this Mac">' +
-          '<option value="">⋯</option>' +
-          '<option value="signout">Sign out of ' + esc(sel || 'app') + '…</option>' +
-          '<option value="forget">Forget screen-share login</option>' +
-          '<option value="install">Install app…</option>' +
-          '<option value="delete">Delete ' + esc(sel || 'app') + '…</option>' +
-        '</select>' +
+        '<button class="mini" data-signin="' + esc(r.name) + '"' + (signinBusy === r.name ? ' disabled' : '') + ' title="Open a sign-in window for this Mac">Sign in</button>' +
+      '</div>' +
+      // Management actions as plain buttons on their own line — a dropdown hid them behind a
+      // click and an unlabeled ⋯. The destructive pair still confirm() before firing, and all
+      // four disable while ANY action is mid-flight: they quit and delete things, and two at
+      // once on different Macs is not worth the ambiguity in the one shared message slot.
+      '<div class="factions">' +
+        '<button class="mini" data-fact="signout" data-mac="' + esc(r.name) + '"' + (signinBusy ? ' disabled' : '') + '>Sign out' + (sel ? ' of ' + esc(sel) : '') + '…</button>' +
+        '<button class="mini" data-fact="forget" data-mac="' + esc(r.name) + '"' + (signinBusy ? ' disabled' : '') + ' title="Forget the saved Screen Sharing password for this Mac (your local keychain)">Forget login</button>' +
+        '<button class="mini" data-fact="install" data-mac="' + esc(r.name) + '"' + (signinBusy ? ' disabled' : '') + '>Install…</button>' +
+        '<button class="mini" data-fact="delete" data-mac="' + esc(r.name) + '"' + (signinBusy ? ' disabled' : '') + '>Delete' + (sel ? ' ' + esc(sel) : '') + '…</button>' +
       '</div>' +
       (r.detail ? '<div class="fdetail">' + esc(r.detail) + '</div>' : '') +
       (r.reason ? '<div class="freason">' + esc(r.reason) + '</div>' : '') +
@@ -1118,7 +1137,11 @@ async function dispatchOnce(id, send) {
 }
 
 el('go').onclick = () => dispatchOnce('go', () =>
-  bus.run({ app: sel, task: el('task').value.trim(), record: el('record').checked, noVision: el('novision').checked, host: host, url: selUrl() }));
+  bus.run({ app: sel, task: el('task').value.trim(), record: el('record').checked, humanize: el('human').checked, noVision: el('novision').checked, host: host, url: selUrl() }));
+// A humanized render is a render OF the recording, so the pair moves together: ticking Human
+// cursor turns recording on, and turning recording off takes the render request with it.
+el('human').addEventListener('change', () => { if (el('human').checked) el('record').checked = true; });
+el('record').addEventListener('change', () => { if (!el('record').checked) el('human').checked = false; });
 // A stop that could not be delivered must land in the pane: silence here is an operator
 // watching a run they believe they ended. The button stays up — the run really is still going.
 // It stops the run owning the SELECTED pane, which is the only run whose output is on screen.
@@ -1138,7 +1161,9 @@ el('ground').onclick = () => dispatchOnce('ground', () => bus.ground(sel, host, 
 // loadApps too: the list is per-host, so switching machines must re-ask rather than leave the
 // previous Mac's inventory on screen looking like this one's.
 el('host').onchange = () => { host = el('host').value; bus.saveHostPref(host); check(); loadApps(); };
-el('fleetrefresh').onclick = () => loadFleet();
+// The refresh lives inside the fold's <summary>; without the preventDefault every probe
+// click would also toggle the fold shut.
+el('fleetrefresh').onclick = (e) => { if (e && e.preventDefault) { e.preventDefault(); e.stopPropagation(); } loadFleet(); };
 // Delegated for the same reason the offer list is: these buttons are rebuilt on every probe.
 // The selected app rides along so the Mac opens with it already in front of you.
 el('fleet').onclick = async (e) => {
@@ -1172,21 +1197,20 @@ el('fleet').onclick = async (e) => {
   signinMsg = { ok: done.ok, text: done.message, paints: 0 };
   loadFleet();
 };
-// The overflow menu beside Sign in. Delegated 'change' for the same reason the click handler
-// above is delegated: the rows are rebuilt on every probe. The select resets itself first so
-// the same action can be picked twice in a row. Outcomes land in signinMsg — the transient
-// slot that retires after a few repaints — and signinBusy gates re-entry exactly as it does
-// for Sign in, because these actions quit and delete things.
+// The management buttons under each Mac. Delegated for the same reason the Sign in handler
+// is: the rows are rebuilt on every probe. Outcomes land TWICE on purpose — the ✓/✗-prefixed
+// transient under the panel (which retires after a few repaints), and a durable copy in the
+// log pane — because "did it actually complete" was exactly the question the transient alone
+// left open. signinBusy gates re-entry: these actions quit and delete things, and two at once
+// on different Macs is not worth the ambiguity in the one shared message slot.
 //
 // The destructive pair (signout, delete) go through confirm() naming exactly what will be
-// removed: picking the option opens the dialog, and only the dialog fires the verb — nothing
+// removed: the click opens the dialog, and only the dialog fires the verb — nothing
 // destructive happens from a single interaction.
-el('fleet').onchange = async (e) => {
-  const s = e.target && e.target.dataset && e.target.dataset.act !== undefined ? e.target : null;
-  if (!s) return;
-  const mac = s.dataset.act, act = s.value;
-  s.value = '';
-  if (!act || signinBusy) return;
+el('fleet').addEventListener('click', async (e) => {
+  const b = e.target.closest ? e.target.closest('button[data-fact]') : null;
+  if (!b || signinBusy) return;
+  const mac = b.dataset.mac, act = b.dataset.fact;
   const say = (ok, text) => { signinMsg = { ok: ok, text: text, paints: 0 }; loadFleet(); };
   const ask = async (progress, send) => {
     signinBusy = mac;
@@ -1194,7 +1218,10 @@ el('fleet').onchange = async (e) => {
     let r;
     try { r = await send(); } catch (err) { r = { ok: false, message: errText(err) }; }
     signinBusy = null;
-    say(r.ok, r.message);
+    // The confirmation the transient cannot give on its own: an explicit verdict mark, and a
+    // durable line in the pane that survives the panel's repaints.
+    say(r.ok, (r.ok ? '✓ ' : '✗ ') + r.message);
+    line((r.ok ? '✓ ' : '✗ ') + r.message, null);
   };
   if (act === 'forget') return ask('forgetting the saved screen-share login for ' + mac + '…', () => bus.forgetVnc(mac));
   if (act === 'install') {
@@ -1206,7 +1233,7 @@ el('fleet').onchange = async (e) => {
   }
   // The two destructive verbs need a target, and the selection is it — same source of truth
   // the Sign in button rides along.
-  if (!sel) return say(false, 'pick an app in the list first — ' + (act === 'signout' ? 'sign-out' : 'delete') + ' needs a target');
+  if (!sel) return say(false, '✗ pick an app in the list first — ' + (act === 'signout' ? 'sign-out' : 'delete') + ' needs a target');
   if (act === 'signout') {
     if (!confirm('Sign out of ' + sel + ' on ' + mac + '?\n\nDeletes YOUR ' + sel + ' data on that Mac: the live copy if you own it, plus your parked profile. Other operators keep theirs.')) return;
     return ask('signing out of ' + sel + ' on ' + mac + '…', () => bus.authClear(mac, sel));
@@ -1215,6 +1242,23 @@ el('fleet').onchange = async (e) => {
     if (!confirm("Delete " + sel + ".app from " + mac + "?\n\nRemoves the app bundle, its live app data, and EVERY operator's parked " + sel + " profile on that Mac.")) return;
     return ask('deleting ' + sel + ' from ' + mac + '…', () => bus.appDelete(mac, sel));
   }
+});
+
+// The embedded sign-in view covers the page below the header, so its one control lives in
+// the header: cancel closes the view, the tunnel, and the engine on the far Mac.
+if (bus.onPortal) bus.onPortal((d) => {
+  const b = el('cancelsignin');
+  b.style.display = d.open ? 'inline-block' : 'none';
+  if (d.open) b.textContent = '✕ cancel sign-in — ' + d.app + ' @ ' + d.host;
+});
+el('cancelsignin').onclick = async () => {
+  let r;
+  try {
+    r = await bus.cancelSignin();
+  } catch (err) {
+    r = { ok: false, message: errText(err) };
+  }
+  if (r && r.message) line((r.ok ? '· ' : '✗ ') + r.message, null);
 };
 /**
  * The unready remedy, end to end: open the sign-in (the host side opens the liveview portal

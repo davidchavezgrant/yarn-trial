@@ -37,6 +37,10 @@ function deps(overrides: Partial<PortalDeps> = {}) {
 
 			return { close: () => void log.push("viewer-closed"), onClosed: (cb) => void closedCbs.push(cb) };
 		},
+		stopEngine: async (h) => {
+			log.push(`engine-stopped ${h.name}`);
+		},
+		onSessionEnd: () => void log.push("session-end"),
 		setTimeout: (fn, ms) => {
 			timers.push({ fn, ms });
 
@@ -90,7 +94,22 @@ test("open__KillsTheTunnelAndFallsBack__When__TheLocalEndNeverComesUp", async ()
 	const out = await new SigninPortal(d).open(host("mac1"), "Yarn", "op");
 
 	assert.equal(out.kind, "fallback");
-	assert.deepEqual(log, ["verb", "tunnel", "tunnel-killed"], "a dead tunnel must not leak, and no viewer may open on it");
+	// The engine over there gets stopped too — it would otherwise hold its fixed port against
+	// the very retry this fallback suggests.
+	assert.deepEqual(log, ["verb", "tunnel", "tunnel-killed", "engine-stopped mac1"], "a dead tunnel must not leak, and no viewer may open on it");
+});
+
+test("close__StopsTheEngineAndSignalsTheEnd__When__TheSessionEnds", async () => {
+	// Backing out is the case the stop exists for: without it the engine held the port for up
+	// to its 20-minute lifetime and every following sign-in was refused for a dead session.
+	const { d, log } = deps();
+	const portal = new SigninPortal(d);
+	await portal.open(host("mac1"), "Yarn", "op");
+	portal.close();
+	portal.close(); // idempotent: the second is a no-op, not a second stop
+
+	assert.equal(log.filter((l) => l === "engine-stopped mac1").length, 1);
+	assert.equal(log.filter((l) => l === "session-end").length, 1);
 });
 
 test("open__RefusesTheSecond__When__ASessionIsAlreadyUp", async () => {

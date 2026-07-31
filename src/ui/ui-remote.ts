@@ -657,6 +657,7 @@ export class RemoteRunController {
 	private readonly deps: RemoteDeps;
 	private active: { host: string; jobId?: string; startedAt: number; abort: AbortController } | undefined;
 	private lastHost: string | undefined;
+	private lastJob: string | undefined;
 
 	constructor(deps: RemoteDeps = defaultRemoteDeps()) {
 		this.deps = deps;
@@ -680,6 +681,15 @@ export class RemoteRunController {
 	 */
 	get lastRunHost(): string | undefined {
 		return this.lastHost;
+	}
+
+	/**
+	 * The job id of the most recent run, kept after it ends for the same reason `lastRunHost`
+	 * is: the job id IS the run stamp on the far side (the dispatcher hands it to the child as
+	 * RUN_STAMP), so it names the pulled recording directory the humanize hook renders from.
+	 */
+	get lastRunJobId(): string | undefined {
+		return this.lastJob;
 	}
 
 	/**
@@ -717,6 +727,7 @@ export class RemoteRunController {
 		if (this.active) return "already following a remote run — detach or stop it first";
 		const abort = new AbortController();
 		this.active = { host, jobId, startedAt: this.deps.now(), abort };
+		this.lastJob = jobId;
 		this.lastHost = host;
 		handlers.onLine(`attaching to ${jobId} on ${host} — replaying its log from the start`);
 		void this.followLoop(host, jobId, handlers, abort, 0);
@@ -771,6 +782,7 @@ export class RemoteRunController {
 		this.lastHost = result.host.name;
 		if (this.active) this.active.host = result.host.name;
 		if (this.active) this.active.jobId = result.jobId;
+		this.lastJob = result.jobId;
 		// Tell the caller which machine this run actually occupies. The shell keys its
 		// one-run-per-host bookkeeping on this, and until now the only holder of the resolved
 		// name was this controller — after `done` fires, too late to matter.

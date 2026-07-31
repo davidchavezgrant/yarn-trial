@@ -20,7 +20,7 @@ import { defaultRunnerDir } from "./lease.js";
  * the other end of this contract.
  */
 
-const USAGE = `usage: runnerctl <status|submit|logs|stop|apps|job|doctor|grant|restart|signin|liveview|ready|authclear|appdelete> [options]
+const USAGE = `usage: runnerctl <status|submit|logs|stop|apps|job|doctor|grant|restart|signin|liveview|liveview-stop|ready|authclear|appdelete> [options]
 
   --spec <base64>   request parameters, base64-encoded JSON (the only way to pass data)
   --json            emit JSON (default for everything except logs)
@@ -41,7 +41,7 @@ export const EXIT_REFUSED = 1;
 export const EXIT_USAGE = 2;
 export const EXIT_UNREACHABLE = 3;
 
-const METHODS = new Set(["status", "submit", "logs", "stop", "apps", "job", "doctor", "grant", "restart", "signin", "liveview", "ready", "authclear", "appdelete"]);
+const METHODS = new Set(["status", "submit", "logs", "stop", "apps", "job", "doctor", "grant", "restart", "signin", "liveview", "liveview-stop", "ready", "authclear", "appdelete"]);
 const TERMINAL_FAILURES = new Set(["failed", "orphaned", "stopped"]);
 
 export interface CtlArgs {

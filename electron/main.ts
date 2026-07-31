@@ -1,4 +1,4 @@
-import { app, BrowserWindow, desktopCapturer, ipcMain, net, protocol, shell, systemPreferences } from "electron";
+import { app, BrowserWindow, desktopCapturer, ipcMain, net, protocol, shell, systemPreferences, WebContentsView } from "electron";
 import { spawn as spawnProcess } from "node:child_process";
 import fs from "node:fs";
 // Electron's `net` (imported above) is an HTTP client with no raw sockets; the tunnel-ready
@@ -114,13 +114,49 @@ const portal = new SigninPortal({
 			attempt();
 		}),
 	openViewer: (url, title) => {
+		// Embedded in the main window rather than floating: the sign-in was asked for from
+		// this window, and a separate one reads as a separate app — the header stays visible
+		// above it, which is where the renderer's "cancel sign-in" control lives.
+		if (win && !win.isDestroyed()) {
+			const owner = win;
+			const view = new WebContentsView({
+				// The viewer page is ours, but it streams a machine a human is typing a
+				// password into — it gets no node access on principle.
+				webPreferences: { nodeIntegration: false, contextIsolation: true },
+			});
+			const layout = (): void => {
+				if (owner.isDestroyed()) return;
+				const b = owner.getContentBounds();
+				// Below the page's 51px header, so the title/status/cancel strip stays usable.
+				view.setBounds({ x: 0, y: 52, width: b.width, height: Math.max(0, b.height - 52) });
+			};
+			owner.contentView.addChildView(view);
+			layout();
+			owner.on("resize", layout);
+			void view.webContents.loadURL(url);
+
+			let closedCb: (() => void) | undefined;
+
+			return {
+				close: () => {
+					owner.removeListener("resize", layout);
+					if (!owner.isDestroyed()) owner.contentView.removeChildView(view);
+					view.webContents.close();
+					closedCb?.();
+				},
+				onClosed: (cb) => {
+					closedCb = cb;
+				},
+			};
+		}
+
+		// No main window to embed in (should not happen — the portal is only reachable from
+		// the renderer). A plain window beats refusing the sign-in over a layout concern.
 		const view = new BrowserWindow({
 			width: 1100,
 			height: 800,
 			title,
 			backgroundColor: "#16181d",
-			// The viewer page is ours, but it streams a machine a human is typing a password
-			// into — it gets no node access on principle.
 			webPreferences: { nodeIntegration: false, contextIsolation: true },
 		});
 		void view.loadURL(url);
@@ -132,6 +168,12 @@ const portal = new SigninPortal({
 			onClosed: (cb) => view.once("closed", cb),
 		};
 	},
+	stopEngine: async (host) => {
+		// Best-effort by contract: the engine's own idle and lifetime exits are the backstop,
+		// this only frees the fixed port immediately so the next sign-in is not refused.
+		await runSsh(host, runnerArgv("liveview-stop"), { timeoutMs: 10_000 }).catch(() => undefined);
+	},
+	onSessionEnd: () => toRenderer("portal", { open: false }),
 	setTimeout: (fn, ms) => setTimeout(fn, ms),
 	clearTimeout: (t) => clearTimeout(t),
 });
@@ -166,6 +208,10 @@ window.__bus = {
   attach: (host, jobId, app) => ipcRenderer.invoke('attach', { host, jobId, app }),
   signin: (host, app) => ipcRenderer.invoke('signin', { host, app }),
   signinWait: (host, app) => ipcRenderer.invoke('signin:wait', { host, app }),
+  cancelSignin: () => ipcRenderer.invoke('signin:cancel'),
+  // {open, app?, host?}: the embedded sign-in view appeared or went away. Drives the
+  // header's cancel control — the view covers the page, so the page cannot own a button in it.
+  onPortal: (cb) => ipcRenderer.on('portal', (_e, d) => cb(d)),
   // Fleet-panel overflow actions. All answer {ok, message} for the same transient slot.
   authClear: (host, app) => ipcRenderer.invoke('auth:clear', { host, app }),
   appDelete: (host, app) => ipcRenderer.invoke('app:delete', { host, app }),
@@ -277,8 +323,36 @@ function createWindow(): void {
 		// remote job is a detached process on another Mac and closing a viewer must not kill it.
 		// The fleet rows keep their ids, so the next launch can offer to follow them again.
 		for (const controller of remotes.values()) controller.detach();
+		// The portal is the opposite case: its view lived INSIDE this window, so the session
+		// is over — and the teardown is what stops the engine and frees the port over there.
+		portal.close();
 		win = undefined;
 	});
+}
+
+/**
+ * Kick the humanized-cursor render off the moment a recorded run finishes cleanly. The
+ * checkbox rides RunOptions, but the render itself is always local: a remote run's recording
+ * is pulled home BEFORE its `done` fires (collect() orders it so), which is exactly when the
+ * stamp-named directory exists here. A refused or crashed run has no take worth rendering.
+ */
+function withHumanize(handlers: RunHandlers, wanted: boolean, stamp: () => string | undefined, app: string, host: string): RunHandlers {
+	if (!wanted) return handlers;
+
+	return {
+		...handlers,
+		onDone: (code, elapsed) => {
+			handlers.onDone(code, elapsed);
+			const id = stamp();
+			if (code !== 0 || !id) return;
+			const refused = humanizer.start(id);
+			toRenderer("line", {
+				text: refused ? `✗ human cursor: ${refused}` : `rendering human cursor — it lands on the gallery card for ${id} when done`,
+				app,
+				host,
+			});
+		},
+	};
 }
 
 // Answers for the SELECTED host, not for this Mac. A colo Mac's list comes from its own runner,
@@ -472,14 +546,15 @@ ipcMain.handle("run", (_event, opts: ShellRunOptions) => {
 	// The task text is handed to whichever controller runs it and read by neither: the audit
 	// lives in agent.ts, on the machine that will execute the run (CLAUDE.md, "Measurement rule").
 	let err: string | undefined;
+	const wantsHuman = opts.record === true && opts.humanize === true;
 	if (target === "local") {
-		err = runs.start(opts, handlersFor(opts.app, "local"));
+		err = runs.start(opts, withHumanize(handlersFor(opts.app, "local"), wantsHuman, () => runs.lastStamp, opts.app, "local"));
 	} else {
 		const controller = new RemoteRunController();
 		remotes.set(target, controller);
 		err = controller.start(
 			{ host: target, app: opts.app, task: opts.task, kind: "task", record: opts.record, noVision: opts.noVision, ...(opts.url ? { url: opts.url } : {}) },
-			handlersFor(opts.app, target, controller),
+			withHumanize(handlersFor(opts.app, target, controller), wantsHuman, () => controller.lastRunJobId, opts.app, target),
 		);
 		// A synchronous refusal never reaches onDone, so the map entry is ours to take back.
 		if (err) remotes.delete(target);
@@ -584,7 +659,13 @@ ipcMain.handle("signin", async (_event, { host, app }: { host: string; app?: str
 		}
 		if (entry) {
 			const out = await portal.open(entry, target, defaultOperator());
-			if (out.kind === "open") return { ok: true, message: out.message, watch: out.watch };
+			if (out.kind === "open") {
+				// The renderer shows its cancel control off this event; the matching
+				// {open:false} arrives from the portal's onSessionEnd, whatever ends it.
+				toRenderer("portal", { open: true, app: target, host: name });
+
+				return { ok: true, message: out.message, watch: out.watch };
+			}
 			if (out.kind === "refused") return { ok: false, message: out.message };
 			// kind === "fallback": the runner could not be asked. Screen sharing is the one
 			// path that does not need it, so the request continues there — with the reason
@@ -609,6 +690,17 @@ ipcMain.handle("signin", async (_event, { host, app }: { host: string; app?: str
  * panel's button spinning for all of it with the screen share already open and usable in front of
  * them. The renderer fires this after `signin` returns and lets the reply land whenever it lands.
  */
+/**
+ * The operator backing out: tear the portal down — window, tunnel, and the engine on the far
+ * Mac, so the port is free for the next attempt instead of held by a sign-in nobody finishes.
+ */
+ipcMain.handle("signin:cancel", () => {
+	const was = portal.active;
+	portal.close();
+
+	return was ? { ok: true, message: `Cancelled the ${was.app} sign-in on ${was.host}.` } : { ok: true, message: "No sign-in was open." };
+});
+
 ipcMain.handle("signin:wait", (_event, { host, app }: { host: string; app: string }) => {
 	const h = String(host ?? "");
 	const a = String(app ?? "");

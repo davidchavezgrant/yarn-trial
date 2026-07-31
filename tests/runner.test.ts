@@ -969,16 +969,25 @@ test("liveview__RequiresAnApp__When__NoneGiven", async () => {
  * from under the in-progress sign-in). It reports the existing server instead — before touching
  * the swap, so the fake swap/spawn are proven untouched.
  */
-test("liveview__RefusesWithoutSwappingOrSpawning__When__AServerIsAlreadyUp", async () => {
+test("liveview__PreemptsBeforeTheSwap__When__AServerIsAlreadyUp", async () => {
+	// The order is the safety property: the old engine dies BEFORE the app is quit and handed
+	// to the new operator, so a preempting kill can never land on a session mid-swap. (The
+	// old behavior — refuse with alreadyRunning — stranded the port for the engine's whole
+	// lifetime; "run it again" is now allowed to win.)
 	await withTempAsync("yr-serve-", async (dir) => {
 		const spawner = mkdirSpawner();
-		let swaps = 0;
+		const order: string[] = [];
 		const runner = await startRunner(dir, {
 			log: () => {},
 			open: async () => {},
 			portInUse: async () => true, // a server is already listening
+			freeLiveviewPort: async () => {
+				order.push("preempt");
+
+				return true;
+			},
 			swap: async (app, operator) => {
-				swaps++;
+				order.push("swap");
 
 				return { action: "kept", app, operator, stashed: [], restored: [], fresh: false };
 			},
@@ -986,12 +995,9 @@ test("liveview__RefusesWithoutSwappingOrSpawning__When__AServerIsAlreadyUp", asy
 		});
 		try {
 			const [res] = await request(runner.socketPath, "liveview", { app: "Yarn", operator: "dave" });
-			assert.equal(res.ok, false);
-			assert.equal(res.alreadyRunning, true);
-			assert.match(String(res.error), /already running/);
-			// Neither the profile swap nor a second server may have happened.
-			assert.equal(swaps, 0);
-			assert.equal(spawner.calls.length, 0);
+			assert.equal(res.ok, true, String(res.error ?? ""));
+			assert.deepEqual(order, ["preempt", "swap"]);
+			assert.equal(spawner.calls.length, 1);
 		} finally {
 			await runner.close();
 		}

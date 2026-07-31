@@ -70,7 +70,7 @@ const el = (): FakeEl => ({
 });
 
 const IDS = [
-	"q", "apps", "url", "urlrow", "urlhint", "task", "warn", "go", "ground", "stop",
+	"q", "apps", "url", "urlrow", "urlhint", "task", "warn", "go", "ground", "stop", "human", "cancelsignin",
 	"record", "novision", "host", "log", "runs", "refresh", "status", "attach", "fleet",
 	"creds", "key", "savekey",
 ];
@@ -109,6 +109,7 @@ interface Harness {
 		line?: (d: { text: string; app: string; host: string }) => void;
 		host?: (d: { app: string; host: string }) => void;
 		done?: (d: { code: number | null; elapsed: number; app: string; host: string }) => void;
+		portal?: (d: { open: boolean; app?: string; host?: string }) => void;
 	};
 	/** Hosts the Stop button asked the bus to stop, in click order. */
 	stops: unknown[];
@@ -168,6 +169,10 @@ function mount(busOverrides: Record<string, unknown> = {}): Harness {
 		// No watch by default, so a flow that reaches signin stops there unless a test says more.
 		signin: async () => ({ ok: true, message: "" }),
 		signinWait: async () => ({ ok: true, message: "" }),
+		cancelSignin: async () => ({ ok: true, message: "" }),
+		onPortal(cb: Harness["events"]["portal"]) {
+			events.portal = cb;
+		},
 		humanize: async () => undefined,
 		humanizeStatus: async () => ({}),
 		...busOverrides,
@@ -703,6 +708,70 @@ test("onDone__LeavesTheSigninFlowAlone__When__TheRefusalIsLocal", async () => {
 	ui.events.done!({ code: 3, elapsed: 17, app: "Yarn", host: "local" });
 	await settle();
 	assert.deepEqual(calls, []);
+});
+
+test("CHROME__PutsTheHostSelectorAtTheTopOfTheLeftColumn__When__Rendered", () => {
+	// The host decides which Mac's apps are listed, so it sits above the search box that
+	// filters them — burying it in the middle column made the list's origin a mystery.
+	const mid = CHROME.indexOf('class="col mid"');
+	const hostAt = CHROME.indexOf('id="host"');
+	assert.ok(hostAt > 0 && hostAt < CHROME.indexOf('id="q"'), "the host selector must sit above the app search");
+	assert.ok(hostAt < mid, "the host selector left the left column");
+});
+
+test("HumanCheckbox__TravelsWithRecording__When__EitherSideChanges", async () => {
+	const opts: { record?: boolean; humanize?: boolean }[] = [];
+	const ui = mount({
+		run: async (o: { record?: boolean; humanize?: boolean }) => {
+			opts.push(o);
+
+			return undefined;
+		},
+	});
+	await settle();
+	// Ticking Human cursor drags recording on — a render OF the recording needs one.
+	ui.nodes.human.checked = true;
+	for (const fn of ui.nodes.human.listeners.change ?? []) fn({});
+	assert.equal(ui.nodes.record.checked, true);
+	// Unticking Record takes the render request with it.
+	ui.nodes.record.checked = false;
+	for (const fn of ui.nodes.record.listeners.change ?? []) fn({});
+	assert.equal(ui.nodes.human.checked, false);
+	// And the flag rides the dispatch.
+	ui.apps = [{ name: "Yarn" }];
+	ui.sel = "Yarn";
+	ui.nodes.task.value = "show me how to change the cursor type";
+	ui.nodes.record.checked = true;
+	ui.nodes.human.checked = true;
+	ui.check();
+	void ui.nodes.go.onclick!();
+	await settle();
+	assert.equal(opts.length, 1);
+	assert.equal(opts[0].record, true);
+	assert.equal(opts[0].humanize, true);
+});
+
+test("onDone__ReadsAsAPause__When__TheRunNeedsASignin", () => {
+	// Exit 3 is expected and recoverable — the sign-in window opens itself — and painting it
+	// as an error taught people to read a routine first run on a Mac as something breaking.
+	const ui = mount();
+	ui.sel = "Yarn";
+	ui.events.started!({ app: "Yarn", task: "t", host: "mac1" });
+	ui.events.done!({ code: 3, elapsed: 17, app: "Yarn", host: "mac1" });
+	const log = ui.stateFor("Yarn").log;
+	assert.ok(log.some((l) => l.includes("paused — sign-in needed")), "exit 3 must read as a pause");
+	assert.ok(!log.some((l) => l.includes("exited with code 3")), "exit 3 must not read as a failure");
+});
+
+test("onPortal__TogglesTheCancelControl__When__TheSigninViewOpensAndCloses", () => {
+	// The embedded view covers the page below the header, so this header control is the one
+	// way to back out — it must appear with the session and retire with it.
+	const ui = mount();
+	ui.events.portal!({ open: true, app: "Yarn", host: "mac1" });
+	assert.equal(ui.nodes.cancelsignin.style.display, "inline-block");
+	assert.match(ui.nodes.cancelsignin.textContent, /Yarn @ mac1/);
+	ui.events.portal!({ open: false });
+	assert.equal(ui.nodes.cancelsignin.style.display, "none");
 });
 
 test("onLine__TagsLinesWithTheHost__When__TheSameAppRunsOnTwoHosts", () => {

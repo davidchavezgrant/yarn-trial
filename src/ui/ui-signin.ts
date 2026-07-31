@@ -35,6 +35,14 @@ export interface PortalDeps {
 	portReady(port: number, deadlineMs: number): Promise<boolean>;
 	/** Open the viewer window. `onClosed` must fire however the window dies, exactly once. */
 	openViewer(url: string, title: string): { close(): void; onClosed(cb: () => void): void };
+	/**
+	 * Ask the runner to end the engine NOW. Fired best-effort on every teardown — without it,
+	 * backing out of a sign-in left the engine holding its fixed port for up to its 20-minute
+	 * lifetime, and the next attempt was refused for a server nobody wanted any more.
+	 */
+	stopEngine(host: HostEntry): Promise<void>;
+	/** The session is gone, however it ended. The shell uses this to retire its cancel UI. */
+	onSessionEnd?(): void;
 	setTimeout(fn: () => void, ms: number): NodeJS.Timeout;
 	clearTimeout(t: NodeJS.Timeout): void;
 }
@@ -56,6 +64,8 @@ const DEFAULT_LIFETIME_MS = 20 * 60_000;
 interface ActiveSession {
 	host: string;
 	app: string;
+	/** The resolved entry, kept so the teardown can reach the runner without a re-lookup. */
+	entry: HostEntry;
 	tunnel: { kill(): void };
 	viewer: { close(): void };
 	lifetime: NodeJS.Timeout;
@@ -116,6 +126,9 @@ export class SigninPortal {
 		const tunnel = this.deps.spawnTunnel(host, port);
 		if (!(await this.deps.portReady(port, TUNNEL_READY_MS))) {
 			tunnel.kill();
+			// The engine is up over there with nobody coming — stop it, or it holds the port
+			// against the retry this fallback is about to suggest.
+			void this.deps.stopEngine(host).catch(() => undefined);
 
 			return { kind: "fallback", reason: `the tunnel to ${host.name} did not come up` };
 		}
@@ -127,6 +140,7 @@ export class SigninPortal {
 		const session: ActiveSession = {
 			host: host.name,
 			app,
+			entry: host,
 			tunnel,
 			viewer,
 			// The engine self-terminates at its lifetime; a viewer of a dead stream plus a
@@ -158,6 +172,10 @@ export class SigninPortal {
 		// flag above has already made a no-op.
 		s.viewer.close();
 		s.tunnel.kill();
+		// Best-effort and unawaited: the engine's own idle/lifetime exits are the backstop,
+		// this just frees the port NOW so the next sign-in is not refused for a dead session.
+		void this.deps.stopEngine(s.entry).catch(() => undefined);
+		this.deps.onSessionEnd?.();
 	}
 
 	/** Close only if the session is the one named — a wait for an older sign-in must not kill a newer one. */

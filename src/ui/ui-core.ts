@@ -2,8 +2,9 @@ import { execFileSync, spawn as spawnProcess, type ChildProcess } from "node:chi
 import fs from "node:fs";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import { appSlug, auditTaskPrompt } from "../core/harness.js";
+import { appSlug, auditTaskPrompt, mintRunKey } from "../core/harness.js";
 import { appmapsDir, dataRoot, outDir, resourcesRoot } from "../paths.js";
+import { readJsonOr } from "../fsutil.js";
 // One capturedAt reader for the whole codebase — the sync's. A second parser here could
 // disagree with it about what counts as stamped. It is a pure local-file read; importing it
 // pulls no ssh behaviour into the local shell, at module load or at call time.
@@ -218,12 +219,8 @@ export function listRecordedRuns(limit = 40): PastRun[] {
 	const out: PastRun[] = [];
 	for (const f of fs.readdirSync(dir).filter((n) => n.endsWith(".json")).sort().reverse()) {
 		if (out.length >= limit) break;
-		let d: any;
-		try {
-			d = JSON.parse(fs.readFileSync(`${dir}/${f}`, "utf8"));
-		} catch {
-			continue; // a half-written log during a live run is not an error worth surfacing
-		}
+		const d: any = readJsonOr(`${dir}/${f}`, undefined);
+		if (d === undefined) continue; // a half-written log during a live run is not an error worth surfacing
 		if (!d.video || !fs.existsSync(`${dataRoot()}/${d.video}`)) continue;
 		// The humanize pass writes its render beside the raw capture, so the path is derived from
 		// the video's own directory rather than rebuilt from the id — one source of truth for
@@ -322,11 +319,8 @@ const LOG_LINES_KEPT = 400;
  * hand-editable and a malformed one must degrade to "no memory", never break the shell.
  */
 export function readUiState(): UiState {
-	try {
-		return pruneUiState(JSON.parse(fs.readFileSync(STATE_PATH(), "utf8")));
-	} catch {
-		return { byApp: {} };
-	}
+	// An absent or corrupt file prunes to the same empty state a fresh install starts with.
+	return pruneUiState(readJsonOr(STATE_PATH(), {}));
 }
 
 /**
@@ -366,6 +360,12 @@ export interface RunOptions {
 	task: string;
 	record: boolean;
 	noVision: boolean;
+	/**
+	 * Render the humanized cursor over the recording once the run completes. Meaningless
+	 * without `record`; the render itself happens on the OPERATOR's Mac either way, since a
+	 * remote run's recording is pulled home before its `done` fires.
+	 */
+	humanize?: boolean;
 	/**
 	 * Set when the target is a website rather than an installed app. Additive on purpose: `app`
 	 * stays the display label and the `byApp` key, because the renderer uses that string as an
@@ -448,9 +448,18 @@ export function streamPump(emit: (line: string) => void): { push: (buf: Buffer) 
 /** Holds the single in-flight run. Both shells share one instance. */
 export class RunController {
 	private current: { child: ChildProcess; startedAt: number } | undefined;
+	private stamp: string | undefined;
 
 	get active(): boolean {
 		return this.current !== undefined;
+	}
+
+	/**
+	 * The run key of the most recent task run — kept after it ends, because the moment a
+	 * caller needs it (rendering the recording it named) is the moment the run is over.
+	 */
+	get lastStamp(): string | undefined {
+		return this.stamp;
 	}
 
 	/**
@@ -476,7 +485,13 @@ export class RunController {
 			return err instanceof Error ? err.message : String(err);
 		}
 
-		return this.spawn(["tsx", "src/core/agent.ts", ...buildRunArgs(target, { task, record: opts.record, noVision: opts.noVision })], handlers);
+		// The stamp is minted HERE, not left for the agent, so the shell knows the recording
+		// directory of the run it just started — the humanize-after-run hook needs it the
+		// moment `done` fires, and scraping it back out of the child's stdout is a parse that
+		// breaks the day the log line changes shape.
+		this.stamp = mintRunKey("", app);
+
+		return this.spawn(["tsx", "src/core/agent.ts", ...buildRunArgs(target, { task, record: opts.record, noVision: opts.noVision })], handlers, this.stamp);
 	}
 
 	/**
@@ -499,11 +514,16 @@ export class RunController {
 	}
 
 	/** Shared launcher for task runs and grounding passes. */
-	private spawn(args: string[], handlers: RunHandlers): undefined {
+	private spawn(args: string[], handlers: RunHandlers, stamp?: string): undefined {
 		// No shell: task text is user input and passes through as a single argv entry.
 		// cwd is the checkout rather than ours: `src/core/explore.ts` in the argv is resolved
 		// relative to it, and under a LaunchAgent our own cwd is `/`.
-		const child = spawnProcess("npx", args, { cwd: resourcesRoot(), env: process.env });
+		const child = spawnProcess("npx", args, {
+			cwd: resourcesRoot(),
+			// RUN_STAMP is how the child adopts the key we minted — the same contract the
+			// runner's dispatcher uses. Absent for passes whose key nobody needs to predict.
+			env: stamp ? { ...process.env, RUN_STAMP: stamp } : process.env,
+		});
 		const startedAt = Date.now();
 		this.current = { child, startedAt };
 
