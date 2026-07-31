@@ -65,9 +65,10 @@ export async function main(): Promise<void> {
 	// flag has selected one: every backend lazy-loads from src/backends/ at its selection
 	// branch, so each backend stays independently deletable without breaking runs on the
 	// others. Type-only imports of the same modules elsewhere stay static — they vanish at
-	// compile time.
+	// compile time. axMod is `let` because the cdp→ax fallback below is a LATE selection
+	// branch: ax.js loads there only once an app target's endpoint has proven unreachable.
 	const cdpMod = backendKind === "cdp" ? await import("../../backends/cdp.js") : undefined;
-	const axMod = backendKind === "ax" ? await import("../../backends/ax.js") : undefined;
+	let axMod = backendKind === "ax" ? await import("../../backends/ax.js") : undefined;
 
 	const { client, model } = makeClient();
 	// Announce the takeover before the first action. An ax run seizes pointer and keyboard
@@ -79,8 +80,10 @@ export async function main(): Promise<void> {
 	const overlay = startOverlay("drive", `Agent driving ${app} — do not touch`, backendKind);
 	// The CDP backend runs with NO cua driver at all — that absence is its reason to exist
 	// (no session TTL, no shared daemon, no consent gate; see src/backends/cdp.ts). Everything below
-	// that needs the driver is therefore conditional on this being set.
-	const driver = backendKind === "cdp" ? undefined : await Driver.start("agent");
+	// that needs the driver is therefore conditional on this being set. `let`, not `const`:
+	// the cdp→ax fallback in the try below starts a driver late, and landing it in THIS
+	// variable is what makes the interrupt handler and the finally close it unchanged.
+	let driver = backendKind === "cdp" ? undefined : await Driver.start("agent");
 	let cdp: CdpBackend | undefined;
 	const interrupted = onInterrupt(async () => {
 		await driver?.close();
@@ -114,6 +117,11 @@ export async function main(): Promise<void> {
 	// The ax backend's run-start activation outcome (src/backends/ax.ts). Hoisted for the
 	// same reason as windowGeometry; absent on cdp runs.
 	let activation: { applied: boolean; error?: string } | undefined;
+	// Which backend actually drives. backendKind is the CLI's request; this is the truth the
+	// run log must tell — the cdp→ax fallback in the try below reassigns it, and a fallback
+	// run that reported itself as cdp would contaminate every benchmark read off the logs.
+	let effectiveBackend = backendKind;
+	let backendFallback: { from: "cdp"; reason: string; detail: string } | undefined;
 	let expectationRejections = 0;
 	let findCalls = 0;
 	let malformedStreak = 0;
@@ -158,7 +166,10 @@ export async function main(): Promise<void> {
 				{
 					task,
 					app,
-					backend: backendKind,
+					// What ACTUALLY drove, with the fallback (if one happened) named beside it:
+					// a log that says cdp when ax produced the numbers is measurement fraud.
+					backend: effectiveBackend,
+					...(backendFallback ? { backendFallback } : {}),
 					// The exact model id, because forensics on a bad run starts with "what was
 					// driving" and until now the logs only recorded token usage.
 					model,
@@ -227,22 +238,6 @@ export async function main(): Promise<void> {
 	const warnings = graph ? scopeWarnings(graph) : "";
 	const ambiguities = graph ? findScopeAmbiguities(graph) : [];
 
-	// A recorded run is a filmed demo: every backend swaps in its demo rules/tool, and the
-	// prompt gains the DEMO CONDUCT section. Unrecorded runs are byte-identical to before.
-	const basePrompt = systemPrompt(
-		backendKind === "cdp"
-			? cdpMod!.cdpRules(record)
-			: noAx
-				? (record ? DEMO_VISION_ONLY_RULES : VISION_ONLY_RULES)
-				: (record ? DEMO_DRIVER_RULES : DRIVER_RULES),
-		vision,
-		targetVocabulary(target),
-		!noAx,
-		record,
-	);
-	const system = grounding.notes
-		? `${basePrompt}\n\n# App grounding notes for ${app} (from a prior exploration pass — trust these to skip dead ends)\n${grounding.notes}${warnings}`
-		: basePrompt;
 	if (grounding.notes) console.log(`loaded grounding notes for ${app} (provenance: ${grounding.provenance}, ${groundingMeta.path})`);
 	if (graph) {
 		groundingMeta.graph = { nodes: graph.nodes.length, edges: graph.edges.length, scopeAmbiguities: ambiguities.map((a) => a.settingKey) };
@@ -250,12 +245,6 @@ export async function main(): Promise<void> {
 		for (const a of ambiguities)
 			console.log(`  scope ambiguity: ${a.settingKey} — ${a.nodes.map((n) => `${n.id} [${n.scope}]`).join(" vs ")}`);
 	}
-	// find is CDP-only: the snapshot is complete there, so find is just search. The AX
-	// path has no need for it (get_window_state returns the whole tree).
-	const tools: Anthropic.Tool[] =
-		backendKind === "cdp"
-			? [cdpMod!.cdpActTool(record), cdpMod!.CDP_FIND_TOOL, CLAIM_TOOL, DONE_TOOL]
-			: [record ? DEMO_ACT_TOOL : ACT_TOOL, CLAIM_TOOL, DONE_TOOL];
 
 	try {
 		// On the CDP backend there is no driver and no window: the page is the target, and
@@ -266,13 +255,67 @@ export async function main(): Promise<void> {
 		// window, so `ax.win` is read fresh at every use rather than held here.
 		let ax: AxBackend | undefined;
 		if (backendKind === "cdp") {
-			cdp = await cdpMod!.CdpBackend.acquire(target, { demo: record });
+			try {
+				cdp = await cdpMod!.CdpBackend.acquire(target, { demo: record });
+			} catch (err) {
+				// cdp→ax fallback, app targets only. The AX path is the actuator of last
+				// resort whenever there is no reachable DOM: native apps never had one, and a
+				// flag-stripped Electron app hid its behind argv sanitization — both land
+				// here as EndpointUnavailableError (electron-attach.ts), the TYPE check being
+				// the repo rule (never regex error prose). Everything else stays fatal: a web
+				// target's cdp failure is about OUR Chrome, and not-installed / port
+				// collisions / wrong-owner endpoints are faults the operator must see.
+				//
+				// An explicit `--backend cdp` falls back too. Honouring the flag by refusing
+				// would be defensible, but hardened Electron apps are exactly why the ax path
+				// exists — the operator asked for cdp against an app where cdp is impossible,
+				// and the loud line below plus the run log's backendFallback carry the truth.
+				if (target.kind !== "app" || !(err instanceof cdpMod!.EndpointUnavailableError)) throw err;
+				console.error(`\nCDP UNAVAILABLE for "${app}" (${err.reason}): ${err.message}`);
+				console.error(`  -> falling back to the AX backend — this run continues on the cua driver, recorded as backendFallback in the run log\n`);
+				backendFallback = { from: "cdp", reason: err.reason, detail: err.message };
+				effectiveBackend = "ax";
+				// Everything the cdp path skipped at startup, taken now: the driver (closed by
+				// the same interrupt handler and finally as an ax-first run, because it lands
+				// in the same variable) and the ax module's selection-branch import.
+				driver = await Driver.start("agent");
+				axMod = await import("../../backends/ax.js");
+				ax = await axMod.AxBackend.acquire(target, driver, app);
+				activation = ax.activation;
+			}
 		} else if (target.kind === "web") {
 			throw new Error("web targets run on the cdp backend — pass --backend cdp (or omit it; web targets default there)");
 		} else {
 			ax = await axMod!.AxBackend.acquire(target, driver!, app);
 			activation = ax.activation;
 		}
+
+		// Rules and tools are chosen HERE, after acquisition, because acquisition is what
+		// settles which backend drives: the fallback above can turn a cdp run into an ax run,
+		// and a prompt carrying cdp rules over an ax actuator would ask the model to call
+		// tools that do not exist. `cdp` (the acquired backend) is the discriminant, exactly
+		// as it is for doObserve and every step below.
+		// A recorded run is a filmed demo: every backend swaps in its demo rules/tool, and the
+		// prompt gains the DEMO CONDUCT section. Unrecorded runs are byte-identical to before.
+		const basePrompt = systemPrompt(
+			cdp
+				? cdpMod!.cdpRules(record)
+				: noAx
+					? (record ? DEMO_VISION_ONLY_RULES : VISION_ONLY_RULES)
+					: (record ? DEMO_DRIVER_RULES : DRIVER_RULES),
+			vision,
+			targetVocabulary(target),
+			!noAx,
+			record,
+		);
+		const system = grounding.notes
+			? `${basePrompt}\n\n# App grounding notes for ${app} (from a prior exploration pass — trust these to skip dead ends)\n${grounding.notes}${warnings}`
+			: basePrompt;
+		// find is CDP-only: the snapshot is complete there, so find is just search. The AX
+		// path has no need for it (get_window_state returns the whole tree).
+		const tools: Anthropic.Tool[] = cdp
+			? [cdpMod!.cdpActTool(record), cdpMod!.CDP_FIND_TOOL, CLAIM_TOOL, DONE_TOOL]
+			: [record ? DEMO_ACT_TOOL : ACT_TOOL, CLAIM_TOOL, DONE_TOOL];
 		// Last chance to take your hands off before the run owns the pointer.
 		await overlay.countdown();
 		if (!cdp) await ax!.ensureObservable();
@@ -280,7 +323,7 @@ export async function main(): Promise<void> {
 		console.log(
 			cdp
 				? `target: ${app} url=${target.kind === "web" ? target.url : "(attached)"} backend=cdp`
-				: `target: ${app} pid=${ax!.win.pid} window=${ax!.win.windowId} backend=${backendKind}`,
+				: `target: ${app} pid=${ax!.win.pid} window=${ax!.win.windowId} backend=${effectiveBackend}`,
 		);
 
 		// Start from a declared home state, so a run never inherits the previous run's

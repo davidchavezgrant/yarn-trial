@@ -12,7 +12,8 @@ import type { Target } from "../core/target.js";
  *   free, so this is the only path that needs no debug port.
  * - The fallback for Electron apps whose --remote-debugging-port never comes up: apps that
  *   sanitize their argv strip the flag, leaving the cdp backend nothing to attach to.
- *   The cdp→ax fallback wiring is a follow-up task, not in this file yet.
+ *   The cdp→ax fallback lives in run.ts's acquisition branch, keyed on
+ *   EndpointUnavailableError (src/backends/electron-attach.ts).
  *
  * Scope, stated plainly: this class owns ACQUISITION (launch → settle → find the window),
  * OBSERVATION, and the WINDOW STATE that recovery can move. Per-step actuation stays where
