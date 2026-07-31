@@ -89,6 +89,8 @@ export const CANONICAL_TASK = "show me how to change the cursor type";
  * the new numbers are comparable with the old ones. Goal-only: names the outcome, not the
  * gutter label, the menu item, or any interaction verb.
  */
+// Kept though currently unreferenced: the Notion Calendar slice above was dropped for a
+// MISSING APP, not a bad idea, and restoring it should not mean re-deriving the task string.
 export const NC_APP = "Notion Calendar";
 export const NC_TASK = "Change my calendar's time zone to Paris";
 
@@ -160,38 +162,40 @@ const PHASE2_SLICES: Arm[] = [
 	task("p2-ax-curated", { backend: "ax", useRecipe: true }, "explore pass vs 10 minutes of human notes"),
 	// Vision-only is ax-backend-only by construction: cdp observations ARE ref lists.
 	task("p2-vision-only-ungrounded", { backend: "ax", noAx: true, noGrounding: true }, "the floor: screenshots alone, cold"),
-	task(
-		"p2-vision-only-grounded",
-		{ backend: "ax", noAx: true },
-		"does prose grounding rescue a vision-only agent — the AX-hostile-app deploy story",
-		{ env: { APPMAP_VARIANT: "vision" } },
-	),
+	/**
+	 * ~~p2-vision-only-grounded~~ — CUT 2026-07-31, and the reason is worth keeping: as
+	 * specified it would have produced a WRONG answer rather than no answer.
+	 *
+	 * It set APPMAP_VARIANT=vision, which resolves to docs/appmaps/<slug>.vision.md — the
+	 * output of a vision-only explore pass, which is deliberately not built yet. A missing map
+	 * does not fail: loadGrounding returns `provenance: "none"` (agent/grounding.ts), which is
+	 * byte-identical to NO_GROUNDING=1. So the arm would have run the SAME conditions as
+	 * p2-vision-only-ungrounded while being labelled the grounded one, and the report would
+	 * have concluded "prose grounding does not help a vision-only agent" from an experiment
+	 * that never ran.
+	 *
+	 * It cannot borrow the ordinary appmap instead: that map was written by a pass that could
+	 * read the AX tree, so it names controls a screenshots-only agent could never have
+	 * discovered — the same contamination class as a hinted prompt.
+	 *
+	 * The QUESTION survives without it: p2-vision-only-curated puts human-written prose in
+	 * front of the same blind agent. What is lost is only whether MACHINE-generated prose does
+	 * the same, which is exactly the deferred vision-explore pipeline. Restore this arm when
+	 * that pipeline lands and a stamped <slug>.vision.md exists.
+	 */
 	task("p2-vision-only-curated", { backend: "ax", noAx: true, useRecipe: true }, "same against the human-written tier"),
 ];
 
-const NC_PREREQ = "Notion Calendar installed + signed in on the fleet (UNVERIFIED — check before --go)";
-
 /**
- * Phase 2 generalization slice — Notion Calendar, only the arms that carry the
- * generalization claim (ungrounded vs grounded × ax vs cdp, n=2). Grounded arms consume the
- * app's EXISTING stamped map (docs/appmaps/notion-calendar.md, an ax pass) rather than a
- * fresh phase-1 per-backend pass — this slice asks whether the Yarn results transfer, not
- * for a second discovery benchmark.
+ * ~~Phase 2 generalization slice (Notion Calendar)~~ — DROPPED 2026-07-31 (David's call).
+ *
+ * The arms carried a PREREQ marked UNVERIFIED; verifying it settled the matter — Notion
+ * Calendar is installed on NONE of the three colo Macs (checked over ssh, all three). Every
+ * run would have refused at the readiness gate for exit 3, costing 16 runs across both model
+ * passes and teaching nothing. Reinstate by installing and signing the app in on the fleet
+ * first, then restoring these arms from git history — the generalization question is still
+ * worth asking, it just needs the app present to ask it.
  */
-const PHASE2_NC: Arm[] = BACKENDS.flatMap((backend) => [
-	task(`p2-nc-${backend}-ungrounded`, { backend, noGrounding: true }, "does the ungrounded floor transfer beyond Yarn", {
-		app: NC_APP,
-		task: NC_TASK,
-		n: 2,
-		prereq: NC_PREREQ,
-	}),
-	task(`p2-nc-${backend}-grounded`, { backend }, "does grounding's lift transfer beyond Yarn", {
-		app: NC_APP,
-		task: NC_TASK,
-		n: 2,
-		prereq: NC_PREREQ,
-	}),
-]);
 
 /**
  * Phase 3 — recipes. Compiles are LOCAL (a pure file transform on a pulled run log through
@@ -264,7 +268,7 @@ const PHASE4: Arm[] = [
 	},
 ];
 
-export const MATRIX: readonly Arm[] = [...PHASE1, ...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE2_NC, ...PHASE3, ...PHASE4];
+export const MATRIX: readonly Arm[] = [...PHASE1, ...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE3, ...PHASE4];
 
 export const phaseArms = (phase: Phase): Arm[] => MATRIX.filter((a) => a.phase === phase);
 

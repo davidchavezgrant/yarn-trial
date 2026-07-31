@@ -46,8 +46,9 @@ import { host, withTemp, withTempAsync } from "./fixtures.js";
  * contact the fleet; a stray real submit takes a colo Mac out for the length of a run.
  *
  * The matrix-integrity tests are the executable copy of the plan doc's totals (as amended
- * 2026-07-31: dom cut, Notion Calendar slice, web-explore check). When the plan changes,
- * change matrix.ts and these numbers TOGETHER — a drifting pair is the failure mode.
+ * 2026-07-31: dom cut, web-explore check, then the Notion Calendar slice and
+ * vision-only-grounded cut). When the plan changes, change matrix.ts and these numbers
+ * TOGETHER — a drifting pair is the failure mode.
  */
 
 const DATE = "2026-07-31";
@@ -62,8 +63,14 @@ test("MATRIX__HasUniqueArmIds__When__Defined", () => {
 test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// Phase 1: ax + cdp Yarn explores + the cdp web-explore verification run.
 	assert.equal(phaseRunCount(1), 3);
-	// Phase 2: core 2 backends × 2 grounding × 3, slices 7 × 3, Notion Calendar 4 × 2.
-	assert.equal(phaseRunCount(2), 12 + 21 + 8);
+	// Phase 2: core 2 backends × 2 grounding × 3, plus 6 slices × 3. Two blocks were cut
+	// 2026-07-31 after their prerequisites were CHECKED rather than assumed (matrix.ts holds
+	// the full reasoning at each site): the Notion Calendar slice (4 arms × 2 = 8 runs — the
+	// app is installed on none of the three Macs, so every run would refuse at the readiness
+	// gate) and p2-vision-only-grounded (3 runs — its `.vision` appmap does not exist, and a
+	// missing map degrades to provenance "none", making it a silent duplicate of the
+	// ungrounded arm under a grounded label).
+	assert.equal(phaseRunCount(2), 12 + 18);
 	// Phase 3: 2 local compiles + replay ×3 per backend + no-rescue ×3.
 	assert.equal(phaseRunCount(3), 2 + 6 + 3);
 	// Phase 4 (optional): 2 task cells × 2 + 1 compile + 2 replays.
@@ -96,10 +103,13 @@ test("MATRIX__LinksSourceArms__When__CompileOrReplay", () => {
 	}
 });
 
-test("MATRIX__FlagsFleetPrereq__When__ArmTargetsNotionCalendar", () => {
-	const nc = MATRIX.filter((a) => a.app === "Notion Calendar");
-	assert.equal(nc.length, 4);
-	for (const arm of nc) assert.match(arm.prereq ?? "", /signed in/i, `${arm.id} must flag the sign-in prereq`);
+test("MATRIX__CarriesNoUnmetPrereqs__When__ArmsTargetASecondApp", () => {
+	// The Notion Calendar slice is gone (see the phase-2 note above), so nothing in the
+	// matrix should target a second app. This guards the restore path as much as the cut: an
+	// arm reintroduced for an app the fleet does not have must carry its prereq, because the
+	// prereq is what made the cut decidable instead of a surprise at run time.
+	assert.deepEqual(MATRIX.filter((a) => a.app === "Notion Calendar"), []);
+	for (const arm of MATRIX.filter((a) => a.prereq)) assert.match(arm.prereq ?? "", /signed in|installed/i, `${arm.id} prereq must name what is missing`);
 });
 
 test("auditPhase__ReturnsNoProblems__When__RunOverEveryPhase", () => {
@@ -224,7 +234,7 @@ test("runPhase__ShapesOptionsPerArm__When__Phase2Dispatches", async () => {
 		const fake = fakeDispatch();
 		const code = await runPhase(2, { go: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
 		assert.equal(code, EXIT_OK);
-		assert.equal(fake.calls.length, 41);
+		assert.equal(fake.calls.length, 30);
 
 		const byFlag = (pred: (c: DispatchOptions) => boolean): DispatchOptions[] => fake.calls.filter(pred);
 		// Task text crosses verbatim and is goal-only for every call.
@@ -236,9 +246,16 @@ test("runPhase__ShapesOptionsPerArm__When__Phase2Dispatches", async () => {
 		assert.equal(byFlag((c) => c.axdomOff === true).length, 3);
 		assert.equal(byFlag((c) => c.noVision === true && c.backend === "cdp").length, 3);
 		assert.equal(byFlag((c) => c.useRecipe === true && !c.noAx).length, 3);
-		assert.equal(byFlag((c) => c.noAx === true).length, 9);
-		assert.equal(byFlag((c) => c.appmapVariant === "vision").length, 3);
-		assert.equal(byFlag((c) => c.app === "Notion Calendar").length, 8);
+		// Two vision-only arms remain (ungrounded floor + curated prose), 3 runs each. The
+		// third — the machine-written-appmap arm — was cut, which is why no dispatch carries
+		// appmapVariant: the variant it asked for resolves to a file that does not exist, and
+		// a missing map degrades to no grounding at all rather than failing.
+		assert.equal(byFlag((c) => c.noAx === true).length, 6);
+		assert.equal(byFlag((c) => c.appmapVariant === "vision").length, 0);
+		// The Notion Calendar slice was cut, so phase 2 must dispatch nothing for it — the
+		// assertion is kept (inverted) rather than deleted, so a careless restore that skips
+		// the fleet-install prereq trips a test instead of burning 8 runs on exit 3.
+		assert.equal(byFlag((c) => c.app === "Notion Calendar").length, 0);
 		// Samples interleave across arms rather than running one arm's n back-to-back.
 		assert.notEqual(fake.calls[0].noGrounding, fake.calls[1].noGrounding);
 	});
@@ -260,7 +277,7 @@ test("runPhase__BypassesPhase1Gate__When__ForceIsSet", async () => {
 		const fake = fakeDispatch();
 		const code = await runPhase(2, { go: true, force: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
 		assert.equal(code, EXIT_OK);
-		assert.equal(fake.calls.length, 41);
+		assert.equal(fake.calls.length, 30);
 	});
 });
 
