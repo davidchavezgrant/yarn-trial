@@ -1,4 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
+import type { CdpBackend } from "./cdp.js";
+import { CDP_ACT_TOOL } from "./cdp.js";
 import type { Driver } from "./driver.js";
 import {
 	ACT_TOOL,
@@ -11,7 +13,7 @@ import {
 } from "./harness.js";
 import { type Mutation, restoreRoute } from "./journal.js";
 import type { ObservationBundle } from "./harness.js";
-import type { AppMap, Expectation, StepRecord } from "./types.js";
+import type { ActionRequest, AppMap, Expectation, StepRecord } from "./types.js";
 
 /**
  * Putting the app back after a run, entry by entry.
@@ -66,7 +68,7 @@ export function controlReads(obs: ObservationBundle, control: string, surface: s
 	return matches.some((e) => e.value.trim().toLowerCase() === want);
 }
 
-const SYSTEM = `You are undoing changes a UI automation run made to a macOS app, one at a time, so the app is left as it was found.
+const SYSTEM = `You are undoing changes a UI automation run made to an app, one at a time, so the app is left as it was found.
 
 You are told the control, the surface it lives on, the value to put back, and usually the navigation route to reach it. Each turn you get an observation of the target window and perform ONE action with the "act" tool.
 
@@ -111,7 +113,10 @@ export function tallyEntries(entries: TeardownEntry[]): {
 }
 
 export interface TeardownArgs {
-	driver: Driver;
+	/** Exactly one of driver/cdp: the AX path restores through the driver against a window,
+	 *  the CDP path through the page. Same journal, same checks, same receipt either way. */
+	driver?: Driver;
+	cdp?: CdpBackend;
 	client: Anthropic;
 	model: string;
 	app: string;
@@ -181,7 +186,8 @@ async function restoreOne(a: TeardownArgs, m: Mutation, index: number): Promise<
 	if (m.before === undefined)
 		return { ...base, why: "no prior value was recorded, so nothing can be restored" };
 
-	const win = await findWindow(a.driver, a.app);
+	const win = a.cdp ? undefined : await findWindow(a.driver!, a.app);
+	const doObserve = (name: string) => (a.cdp ? a.cdp.observe(name) : observe(a.driver!, win!, name));
 	const route = a.graph && m.settingKey ? restoreRoute(a.graph, m.settingKey, m.scope) : "";
 	// Annotation only — `controlReads` decides the outcome. A blank target has no substring
 	// to grep, so the include list is dropped rather than filled with "", which would match
@@ -190,7 +196,7 @@ async function restoreOne(a: TeardownArgs, m: Mutation, index: number): Promise<
 		? { description: `${m.control} reads "${m.before}" again`, textIncludes: [m.before] }
 		: { description: `${m.control} is empty again` };
 
-	let obs = await observe(a.driver, win, `cleanup-${index}-0`);
+	let obs = await doObserve(`cleanup-${index}-0`);
 	// The run may have ended on the very surface this control lives on, in which case the
 	// value is already back within reach and the model never needs to be called at all.
 	if (controlReads(obs, m.control, m.surface, m.before))
@@ -222,7 +228,7 @@ async function restoreOne(a: TeardownArgs, m: Mutation, index: number): Promise<
 			model: a.model,
 			max_tokens: 2000,
 			system: SYSTEM,
-			tools: [ACT_TOOL],
+			tools: [a.cdp ? CDP_ACT_TOOL : ACT_TOOL],
 			messages,
 		});
 		a.usage.modelCalls++;
@@ -234,6 +240,10 @@ async function restoreOne(a: TeardownArgs, m: Mutation, index: number): Promise<
 		messages.push({ role: "assistant", content: r.content });
 		const input = toolUse.input as { action: any; expectation?: Expectation };
 		let resultText = "";
+		// What the step record reports as the action. On the CDP path there is no driver
+		// request — requestForLog captures the model's own arguments, the same shape agent.ts
+		// records for cdp steps.
+		let request: ActionRequest | null = null;
 		// The same label guard the exploration pass runs, for the same reason and with more
 		// force here: this loop runs unattended, after the run it is tidying up has already
 		// reported its result, and nobody is watching. Putting a value back never requires a
@@ -246,14 +256,19 @@ async function restoreOne(a: TeardownArgs, m: Mutation, index: number): Promise<
 			console.log(`    refused destructive restore action on "${destructive}"`);
 		} else {
 			try {
-				const request = toActionRequest(input.action, win);
-				resultText = request ? (await a.driver.act(request)).text.slice(0, 300) : "waited";
+				if (a.cdp) {
+					request = input.action?.name === "wait" ? null : a.cdp.requestForLog(input.action);
+					resultText = (await a.cdp.act(input.action)).slice(0, 300);
+				} else {
+					request = toActionRequest(input.action, win!);
+					resultText = request ? (await a.driver!.act(request)).text.slice(0, 300) : "waited";
+				}
 			} catch (err) {
 				resultText = `ACTION FAILED: ${err instanceof Error ? err.message : String(err)}`;
 			}
 		}
 		await new Promise((res) => setTimeout(res, SETTLE_MS));
-		obs = await observe(a.driver, win, `cleanup-${index}-${step}`);
+		obs = await doObserve(`cleanup-${index}-${step}`);
 
 		// The harness's check, not the model's — `wanted` came from the journal before this
 		// loop began, so nothing the model says can widen it. The value scan is the authority
@@ -263,9 +278,13 @@ async function restoreOne(a: TeardownArgs, m: Mutation, index: number): Promise<
 		const reads = controlReads(obs, m.control, m.surface, m.before);
 		const grep = verify(wanted, obs.haystack);
 		a.steps.push({
-			index: step,
+			// Numbered across the whole teardown, not per entry: three entries at budget 2 would
+			// otherwise write indices 1,2,1,2,1,2 and any consumer ordering by index mis-reads
+			// the sequence. `a.steps` starts empty (the caller keeps restore steps apart from
+			// the task's), so length + 1 is the running counter.
+			index: a.steps.length + 1,
 			timestamp: new Date().toISOString(),
-			action: { kind: "tool", name: input.action?.name ?? "unknown", args: {} },
+			action: request ?? { kind: "tool", name: input.action?.name ?? "unknown", args: {} },
 			expectation: wanted,
 			verified: reads,
 			verificationChannel: reads ? "text" : undefined,
@@ -278,14 +297,23 @@ async function restoreOne(a: TeardownArgs, m: Mutation, index: number): Promise<
 		});
 		if (reads) return { ...base, restored: true, why: `restored in ${step} step(s)` };
 
+		// The follow-up MUST lead with a tool_result paired to the assistant's tool_use id —
+		// the API rejects an unanswered tool_use with a 400, which killed every restore that
+		// needed a second action. Same shape as the forward loop in src/agent.ts.
 		messages.push({
 			role: "user",
 			content: [
 				{
-					type: "text",
-					text: `Driver result: ${resultText}\nThe control does not yet read "${m.before}". New observation follows.`,
+					type: "tool_result",
+					tool_use_id: toolUse.id,
+					content: [
+						{
+							type: "text",
+							text: `Driver result: ${resultText}\nThe control does not yet read "${m.before}". New observation follows.`,
+						},
+						...observationBlocks(obs, a.vision),
+					],
 				},
-				...observationBlocks(obs, a.vision),
 			],
 		});
 	}
@@ -294,6 +322,9 @@ async function restoreOne(a: TeardownArgs, m: Mutation, index: number): Promise<
 }
 
 export async function runTeardown(a: TeardownArgs): Promise<Record<string, unknown>> {
+	// Both would make every act ambiguous; neither would make restoreOne dereference undefined
+	// ten steps in. Refuse at the boundary, where the mistake is a stack trace with a caller.
+	if (!!a.driver === !!a.cdp) throw new Error("runTeardown needs exactly one of driver/cdp");
 	const settings = collapseJournal(a.journal).reverse();
 	const created = a.claimed.filter((c) => c.kind === "created");
 	if (!settings.length && !created.length) return { mode: a.mode, attempted: 0, restored: 0, failed: 0, dirty: [] };

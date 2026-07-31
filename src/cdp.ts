@@ -290,6 +290,12 @@ export class CdpBackend {
 			if (!page) throw new Error(`attached to ${endpoint} but found no page`);
 		}
 
+		// Chrome throttles rendering for backgrounded tabs, and a throttled tab times out
+		// every screenshot — observed on the first run that ATTACHED instead of launching
+		// (the launched-Chrome case worked only because a fresh tab starts frontmost). The
+		// snapshot channel is unaffected either way; this is for the pixel channel.
+		await page.bringToFront().catch(() => {});
+
 		return new CdpBackend(browser, page, target.kind === "web" ? target.url : undefined);
 	}
 

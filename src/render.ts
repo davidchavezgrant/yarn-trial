@@ -58,6 +58,11 @@ export async function renderTrack(track: MotionTrack, framesDir: string, outPath
 			"-s", `${width}x${height}`,
 			"-r", String(fps),
 			"-i", "pipe:0",
+			// libx264 + yuv420p refuses odd dimensions, and a viewport is odd whenever the
+			// page happens to lay out that way (first hit: a 1200x953 CDP recording). Pad by
+			// at most one row/column rather than crop: added pixels shift nothing, removed
+			// ones would put every composited click point half a pixel off the content.
+			"-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0:color=black",
 			"-c:v", "libx264",
 			"-preset", "medium",
 			"-crf", "18",

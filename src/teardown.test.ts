@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { collapseJournal, controlReads, tallyEntries } from "./teardown.js";
+import { collapseJournal, controlReads, runTeardown, tallyEntries } from "./teardown.js";
 import type { TeardownEntry } from "./teardown.js";
 import { destructiveTarget } from "./harness.js";
 import type { InteractiveElement, ObservationBundle } from "./harness.js";
@@ -215,4 +215,25 @@ test("tallyEntries__TreatsABlankTargetAsAttempted__When__TheFieldWasOriginallyEm
 	const t = tallyEntries([entry("Project Name", "", true)]);
 	assert.equal(t.attempted.length, 1);
 	assert.equal(t.unrestorable.length, 0);
+});
+
+test("runTeardown__Throws__When__BothOrNeitherActuatorIsGiven", async () => {
+	// The rest of the args never matter: the guard runs before the journal is read.
+	const base = {
+		client: {} as never,
+		model: "m",
+		app: "A",
+		journal: [],
+		claimed: [],
+		steps: [],
+		budget: 1,
+		mode: "advisory",
+		vision: false,
+		usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, modelCalls: 0 },
+	};
+	await assert.rejects(() => runTeardown({ ...base }), /exactly one of driver\/cdp/);
+	await assert.rejects(
+		() => runTeardown({ ...base, driver: {} as never, cdp: {} as never }),
+		/exactly one of driver\/cdp/,
+	);
 });

@@ -43,6 +43,7 @@ import { CDP_ACT_TOOL, CDP_FIND_TOOL, CDP_RULES, CdpBackend } from "./cdp.js";
 import { DOM_ACT_TOOL, DOM_RULES, DomBackend, FIND_TOOL } from "./dom.js";
 import { appendMutation, detectMutation, readJournal } from "./journal.js";
 import { runTeardown } from "./teardown.js";
+import { TrajectoryWriter } from "./trajectory.js";
 import { startOverlay } from "./overlay.js";
 import { appmapsDir, recipesDir, relToData } from "./paths.js";
 import { ensureBrowser } from "./browser.js";
@@ -482,6 +483,9 @@ async function main(): Promise<void> {
 	const frameDrops: string[] = [];
 	let recordingActive = false;
 	let frameLoop: Promise<void> | undefined;
+	// CDP recordings write their own trajectory feed (no driver recorder to do it) — same
+	// turn-NNNNN/action.json shape, so humanize/track read both backends' recordings alike.
+	let trajectory: TrajectoryWriter | undefined;
 
 	const slug = targetSlug(target);
 	const grounding = loadGrounding(slug);
@@ -623,11 +627,11 @@ async function main(): Promise<void> {
 			// No staging and no settle dance: the recording surface is the page viewport,
 			// which playwright screenshots at CSS scale regardless of what covers the window —
 			// the same occlusion-proof property the window-snapshot path has, and a viewport
-			// does not resize when nobody resizes it. The trajectory feed (cua's
-			// turn-NNNNN/action.json) has no equivalent here yet; StepRecords carry the same
-			// click points and timestamps for the humanize pass.
+			// does not resize when nobody resizes it. The trajectory feed is written by the
+			// harness itself (TrajectoryWriter) since there is no driver recorder here.
 			fs.mkdirSync(framesDir, { recursive: true });
 			recordingActive = true;
+			trajectory = new TrajectoryWriter(`${recordingDir}/trajectory`);
 			fs.writeFileSync(`${recordingDir}/recording-started.json`, JSON.stringify({ epochMs: Date.now() }));
 			frameLoop = (async () => {
 				while (recordingActive) {
@@ -1133,6 +1137,8 @@ async function main(): Promise<void> {
 			// actuation window (act, settle, re-observe). It goes back down before the next
 			// model call, which is most of the run's wall clock.
 			overlay.setDriving(true);
+			const dispatchedAt = Date.now();
+			let actedAt = dispatchedAt;
 			try {
 				if (!isError) {
 					try {
@@ -1145,6 +1151,7 @@ async function main(): Promise<void> {
 						resultText = `ACTION FAILED: ${err instanceof Error ? err.message : String(err)}`;
 						isError = true;
 					}
+					actedAt = Date.now();
 				}
 
 				const settleMs = settleMsFor(input.action, SETTLE_MS);
@@ -1206,6 +1213,25 @@ async function main(): Promise<void> {
 							`destination by ${((m.dest ?? 0) * 100).toFixed(1)}%, consistent with something moving between ` +
 							`them. This does NOT establish it landed in the right place.`,
 					};
+			}
+			// The trajectory turn for this action, now that both frames exist on disk. The
+			// click point is the target's centre — playwright clicks element centres — in the
+			// same CSS pixels as the frames, so no capture-width conversion applies downstream.
+			// Errored actions are skipped for the same reason a failed driver call writes no
+			// turn: animating a reach toward an action that never ran is fabrication. So is
+			// wait — the driver path records no turn for it, because nothing was dispatched.
+			if (trajectory && !isError && input.action.name !== "wait") {
+				const pointer = ["click", "right_click", "double_click", "hover"].includes(String(input.action.name));
+				trajectory.record({
+					tool: String(input.action.name),
+					args: request?.kind === "tool" ? request.args : {},
+					...(pointer && target && target.w > 0 ? { clickPoint: { x: target.x + target.w / 2, y: target.y + target.h / 2 } } : {}),
+					startedAtMs: dispatchedAt,
+					endedAtMs: actedAt,
+					beforePng: prevShot,
+					afterPng: `${OUT}/agent-step-${step}.png`,
+					resultSummary: resultText,
+				});
 			}
 			// Advisory pixel signal: the AX text channel does not carry rendered content, so a
 			// canvas that failed to repaint is invisible to verify(). Recorded, never a gate.
@@ -1327,25 +1353,14 @@ async function main(): Promise<void> {
 		 * as a success does, and those are the ones nobody is watching. The driver is still
 		 * open here — `driver.close()` is deliberately below.
 		 */
-		if (cleanupMode !== "off" && !interrupted() && !driver) {
-			// The teardown loop replays restores through the AX path (observe/toActionRequest
-			// against a WindowRef), which this backend does not have. The journal is still on
-			// disk with everything a restore needs — reported as unattempted, not hidden.
-			const journal = readJournal(journalPath);
-			if (journal.length || claimed.length)
-				cleanupReport = {
-					mode: cleanupMode,
-					skipped: "cdp backend has no teardown loop yet",
-					journalEntries: journal.length,
-					claimed: claimed.length,
-				};
-		} else if (cleanupMode !== "off" && !interrupted()) {
+		if (cleanupMode !== "off" && !interrupted()) {
 			try {
 				const journal = readJournal(journalPath);
 				if (journal.length || claimed.length) {
 					overlay.setDriving(true);
 					cleanupReport = await runTeardown({
-						driver: driver!,
+						driver,
+						cdp,
 						client,
 						model,
 						app,
