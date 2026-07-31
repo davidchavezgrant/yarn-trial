@@ -407,9 +407,13 @@ test("autoLaunchWriteLines__TargetsTheManagedDomain__When__GivenEntries", () => 
 	// ignored it — the set-but-ineffective state this module exists to never manufacture.
 	assert.equal(/defaults write "\$DOMAIN" AutoLaunchProtocolsFromOrigins/.test(lines), false);
 
-	// The check demands the value be FORCED, not merely readable: the managed plist must
-	// exist as well as the key answering.
-	assert.match(lines, /\[ -f "\/Library\/Managed Preferences\/\$DOMAIN\.plist" \]/);
+	// The check demands the value be FORCED, not merely readable — and it proves that by
+	// reading the MANAGED domain itself rather than checking the file exists and then reading
+	// the user domain. The earlier form did the latter, and on 2026-07-31 it graded a fleet
+	// unpoliced whose chrome://policy said Mandatory/OK: a profile-delivered key never appears
+	// in the user domain, so the second half of that conjunction could not pass.
+	assert.match(lines, /defaults read "\/Library\/Managed Preferences\/\$DOMAIN" AutoLaunchProtocolsFromOrigins/);
+	assert.equal(/defaults read "\$DOMAIN" AutoLaunchProtocolsFromOrigins/.test(lines), false, "reading the user domain is the bug this replaced");
 	assert.match(lines, /MISSING="\$MISSING AutoLaunchProtocolsFromOrigins"/);
 });
 

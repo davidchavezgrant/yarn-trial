@@ -254,7 +254,11 @@ export function autoLaunchWriteLines(entries: AutoLaunchProtocolEntry[] = AUTO_L
 	return [
 		`# lets the OAuth handoff launch ${entries.map((e) => e.protocol).join(", ")} from its own sign-in origins with no "Open <App>?" dialog — browser chrome a CDP liveview cannot show`,
 		`sudo -n defaults write "/Library/Managed Preferences/$DOMAIN" ${AUTO_LAUNCH_POLICY_KEY} '${plist}' 2>/dev/null || true`,
-		`if [ -f "/Library/Managed Preferences/$DOMAIN.plist" ] && defaults read "$DOMAIN" ${AUTO_LAUNCH_POLICY_KEY} >/dev/null 2>&1; then`,
+		// Read the MANAGED domain, not the user one. A profile-delivered key exists only under
+		// /Library/Managed Preferences — nothing writes it to the user domain — so reading
+		// "$DOMAIN" reported a correctly-policed fleet as unpoliced on 2026-07-31 while
+		// chrome://policy on the same host said Mandatory/OK.
+		`if defaults read "/Library/Managed Preferences/$DOMAIN" ${AUTO_LAUNCH_POLICY_KEY} >/dev/null 2>&1; then`,
 		`\tAPPLIED=$((APPLIED + 1))`,
 		`else`,
 		`\tMISSING="$MISSING ${AUTO_LAUNCH_POLICY_KEY}"`,

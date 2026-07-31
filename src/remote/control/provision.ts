@@ -831,7 +831,11 @@ check() {
 	# Read it back. \`defaults write\` to a plist owned by another uid, or on a read-only home,
 	# fails in ways that do not always set a nonzero exit — so the only trustworthy report is the
 	# value the preference system hands back afterwards.
-	if [ "$(defaults read "$DOMAIN" "$1" 2>/dev/null || echo missing)" = "0" ]; then
+	# Managed domain first, then the user one — Chrome's own resolution order. A key delivered
+	# by a configuration profile lives ONLY under /Library/Managed Preferences, so a user-domain
+	# read alone calls a profile-policed host unpoliced (measured 2026-07-31: BrowserSignin read
+	# Mandatory/OK in chrome://policy while this said missing).
+	if [ "$(defaults read "/Library/Managed Preferences/$DOMAIN" "$1" 2>/dev/null || defaults read "$DOMAIN" "$1" 2>/dev/null || echo missing)" = "0" ]; then
 		APPLIED=$((APPLIED + 1))
 	else
 		MISSING="$MISSING $1"
