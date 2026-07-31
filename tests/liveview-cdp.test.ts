@@ -268,30 +268,54 @@ const HOME = "https://y-prod-react.onrender.com/library/ag";
 test("homeTransitionGate__DoesNotFire__When__TheLabelIsAlreadyVisibleOnTheFirstPoll", () => {
 	// The cached-Library flash at app launch: visible from tick one is the baseline, not a win.
 	const fire = homeTransitionGate(APP);
-	assert.equal(fire(HOME, "Library"), false);
+	assert.equal(fire(HOME, "Library"), undefined);
 });
 
-test("homeTransitionGate__Fires__When__TheLabelAppearsAfterBeingAbsent", () => {
-	// The real sign-in: /login (absent) → OAuth → the app lands on its home route.
+test("homeTransitionGate__FiresOnTheLabel__When__ItAppearsAfterBeingAbsent", () => {
+	// The no-detour sign-in (in-app credentials): /login (absent) → the home route renders.
 	const fire = homeTransitionGate(APP);
-	assert.equal(fire(APP, undefined), false);
-	assert.equal(fire(HOME, "Library"), true);
+	assert.equal(fire(APP, undefined), undefined);
+	assert.equal(fire(HOME, "Library"), "label");
 });
 
 test("homeTransitionGate__DoesNotFire__When__TheLabelAppearsOnAForeignOrigin", () => {
 	// Yarn's "Continue with Google" navigates the PRIMARY window to accounts.google.com, so
 	// "primary-page-only" does not keep the watch off the provider's pages — the origin must.
 	const fire = homeTransitionGate(APP);
-	assert.equal(fire(APP, undefined), false);
-	assert.equal(fire("https://accounts.google.com/v3/signin/identifier", "Library"), false);
+	assert.equal(fire(APP, undefined), undefined);
+	assert.equal(fire("https://accounts.google.com/v3/signin/identifier", "Library"), undefined);
+});
+
+test("homeTransitionGate__FiresOnTheReturn__When__TheDetourLandsOnANewPath", () => {
+	// Set by David 2026-07-31: close "basically as soon as the user submits their credential".
+	// The generic anchor for that moment is the redirect chain completing — the primary page
+	// coming back from the provider's origin to the app's, on a path it did not start on.
+	// That lands seconds before the home label renders, and no label is required.
+	const fire = homeTransitionGate(APP);
+	assert.equal(fire(APP, undefined), undefined);
+	assert.equal(fire("https://accounts.google.com/signin/challenge", undefined), undefined);
+	assert.equal(fire(HOME, undefined), "returned");
+});
+
+test("homeTransitionGate__WaitsForTheLabel__When__TheDetourBouncesBackToWhereItStarted", () => {
+	// A failed or abandoned OAuth bounces back to the SAME path the session started on
+	// (/login → provider → /login). That is not a submit — the early close must not fire —
+	// and the session stays armed, closing only when home is genuinely reached later
+	// (by either reason; which one is not the contract).
+	const fire = homeTransitionGate(APP);
+	assert.equal(fire(APP, undefined), undefined);
+	assert.equal(fire("https://accounts.google.com/signin/challenge", undefined), undefined);
+	assert.equal(fire(APP, undefined), undefined);
+	assert.ok(fire(HOME, "Library"));
 });
 
 test("homeTransitionGate__TreatsAForeignOriginAsAbsence__When__TheFlowDetoursThroughOAuth", () => {
-	// Flash → OAuth in the same window → home. The detour IS the going-away; the return fires.
+	// Flash → OAuth in the same window → home. The detour IS the going-away; the return fires
+	// (as the early "returned" — the flash's path differs from home's).
 	const fire = homeTransitionGate(APP);
-	assert.equal(fire(HOME, "Library"), false);
-	assert.equal(fire("https://accounts.google.com/signin/challenge", "Library"), false);
-	assert.equal(fire(HOME, "Library"), true);
+	assert.equal(fire(HOME, "Library"), undefined);
+	assert.equal(fire("https://accounts.google.com/signin/challenge", "Library"), undefined);
+	assert.equal(fire(HOME, "Library"), "returned");
 });
 
 // ---- browserPageDisposition: whose tab is this — the flow's, or the operator's? -----------
@@ -324,8 +348,8 @@ test("homeTransitionGate__NeverFires__When__TheSessionStartUrlIsUnparseable", ()
 	// A session anchored to about:blank (app still booting) has no origin to trust — the watch
 	// stays off and the session keeps its pre-auto-close behaviour rather than guessing.
 	const fire = homeTransitionGate("about:blank");
-	assert.equal(fire(HOME, undefined), false);
-	assert.equal(fire(HOME, "Library"), false);
+	assert.equal(fire(HOME, undefined), undefined);
+	assert.equal(fire(HOME, "Library"), undefined);
 });
 
 // ---- FollowStack: newest page wins, pop on close -------------------------------------------

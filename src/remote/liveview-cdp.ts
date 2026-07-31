@@ -446,23 +446,56 @@ function sameOrigin(pageUrl: string, targetUrl: string): boolean {
  * still booting) never fires and keeps the pre-auto-close behaviour: the 20-minute clock and
  * the operator closing the tab, which is an idle session, not a broken one.
  *
+ * Two ways to fire, and "returned" is the point (set by David 2026-07-31: close "basically
+ * as soon as the user submits their credential"):
+ *
+ *  - **"returned"** — the primary page comes back from a FOREIGN origin to the app's, on a
+ *    path it did not start on. A provider only redirects back once the credential is
+ *    accepted, so this lands seconds before the home label renders — no label needed. The
+ *    path check is the failure guard: a bounced or abandoned OAuth returns to the SAME path
+ *    the session started on (/login → provider → /login), which is not a submit.
+ *  - **"label"** — the absence→presence transition on the home label, for flows that never
+ *    leave the app origin (in-app credentials) and as the fallback when a return lands on
+ *    the start path anyway.
+ *
+ * The runner's `ready` probe stays the real verdict either way — this only decides when the
+ * operator stops having to watch.
+ *
  * Known residual: an app that RELAUNCHES mid-session replays its cached flash after absence
  * has been recorded, and that would fire. The runner launches the app before the viewer link
  * goes out, so a mid-session relaunch is operator-driven and rare; accepted.
  */
-export function homeTransitionGate(sessionStartUrl: string | undefined): (pageUrl: string, hit: string | undefined) => boolean {
+export function homeTransitionGate(sessionStartUrl: string | undefined): (pageUrl: string, hit: string | undefined) => "label" | "returned" | undefined {
+	const startPath = pathnameOf(sessionStartUrl);
 	let sawAbsent = false;
+	let sawForeign = false;
 
 	return (pageUrl, hit) => {
-		const atHome = hit !== undefined && sessionStartUrl !== undefined && sameOrigin(pageUrl, sessionStartUrl);
-		if (!atHome) {
+		const onApp = sessionStartUrl !== undefined && sameOrigin(pageUrl, sessionStartUrl);
+		if (!onApp) {
+			sawForeign = true;
 			sawAbsent = true;
 
-			return false;
+			return undefined;
+		}
+		if (sawForeign && pathnameOf(pageUrl) !== startPath) return "returned";
+		if (hit === undefined) {
+			sawAbsent = true;
+
+			return undefined;
 		}
 
-		return sawAbsent;
+		return sawAbsent ? "label" : undefined;
 	};
+}
+
+function pathnameOf(url: string | undefined): string | undefined {
+	if (url === undefined) return undefined;
+	try {
+		return new URL(url).pathname;
+	} catch {
+		return undefined;
+	}
 }
 
 /**
@@ -847,9 +880,15 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 				}, labels)
 				.then((hit) => {
 					if (fired || closed) return;
-					if (!gate(url, hit ?? undefined)) return;
+					const why = gate(url, hit ?? undefined);
+					if (!why) return;
 					fired = true;
-					emit({ ev: "home", detail: `"${hit}" is back on screen — ${appName} is signed in` });
+					emit({
+						ev: "home",
+						detail: why === "returned"
+							? `${appName} came back from the sign-in detour — closing; the readiness check confirms in the background`
+							: `"${hit}" is back on screen — ${appName} is signed in`,
+					});
 				})
 				.catch(() => {}); // a navigating page throws; the next tick asks again
 		}, HOME_POLL_MS);
