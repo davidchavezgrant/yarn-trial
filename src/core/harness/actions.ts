@@ -179,6 +179,24 @@ export const ACT_TOOL: Anthropic.Tool = {
 	},
 };
 
+/**
+ * The recorded-run variant of ACT_TOOL. Two deliberate differences, both about legibility on
+ * film: set_value is absent (an atomic AXValue write shows text appearing from nowhere, with
+ * no pointer anchor for the cursor pass — the humanizer rightly refuses to fake typing over
+ * one), and element_index on type_text names the FIELD for the harness — which clicks it for
+ * real and types the text in chunked keystrokes — rather than directing an invisible write.
+ */
+export const DEMO_ACT_TOOL: Anthropic.Tool = (() => {
+	const tool = structuredClone(ACT_TOOL) as any;
+	const action = tool.input_schema.properties.action.properties;
+	action.name.enum = SUPPORTED_ACTIONS.filter((a) => a !== "set_value");
+	action.element_index.description =
+		"Target element from the current observation. Required for click/right_click/double_click. For type_text it names the FIELD: the harness clicks that field for real and types your text into it, so pick the right field and supply the full text. Available for press_key.";
+	action.text.description = "For type_text (the text to type).";
+
+	return tool as Anthropic.Tool;
+})();
+
 export const DRIVER_RULES = `Rules learned from this driver (follow them):
 - Address elements by element_index from the CURRENT observation only — indices change every snapshot.
 - Elements in web content often warn "does not advertise AXPress" — the click usually still works. Trust the next observation, not the warning.
@@ -210,3 +228,21 @@ export const VISION_ONLY_RULES = `Rules for this driver (follow them):
 - A silent no-op click means your next keystrokes hit global shortcuts and can open random overlays. If the screenshot shows an unexpected overlay, close it (escape, foreground) before continuing.
 - Your expectations are still checked against the app's rendered text (the harness reads it even though you cannot), so write textIncludes/textExcludes with the literal strings you can READ IN THE SCREENSHOT.
 - Dragging a thing puts it under wherever you released. A reverse drag is NOT an undo.`;
+
+/**
+ * Recorded-run variants of the rules blocks. The non-demo rules teach element_index
+ * discipline on type_text because AXPress focus is unreliable; on a recorded run the HARNESS
+ * clicks the field for real and types the text in chunked keystrokes, so the model's job
+ * flips to naming the right field and supplying the text. Non-demo rules stay untouched.
+ */
+export const DEMO_DRIVER_RULES = `${DRIVER_RULES}
+
+Recorded-run actuation (this run is FILMED):
+- On type_text, pass the target field's element_index and the FULL text: the harness clicks the field for real and types it keystroke by keystroke. Do not pre-click the field as a separate step unless you need cmd+a first to replace its contents.
+- set_value does not exist on recorded runs — an atomic value write is invisible on film.`;
+
+export const DEMO_VISION_ONLY_RULES = `${VISION_ONLY_RULES}
+
+Recorded-run actuation (this run is FILMED):
+- type_text is typed for real, keystroke by keystroke, at the current focus. Click the field you mean first (by pixel), then type.
+- set_value does not exist on recorded runs — an atomic value write is invisible on film.`;

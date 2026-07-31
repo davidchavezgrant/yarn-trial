@@ -16,6 +16,7 @@ import {
 	verify,
 } from "../harness.js";
 import type { ObservationBundle, VerifyResult, WindowRef } from "../harness.js";
+import { type DemoPlan, demoTranslatable, demoTranslate, freshSnapshot, type FreshSnapshot } from "../harness/fresh-target.js";
 import { appendMutation, detectMutation } from "../journal.js";
 import type { Overlay } from "../overlay.js";
 import type { ActionRequest, AppMap, Expectation, StepRecord } from "../../types.js";
@@ -33,6 +34,16 @@ import type { DriverSync, Recording } from "./recording.js";
  */
 const FROZEN_STEPS = 4;
 const SETTLE_MS = 900;
+/** Driver yield between demo-sequence elements — just past the frame poller's post-action cadence (RESPONSE_POLL_MS in recording.ts), so mid-typing frames land. */
+const CHUNK_GAP_MS = 150;
+/**
+ * The driver's CGEvent delivery counter ("delivered N of M character(s)"). Provably wrong:
+ * turn-00007 of run 2026-07-31T05-45-03 reported "delivered 0 of 11" while the characters
+ * had landed (the '#'s created two scenes). The old short-circuit to "action errored"
+ * skipped verification and made the model retry — duplicate text on film — so the claim is
+ * advisory on every run: attach it as a warning, re-observe, and let verify() decide.
+ */
+const DELIVERY_CLAIM = /delivered \d+ of \d+/;
 
 /** Loop state the act-verify cycle reads and writes across steps. */
 export interface StepLoopState {
@@ -66,6 +77,20 @@ export interface StepContext {
 	cleanupMode: string;
 	journalPath: string;
 	graph: AppMap | undefined;
+	/**
+	 * Recorded-run demo actuation (AX backend): element clicks re-resolve against a fresh
+	 * snapshot and land as real coordinate clicks, and type_text becomes a real click on the
+	 * field followed by live chunked typing. Optional and default-off, so every existing
+	 * caller behaves byte-identically until run.ts wires the flag.
+	 */
+	demo?: boolean;
+	/**
+	 * OUT-relative directory step screenshots land in (`runs/<stamp>-steps`). Optional so
+	 * existing callers/tests keep the flat OUT/agent-step-N.png layout; run.ts always passes
+	 * it, because the shared flat paths were overwritten by every later run and cross-run
+	 * forensics ended up reading the wrong run's pixels.
+	 */
+	stepsDir?: string;
 }
 
 /**
@@ -82,10 +107,18 @@ export async function executeAction(
 	input: { reasoning?: string; action: any; expectation: Expectation },
 ): Promise<void> {
 	const { driver, cdp, dom, win, app, doObserve, overlay, sync, rec, records, messages, vision, noAx, cleanupMode, journalPath, graph } = ctx;
+	// `agent-step-3` → `runs/<stamp>-steps/agent-step-3` when the caller namespaced the run.
+	const shotName = (suffix: string) => (ctx.stepsDir ? `${ctx.stepsDir}/${suffix}` : suffix);
 
 	let resultText = "";
 	let isError = false;
 	let request: ActionRequest | null = null;
+	let plan: DemoPlan | null = null;
+	let driverWarning: string | undefined;
+	const typedChunks: Array<{ text: string; epochStartMs: number; epochEndMs: number }> = [];
+	// Demo actuation is the AX driver path's concern: the CDP backend grows its own demo
+	// variant in src/backends/cdp.ts, and the DOM backend has none.
+	const demoMode = ctx.demo === true && !cdp && !dom;
 
 	const prevHaystack = ls.obs.haystack;
 	// The whole bundle, not just the derived views below: the mutation journal needs
@@ -118,7 +151,24 @@ export async function executeAction(
 			if (cdp) {
 				cdp.assertSupported(input.action.name);
 				request = input.action.name === "wait" ? null : cdp.requestForLog(input.action);
-			} else request = dom ? await dom.toRequest(input.action) : toActionRequest(input.action, win!);
+			} else if (dom) request = await dom.toRequest(input.action);
+			else {
+				// Recorded runs re-resolve element targets against ONE fresh snapshot — taken
+				// inside the mutex like dom.toRequest, so the frame poller cannot interleave —
+				// and act by coordinate, never AXPress (whose "click" moves no pointer and may
+				// focus nothing). A null plan means no demo variant; the normal path applies.
+				if (demoMode && demoTranslatable(input.action)) {
+					let snap: FreshSnapshot = { elements: [] };
+					if (input.action.element_index !== undefined && target)
+						try {
+							snap = await freshSnapshot(driver!, win!, `${OUT}/${shotName(`agent-step-${step}-fresh`)}.png`);
+						} catch {
+							// Degrades to the stale rect and its centre — still a coordinate click.
+						}
+					plan = demoTranslate(input.action, win!, target, snap);
+				}
+				request = plan ? plan.logRequest : toActionRequest(input.action, win!);
+			}
 		} catch (err) {
 			// Unsupported action: report it back so the model can pick a real one.
 			resultText = `ACTION REJECTED: ${err instanceof Error ? err.message : String(err)}`;
@@ -126,15 +176,62 @@ export async function executeAction(
 		}
 
 		if (!isError) {
-			try {
-				resultText = cdp
-					? (await cdp.act(input.action)).slice(0, 400)
-					: request
-						? (await driver!.act(request)).text.slice(0, 400)
-						: "waited (no driver action)";
-			} catch (err) {
-				resultText = `ACTION FAILED: ${err instanceof Error ? err.message : String(err)}`;
-				isError = true;
+			if (plan) {
+				// The demo sequence: one real driver call per element, the recording mutex
+				// yielded between them so the frame poller lands mid-typing captures. Any
+				// element failing stops the sequence and fails the step like a failed action.
+				for (const [i, el] of plan.seq.entries()) {
+					if (i > 0) {
+						sync.busy = false;
+						await new Promise((r) => setTimeout(r, CHUNK_GAP_MS));
+						while (sync.busy) await new Promise((r) => setTimeout(r, 50));
+						sync.busy = true;
+					}
+					const chunkStart = Date.now();
+					try {
+						await driver!.act(el.request);
+					} catch (err) {
+						const msg = err instanceof Error ? err.message : String(err);
+						// An under-delivery claim on a chunk is advisory (see DELIVERY_CLAIM):
+						// the characters usually landed, so the sequence continues.
+						if (el.chunkText !== undefined && DELIVERY_CLAIM.test(msg)) driverWarning = msg.slice(0, 300);
+						else {
+							resultText = `ACTION FAILED at element ${i + 1}/${plan.seq.length}: ${msg}`;
+							isError = true;
+
+							break;
+						}
+					}
+					sync.lastActionAt = Date.now();
+					if (el.chunkText !== undefined) typedChunks.push({ text: el.chunkText, epochStartMs: chunkStart, epochEndMs: Date.now() });
+				}
+				if (!isError) {
+					const parts: string[] = [];
+					if (plan.clickPoint)
+						parts.push(
+							`clicked (${plan.clickPoint.x}, ${plan.clickPoint.y})${plan.target?.name ? ` on "${plan.target.name}"` : ""}` +
+								`${plan.target?.source === "stale" ? " [stale rect — fresh re-resolution was ambiguous]" : ""}`,
+						);
+					if (typedChunks.length) parts.push(`typed ${typedChunks.length} chunk(s) as live keystrokes`);
+					resultText = (parts.join("; ") || "demo actuation complete").slice(0, 400);
+				}
+			} else {
+				try {
+					resultText = cdp
+						? (await cdp.act(input.action)).slice(0, 400)
+						: request
+							? (await driver!.act(request)).text.slice(0, 400)
+							: "waited (no driver action)";
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					if (DELIVERY_CLAIM.test(msg)) {
+						driverWarning = msg.slice(0, 300);
+						resultText = "driver reported incomplete text delivery (advisory — see warning); the text frequently lands anyway";
+					} else {
+						resultText = `ACTION FAILED: ${msg}`;
+						isError = true;
+					}
+				}
 			}
 			actedAt = Date.now();
 		}
@@ -142,7 +239,7 @@ export async function executeAction(
 		const settleMs = settleMsFor(input.action, SETTLE_MS);
 		if (settleMs > SETTLE_MS) console.log(`    waiting ${Math.round(settleMs / 1000)}s before re-observing`);
 		await new Promise((r) => setTimeout(r, settleMs));
-		ls.obs = await doObserve(`agent-step-${step}`);
+		ls.obs = await doObserve(shotName(`agent-step-${step}`));
 		if (ls.obs.appContent === 0) {
 			// AX tree collapsed (e.g. a modal/other window took over). Acting now means
 			// acting blind — stop rather than let the model flail against a menu bar.
@@ -157,7 +254,7 @@ export async function executeAction(
 	// This step's frame, by the same predicate as step 0; becomes the next step's
 	// "before". On the CDP path a missed capture leaves whatever file was already at
 	// this path, so the path alone proves nothing.
-	const curShot = ls.obs.screenshotB64 ? `${OUT}/agent-step-${step}.png` : undefined;
+	const curShot = ls.obs.screenshotB64 ? `${OUT}/${shotName(`agent-step-${step}`)}.png` : undefined;
 	ls.lastShot = curShot;
 	// `wait` legitimately changes nothing, so exempt it from the discrimination
 	// requirement (its point is that already-true state persists).
@@ -218,7 +315,17 @@ export async function executeAction(
 		rec.trajectory.record({
 			tool: String(input.action.name),
 			args: request?.kind === "tool" ? request.args : {},
-			...(pointer && target && target.w > 0 ? { clickPoint: { x: target.x + target.w / 2, y: target.y + target.h / 2 } } : {}),
+			// Demo steps carry the point that was ACTUALLY clicked, from the fresh snapshot —
+			// including type_text, whose sequence starts with a real click on the field. On
+			// the CDP path the same guarantee comes from lastActuation: point and box from
+			// the ONE boundingBox call the pointer physically visited, cleared per act.
+			...(plan?.clickPoint
+				? { clickPoint: plan.clickPoint }
+				: cdp?.lastActuation
+					? { clickPoint: cdp.lastActuation.point }
+					: pointer && target && target.w > 0
+						? { clickPoint: { x: target.x + target.w / 2, y: target.y + target.h / 2 } }
+						: {}),
 			startedAtMs: dispatchedAt,
 			endedAtMs: actedAt,
 			// Both optional in the writer; a path is only passed when THIS run's frame
@@ -234,7 +341,16 @@ export async function executeAction(
 	// only checks existence, which a previous run's file at the same path satisfies.
 	const delta = prevShot && curShot ? pixelDelta(prevShot, curShot) : undefined;
 	const deltaNote = delta === undefined ? "" : ` [pixels ${(delta * 100).toFixed(1)}%${delta < 0.001 && !isError ? " — screen essentially unchanged" : ""}]`;
+	if (driverWarning) console.log(`    driver warning (advisory): ${driverWarning}`);
 	console.log(`    -> ${verdict.verified ? "✓ verified" : `✗ ${verdict.note}`}${deltaNote}`);
+
+	// Legible-on-film bookkeeping: a cmd/ctrl chord is invisible to a viewer, so recorded
+	// runs tally them. Demo-gated so unrecorded run logs stay byte-identical.
+	const chord =
+		demoMode &&
+		input.action.name === "press_key" &&
+		Array.isArray(input.action.modifiers) &&
+		input.action.modifiers.some((m: unknown) => /^(cmd|command|ctrl|control)$/i.test(String(m)));
 
 	records.push({
 		index: step,
@@ -244,17 +360,34 @@ export async function executeAction(
 		verified: verdict.verified,
 		verificationChannel: verdict.channel,
 		verificationNote: verdict.note,
-		screenshotFile: `agent-step-${step}.png`,
+		screenshotFile: `${shotName(`agent-step-${step}`)}.png`,
 		pixelDelta: delta,
 		modelReasoning: input.reasoning,
-		...(target
+		// Demo steps record the FRESH target — the geometry that was actually clicked and
+		// that the recording frames show — instead of the stale observation's rect.
+		...(plan?.target
 			? {
-					targetRole: target.role,
-					targetRect: { x: target.x, y: target.y, w: target.w, h: target.h },
-					targetName: target.name,
-					...(target.namedBy ? { targetNamedBy: target.namedBy } : {}),
+					targetRole: plan.target.role,
+					targetRect: { x: plan.target.x, y: plan.target.y, w: plan.target.w, h: plan.target.h },
+					targetName: plan.target.name,
+					...(target?.namedBy ? { targetNamedBy: target.namedBy } : {}),
 				}
-			: {}),
+			: target
+				? {
+						targetRole: target.role,
+						// A CDP demo act aimed at ONE freshly-resolved boundingBox (shared with
+						// the click point above); that box supersedes the observation-time rect.
+						targetRect: cdp?.lastActuation ? cdp.lastActuation.box : { x: target.x, y: target.y, w: target.w, h: target.h },
+						targetName: target.name,
+						...(target.namedBy ? { targetNamedBy: target.namedBy } : {}),
+					}
+				: {}),
+		// CDP demo typing is one pressSequentially call — real keystrokes, real frames —
+		// so it is `typedLive` without chunk records; the humanizer spans the turn instead.
+		...(plan?.typedLive || (demoMode && cdp && input.action.name === "type_text") ? { typedLive: true } : {}),
+		...(typedChunks.length ? { typedChunks } : {}),
+		...(driverWarning ? { driverWarning } : {}),
+		...(chord ? { chord: true as const } : {}),
 	});
 
 	// Journal what this step CHANGED, as opposed to what it was aimed at. Detection is
@@ -293,7 +426,7 @@ export async function executeAction(
 				content: [
 					{
 						type: "text",
-						text: `Driver result: ${resultText}\nVerification: ${verdict.verified ? "PASSED" : `FAILED — ${verdict.note}`}\n\nNew observation follows.`,
+						text: `Driver result: ${resultText}${driverWarning ? `\nDriver warning (advisory): ${driverWarning} — this delivery counter is known to be unreliable; the verification verdict is authoritative.` : ""}\nVerification: ${verdict.verified ? "PASSED" : `FAILED — ${verdict.note}`}\n\nNew observation follows.`,
 					},
 					...observationBlocks(ls.obs, vision, !noAx),
 				],

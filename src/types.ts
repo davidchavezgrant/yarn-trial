@@ -63,6 +63,27 @@ export interface StepRecord {
 	 * than inferred from run-level flags.
 	 */
 	targetNamedBy?: "ax" | "dom" | "none";
+	/**
+	 * Demo actuation typed this step's text for REAL — a coordinate click on the field, then
+	 * chunked CGEvent keystrokes — so the recorded frames show the text appearing. The
+	 * humanizer keys off this to skip keystroke synthesis. Absent on non-recorded runs and on
+	 * runs recorded before live typing existed.
+	 */
+	typedLive?: boolean;
+	/** Wall-clock span of each live-typed chunk, captured around its own driver call. */
+	typedChunks?: Array<{ text: string; epochStartMs: number; epochEndMs: number }>;
+	/**
+	 * press_key carried cmd/ctrl on a recorded run. A chord is invisible on film — DEMO
+	 * CONDUCT discourages them — so the run log tallies how many happened anyway.
+	 */
+	chord?: true;
+	/**
+	 * The driver's own claim about this action when the harness proceeded anyway — today the
+	 * CGEvent delivery counter ("delivered 0 of 11 character(s)"), which is provably
+	 * unreliable: it reported 0 while all 11 landed (run 2026-07-31T05-45-03). Advisory;
+	 * verification is authoritative.
+	 */
+	driverWarning?: string;
 }
 
 /**

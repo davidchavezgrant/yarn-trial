@@ -90,9 +90,18 @@ Settings…**.
 - **The draft title field ignores cmd+A** (no selection). To rename: use `set_value` on the
   title AXTextField, or clear it with repeated `option+delete` (word-wise) before typing.
   Typing without clearing appends ("UntitledCoffee App Tour").
-- **Clicking the script textarea does not reliably focus it.** A click that appears to
-  succeed can leave focus on the window, so subsequent `type_text` keystrokes hit the app's
-  global shortcuts instead (observed: an accidental comment overlay). **Always pass
-  `element_index` on `type_text`** so the driver writes directly into the field.
+- **Clicking the script textarea does not reliably focus it via AXPress.** A click that
+  appears to succeed can leave focus elsewhere, so subsequent `type_text` keystrokes land in
+  whatever field the app auto-focused or hit global shortcuts (observed: an accidental
+  comment overlay; text leaking into the composer). What to do depends on the run mode:
+  - **Unrecorded runs**: always pass `element_index` on `type_text` so the driver writes
+    directly into the field.
+  - **Recorded (demo) runs**: the harness translates `type_text` itself — it re-resolves the
+    field against a fresh snapshot, clicks it by coordinate, then types the text as real
+    keystrokes in chunks. Pass `element_index` naming the field and give the full text;
+    `set_value` is not offered on recorded runs.
+  Either way, distrust the driver's delivery counter ("delivered N of M character(s)") — it
+  reported 0 delivered while every character landed (2026-07-31). The harness treats it as
+  advisory and verifies from the fresh observation instead.
 - Creating a draft via "New draft" opens the editor immediately with the title "Untitled";
   the sidebar entry updates after the title field is committed (click away / switch tabs).
