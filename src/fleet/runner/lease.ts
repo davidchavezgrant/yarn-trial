@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readJsonOr } from "../../fsutil.js";
 import { type JobKind, pidAlive } from "./jobs.js";
 
 /**
@@ -63,13 +64,9 @@ function leasePath(runnerDir: string): string {
 }
 
 function readLease(runnerDir: string): Lease | undefined {
-	try {
-		const l = JSON.parse(fs.readFileSync(leasePath(runnerDir), "utf8")) as Lease;
+	const l = readJsonOr<Lease | undefined>(leasePath(runnerDir), undefined);
 
-		return typeof l?.jobId === "string" && typeof l?.pid === "number" ? l : undefined;
-	} catch {
-		return undefined;
-	}
+	return typeof l?.jobId === "string" && typeof l?.pid === "number" ? l : undefined;
 }
 
 function holderOf(lease: Lease): LeaseHolder {

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { appSlug } from "../../paths.js";
+import { readJsonOr } from "../../fsutil.js";
 import { osascript, quitApp } from "../../core/appctl.js";
 import { defaultRunnerDir } from "./lease.js";
 
@@ -144,13 +145,10 @@ function ownersFile(root: string): string {
 }
 
 export function readOwners(root: string): OwnerRecord {
-	try {
-		const parsed = JSON.parse(fs.readFileSync(ownersFile(root), "utf8")) as unknown;
+	// Absent on first use, and an unreadable one means "nobody owns anything yet".
+	const parsed = readJsonOr<unknown>(ownersFile(root), undefined);
 
-		return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as OwnerRecord) : {};
-	} catch {
-		return {}; // Absent on first use, and an unreadable one means "nobody owns anything yet".
-	}
+	return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as OwnerRecord) : {};
 }
 
 function writeOwners(root: string, owners: OwnerRecord): void {
@@ -193,11 +191,7 @@ function manifestFile(dir: string): string {
 }
 
 function readManifest(dir: string): ProfileManifest | undefined {
-	try {
-		return JSON.parse(fs.readFileSync(manifestFile(dir), "utf8")) as ProfileManifest;
-	} catch {
-		return undefined;
-	}
+	return readJsonOr<ProfileManifest | undefined>(manifestFile(dir), undefined);
 }
 
 /**

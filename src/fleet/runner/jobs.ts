@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { appSlug, mintRunKey } from "../../core/harness.js";
+import { readJsonOr } from "../../fsutil.js";
 import { outDir } from "../../paths.js";
 
 /**
@@ -225,13 +226,9 @@ export function writeJob(rec: JobRecord, root = jobsDir()): void {
 
 export function readJob(id: string, root = jobsDir()): JobRecord | undefined {
 	if (!SAFE_ID.test(id)) return undefined;
-	try {
-		const rec = JSON.parse(fs.readFileSync(path.join(jobDir(id, root), "job.json"), "utf8")) as JobRecord;
+	const rec = readJsonOr<JobRecord | undefined>(path.join(jobDir(id, root), "job.json"), undefined);
 
-		return rec && typeof rec.id === "string" ? rec : undefined;
-	} catch {
-		return undefined;
-	}
+	return rec && typeof rec.id === "string" ? rec : undefined;
 }
 
 /**
