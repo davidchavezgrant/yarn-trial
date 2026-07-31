@@ -2266,5 +2266,14 @@ test("createJob__NamesTheAppmapTheWayTheExploreWritesIt__When__TheTargetIsAWebUr
 		// An app target is unchanged — it never went through URL slugging.
 		const app = createJob({ id: "explore-app", kind: "explore", app: "Yarn", task: "", operator: "dave" }, dir);
 		assert.equal(app.artifacts.appmap, "docs/appmaps/yarn.md");
+
+		// A vision-only pass writes the `.vision` pair so it cannot overwrite the
+		// element-grounded map. Naming the plain file here made `pull` fetch the ELEMENT map
+		// and file it under the vision arm — a stale 96-action ax map archived as the vision
+		// result, while phase 2's visionmap arm found no `.vision` map and silently ran
+		// ungrounded under a grounded label.
+		const vision = createJob({ id: "explore-vision", kind: "explore", app: "Yarn", task: "", operator: "dave", noAx: true }, dir);
+		assert.equal(vision.artifacts.appmap, "docs/appmaps/yarn.vision.md");
+		assert.equal(vision.artifacts.appmapGraph, "docs/appmaps/yarn.vision.json");
 	});
 });

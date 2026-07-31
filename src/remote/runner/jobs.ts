@@ -285,11 +285,19 @@ function artifactsFor(id: string, init: JobInit): JobArtifacts {
 		// slug from the URL's host. Deriving it here anyway keeps the value honest rather than
 		// passing a placeholder that a future reader would trust.
 		const slug = init.url ? targetSlug({ kind: "web", url: init.url, origin: new URL(init.url).origin }) : appSlug(init.app);
+		// A vision-only pass writes its own `.vision.*` pair (explore/state.ts) so it can never
+		// overwrite the element-grounded map — the benchmark compares the two tiers, and one
+		// clobbering the other would destroy the artifact it is measured against. The record
+		// has to name the same file, or `pull` fetches the ELEMENT-grounded map and files it
+		// under the vision arm: on 2026-07-31 that archived a stale 96-action ax map as the
+		// vision arm's result, and phase 2's visionmap arm would then have found no `.vision`
+		// map at all and degraded to ungrounded while still labelled grounded.
+		const variant = init.noAx ? ".vision" : "";
 
 		return {
 			log,
-			appmap: `docs/appmaps/${slug}.md`,
-			appmapGraph: `docs/appmaps/${slug}.json`,
+			appmap: `docs/appmaps/${slug}${variant}.md`,
+			appmapGraph: `docs/appmaps/${slug}${variant}.json`,
 			checkpoint: `out/runs/${id}.checkpoint.json`,
 		};
 	}

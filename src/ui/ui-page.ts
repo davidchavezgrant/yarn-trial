@@ -456,17 +456,31 @@ function flush() {
   bus.saveState(uiState);
 }
 
-async function loadApps() {
+/**
+ * quiet is for the background poll: no spinner, no placeholder churn, no note line.
+ *
+ * The list needs polling because grounding state changes underneath it — an explore finishing
+ * on a Mac turns an app from ungrounded to grounded, and a web target appears in the list for
+ * the first time only once its map lands. Before this, loadApps ran once at startup and had no
+ * timer, so a map that arrived mid-session was invisible until the shell was restarted. That
+ * was a regression from removing the refresh buttons: the manual path went and no automatic
+ * one replaced it.
+ *
+ * Quiet matters as much as the poll. A remote listing is an ssh fan-out that paints a spinner
+ * over the list; doing that every 30 seconds would make an idle shell look permanently busy
+ * and hide the entries it is supposed to be showing.
+ */
+async function loadApps(quiet) {
   // Snapshot the host: this is a round trip to another Mac and the selector can move during it.
   // Without the guard a slow answer from mac1 lands after the operator has switched to mac2 and
   // silently repopulates the list with the wrong machine's apps.
   const asked = host;
-  el('q').placeholder = 'Searching ' + asked + '…';
+  if (!quiet) el('q').placeholder = 'Searching ' + asked + '…';
   // Listing a remote Mac's apps is an ssh fan-out ("auto" asks all three). The placeholder
   // alone left the PREVIOUS host's apps on screen looking current — a spinner in the list is
   // the only thing that says these entries are stale and something is on its way. Local is
   // instant and would only flicker, so it is left alone.
-  if (asked !== 'local') el('apps').innerHTML = '<li class="loading"><span class="spin"></span> Listing apps on ' + esc(asked) + '…</li>';
+  if (!quiet && asked !== 'local') el('apps').innerHTML = '<li class="loading"><span class="spin"></span> Listing apps on ' + esc(asked) + '…</li>';
   let res;
   try {
     res = await bus.loadApps(asked);
@@ -475,7 +489,7 @@ async function loadApps() {
     // to say the request died rather than being slow — and the rejection escaped unhandled.
     // Owner is the SELECTION, like the note below: defaulting would file this under whatever
     // app is mid-run, invisibly, instead of the pane the operator is looking at.
-    if (asked === host) {
+    if (asked === host && !quiet) {
       el('q').placeholder = 'Search apps…';
       // Clear the spinner too, or a failed listing spins forever claiming to be in progress.
       el('apps').innerHTML = '<li class="empty">could not list apps on ' + esc(asked) + '</li>';
@@ -492,7 +506,7 @@ async function loadApps() {
     : 'Search apps on ' + asked + '…';
   // Owner is the SELECTION: this note is about the list on screen, and defaulting would file
   // it into the running app's terminal whenever a run is in flight.
-  if (res && res.note) line('· ' + res.note, sel);
+  if (!quiet && res && res.note) line('· ' + res.note, sel);
   render();
   dropStaleSelection();
 }
@@ -949,6 +963,9 @@ async function loadHostList() {
   // and skips itself while one is still in flight — a host at its timeout would otherwise
   // stack probes faster than they drain.
   setInterval(loadFleet, 15000);
+  // Slower than the fleet poll: apps change when something is installed or a map lands, not
+  // second to second, and a remote listing is an ssh fan-out.
+  setInterval(() => loadApps(true), 30000);
 }
 
 async function loadFleet() {
