@@ -8,6 +8,7 @@ import {
 	type FrameMeta,
 	isIdlePage,
 	keyEventParams,
+	titleFor,
 	mouseEventParams,
 	sameEndpoint,
 	wheelParams,
@@ -347,6 +348,31 @@ test("FollowStack__DropsOnlyPrimaryPages__When__PrimaryOriginNamed", () => {
 	s.dropOrigin("primary");
 	assert.deepEqual(s.active, { page: "oauth", origin: "browser" });
 	assert.equal(s.size, 1);
+});
+
+// ---- the title bar shows a title, not a 1500-character OAuth URL -------------------------
+
+test("titleFor__KeepsARealTitle__When__ThePageHasOne", () => {
+	assert.equal(titleFor("Sign in - Google Accounts"), "Sign in - Google Accounts");
+});
+
+test("titleFor__ShortensToOriginAndPath__When__TheFallbackIsAUrl", () => {
+	// Live on mac3, 2026-07-31: Google's consent URL is ~1500 chars of query string, and the
+	// viewer rendered every one of them — six wrapped lines that pushed the canvas off screen.
+	const oauth = "https://accounts.google.com/v3/signin/identifier?opparams=%253F&dsh=S-1037491303" + "&x=".repeat(400);
+	const out = titleFor(oauth);
+
+	assert.ok(out.length <= 80, `got ${out.length} chars`);
+	assert.match(out, /^accounts\.google\.com\/v3\/signin\/identifier/);
+	assert.equal(out.includes("?"), false, "the query string is the part that made it enormous");
+});
+
+test("titleFor__DropsTheBareSlash__When__TheUrlHasNoPath", () => {
+	assert.equal(titleFor("https://example.com/"), "example.com");
+});
+
+test("titleFor__StillTruncates__When__ATitleIsLongWithoutBeingAUrl", () => {
+	assert.equal(titleFor("x".repeat(200)).length, 80);
 });
 
 // ---- idle pages rank below live ones, so an empty tab cannot take the stream -------------

@@ -349,6 +349,25 @@ const CONNECT_TIMEOUT_MS = 5_000;
 /** Cadence for re-probing a silent browser endpoint — Chrome may not exist until the OAuth
  *  handoff launches it, so silence is re-checked on this interval, never reported. */
 const REPROBE_MS = 2_000;
+/**
+ * What the viewer's title bar shows for a page. A titleless page falls back to its URL, and an
+ * OAuth URL is ~1500 characters of query string — seen live on mac3, 2026-07-31, where
+ * Google's consent URL wrapped over six lines and shoved the whole canvas down the page.
+ * A URL fallback is still worth having (it names where you are when a page has no title), so
+ * it is shortened to origin + path rather than dropped, and anything still long is cut.
+ */
+export function titleFor(raw: string, max = 80): string {
+	let s = raw.trim();
+	if (/^https?:\/\//.test(s)) {
+		try {
+			const u = new URL(s);
+			s = u.host + (u.pathname === "/" ? "" : u.pathname);
+		} catch {}
+	}
+
+	return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
 /** page.title() evaluates in the page; a hung renderer must not stall a hop announcement. */
 const TITLE_TIMEOUT_MS = 1_500;
 
@@ -486,13 +505,13 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 	// page, and a busy renderer must not stall the announcement the title bar is waiting on.
 	const announce = (page: Page, origin: FollowOrigin) => {
 		void (async () => {
-			const title =
+			const raw =
 				(await Promise.race([
 					page.title().catch(() => ""),
 					new Promise<string>((r) => setTimeout(r, TITLE_TIMEOUT_MS, "")),
 				])) || page.url();
 			const app = appName || hostOf(origin === "primary" ? endpoint : browserEndpoint);
-			emit({ ev: "window", id: 0, title, app, x: 0, y: 0, w: 0, h: 0, scale: 1 });
+			emit({ ev: "window", id: 0, title: titleFor(raw), app, x: 0, y: 0, w: 0, h: 0, scale: 1 });
 		})();
 	};
 
@@ -561,6 +580,26 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 			.catch(() => {}); // a failed hop must not wedge the queue — the next sync converges
 	};
 
+	/**
+	 * The PRIMARY app navigated, so the flow has come home.
+	 *
+	 * A browser leg that handed off does not close and does not go blank — Google's
+	 * `accounts.youtube.com/accounts/SetSID` sits there as a live https page forever. Newest-wins
+	 * keeps streaming it while the app it just authenticated renders the signed-in view behind,
+	 * which on mac3 (2026-07-31) was reported as "stuck white screen after successful signin":
+	 * the sign-in HAD worked, the viewer was simply pointed at the wrong page.
+	 *
+	 * A navigation on the primary target is the strongest available signal that the detour is
+	 * over — the app only re-navigates when the deep link lands. So promote the app and demote
+	 * the browser pages that led here. Not closing them: the flow can bounce back to the
+	 * browser, and cmd+] still reaches them.
+	 */
+	const cameHome = (page: Page) => {
+		if (closed || stack.active?.page === page) return;
+		stack.push(page, "primary");
+		sync();
+	};
+
 	/** Put a page under follow: wire its close to the pop, push it (newest wins), converge. */
 	const followed = new WeakSet<Page>();
 	const follow = (page: Page, origin: FollowOrigin) => {
@@ -571,6 +610,10 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 			stack.dropClosed(page);
 			sync();
 		});
+		// The deep-link return: only the primary target's own navigation counts, and only after
+		// the stream has already wandered off to a browser leg. A browser page navigating is
+		// just the OAuth chain doing its several redirects.
+		if (origin === "primary") page.on("framenavigated", (f) => { if (f === page.mainFrame()) cameHome(page); });
 		stack.push(page, origin, isIdlePage(page.url()));
 		sync();
 	};
