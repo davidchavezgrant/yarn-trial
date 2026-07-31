@@ -130,6 +130,11 @@ const portal = new SigninPortal({
 				// password into — it gets no node access on principle.
 				webPreferences: { nodeIntegration: false, contextIsolation: true },
 			});
+			// Match the shell. A WebContentsView defaults to a WHITE base layer and paints black
+			// before its first frame, which is what produced the slab of black around the stream
+			// (reported 2026-07-31). The viewer page paints the same colour, so the seam between
+			// the two disappears rather than reading as a broken video pane.
+			view.setBackgroundColor("#16181d");
 			// Measured, not assumed: a hardcoded offset drifted the first time a header control
 			// changed its height, leaving the view overlapping the cancel button it depends on.
 			let headerPx = 52;

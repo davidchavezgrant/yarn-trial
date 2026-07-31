@@ -300,6 +300,16 @@ func axAttr(_ el: AXUIElement, _ name: String) -> CFTypeRef? {
 	return ref
 }
 
+/// First of these that has content. Labels live under different attributes per toolkit, and the
+/// caller should not care which one answered.
+func firstNonEmpty(_ candidates: String?...) -> String {
+	for c in candidates {
+		if let c, !c.trimmingCharacters(in: .whitespaces).isEmpty { return c }
+	}
+
+	return ""
+}
+
 func axFrame(_ el: AXUIElement) -> CGRect? {
 	guard let posRef = axAttr(el, kAXPositionAttribute), let sizeRef = axAttr(el, kAXSizeAttribute) else { return nil }
 	var p = CGPoint.zero
@@ -307,6 +317,45 @@ func axFrame(_ el: AXUIElement) -> CGRect? {
 	guard AXValueGetValue(posRef as! AXValue, .cgPoint, &p), AXValueGetValue(sizeRef as! AXValue, .cgSize, &s) else { return nil }
 	// AX speaks the same top-left-origin global coordinates CGWindowList does.
 	return CGRect(origin: p, size: s)
+}
+
+/// The external-protocol confirmation, wherever it lives in this app.
+///
+/// Searched across ALL of the app's AX windows rather than inside the streamed one, because the
+/// dialog is its own window: measured 2026-07-31, "Open Yarn.app?" is a separate `AXWindow`
+/// (448x168, subrole AXUnknown) AND a separate layer-0 CGWindow. The engine therefore FOLLOWS it
+/// when it appears, and a scan confined to the followed window searched a 448x168 dialog for a
+/// web area (finding none — hence the uncropped frame) while the button sat one window over.
+/// Both halves of that bug are this function.
+///
+/// Bounded and shallow: these dialogs are a handful of nodes deep, so a full-depth walk of every
+/// window every 500ms would be paid for nothing.
+func findOpenButton(pid: pid_t, appName: String) -> (AXUIElement, String)? {
+	let app = AXUIElementCreateApplication(pid)
+	guard let wins = axAttr(app, kAXWindowsAttribute) as? [AXUIElement] else { return nil }
+	let wanted = normalizedAppName(appName)
+	var budget = 2000
+
+	func hunt(_ el: AXUIElement, depth: Int) -> (AXUIElement, String)? {
+		if depth > 12 || budget <= 0 { return nil }
+		budget -= 1
+		if (axAttr(el, kAXRoleAttribute) as? String ?? "") == "AXButton" {
+			let label = firstNonEmpty(axAttr(el, kAXDescriptionAttribute) as? String, axAttr(el, kAXTitleAttribute) as? String)
+			if label.lowercased().hasPrefix("open "), normalizedAppName(label).contains(wanted) { return (el, label) }
+		}
+		guard let kids = axAttr(el, kAXChildrenAttribute) as? [AXUIElement] else { return nil }
+		for k in kids {
+			if let hit = hunt(k, depth: depth + 1) { return hit }
+		}
+
+		return nil
+	}
+
+	for w in wins {
+		if let hit = hunt(w, depth: 0) { return hit }
+	}
+
+	return nil
 }
 
 // The AX window element matching the tracked CGWindow, by geometry: element ids and window ids
@@ -375,6 +424,126 @@ let INK_ROLES: Set<String> = [
 	"AXHeading", "AXRadioButton", "AXCheckBox", "AXPopUpButton", "AXMenuButton",
 ]
 
+/// Roles a human must OPERATE to finish a sign-in, as opposed to merely read. A page footer is
+/// links and text; a form is fields and buttons. Telling the two apart is what lets the descent
+/// below find the login card inside the page furniture around it.
+let CONTROL_ROLES: Set<String> = [
+	"AXTextField", "AXSecureTextField", "AXButton", "AXCheckBox", "AXRadioButton", "AXPopUpButton",
+]
+
+/// Floor on a crop, in points, shared by the descent and `cropFraction()`'s gate.
+///
+/// One constant in two places on purpose: the descent may only ever tighten a crop that the gate
+/// would already have accepted. If it could propose something smaller than the gate allows, the
+/// gate would reject it and the operator would get NO crop — the whole browser — which is a worse
+/// outcome than the loose crop the descent was trying to improve on.
+let MIN_CROP_W: CGFloat = 200
+let MIN_CROP_H: CGFloat = 160
+
+/// How long a foreign window may stay unshown while waiting for its first crop.
+///
+/// 6s: Chromium's tree materializes ~2s after the wake and the scan cadence is 500ms, so a
+/// healthy page settles inside 3. The remainder is headroom for a slow page load; past it,
+/// showing the window uncropped beats showing nothing at all.
+let SETTLE_TIMEOUT: TimeInterval = 6.0
+
+/// Ink measured inside one subtree, clipped to the viewport.
+struct InkBox {
+	var union: CGRect?
+	var leaves = 0
+	var controls = 0
+
+	mutating func absorb(_ other: InkBox) {
+		leaves += other.leaves
+		controls += other.controls
+		if let u = other.union { union = union == nil ? u : union!.union(u) }
+	}
+}
+
+func inkWithin(_ el: AXUIElement, clip: CGRect, budget: inout Int, depth: Int = 0) -> InkBox {
+	var out = InkBox()
+	if depth > 22 || budget <= 0 { return out }
+	budget -= 1
+	let role = axAttr(el, kAXRoleAttribute) as? String ?? ""
+	if INK_ROLES.contains(role), let f = axFrame(el), f.width > 1, f.height > 1, clip.intersects(f) {
+		// Clipped to the viewport: a scrolled-out element reports its layout frame, which can sit
+		// far outside the visible page and would blow the union up to nothing useful.
+		let vis = f.intersection(clip)
+		if vis.width > 1, vis.height > 1 {
+			out.leaves = 1
+			out.union = vis
+			if CONTROL_ROLES.contains(role) { out.controls = 1 }
+		}
+	}
+	guard let kids = axAttr(el, kAXChildrenAttribute) as? [AXUIElement] else { return out }
+	for k in kids { out.absorb(inkWithin(k, clip: clip, budget: &budget, depth: depth + 1)) }
+
+	return out
+}
+
+/// The ink of the tightest element that still holds EVERY interactive control on the page.
+///
+/// Why this exists, measured on accounts.google.com (2026-07-31): the web area's page wrapper has
+/// three children — the login card (840x402), a footer of Help/Privacy/Terms links (840x64) some
+/// 300pt below it, and an empty overlay. The ink union across all of them is 800x351, so cropping
+/// to the union framed the card AND the footer AND the dead space between. The card's own inner
+/// container is 768x258. Descending to it is the difference between "the form" and "the page".
+///
+/// The rule is structural, never page-specific: walk down while exactly ONE child holds all of
+/// this node's controls. That child is by definition the only branch a human has to reach, so the
+/// descent can never crop away something operable. It halts the moment the controls split across
+/// siblings — on Google's page that is the level where the email field, Next and "Create account"
+/// become separate children, which is exactly the form's own box.
+func formInk(_ web: AXUIElement, clip: CGRect, budget: inout Int) -> InkBox {
+	var chosen = inkWithin(web, clip: clip, budget: &budget)
+	// The frame of every node descended through, so the step-out below can consider them. The
+	// web area itself is not a candidate — stepping out to it is the no-crop case.
+	var chain: [CGRect] = []
+	var node = web
+	var depth = 0
+	while depth < 12, budget > 0 {
+		depth += 1
+		guard let kids = axAttr(node, kAXChildrenAttribute) as? [AXUIElement], !kids.isEmpty else { break }
+		var bearers: [(AXUIElement, InkBox)] = []
+		for k in kids {
+			let box = inkWithin(k, clip: clip, budget: &budget)
+			if box.controls > 0 { bearers.append((k, box)) }
+		}
+		guard bearers.count == 1, bearers[0].1.controls == chosen.controls else { break }
+		let next = bearers[0].1
+		// A page with a SINGLE control would otherwise descend all the way onto that control and
+		// crop to a bare button. Stop at the last box that still clears the shared floor.
+		guard let u = next.union, u.width >= MIN_CROP_W, u.height >= MIN_CROP_H else { break }
+		chosen = next
+		node = bearers[0].0
+		if let f = axFrame(node)?.intersection(clip), f.width > 1, f.height > 1 { chain.append(f) }
+	}
+
+	// Step back OUT to the enclosing CARD, and prefer its frame to the ink union.
+	//
+	// Measured on accounts.google.com (2026-07-31): the form's ink is 768x258 at y=494, and its
+	// enclosing container is 840x402 at y=386 — the login card. The extra 108pt of height is
+	// where Google's logo lives, and the logo is CSS, so it has NO accessibility node: no
+	// ink-based box can ever include it, and padding it back by hand means guessing a constant
+	// that is wrong on the next page. The container's frame is the page's own answer to "where
+	// does this card end", including whatever it draws that the AX tree cannot see.
+	//
+	// Only while the parent stays CLOSE in size. A modestly bigger ancestor is the card's own
+	// chrome; a much bigger one is the page, and stepping into it would undo the descent. 2.5x
+	// separates the two by a wide margin here (card/form = 1.7x, page/card = 3.4x).
+	var target = chosen.union
+	if let ink = chosen.union {
+		let inkArea = ink.width * ink.height
+		for frame in chain.reversed() where frame.contains(ink.insetBy(dx: 1, dy: 1)) {
+			let area = frame.width * frame.height
+			if area > 0, area <= inkArea * 2.5 { target = frame }
+		}
+	}
+	chosen.union = target
+
+	return chosen
+}
+
 func scanForeignWindow(_ root: AXUIElement, appName: String) -> ForeignScan {
 	var out = ForeignScan()
 	var budget = 12000
@@ -395,12 +564,16 @@ func scanForeignWindow(_ root: AXUIElement, appName: String) -> ForeignScan {
 			}
 		}
 		if role == "AXButton", out.openButton == nil {
-			let title = axAttr(el, kAXTitleAttribute) as? String ?? ""
-			// Chrome's external-protocol dialog: a button literally titled "Open <App>.app".
+			// AXDescription FIRST, and this is why the auto-press never fired (measured against a
+			// real "Open Yarn.app?" dialog, 2026-07-31): Chromium labels its dialog buttons with
+			// AXDescription and leaves AXTitle EMPTY, so a title-only match could not see them at
+			// all. AXTitle is still consulted for any toolkit that does use it.
+			let label = firstNonEmpty(axAttr(el, kAXDescriptionAttribute) as? String, axAttr(el, kAXTitleAttribute) as? String)
+			// Chrome's external-protocol dialog: a button literally labelled "Open <App>.app".
 			// The app name must appear, or a page's own "Open settings" button would be pressed.
-			if title.lowercased().hasPrefix("open "), normalizedAppName(title).contains(wanted) {
+			if label.lowercased().hasPrefix("open "), normalizedAppName(label).contains(wanted) {
 				out.openButton = el
-				out.openTitle = title
+				out.openTitle = label
 			}
 		}
 		guard let kids = axAttr(el, kAXChildrenAttribute) as? [AXUIElement] else { return }
@@ -409,33 +582,15 @@ func scanForeignWindow(_ root: AXUIElement, appName: String) -> ForeignScan {
 
 	walk(root, depth: 0)
 
-	// Second pass inside the winning web area: bound the ink. Deliberately separate from the
-	// walk above — the union is only meaningful within ONE web area, and collecting it during a
-	// walk that may still switch web areas would mix two pages' geometry.
+	// Second pass inside the winning web area: bound the ink, descending to the form. Deliberately
+	// separate from the walk above — the union is only meaningful within ONE web area, and
+	// collecting it during a walk that may still switch web areas would mix two pages' geometry.
 	if let we = webEl, let web = out.webArea {
-		var inkBudget = 12000
-		var union: CGRect?
-		var leaves = 0
-		func inkWalk(_ el: AXUIElement, depth: Int) {
-			if depth > 22 || inkBudget <= 0 { return }
-			inkBudget -= 1
-			if INK_ROLES.contains(axAttr(el, kAXRoleAttribute) as? String ?? ""), let f = axFrame(el),
-			   f.width > 1, f.height > 1, web.intersects(f) {
-				// Clipped to the web area: a scrolled-out element reports its layout frame, which
-				// can sit far outside the viewport and would blow the union up to nothing useful.
-				let vis = f.intersection(web)
-				if vis.width > 1, vis.height > 1 {
-					leaves += 1
-					union = union == nil ? vis : union!.union(vis)
-				}
-			}
-			guard let kids = axAttr(el, kAXChildrenAttribute) as? [AXUIElement] else { return }
-			for k in kids { inkWalk(k, depth: depth + 1) }
-		}
-		inkWalk(we, depth: 0)
-		out.inkLeaves = leaves
+		var inkBudget = 24000
+		let box = formInk(we, clip: web, budget: &inkBudget)
+		out.inkLeaves = box.leaves
 		// A handful of leaves is a page mid-load, not a form; keep the web area until it settles.
-		if leaves >= 3 { out.ink = union }
+		if box.leaves >= 3 { out.ink = box.union }
 	}
 
 	return out
@@ -501,6 +656,9 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 	private var lastPressAt = Date.distantPast
 	private var lastCropSent: CGRect?
 	private var lastShapeSent = ""
+	/** When the CURRENT foreign window became foreign — the clock `framesAllowed()` bounds. */
+	private var foreignSince = Date.distantPast
+	private var lastSettlingSent: Bool?
 
 	init(fps: Int) {
 		self.minInterval = 1.0 / Double(fps)
@@ -534,6 +692,7 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 		if want == currentWindowId {
 			refreshBounds(for: want)
 			scheduleForeignScan()
+			syncSettling()
 			return
 		}
 
@@ -605,6 +764,10 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 		cropPoints.value = nil
 		boundsBox.value = scWindow.frame
 		lastCropSent = nil
+		// Restart the settle clock with the window. A handoff into a second browser window (the
+		// OAuth popup) must get its own grace period, not inherit an expired one and flash
+		// uncropped — which is the moment the URL bar and any autofill dropdown are on screen.
+		foreignSince = Date()
 		emitWindowEvent(id: id, title: scWindow.title ?? "", app: currentApp)
 		scheduleForeignScan()
 	}
@@ -624,10 +787,36 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 		// less of the window), so an area-ratio gate would veto exactly the crops worth making.
 		// What must be rejected is a DEGENERATE rect — a collapsed mid-load element — and 200pt
 		// on a side is below any real form yet far above the 0x0 and sliver cases.
-		guard inter.width >= 200, inter.height >= 160 else { return nil }
+		guard inter.width >= MIN_CROP_W, inter.height >= MIN_CROP_H else { return nil }
 
 		return CGRect(x: (inter.origin.x - b.origin.x) / b.width, y: (inter.origin.y - b.origin.y) / b.height,
 		              width: inter.width / b.width, height: inter.height / b.height)
+	}
+
+	/**
+	 * Whether frames may be shown right now.
+	 *
+	 * A foreign window with no crop yet is WITHHELD, and this is a privacy rule, not a cosmetic
+	 * one. Chromium's AX tree takes ~2s to materialize after the wake, and every frame in that
+	 * window is the whole browser: URL bar, tab titles, whatever the previous page was, and — as
+	 * observed 2026-07-31 — a saved-password dropdown listing real people's addresses. The
+	 * constrained mode exists precisely so the operator never sees those, so "not yet cropped"
+	 * must mean "not yet shown" rather than "shown uncropped for two seconds".
+	 *
+	 * The window's OWN app is never withheld: it is the app being signed in, there is no crop for
+	 * it by design, and holding it would blank the viewer for the whole session.
+	 *
+	 * The wait is bounded (`SETTLE_TIMEOUT`). A page the descent can never crop — a plain
+	 * non-web browser window, a PDF, an app with no AX tree at all — would otherwise hold the
+	 * viewer black forever, and a stream that never starts is a worse failure than a wide one.
+	 * On expiry the frames flow uncropped, which is the pre-existing behavior, and the viewer is
+	 * told (`settling: false`) so it can stop saying "framing".
+	 */
+	func framesAllowed() -> Bool {
+		if !foreign.value { return true }
+		if cropFraction() != nil { return true }
+
+		return Date().timeIntervalSince(foreignSince) >= SETTLE_TIMEOUT
 	}
 
 	/** The window event, with the constrained-mode fields riding along for the log and tests. */
@@ -642,7 +831,24 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 		if let c = cropFraction() {
 			ev["crop"] = ["x": c.origin.x, "y": c.origin.y, "w": c.width, "h": c.height]
 		}
+		// The viewer must be able to say "framing the sign-in…" rather than showing a dead canvas:
+		// withheld frames and a broken stream look identical from the browser side.
+		ev["settling"] = !framesAllowed()
 		emitEvent(ev)
+		lastSettlingSent = !framesAllowed()
+	}
+
+	/**
+	 * Tell the viewer when the settle state flips WITHOUT a window event to carry it.
+	 *
+	 * Two flips have no other trigger: the timeout expiring (nothing changed but the clock), and
+	 * a crop landing whose geometry is too close to the last one for `applyScan`'s 2% movement
+	 * filter to report. Either would leave the viewer stuck on "framing" over a live stream.
+	 */
+	private func syncSettling() {
+		let settling = !framesAllowed()
+		guard settling != lastSettlingSent, let id = currentWindowId else { return }
+		emitWindowEvent(id: id, title: "", app: currentApp)
 	}
 
 	/**
@@ -670,6 +876,14 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 			if let winEl = axWindowElement(pid: pid, matching: bounds) {
 				scan = scanForeignWindow(winEl, appName: app)
 			}
+			// App-wide, and deliberately outside the window scan: the dialog is a SEPARATE window
+			// (see findOpenButton), so when the engine is following the dialog itself the window
+			// scan searches a 448x168 box for a web area and finds nothing — while the button it
+			// needs to press is right there in the app. This is the only search that finds it.
+			if scan.openButton == nil, let (btn, label) = findOpenButton(pid: pid, appName: app) {
+				scan.openButton = btn
+				scan.openTitle = label
+			}
 			DispatchQueue.main.async {
 				guard let self, self.currentWindowId == id else { self?.scanInFlight = false; return }
 				self.scanInFlight = false
@@ -685,12 +899,14 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 		// "a small card adrift in page background".
 		var target = scan.ink ?? scan.webArea
 		if let ink = scan.ink, let web = scan.webArea {
-			// Asymmetric-friendly but simple: enough that a card is never cut flush to its own
-			// rounded corner or its logo. Measured too tight at 8% — Google's mark sits above
-			// the first ink element and lost its top.
-			let padX = max(32, ink.width * 0.10)
-			let padY = max(40, ink.height * 0.12)
-			target = ink.insetBy(dx: -padX, dy: -padY).intersection(web)
+			// A thin, FIXED bleed — not the breathing room itself. `formInk` now returns the
+			// card's own container frame where there is one, which already carries the padding
+			// the page designer chose (and the logo, which is CSS and has no AX node to bound).
+			// This is only so the card is not cut flush to its own rounded corner. Fixed rather
+			// than proportional because padding derived from the box shrinks as the box
+			// tightens, which is how the previous crop lost the top of Google's mark.
+			let pad: CGFloat = 18
+			target = ink.insetBy(dx: -pad, dy: -pad).intersection(web)
 		}
 		// Store in POINTS; cropFraction() re-derives fractions per use and applies the sanity
 		// gate against live geometry, so a resize between scans cannot leave a wrong crop.
@@ -743,7 +959,11 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 		boundsBox.value = w.bounds
 		currentApp = w.app
 		currentPid = w.pid
+		let wasForeign = foreign.value
 		foreign.value = isForeign(app: w.app)
+		// Only on the TRANSITION into foreign. Resetting on every bounds change would restart the
+		// clock each time the window moved, so a browser being dragged could never time out.
+		if foreign.value, !wasForeign { foreignSince = Date() }
 		emitWindowEvent(id: id, title: w.title, app: w.app)
 	}
 
@@ -772,6 +992,10 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 		      let pixel = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 		let now = Date()
 		if now.timeIntervalSince(lastEmit) < minInterval { return }
+		// Withhold rather than leak: a foreign window that has not resolved its crop is the whole
+		// browser, and those pixels are the ones constrained mode exists to keep off the wire.
+		// Dropped, never queued — a held frame is stale by the time the crop lands.
+		if !framesAllowed() { return }
 		lastEmit = now
 		var cg: CGImage?
 		VTCreateCGImageFromCVPixelBuffer(pixel, options: nil, imageOut: &cg)

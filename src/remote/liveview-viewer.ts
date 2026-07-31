@@ -19,18 +19,31 @@ export function viewerHtml(token: string): string {
 <title>Sign in — window view</title>
 <style>
   :root { color-scheme: dark; }
-  html, body { margin: 0; height: 100%; background: #111; color: #ddd; font: 13px/1.5 -apple-system, system-ui, sans-serif; }
+  /* #16181d, not #111/#000: this page is embedded in the Electron shell, and the letterbox
+     around a crop that does not share the pane's aspect ratio is unavoidable — a 768x258 login
+     form in a tall pane HAS empty space above and below it. Pure black read as broken video
+     (reported 2026-07-31 as "those black bars"); the shell's own surface colour reads as the
+     app's background, so the same pixels stop looking like a fault. */
+  html, body { margin: 0; height: 100%; background: #16181d; color: #ddd; font: 13px/1.5 -apple-system, system-ui, sans-serif; }
   #wrap { display: flex; flex-direction: column; height: 100%; }
   #bar { padding: 6px 12px; background: #1c1c1e; border-bottom: 1px solid #333; display: flex; gap: 12px; align-items: center; }
   #bar b { color: #fff; font-weight: 600; }
   #status { color: #9a9; }
   #status.err { color: #f6a; }
-  #stage { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  #stage { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 10px; box-sizing: border-box; position: relative; }
   /* The LOCAL cursor stays — it is the operator's only pointer feedback, since the remote one
      is no longer composited into the stream (cfg.showsCursor = false). 'default' rather than
      'crosshair': this is a login form to click and type in, not a canvas to aim at, and an
-     arrow is what every other window on their screen shows. */
-  canvas { max-width: 100%; max-height: 100%; cursor: default; background: #000; box-shadow: 0 0 40px #0008; }
+     arrow is what every other window on their screen shows.
+     No background on the canvas itself: an unpainted canvas should show the stage through it,
+     not a black rectangle sized to the last frame. */
+  canvas { max-width: 100%; max-height: 100%; cursor: default; border-radius: 6px; box-shadow: 0 2px 24px #0006; transition: opacity .18s ease; }
+  /* Hidden, not absent: keeping it laid out means the first painted frame does not reflow. */
+  canvas.settling { opacity: 0; }
+  #settle { position: absolute; display: none; flex-direction: column; align-items: center; gap: 10px; color: #8b93a1; }
+  #settle.on { display: flex; }
+  #spin { width: 22px; height: 22px; border: 2px solid #333a45; border-top-color: #7aa2f7; border-radius: 50%; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   kbd { background:#333; border-radius:3px; padding:0 4px; }
 </style>
 </head>
@@ -41,7 +54,10 @@ export function viewerHtml(token: string): string {
     <span id="status">opening the window stream</span>
     <span style="margin-left:auto;color:#666">click the window to focus it, then type your login · <kbd>Esc</kbd> stays in the app</span>
   </div>
-  <div id="stage"><canvas id="c" width="800" height="600"></canvas></div>
+  <div id="stage">
+    <canvas id="c" class="settling" width="800" height="600"></canvas>
+    <div id="settle" class="on"><div id="spin"></div><div>framing the sign-in window…</div></div>
+  </div>
 </div>
 <script>
 (() => {
@@ -56,6 +72,19 @@ export function viewerHtml(token: string): string {
 
   let imgW = 800, imgH = 600;         // last known rendered image size (canvas pixels)
   const setStatus = (t, err) => { statusEl.textContent = t; statusEl.className = err ? 'err' : ''; };
+
+  // The canvas stays hidden until the first frame ARRIVES, independent of the engine's own
+  // settling flag. Two different waits look the same to the operator — "no frame yet" and
+  // "frames withheld until the crop lands" — and both must show the spinner rather than a
+  // stale or empty canvas. The engine withholds foreign frames itself (framesAllowed), so a
+  // frame reaching us is already proof it is safe to show.
+  let painted = false;
+  const settleEl = document.getElementById('settle');
+  const setSettling = (on, label) => {
+    canvas.classList.toggle('settling', on);
+    settleEl.classList.toggle('on', on);
+    if (label) settleEl.lastElementChild.textContent = label;
+  };
 
   ws.onopen = () => setStatus('connected — waiting for the first frame');
   ws.onclose = () => setStatus('disconnected', true);
@@ -72,11 +101,20 @@ export function viewerHtml(token: string): string {
       imgW = bmp.width; imgH = bmp.height;
       ctx.drawImage(bmp, 0, 0);
       bmp.close();
+      if (!painted) { painted = true; setSettling(false); setStatus('live'); }
     });
   };
 
   function handleEvent(ev) {
-    if (ev.ev === 'window') { titleEl.textContent = (ev.app || 'window') + (ev.title ? ' — ' + ev.title : ''); setStatus('live'); }
+    if (ev.ev === 'window') {
+      titleEl.textContent = (ev.app || 'window') + (ev.title ? ' — ' + ev.title : '');
+      // The engine's flag only ever RE-arms the wait (a handoff to a new browser window starts
+      // settling again). It cannot clear it — only a painted frame does, above: the engine
+      // says frames are allowed a moment before one actually arrives, and revealing an empty
+      // canvas in that gap is the flash this whole mechanism exists to remove.
+      if (ev.settling) { painted = false; setSettling(true, 'framing the sign-in window…'); setStatus('framing'); }
+      else if (painted) setStatus('live');
+    }
     else if (ev.ev === 'auto') { setStatus('pressed \u201c' + ev.pressed + '\u201d for you'); }
     else if (ev.ev === 'error') { setStatus(ev.remedy || ev.detail || ev.kind, true); }
   }

@@ -345,6 +345,22 @@ test("EventParser__CarriesTheDiagnosticEvents__When__TheEngineEmitsThem", () => 
 	assert.equal(events[2].ev === "scan" && events[2].ink, "800x351");
 });
 
+test("EventParser__CarriesSettling__When__TheEngineWithholdsFrames", () => {
+	// `settling` is how the viewer tells "frames withheld until the crop lands" apart from a
+	// dead stream. Withholding exists because an uncropped foreign window shows the URL bar and,
+	// as observed 2026-07-31, a saved-password dropdown listing real addresses.
+	const parser = new EventParser();
+	const events = parser.push(
+		'{"ev":"window","id":1,"title":"Sign in","app":"Google Chrome","x":0,"y":0,"w":1200,"h":1040,"scale":2,"foreign":true,"settling":true}\n' +
+		'{"ev":"window","id":1,"title":"","app":"Google Chrome","x":0,"y":0,"w":1200,"h":1040,"scale":2,"foreign":true,"settling":false,"crop":{"x":0.15,"y":0.31,"w":0.7,"h":0.38}}\n',
+	);
+
+	assert.equal(events.length, 2);
+	assert.equal(events[0].ev === "window" && events[0].settling, true);
+	assert.equal(events[1].ev === "window" && events[1].settling, false);
+	assert.equal(events[1].ev === "window" && !!events[1].crop, true);
+});
+
 test("engineArgs__LeavesFrameRateToTheEngine__When__UnsetByTheCaller", () => {
 	// The runner passes fps by env (LIVEVIEW_FPS), not argv, so an unset caller must not pin a
 	// rate here — that is what kept the fleet at the old 15fps default with no way to change it.

@@ -45,6 +45,12 @@ export interface WindowEvent {
 	foreign?: boolean;
 	/** Active page-content crop, as fractions of the window. Present only in constrained mode. */
 	crop?: { x: number; y: number; w: number; h: number };
+	/**
+	 * Frames are being WITHHELD while this foreign window resolves its crop. The viewer shows a
+	 * settling state rather than a dead canvas; see the engine's `framesAllowed()` for why an
+	 * uncropped browser must never be shown even briefly.
+	 */
+	settling?: boolean;
 }
 
 /** The engine pressed the external-protocol confirmation ("Open Yarn.app") itself. */

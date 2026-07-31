@@ -7,6 +7,7 @@ import {
 	startLiveViewServer,
 	type LifecycleState,
 } from "../src/remote/liveview-server.js";
+import { viewerHtml } from "../src/remote/liveview-viewer.js";
 
 // The detached-server self-termination clock. Pure, so tested with explicit clocks — no sockets,
 // no real timers. Guards two failures: a server nobody opens listening forever (max-lifetime), and
@@ -115,4 +116,28 @@ test("startLiveViewServer__Throws__When__SuppliedTokenTooShort", () => {
 
 test("startLiveViewServer__Throws__When__SuppliedTokenHasBadCharacters", () => {
 	assert.throws(() => void startLiveViewServer({ token: "long enough but has spaces!!" }), /invalid supplied token/);
+});
+
+// ---- viewer page ---------------------------------------------------------------------------
+//
+// The viewer is a string of HTML, so these are the only cheap checks that its two privacy-shaped
+// behaviours survive an edit: the canvas starts HIDDEN (an uncropped browser must never flash
+// into view — 2026-07-31, a saved-password dropdown did exactly that), and the token is not
+// leaked into a place a screenshot or a log would carry it.
+
+test("viewerHtml__StartsWithTheCanvasHidden__When__Rendered", () => {
+	const html = viewerHtml("tok-abcdefghijklmnop");
+	// Hidden until a frame is actually painted: the engine withholds foreign frames until the
+	// crop lands, and revealing an empty canvas in the meantime is the flash we are removing.
+	assert.match(html, /<canvas id="c" class="settling"/);
+	assert.match(html, /id="settle" class="on"/);
+	assert.match(html, /painted = true; setSettling\(false\)/);
+});
+
+test("viewerHtml__PaintsTheShellBackground__When__TheCropIsNarrowerThanThePane", () => {
+	// Not #000: the letterbox around a card that does not match the pane's aspect ratio is
+	// unavoidable, and pure black read as broken video rather than as the app's background.
+	const html = viewerHtml("tok-abcdefghijklmnop");
+	assert.match(html, /background: #16181d/);
+	assert.doesNotMatch(html, /canvas \{[^}]*background: #000/);
 });
