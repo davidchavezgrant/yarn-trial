@@ -103,6 +103,9 @@ export interface DispatchOptions {
 	 *  option rather than a generic env dict — arbitrary env crossing the wire is a surface
 	 *  nothing needs, and a named field is one the runner can validate. */
 	appmapVariant?: "vision";
+	/** `AGENT_MODEL=<id>` on the child: which model runs the loop (task/explore/replay alike).
+	 *  Absent = the child's own default (makeClient). The benchmark's model dimension. */
+	model?: string;
 	/**
 	 * Wait in line instead of being refused when the host is busy. Default true — the queue is
 	 * why an operator can dispatch five runs and close the lid. `false` restores the old
@@ -238,6 +241,7 @@ export async function dispatch(opts: DispatchOptions): Promise<DispatchResult> {
 		...(kind === "replay" ? { recipe: opts.recipe } : {}),
 		...(opts.url ? { url: opts.url } : {}),
 		...(opts.appmapVariant ? { appmapVariant: opts.appmapVariant } : {}),
+		...(opts.model ? { model: opts.model } : {}),
 		operator: opts.operator ?? defaultOperator(),
 	};
 	const wantQueue = opts.queue !== false;

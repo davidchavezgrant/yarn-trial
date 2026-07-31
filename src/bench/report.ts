@@ -71,40 +71,60 @@ function rollup(arm: Arm, entries: ManifestEntry[]): ArmRollup {
 	};
 }
 
-const taskTableHeader = "| arm | flags | done | success | steps x̄ | s x̄ | calls x̄ | out-tok x̄ | rejections | doc-scope muts | obs-nodes x̄ | shown x̄ | unnormalised |";
-const taskTableRule = "|---|---|---|---|---|---|---|---|---|---|---|---|---|";
+const taskTableHeader = "| arm | model | flags | done | success | steps x̄ | s x̄ | calls x̄ | out-tok x̄ | rejections | doc-scope muts | obs-nodes x̄ | shown x̄ | unnormalised |";
+const taskTableRule = "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|";
 
-const taskRow = (r: ArmRollup): string =>
-	`| ${r.arm.id} | ${flagsLine(r.arm)} | ${r.collected.length}/${r.arm.n} | ${pct(r.successes, r.collected.length)} | ${fmt(r.meanSteps)} | ${fmt(r.meanElapsedSec)} | ${fmt(r.meanModelCalls)} | ${fmt(r.meanOutputTokens)} | ${r.rejections} | ${r.documentScopeMutations} | ${fmt(r.meanObsNodes)} | ${fmt(r.meanShownLines)} | ${r.unnormalisedRuns ? `⚠ ${r.unnormalisedRuns}` : "0"} |`;
+const taskRow = (r: ArmRollup, model: string): string =>
+	`| ${r.arm.id} | ${model} | ${flagsLine(r.arm)} | ${r.collected.length}/${r.arm.n} | ${pct(r.successes, r.collected.length)} | ${fmt(r.meanSteps)} | ${fmt(r.meanElapsedSec)} | ${fmt(r.meanModelCalls)} | ${fmt(r.meanOutputTokens)} | ${r.rejections} | ${r.documentScopeMutations} | ${fmt(r.meanObsNodes)} | ${fmt(r.meanShownLines)} | ${r.unnormalisedRuns ? `⚠ ${r.unnormalisedRuns}` : "0"} |`;
+
+/** The model passes present for an arm, in first-seen order; [undefined] when none ran yet. */
+const modelPasses = (m: Manifest, armId: string): Array<string | undefined> => {
+	const seen: Array<string | undefined> = [];
+	for (const e of m.entries) if (e.armId === armId && !seen.includes(e.model)) seen.push(e.model);
+
+	return seen.length ? seen : [undefined];
+};
+
+const passLabel = (model: string | undefined): string => model ?? "(default)";
 
 function taskTable(arms: Arm[], m: Manifest): string[] {
-	const rows = arms.map((a) => taskRow(rollup(a, m.entries.filter((e) => e.armId === a.id))));
+	// One row per (arm, model pass): the two passes are separate self-grounded pipelines,
+	// and averaging across them would blend exactly the comparison the dimension exists for.
+	const rows = arms.flatMap((a) =>
+		modelPasses(m, a.id).map((model) =>
+			taskRow(rollup(a, m.entries.filter((e) => e.armId === a.id && e.model === model)), passLabel(model)),
+		),
+	);
 
 	return [taskTableHeader, taskTableRule, ...rows];
 }
 
 function exploreTable(arms: Arm[], m: Manifest): string[] {
-	const header = "| arm | flags | actions | elapsed | actuated/dismissed/seen | surfaces | nodes | edges | ambiguities |";
-	const rows = arms.map((a) => {
-		const e = m.entries.filter((x) => x.armId === a.id).find((x) => x.collected);
-		const mm = e?.metrics ?? {};
-		const controls = mm.controlsSeen !== undefined ? `${fmt(mm.controlsActuated)}/${fmt(mm.controlsDismissed)}/${fmt(mm.controlsSeen)}` : "—";
+	const header = "| arm | model | flags | actions | elapsed | actuated/dismissed/seen | surfaces | nodes | edges | ambiguities |";
+	const rows = arms.flatMap((a) =>
+		modelPasses(m, a.id).map((model) => {
+			const e = m.entries.filter((x) => x.armId === a.id && x.model === model).find((x) => x.collected);
+			const mm = e?.metrics ?? {};
+			const controls = mm.controlsSeen !== undefined ? `${fmt(mm.controlsActuated)}/${fmt(mm.controlsDismissed)}/${fmt(mm.controlsSeen)}` : "—";
 
-		return `| ${a.id} | ${flagsLine(a)} | ${fmt(mm.exploreActions)} | ${fmt(mm.exploreElapsed)} | ${controls} | ${fmt(mm.surfaces)} | ${fmt(mm.graphNodes)} | ${fmt(mm.graphEdges)} | ${fmt(mm.scopeAmbiguities)} |`;
-	});
+			return `| ${a.id} | ${passLabel(model)} | ${flagsLine(a)} | ${fmt(mm.exploreActions)} | ${fmt(mm.exploreElapsed)} | ${controls} | ${fmt(mm.surfaces)} | ${fmt(mm.graphNodes)} | ${fmt(mm.graphEdges)} | ${fmt(mm.scopeAmbiguities)} |`;
+		}),
+	);
 
-	return [header, "|---|---|---|---|---|---|---|---|---|", ...rows];
+	return [header, "|---|---|---|---|---|---|---|---|---|---|", ...rows];
 }
 
 function replayTable(arms: Arm[], m: Manifest): string[] {
-	const header = "| arm | flags | done | success | recipe steps | rescued x̄ | calls x̄ | s x̄ |";
-	const rows = arms.map((a) => {
-		const r = rollup(a, m.entries.filter((e) => e.armId === a.id));
+	const header = "| arm | model | flags | done | success | recipe steps | rescued x̄ | calls x̄ | s x̄ |";
+	const rows = arms.flatMap((a) =>
+		modelPasses(m, a.id).map((model) => {
+			const r = rollup(a, m.entries.filter((e) => e.armId === a.id && e.model === model));
 
-		return `| ${a.id} | ${flagsLine(a)} | ${r.collected.length}/${a.n} | ${pct(r.successes, r.collected.length)} | ${fmt(mean(nums(r.collected, (mm) => mm.recipeSteps)))} | ${fmt(mean(nums(r.collected, (mm) => mm.rescuedSteps)))} | ${fmt(r.meanModelCalls)} | ${fmt(r.meanElapsedSec)} |`;
-	});
+			return `| ${a.id} | ${passLabel(model)} | ${flagsLine(a)} | ${r.collected.length}/${a.n} | ${pct(r.successes, r.collected.length)} | ${fmt(mean(nums(r.collected, (mm) => mm.recipeSteps)))} | ${fmt(mean(nums(r.collected, (mm) => mm.rescuedSteps)))} | ${fmt(r.meanModelCalls)} | ${fmt(r.meanElapsedSec)} |`;
+		}),
+	);
 
-	return [header, "|---|---|---|---|---|---|---|---|", ...rows];
+	return [header, "|---|---|---|---|---|---|---|---|---|", ...rows];
 }
 
 function timingSection(m: Manifest): string[] {
@@ -124,7 +144,7 @@ function stampList(m: Manifest): string[] {
 	for (const arm of MATRIX) {
 		const entries = byArm.get(arm.id);
 		if (!entries) continue;
-		lines.push(`- **${arm.id}**: ${entries.map((e) => `\`${e.jobId}\` (${e.host}${e.collected ? "" : ", uncollected"})`).join(", ")}`);
+		lines.push(`- **${arm.id}**: ${entries.map((e) => `\`${e.jobId}\` (${e.host}${e.model ? `, ${e.model}` : ""}${e.collected ? "" : ", uncollected"})`).join(", ")}`);
 	}
 
 	return lines.length ? lines : ["_Nothing submitted yet._"];
@@ -199,6 +219,7 @@ export function renderReport(m: Manifest): string {
 		"<!-- Human-written conclusions. Everything above regenerates; this section is re-emitted",
 		"     as TODOs until the final edit, made after the last collect. -->",
 		"",
+		"- TODO: which MODEL pipeline to ship — self-grounded end to end (its own explores, its own maps, its own task runs). Note: each model ran at its own max effort; that asymmetry is the deployment-honest comparison. If the winner's edge needs factoring (explored better vs executed better), one cross-cell (loser's tasks on winner's maps, n=3) resolves it.",
 		"- TODO: which backend to build on (phase 1 discovery + phase 2 outcomes).",
 		"- TODO: leaner vs blinder — cdp's smaller per-screen observation (obs-nodes/shown columns) is a token win ONLY if phase 1 shows it DISCOVERED comparable functionality (controls actuated/seen + graph nodes vs ax). If cdp's frontier is materially smaller, the lean snapshot missed real controls.",
 		"- TODO: what grounding buys — actions, tokens, wrong-scope rate (doc-scope mutation counts above are raw; the cursor task implies the brand default).",

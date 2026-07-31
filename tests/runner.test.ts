@@ -824,6 +824,26 @@ test("submit__SaysNothingAboutSignin__When__TheOperatorAlreadyOwnsTheApp", async
  * because the drain only runs when a run actually ENDS and killing detached pids from the
  * test is a race the suite should not have to win.
  */
+/** fakeSpawner that also records each spawn's env, for the arm/model variables. */
+function envSpawner(): { calls: Array<{ command: string; args: string[] }>; envs: Array<Record<string, string | undefined>>; spawn: any } {
+	const calls: Array<{ command: string; args: string[] }> = [];
+	const envs: Array<Record<string, string | undefined>> = [];
+
+	return {
+		calls,
+		envs,
+		spawn: (cmd: { command: string; args: string[] }, opts: { logFile: string; env?: Record<string, string | undefined> }) => {
+			calls.push(cmd);
+			envs.push(opts.env ?? {});
+			fs.appendFileSync(opts.logFile, "pretend agent output\n");
+			const child = spawn("/bin/sh", ["-c", "sleep 30"], { detached: true, stdio: "ignore" });
+			child.unref();
+
+			return { pid: child.pid as number, child };
+		},
+	};
+}
+
 function quickSpawner(lifeSec = 0.3): { calls: Array<{ command: string; args: string[] }>; envs: Array<Record<string, string | undefined>>; spawn: any } {
 	const calls: Array<{ command: string; args: string[] }> = [];
 	const envs: Array<Record<string, string | undefined>> = [];
@@ -842,6 +862,55 @@ function quickSpawner(lifeSec = 0.3): { calls: Array<{ command: string; args: st
 		},
 	};
 }
+
+test("submit__CarriesTheModelToTheChildEnv__When__AModelIsAsked", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const prevData = process.env.YARN_RUNNER_DATA;
+		process.env.YARN_RUNNER_DATA = dir;
+		const spawner = envSpawner();
+		const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
+		let pid = 0;
+		try {
+			const [res] = await request(runner.socketPath, "submit", {
+				kind: "task",
+				app: "Yarn",
+				task: "show me how to change the cursor type",
+				operator: "dave",
+				model: "claude-fable-5",
+			});
+			assert.equal(res.ok, true, String(res.error ?? ""));
+			pid = res.pid;
+			assert.equal(spawner.envs[0]?.AGENT_MODEL, "claude-fable-5");
+			assert.equal(readJob(res.jobId)?.model, "claude-fable-5");
+		} finally {
+			if (pid) try { process.kill(-pid, "SIGKILL"); } catch {}
+			await runner.close();
+			if (prevData === undefined) delete process.env.YARN_RUNNER_DATA;
+			else process.env.YARN_RUNNER_DATA = prevData;
+		}
+	});
+});
+
+test("submit__RefusesTheModel__When__ItIsNotAModelIdShape", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const spawner = fakeSpawner();
+		const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
+		try {
+			const [res] = await request(runner.socketPath, "submit", {
+				kind: "task",
+				app: "Yarn",
+				task: "t",
+				operator: "dave",
+				model: "$(curl evil)",
+			});
+			assert.equal(res.ok, false);
+			assert.match(String(res.error), /model must be a model id/);
+			assert.equal(spawner.calls.length, 0, "a refused model spawns nothing");
+		} finally {
+			await runner.close();
+		}
+	});
+});
 
 test("submit__QueuesTheJob__When__TheHostIsBusyAndQueueIsAsked", async () => {
 	await withTempAsync("yr-serve-", async (dir) => {

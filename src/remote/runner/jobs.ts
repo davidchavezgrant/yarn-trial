@@ -124,6 +124,8 @@ export interface JobRecord {
 	url?: string;
 	/** `APPMAP_VARIANT=vision` in the child's environment: ground from the vision-variant map. */
 	appmapVariant?: "vision";
+	/** `AGENT_MODEL=<id>` in the child's environment. Absent = the child's default model. */
+	model?: string;
 	artifacts: JobArtifacts;
 }
 
@@ -149,6 +151,7 @@ export interface JobInit {
 	noRescue?: boolean;
 	url?: string;
 	appmapVariant?: "vision";
+	model?: string;
 	/** Accepted behind a held lease: the record starts `queued` and the drain spawns it later. */
 	queued?: boolean;
 }
@@ -250,6 +253,7 @@ export function createJob(init: JobInit, root = jobsDir()): JobRecord {
 		...(init.noRescue ? { noRescue: true } : {}),
 		...(init.url ? { url: init.url } : {}),
 		...(init.appmapVariant ? { appmapVariant: init.appmapVariant } : {}),
+		...(init.model ? { model: init.model } : {}),
 		artifacts: artifactsFor(id, init),
 	};
 	writeJob(rec, root);

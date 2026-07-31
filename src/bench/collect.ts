@@ -5,7 +5,7 @@ import { readJournal } from "../core/journal.js";
 import { appSlug, dataRoot as dataRootDir, outDir } from "../paths.js";
 import type { JobRecord } from "../remote/runner/jobs.js";
 import { armById } from "./matrix.js";
-import { type Manifest, type ManifestEntry, readManifest, type RunMetrics, updateEntry, utcDate, writeManifest } from "./manifest.js";
+import { benchDir, type Manifest, type ManifestEntry, readManifest, type RunMetrics, updateEntry, utcDate, writeManifest } from "./manifest.js";
 import { writeReport } from "./report.js";
 
 /**
@@ -61,6 +61,9 @@ export function parseRunMetrics(runLog: Record<string, any>): RunMetrics {
 				? { modelCalls: runLog.modelCalls }
 				: {}),
 		...(runLog.grounding?.provenance ? { provenance: String(runLog.grounding.provenance) } : {}),
+		// The run log's model is ground truth (makeClient records what actually ran); the
+		// manifest's model field is only what dispatch asked for. Divergence is a finding.
+		...(runLog.model ? { model: String(runLog.model) } : {}),
 		...(runLog.backend ? { backend: String(runLog.backend) } : {}),
 		...(typeof runLog.vision === "boolean" ? { vision: runLog.vision } : {}),
 		...(typeof runLog.ax === "boolean" ? { ax: runLog.ax } : {}),
@@ -216,7 +219,7 @@ export async function collect(opts: CollectOptions = {}): Promise<CollectOutcome
 			continue;
 		}
 
-		const next = collectEntry(entry, job, dataDir, state);
+		const next = collectEntry(entry, job, dataDir, state, benchDir(date, outRoot));
 		manifest = updateEntry(manifest, next);
 		writeManifest(manifest, outRoot);
 		collected.push(entry.jobId);
@@ -229,8 +232,20 @@ export async function collect(opts: CollectOptions = {}): Promise<CollectOutcome
 	return { manifest, collected, pending, reportPath };
 }
 
+/**
+ * Where an explore arm's appmap pair is archived under the bench dir, keyed on
+ * (model, armId) — the pair the report compares. Exists because docs/appmaps/<slug>.* is
+ * ONE file per app by convention, so a second model's pass overwrites the first's on disk;
+ * the run logs pin each run's map by sha256, but the content itself would be gone.
+ */
+export function archiveDirFor(benchRoot: string, entry: ManifestEntry): string {
+	const model = (entry.model ?? "default").replace(/[^A-Za-z0-9._-]+/g, "-");
+
+	return path.join(benchRoot, "appmaps", model, entry.armId);
+}
+
 /** Metrics for one terminal entry, from whatever artifacts landed. Missing files become notes. */
-function collectEntry(entry: ManifestEntry, job: JobRecord | undefined, dataDir: string, state: string): ManifestEntry {
+function collectEntry(entry: ManifestEntry, job: JobRecord | undefined, dataDir: string, state: string, benchRoot?: string): ManifestEntry {
 	const arm = armById(entry.armId);
 	const notes: string[] = [];
 	let metrics: RunMetrics = job ? jobTiming(job) : {};
@@ -248,6 +263,18 @@ function collectEntry(entry: ManifestEntry, job: JobRecord | undefined, dataDir:
 		const graph = readJson(graphFile);
 		if (graph) metrics = { ...metrics, ...parseGraphCounts(graph) };
 		else notes.push("no appmap graph");
+		// Archive the map pair beside the manifest — see archiveDirFor for why losing the
+		// live file to the next pass's overwrite is otherwise unrecoverable.
+		if (benchRoot) {
+			const keep = archiveDirFor(benchRoot, entry);
+			try {
+				fs.mkdirSync(keep, { recursive: true });
+				fs.copyFileSync(md, path.join(keep, path.basename(md)));
+				if (fs.existsSync(graphFile)) fs.copyFileSync(graphFile, path.join(keep, path.basename(graphFile)));
+			} catch (e) {
+				notes.push(`appmap archive failed: ${(e as Error).message}`);
+			}
+		}
 	} else {
 		const runLog = readJson(path.join(dataDir, job?.artifacts?.runLog ?? `out/runs/${entry.jobId}.json`));
 		if (runLog) metrics = { ...metrics, ...parseRunMetrics(runLog) };

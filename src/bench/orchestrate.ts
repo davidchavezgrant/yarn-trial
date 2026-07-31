@@ -65,6 +65,7 @@ export type BenchDispatchOptions = Omit<DispatchOptions, "kind"> & {
 	noRescue?: boolean;
 	url?: string;
 	appmapVariant?: "vision";
+	model?: string;
 };
 
 export type DispatchFn = (opts: BenchDispatchOptions) => Promise<DispatchResult>;
@@ -73,6 +74,10 @@ export type CompileFn = (stamp: string) => { path: string };
 export interface PhaseOptions {
 	go?: boolean;
 	force?: boolean;
+	/** Which model this pass runs (`--model <id>`). Crosses the wire as AGENT_MODEL; scopes
+	 *  every manifest count so two self-grounded passes coexist in one manifest. Absent =
+	 *  the child's default model, recorded as such. */
+	model?: string;
 	date?: string;
 	outRoot?: string;
 	/** Injected by tests. Production lazily loads the real dispatch/compile. */
@@ -99,9 +104,9 @@ const phase1GateArms = (): Arm[] => phaseArms(1).filter((a) => a.app === BENCH_A
  * Interleaved submission order, minus samples the manifest already holds. Compile arms are
  * excluded — they never dispatch; `runCompiles` handles them locally.
  */
-export function plannedRuns(phase: Phase, manifest: Manifest): PlannedRun[] {
+export function plannedRuns(phase: Phase, manifest: Manifest, model?: string): PlannedRun[] {
 	const arms = phaseArms(phase).filter((a) => a.kind !== "compile");
-	const remaining = arms.map((arm) => ({ arm, have: submittedCount(manifest, arm.id) }));
+	const remaining = arms.map((arm) => ({ arm, have: submittedCount(manifest, arm.id, model) }));
 	const out: PlannedRun[] = [];
 	const maxN = Math.max(0, ...arms.map((a) => a.n));
 	for (let sample = 0; sample < maxN; sample++)
@@ -111,11 +116,12 @@ export function plannedRuns(phase: Phase, manifest: Manifest): PlannedRun[] {
 }
 
 /** The DispatchOptions a planned run crosses with. Task text goes over VERBATIM (property 1). */
-export function dispatchOptionsFor(arm: Arm, recipe?: string): BenchDispatchOptions {
+export function dispatchOptionsFor(arm: Arm, recipe?: string, model?: string): BenchDispatchOptions {
 	const d = arm.dispatch;
 
 	return {
 		host: AUTO_HOST,
+		...(model ? { model } : {}),
 		app: arm.app,
 		kind: arm.kind === "compile" ? "task" : arm.kind,
 		queue: true,
@@ -159,8 +165,8 @@ export function auditPhase(phase: Phase): string[] {
  * (armId, jobId), so re-recording the same pair would be dropped, and re-compiling the
  * same log would refuse identically anyway.
  */
-export function findCompileSource(manifest: Manifest, sourceArmId: string, tried: Set<string> = new Set()): ManifestEntry | undefined {
-	return entriesForArm(manifest, sourceArmId).find(
+export function findCompileSource(manifest: Manifest, sourceArmId: string, tried: Set<string> = new Set(), model?: string): ManifestEntry | undefined {
+	return entriesForArm(manifest, sourceArmId, model).find(
 		(e) => !tried.has(e.jobId) && e.collected && e.metrics?.success === true && e.metrics?.finalCheckVerified !== false,
 	);
 }
@@ -177,12 +183,12 @@ async function runCompiles(phase: Phase, manifest: Manifest, opts: Required<Pick
 	for (const arm of phaseArms(phase).filter((a) => a.kind === "compile")) {
 		// A recipe on file is the done condition — a recorded REFUSAL does not retire the arm,
 		// so a later collect that lands a cleaner source run gets the compile retried.
-		if (entriesForArm(m, arm.id).some((e) => e.recipe)) {
+		if (entriesForArm(m, arm.id, opts.model).some((e) => e.recipe)) {
 			opts.log(`${arm.id}: already compiled — skipping`);
 			continue;
 		}
-		const tried = new Set(entriesForArm(m, arm.id).map((e) => e.jobId));
-		const source = findCompileSource(m, arm.sourceArm ?? "", tried);
+		const tried = new Set(entriesForArm(m, arm.id, opts.model).map((e) => e.jobId));
+		const source = findCompileSource(m, arm.sourceArm ?? "", tried, opts.model);
 		if (!source) {
 			opts.log(`${arm.id}: no clean collected run in ${arm.sourceArm} yet — run \`./run bench collect\` after those land, then re-run this phase`);
 			continue;
@@ -195,6 +201,7 @@ async function runCompiles(phase: Phase, manifest: Manifest, opts: Required<Pick
 			submittedAt: new Date().toISOString(),
 			state: "done",
 			collected: true,
+			...(opts.model ? { model: opts.model } : {}),
 		};
 		try {
 			const { path } = compileFn(source.jobId);
@@ -211,8 +218,8 @@ async function runCompiles(phase: Phase, manifest: Manifest, opts: Required<Pick
 }
 
 /** The recipe a replay arm replays: its compile arm's manifest entry, when the compile succeeded. */
-const recipeFor = (manifest: Manifest, arm: Arm): string | undefined =>
-	entriesForArm(manifest, arm.sourceArm ?? "").find((e) => e.recipe && e.state === "done")?.recipe;
+const recipeFor = (manifest: Manifest, arm: Arm, model?: string): string | undefined =>
+	entriesForArm(manifest, arm.sourceArm ?? "", model).find((e) => e.recipe && e.state === "done")?.recipe;
 
 export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<number> {
 	const log = opts.log ?? console.log;
@@ -232,11 +239,11 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 	// the preview is how an operator finds out what phase 2 needs before phase 1 has run.
 	const missingMaps =
 		phase === 2 && !opts.force
-			? phase1GateArms().filter((a) => !entriesForArm(manifest, a.id).some((e) => e.collected))
+			? phase1GateArms().filter((a) => !entriesForArm(manifest, a.id, opts.model).some((e) => e.collected))
 			: [];
 	if (missingMaps.length && opts.go) {
-		log(`REFUSED: phase 2's grounded arms need phase-1 maps, and today's manifest has no collected explore for: ${missingMaps.map((a) => a.id).join(", ")}`);
-		log(`Run \`./run bench phase 1 --go\`, wait, \`./run bench collect\` — or \`--force\` to use maps from an earlier pass.`);
+		log(`REFUSED: phase 2's grounded arms need phase-1 maps${opts.model ? ` from THIS model's pass (${opts.model} grounds itself)` : ""}, and today's manifest has no collected explore for: ${missingMaps.map((a) => a.id).join(", ")}`);
+		log(`Run \`./run bench phase 1${opts.model ? ` --model ${opts.model}` : ""} --go\`, wait, \`./run bench collect\` — or \`--force\` to use maps from an earlier pass.`);
 
 		return EXIT_REFUSED;
 	}
@@ -244,14 +251,14 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 	// Compiles are local and cheap, but they are still phase work — gated like everything else.
 	if (opts.go && (phase === 3 || phase === 4)) manifest = await runCompiles(phase, manifest, { ...opts, log });
 
-	const planned = plannedRuns(phase, manifest);
+	const planned = plannedRuns(phase, manifest, opts.model);
 	// Resolve replay recipes AFTER compiles so a single --go does compile-then-replay when
 	// the sources are already collected; a missing recipe defers the replay to a later re-run.
-	const ready = planned.filter((p) => p.arm.kind !== "replay" || recipeFor(manifest, p.arm) !== undefined);
+	const ready = planned.filter((p) => p.arm.kind !== "replay" || recipeFor(manifest, p.arm, opts.model) !== undefined);
 	const deferred = planned.filter((p) => !ready.includes(p));
 
 	if (!opts.go) {
-		log(`phase ${phase}: ${planned.length} run(s) would be submitted (${phaseRunCount(phase)} total in phase, minus already-submitted):`);
+		log(`phase ${phase}${opts.model ? ` [model ${opts.model}]` : ""}: ${planned.length} run(s) would be submitted (${phaseRunCount(phase)} total in phase, minus already-submitted this pass):`);
 		for (const p of planned) {
 			const arm = p.arm;
 			log(`  ${arm.id} [${p.sample + 1}/${arm.n}] ${arm.kind} "${arm.app}"${arm.task ? ` — ${JSON.stringify(arm.task)}` : ""} | ${flagsLine(arm)}`);
@@ -259,7 +266,7 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 			if (arm.prereq) log(`    PREREQ: ${arm.prereq}`);
 		}
 		for (const arm of phaseArms(phase).filter((a) => a.kind === "compile"))
-			if (submittedCount(manifest, arm.id) < arm.n) log(`  ${arm.id} [local] compile from ${arm.sourceArm}`);
+			if (submittedCount(manifest, arm.id, opts.model) < arm.n) log(`  ${arm.id} [local] compile from ${arm.sourceArm}`);
 		if (missingMaps.length) log(`NOTE: --go would currently refuse — no collected phase-1 explore for: ${missingMaps.map((a) => a.id).join(", ")}`);
 		log(`Nothing was dispatched. Re-run with --go to submit.`);
 
@@ -270,8 +277,8 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 	let submitted = 0;
 	let refused = 0;
 	for (const p of ready) {
-		const recipe = p.arm.kind === "replay" ? recipeFor(manifest, p.arm) : undefined;
-		const result = await dispatchFn(dispatchOptionsFor(p.arm, recipe));
+		const recipe = p.arm.kind === "replay" ? recipeFor(manifest, p.arm, opts.model) : undefined;
+		const result = await dispatchFn(dispatchOptionsFor(p.arm, recipe, opts.model));
 		if (!result.ok) {
 			refused++;
 			log(`✗ ${p.arm.id} [${p.sample + 1}/${p.arm.n}]: ${result.error}`);
@@ -287,6 +294,7 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 				submittedAt: new Date().toISOString(),
 				state: result.queued ? "queued" : "running",
 				collected: false,
+				...(opts.model ? { model: opts.model } : {}),
 				...(p.arm.env ? { env: p.arm.env } : {}),
 				...(recipe ? { recipe } : {}),
 			},
@@ -341,12 +349,19 @@ async function defaultCompile(): Promise<CompileFn> {
 }
 
 const USAGE = `usage: ./run bench plan
-       ./run bench phase <1|2|3|4> [--go] [--force]
+       ./run bench phase <1|2|3|4> [--model <id>] [--go] [--force]
        ./run bench collect
 
 plan     print the resolved matrix — every arm, flags, n, phase. No side effects.
 phase    dispatch that phase's runs to the fleet queue. WITHOUT --go: preview and exit 2.
-         --force skips the phase-2 "phase-1 maps collected" gate (reuse earlier maps).
+         --model runs the pass under that model (AGENT_MODEL on every child; e.g.
+         claude-fable-5 or openai/gpt-5.6-sol:nitro). Each model is a SEPARATE
+         self-grounded pass: its own explores, its own maps, its own sample counts —
+         run the whole matrix under one model, then again under the other. Sequencing
+         matters: docs/appmaps/ holds one live map per app, so a pass's phase 2 must
+         run before the next pass's phase 1 overwrites it (collect archives each pass's
+         maps under out/bench/<date>/appmaps/<model>/).
+         --force skips the phase-2 "phase-1 maps collected this pass" gate.
 collect  pull artifacts for every uncollected manifest entry, compute metrics, rewrite
          the report skeleton. Idempotent; run it as often as you like while the queue drains.`;
 
@@ -364,8 +379,15 @@ async function main(argv: string[]): Promise<number> {
 
 			return EXIT_REFUSED;
 		}
+		const mi = argv.indexOf("--model");
+		const model = mi >= 0 ? argv[mi + 1] : undefined;
+		if (mi >= 0 && (!model || model.startsWith("--"))) {
+			console.error("--model needs a model id, e.g. --model claude-fable-5");
 
-		return runPhase(phase as Phase, { go: argv.includes("--go"), force: argv.includes("--force") });
+			return EXIT_REFUSED;
+		}
+
+		return runPhase(phase as Phase, { go: argv.includes("--go"), force: argv.includes("--force"), ...(model ? { model } : {}) });
 	}
 	if (cmd === "collect") {
 		const outcome = await collect();

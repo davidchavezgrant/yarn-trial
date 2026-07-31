@@ -508,6 +508,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 						...(rec.noGrounding ? { NO_GROUNDING: "1" } : {}),
 						...(rec.useRecipe ? { USE_RECIPE: "1" } : {}),
 						...(rec.appmapVariant ? { APPMAP_VARIANT: rec.appmapVariant } : {}),
+						...(rec.model ? { AGENT_MODEL: rec.model } : {}),
 						// Fleet posture: a dispatched cdp run owns the machine (the lease says so),
 						// and the app it finds running portless was left by the previous job —
 						// an ax arm, most often. Quit-and-relaunch beats failing every
@@ -658,6 +659,14 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			return { ok: false, error: `appmapVariant must be "vision", got ${JSON.stringify(params.appmapVariant)}` };
 		const appmapVariant = params.appmapVariant as "vision" | undefined;
 
+		// A model id becomes an env VALUE, never argv — but it still gets a shape check, so a
+		// typo'd or hostile id is refused before the lease is spent rather than dying in the
+		// child's first model call. Provider-prefixed ids ("openai/gpt-5.6-sol:nitro") and
+		// bare ones ("claude-fable-5") both fit.
+		if (params.model !== undefined && (typeof params.model !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._\/:-]{0,127}$/.test(params.model)))
+			return { ok: false, error: `model must be a model id, got ${JSON.stringify(params.model)}` };
+		const model = params.model as string | undefined;
+
 		// The URL is child argv, but it is not free text: the child's own webTarget() gate
 		// rejects non-http(s) later, and this earlier copy exists because by then the lease
 		// and a profile swap are already spent. Scheme-only — everything else is the child's.
@@ -701,6 +710,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			...(recipe !== undefined ? { recipe } : {}),
 			...(url !== undefined ? { url } : {}),
 			...(appmapVariant !== undefined ? { appmapVariant } : {}),
+			...(model !== undefined ? { model } : {}),
 		};
 		const claim = acquire(
 			{ jobId: id, operator, kind, app, startedAt: new Date().toISOString(), pid: process.pid },

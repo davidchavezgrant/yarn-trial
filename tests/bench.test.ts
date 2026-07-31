@@ -5,6 +5,7 @@ import { test } from "node:test";
 import { auditTaskPrompt } from "../src/core/harness.js";
 import type { JobRecord } from "../src/remote/runner/jobs.js";
 import {
+	archiveDirFor,
 	collect,
 	jobTiming,
 	journalScopes,
@@ -698,4 +699,51 @@ test("writeReport__WritesRegenerableFile__When__CalledTwice", () => {
 		writeReport(m, { dir });
 		assert.equal(fs.readFileSync(file, "utf8"), first);
 	});
+});
+
+test("runPhase__ScopesSampleCountsToTheModelPass__When__TwoModelsRunTheMatrix", async () => {
+	// Self-grounded passes: pass B's top-up arithmetic must not read pass A's entries as
+	// its own samples, or the second model silently runs a fraction of the matrix.
+	await withTempAsync("bench-", async (dir) => {
+		const a = fakeDispatch();
+		await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: a.fn, log: () => {}, model: "openai/gpt-5.6-sol:nitro" });
+		assert.equal(a.calls.length, 3, "pass A submits the full phase");
+		for (const c of a.calls) assert.equal(c.model, "openai/gpt-5.6-sol:nitro");
+
+		const b = fakeDispatch();
+		await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: b.fn, log: () => {}, model: "claude-fable-5" });
+		assert.equal(b.calls.length, 3, "pass B submits the full phase again — pass A's entries are not its samples");
+		for (const c of b.calls) assert.equal(c.model, "claude-fable-5");
+
+		// And a re-run of pass A tops up nothing.
+		const a2 = fakeDispatch();
+		await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: a2.fn, log: () => {}, model: "openai/gpt-5.6-sol:nitro" });
+		assert.equal(a2.calls.length, 0);
+	});
+});
+
+test("runPhase__GatesPhase2OnThisPassesExplores__When__AnotherModelAlreadyExplored", async () => {
+	// Pass A's collected explores prove nothing about pass B: B grounds itself, and its
+	// phase 2 must wait for B's own maps.
+	await withTempAsync("bench-", async (dir) => {
+		const a = fakeDispatch();
+		await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: a.fn, log: () => {}, model: "openai/gpt-5.6-sol:nitro" });
+		let m = readManifest(DATE, dir);
+		for (const e of m.entries) m = updateEntry(m, { ...e, collected: true });
+		writeManifest(m, dir);
+
+		const b = fakeDispatch();
+		const code = await runPhase(2, { go: true, date: DATE, outRoot: dir, dispatchFn: b.fn, log: () => {}, model: "claude-fable-5" });
+		assert.equal(code, EXIT_REFUSED, "pass B's phase 2 refuses on pass A's maps");
+		assert.equal(b.calls.length, 0);
+	});
+});
+
+test("archiveDirFor__KeysOnModelAndArm__When__TwoPassesShareOneManifest", () => {
+	const base = { armId: "p1-explore-ax", jobId: "j", host: "mac1", submittedAt: "", state: "done", collected: true };
+	const sol = archiveDirFor("/bench/2026-07-31", { ...base, model: "openai/gpt-5.6-sol:nitro" });
+	const fable = archiveDirFor("/bench/2026-07-31", { ...base, model: "claude-fable-5" });
+	assert.notEqual(sol, fable, "each pass archives its own maps");
+	assert.match(sol, /appmaps\/openai-gpt-5.6-sol-nitro\/p1-explore-ax$/);
+	assert.match(archiveDirFor("/b", base), /appmaps\/default\/p1-explore-ax$/);
 });
