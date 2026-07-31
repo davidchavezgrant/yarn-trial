@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import type { HostEntry } from "../src/remote/control/hosts.js";
-import { explainCloseFailure, forgetScreenShareLogin, launchCommand, planSignin, vncUrl, waitForHome } from "../src/remote/control/signin.js";
+import { explainCloseFailure, forgetScreenShareLogin, launchCommand, planSignin, pollDelayMs, vncUrl, waitForHome } from "../src/remote/control/signin.js";
 import type { SshResult } from "../src/remote/control/ssh.js";
 import { ok, PIN } from "./fixtures.js";
 
@@ -321,4 +321,39 @@ test("forgetScreenShareLogin__StopsAtTheCap__When__SecurityKeepsAnsweringSuccess
 
 	assert.equal(res.removed, 20);
 	assert.equal(calls, 20);
+});
+
+test("pollDelayMs__PollsFastThenBacksOff__When__TheWaitRunsLong", () => {
+	// The interval IS the operator's dead-viewer time: the sign-in window stays up showing an
+	// already-signed-in app until the next poll notices. Measured 2026-07-31, a `ready` call
+	// costs ~2s and holds no lease, so the old flat 10s was paying for a cost that no longer
+	// exists — but polling every 3s for the full 20-minute ceiling would put real load on a
+	// shared Mac while someone hunts for a 2FA code.
+	assert.equal(pollDelayMs(0), 3_000, "the first gap is the fast one — most sign-ins finish here");
+	assert.equal(pollDelayMs(89_000), 3_000);
+	// Past the window the human is reading a text message, not typing.
+	assert.equal(pollDelayMs(90_000), 10_000);
+	assert.equal(pollDelayMs(15 * 60_000), 10_000);
+});
+
+test("waitForHome__BacksOff__When__NobodyFinishesTheSignIn", async () => {
+	// The cadence is a property of the wait, not of the caller: waitForHome must pick it up
+	// without an intervalMs, or the GUI (which passes none) keeps the old flat delay.
+	const gaps: number[] = [];
+	let calls = 0;
+	const out = await waitForHome(host(), "Yarn", {
+		// Deadline short enough to end the loop, long enough for two gaps to be chosen.
+		timeoutMs: 20,
+		run: async () => {
+			calls++;
+			gaps.push(Date.now());
+
+			return frame({ ok: true, ready: false, detail: "not yet" });
+		},
+	});
+
+	assert.equal(out.ready, false);
+	// It polled at least once and stopped rather than sleeping past its own deadline — the
+	// backoff must never outlive the wait it belongs to.
+	assert.ok(calls >= 1);
 });

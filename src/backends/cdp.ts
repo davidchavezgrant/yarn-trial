@@ -677,14 +677,24 @@ export class CdpBackend {
 						// its contenteditable host): a click collapses any selection, and the
 						// documented pre-filled recovery (click the field, cmd+a, type_text)
 						// depends on the selection surviving into the typing.
-						const FOCUS_CHECK =
-							"el => el === document.activeElement || el.contains(document.activeElement) || (document.activeElement && document.activeElement.contains(el))";
+						// Real functions, not strings: playwright treats a STRING as an
+						// expression, so an arrow-function string evaluates to a function
+						// object and serializes to undefined — every check built that way
+						// silently answered false/undefined (found live on round 6: the
+						// theft error blamed "<undefined>"). tsx strips the `any` casts and
+						// playwright serializes the compiled source, so globalThis keeps the
+						// DOM references compiling without lib.dom.
+						const FOCUS_CHECK = (el: any): boolean => {
+							const d = (globalThis as any).document;
+							return el === d.activeElement || el.contains(d.activeElement) || Boolean(d.activeElement && d.activeElement.contains(el));
+						};
 						const focused = (await loc.evaluate(FOCUS_CHECK).catch(() => false)) as boolean;
 						if (!focused) {
 							// Who holds focus BEFORE the click, so "did focus move" is answerable
 							// even when the clicked node itself is replaced (see below).
+							// IIFE, because page.evaluate strings are EXPRESSIONS (see above).
 							const ACTIVE_DESC =
-								"() => { const a = document.activeElement; return a ? a.tagName.toLowerCase() + (a.className ? '.' + String(a.className).trim().split(/\\s+/)[0] : '') : 'nothing'; }";
+								"(() => { const a = document.activeElement; return a ? a.tagName.toLowerCase() + (a.className ? '.' + String(a.className).trim().split(/\\s+/)[0] : '') : 'nothing'; })()";
 							const before = (await this.page.evaluate(ACTIVE_DESC).catch(() => "")) as string;
 							await this.demoPointer(loc, "click", ref);
 							// Never type into whatever kept focus. Yarn's agent composer holds
@@ -698,7 +708,7 @@ export class CdpBackend {
 							// beat after mouseup. So poll briefly, and accept EITHER containment
 							// OR focus having MOVED onto something editable since before the click.
 							const MOVED_CHECK =
-								"() => { const a = document.activeElement; if (!a) return ''; const editable = a.isContentEditable || a.tagName === 'INPUT' || a.tagName === 'TEXTAREA'; return editable ? a.tagName.toLowerCase() + (a.className ? '.' + String(a.className).trim().split(/\\s+/)[0] : '') : ''; }";
+								"(() => { const a = document.activeElement; if (!a) return ''; const editable = a.isContentEditable || a.tagName === 'INPUT' || a.tagName === 'TEXTAREA'; return editable ? a.tagName.toLowerCase() + (a.className ? '.' + String(a.className).trim().split(/\\s+/)[0] : '') : ''; })()";
 							let took = false;
 							for (let tries = 0; tries < 6 && !took; tries++) {
 								await new Promise((r) => setTimeout(r, 200));
@@ -786,7 +796,11 @@ export class CdpBackend {
 		let box = await loc.boundingBox().catch(() => null);
 		if (!box || box.width <= 0 || box.height <= 0)
 			box = (await loc
-				.evaluate("el => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; }")
+				.evaluate((el: any) => {
+					const r = el.getBoundingClientRect();
+
+					return { x: r.x, y: r.y, width: r.width, height: r.height };
+				})
 				.catch(() => null)) as { x: number; y: number; width: number; height: number } | null;
 		if (!box || box.width <= 0 || box.height <= 0) {
 			const row = ref ? this.lastRows.find((r) => r.ref === ref) : undefined;

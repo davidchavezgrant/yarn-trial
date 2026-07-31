@@ -43,8 +43,32 @@ const LAUNCH_TIMEOUT_MS = 60_000;
  * to disconnect when they are done.
  */
 const WAIT_TIMEOUT_MS = 20 * 60_000;
-/** Between polls. Each one costs an ssh round trip and a driver session on the far side. */
-const POLL_INTERVAL_MS = 10_000;
+/**
+ * Between polls, and it BACKS OFF rather than being one number.
+ *
+ * The delay is dead viewer time: the sign-in window stays on screen showing an app that is
+ * already signed in until the next poll notices, so the interval IS the latency the operator
+ * feels at the end of every sign-in ("we stay in the viewer for quite a while", 2026-07-31).
+ *
+ * The flat 10s was justified as "each poll costs an ssh round trip and a driver session on the
+ * far side". Measured against mac2 the same day, a `ready` call is **~2.0s** and holds no
+ * lease — the constant outlived its own rationale. But polling fast for twenty minutes while
+ * someone hunts for a 2FA code is real load on a shared Mac, so neither number is right for
+ * the whole wait.
+ *
+ * So: fast while a human is plausibly mid-flow, slow once they are clearly away. A sign-in that
+ * completes normally is noticed within ~3s of finishing; one that is abandoned costs the fleet
+ * six polls a minute, as before.
+ */
+const POLL_FAST_MS = 3_000;
+const POLL_SLOW_MS = 10_000;
+/** How long the fast cadence lasts. Past this, the human is reading a text message, not typing. */
+const POLL_FAST_WINDOW_MS = 90_000;
+
+/** The gap before the next poll, given how long this wait has been running. */
+export function pollDelayMs(elapsedMs: number, fast = POLL_FAST_MS, slow = POLL_SLOW_MS, window = POLL_FAST_WINDOW_MS): number {
+	return elapsedMs < window ? fast : slow;
+}
 /** One `ready` call, generously over the runner's own 45s probe ceiling so its answer arrives. */
 const READY_CALL_MS = 70_000;
 const OSASCRIPT_TIMEOUT_MS = 10_000;
@@ -187,8 +211,8 @@ export async function waitForHome(
 	opts: { timeoutMs?: number; intervalMs?: number; run?: SshRunner; onPoll?: (detail: string) => void } = {},
 ): Promise<{ ready: boolean; detail: string }> {
 	const run = opts.run ?? runSsh;
-	const interval = opts.intervalMs ?? POLL_INTERVAL_MS;
-	const deadline = Date.now() + (opts.timeoutMs ?? WAIT_TIMEOUT_MS);
+	const startedAt = Date.now();
+	const deadline = startedAt + (opts.timeoutMs ?? WAIT_TIMEOUT_MS);
 	let last = "no answer yet";
 
 	for (;;) {
@@ -205,6 +229,7 @@ export async function waitForHome(
 
 		// After the check, not before: a sign-in that was already finished when we were called
 		// should return immediately rather than sleeping through one interval first.
+		const interval = opts.intervalMs ?? pollDelayMs(Date.now() - startedAt);
 		if (Date.now() + interval >= deadline) return { ready: false, detail: last };
 		await new Promise((r) => setTimeout(r, interval));
 	}
