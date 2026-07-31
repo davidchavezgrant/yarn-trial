@@ -7,7 +7,7 @@ import { dataRoot } from "../../paths.js";
 import { EXIT_REFUSED as CTL_REFUSED, EXIT_UNREACHABLE as CTL_UNREACHABLE } from "../runner/ctl.js";
 import type { JobArtifacts, JobKind, JobRecord } from "../runner/jobs.js";
 import { autoSync, type SyncOptions } from "./appmaps.js";
-import { type FleetRow, type FleetState, fleetStatus, pickIdleHost } from "./fleet.js";
+import { type FleetRow, type FleetState, fleetStatus, pickIdleHost, pickShortestQueue } from "./fleet.js";
 import { defaultOperator, type HostEntry, type Inventory, loadHosts, resolveHost } from "./hosts.js";
 import { assertSafeRemotePath, DEFAULT_SSH_TIMEOUT_MS, firstLine, lastFrame, remoteDataRoot, runnerArgv, runnerHome, runSsh, runTransport, rsyncShell, SPAWN_FAILED_EXIT, type SshResult, type SshRunner, sshArgv } from "./ssh.js";
 
@@ -82,6 +82,12 @@ export interface DispatchOptions {
 	task?: string;
 	record?: boolean;
 	noVision?: boolean;
+	/**
+	 * Wait in line instead of being refused when the host is busy. Default true — the queue is
+	 * why an operator can dispatch five runs and close the lid. `false` restores the old
+	 * refusal for callers that want to react to busy themselves.
+	 */
+	queue?: boolean;
 	operator?: string;
 	inventory?: Inventory;
 	/** The ssh call, injected so tests exercise the fall-through logic without a network. */
@@ -125,6 +131,11 @@ export interface DispatchAccepted {
 	 * are reading it from.
 	 */
 	artifacts: JobArtifacts;
+	/** The job joined this host's line instead of starting; `position` is 1-based. */
+	queued?: boolean;
+	position?: number;
+	/** The run the queued job is waiting behind, as the runner reported it. */
+	behind?: BusyHolder;
 	/** Hosts that refused before this one accepted. Empty for a direct hit. */
 	attempts: DispatchAttempt[];
 	/** What the pre-submit appmap fan-out moved, when it moved anything. For the operator's log. */
@@ -150,6 +161,10 @@ export type DispatchResult = DispatchAccepted | { ok: false; error: string; atte
  */
 export function dispatchNotes(r: DispatchAccepted): string[] {
 	const notes: string[] = [];
+	if (r.queued) {
+		const wait = r.behind ? ` behind ${r.behind.operator ?? "?"}'s ${r.behind.kind ?? "run"} on ${r.behind.app ?? "?"} (${r.behind.elapsedSec ?? 0}s in)` : "";
+		notes.push(`queued at position ${r.position ?? "?"}${wait} — it starts when the host frees; following its log now`);
+	}
 	if (r.syncNote) notes.push(r.syncNote);
 	if (r.profile) notes.push(r.profile);
 	// Named command over "you may need to sign in": this is the moment the operator can act, and
@@ -183,15 +198,27 @@ export async function dispatch(opts: DispatchOptions): Promise<DispatchResult> {
 		noVision: Boolean(opts.noVision),
 		operator: opts.operator ?? defaultOperator(),
 	};
+	const wantQueue = opts.queue !== false;
 
 	const attempts: DispatchAttempt[] = [];
-	let targets: HostEntry[];
+	let targets: Array<{ host: HostEntry; queue: boolean }>;
 	if (opts.host.trim().toLowerCase() === AUTO_HOST) {
 		const rows = await fleetStatus({ inventory: inv, run, timeoutMs: DEFAULT_SSH_TIMEOUT_MS });
-		targets = idleHosts(rows, inv);
+		// Idle hosts are asked WITHOUT the queue flag even when queueing is wanted: losing the
+		// advisory race on one idle host must mean "ask the next idle host", not "join the line
+		// on the first" while a free Mac sits two entries down the list.
+		targets = idleHosts(rows, inv).map((host) => ({ host, queue: false }));
+		if (!targets.length && wantQueue) {
+			// Nobody idle: wait on the busy host with the shortest line. One target, asked once —
+			// an enqueue cannot lose the race the idle walk exists for, because a busy host
+			// accepts a queued job whatever else lands on it in between.
+			const pick = pickShortestQueue(rows);
+			const host = pick && inv.hosts.find((h) => h.name === pick.name);
+			if (host) targets = [{ host, queue: true }];
+		}
 		if (!targets.length) return { ok: false, error: "no idle host in the fleet", attempts: rows.map(rowAttempt) };
 	} else {
-		targets = [resolveHost(opts.host, inv)];
+		targets = [{ host: resolveHost(opts.host, inv), queue: wantQueue }];
 	}
 
 	// Before the submit, not after: the run reads its appmap at startup, so a map that arrives
@@ -204,8 +231,8 @@ export async function dispatch(opts: DispatchOptions): Promise<DispatchResult> {
 	// Measured at ~3s for three Macs, against runs that last minutes.
 	const syncNote = await (opts.sync ?? autoSync)({ inventory: inv });
 
-	for (const host of targets) {
-		const res = await run(host, runnerArgv("submit", spec), { timeoutMs: opts.timeoutMs ?? SUBMIT_TIMEOUT_MS });
+	for (const { host, queue } of targets) {
+		const res = await run(host, runnerArgv("submit", queue ? { ...spec, queue: true } : spec), { timeoutMs: opts.timeoutMs ?? SUBMIT_TIMEOUT_MS });
 		const frame = lastFrame(res.stdout);
 		if (frame?.ok === true && typeof frame.jobId === "string")
 			return {
@@ -216,6 +243,9 @@ export async function dispatch(opts: DispatchOptions): Promise<DispatchResult> {
 				app: String(frame.app ?? opts.app),
 				...(typeof frame.pid === "number" ? { pid: frame.pid } : {}),
 				artifacts: (frame.artifacts ?? { log: `out/jobs/${frame.jobId}/log.txt` }) as JobArtifacts,
+				...(frame.queued === true ? { queued: true } : {}),
+				...(typeof frame.position === "number" ? { position: frame.position } : {}),
+				...(frame.behind && typeof frame.behind === "object" ? { behind: frame.behind as BusyHolder } : {}),
 				attempts,
 				...(syncNote ? { syncNote } : {}),
 				...(typeof frame.profile === "string" ? { profile: frame.profile } : {}),

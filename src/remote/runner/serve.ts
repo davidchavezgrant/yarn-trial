@@ -24,6 +24,7 @@ import {
 	type JobRecord,
 	jobsDir,
 	listJobs,
+	listQueued,
 	logPath,
 	mintJobId,
 	pidAlive,
@@ -274,6 +275,8 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		updateJob(id, { state, exitCode, endedAt: new Date().toISOString(), ...(signal ? { signal } : {}) }, root);
 		release(runnerDir, id);
 		log(`job ${id} ${state}${exitCode === null ? "" : ` (exit ${exitCode})`}${signal ? ` (${signal})` : ""}`);
+		// The host just freed; the queue's head is entitled to it before any new submit.
+		void drain();
 	}
 
 	/**
@@ -286,9 +289,12 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		const { stale: dead } = inspect(runnerDir);
 		if (!dead) return;
 		finalise(dead.jobId, "orphaned", null);
-		// finalise is a no-op if the record was already terminal; the lease still has to go.
+		// finalise is a no-op if the record was already terminal; the lease still has to go —
+		// and with it gone, the queue's head is startable. finalise's own drain only fires on
+		// the record-was-running path, so this one covers the already-terminal case.
 		release(runnerDir, dead.jobId);
 		log(`reaped ${dead.jobId}: holder pid ${dead.pid} exited unobserved`);
+		void drain();
 	}
 
 	const reaper = setInterval(reap, REAP_MS);
@@ -412,60 +418,21 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		return { ok: true, stopped: true };
 	}
 
-	async function submit(params: Params): Promise<RunnerResponse> {
-		if (params.kind !== undefined && params.kind !== "explore" && params.kind !== "task")
-			return { ok: false, error: `kind must be "task" or "explore", got ${JSON.stringify(params.kind)}` };
-		const kind: JobKind = params.kind === "explore" ? "explore" : "task";
-		const app = String(params.app ?? "").trim();
-		// Verbatim, start to finish. `auditTaskPrompt` in agent.ts is the authoritative gate
-		// and refuses a hinted prompt there (exit 2, visible in the job log); rewriting or
-		// pre-screening the text here would put a second, divergent copy of that rule on the
-		// wire — and the whole value of the gate is that there is exactly one.
-		const task = typeof params.task === "string" ? params.task : "";
-		const operator = String(params.operator ?? "unknown").trim() || "unknown";
-		if (!app) return { ok: false, error: "app is required" };
-		if (kind === "task" && !task.trim()) return { ok: false, error: "task is required" };
-
-		// Before acquire(), not after: every return past this point has to release the lease, and
-		// a validation branch that forgets to leaves the Mac permanently busy with no run on it.
-		const record = flag(params, "record");
-		const noVision = flag(params, "noVision");
-		if (typeof record !== "boolean") return record;
-		if (typeof noVision !== "boolean") return noVision;
-
-		const id = mintJobId(kind, app);
-		const claim = acquire(
-			{ jobId: id, operator, kind, app, startedAt: new Date().toISOString(), pid: process.pid },
-			runnerDir,
-		);
-		if (!claim.ok)
-			return {
-				ok: false,
-				error: claim.reason,
-				busy: true,
-				operator: claim.holder.lease.operator,
-				app: claim.holder.lease.app,
-				kind: claim.holder.lease.kind,
-				jobId: claim.holder.lease.jobId,
-				elapsedSec: claim.holder.heldSec,
-			};
-		if (claim.reclaimed) log(`reclaimed lease from dead pid ${claim.reclaimed.pid} (job ${claim.reclaimed.jobId})`);
-
-		// The registry write itself can fail — ENOSPC, EACCES — and handle()'s generic catch
-		// knows nothing about the lease. Left held it names pid=<this runner>, which is always
-		// alive, so reap() never reclaims it and the host stays busy until a runner restart.
-		let job: JobRecord;
-		try {
-			job = createJob({ id, kind, app, task, operator, record }, root);
-		} catch (e) {
-			release(runnerDir, id);
-			throw e;
-		}
-
-		// Under the lease and before the spawn. Under, because two operators swapping the same
-		// app's data at once would interleave two sets of directory moves; before, because the
-		// agent reads the app's state the moment it starts. The lock, not the lease, is what
-		// serialises this against `signin`'s swap — signin never takes the lease.
+	/**
+	 * Swap, spawn, adopt — the part of a submit that actually starts a run. Factored out of
+	 * `submit` because the drain starts QUEUED jobs through the same door, and a second copy
+	 * of the swap/spawn failure handling would be a copy that drifts.
+	 *
+	 * The caller must already hold the lease under `rec.id`, and the record must already say
+	 * `running`; every failure path here marks the record failed and releases that lease.
+	 *
+	 * The swap happens HERE — at start time, not enqueue time — because between a job joining
+	 * the queue and reaching the host's keyboard, any number of other operators' runs may have
+	 * swapped the app's data. Only the swap that immediately precedes the spawn is the one the
+	 * agent actually reads.
+	 */
+	async function startJob(rec: JobRecord): Promise<RunnerResponse> {
+		const { id, kind, app, task, operator } = rec;
 		let swap: ProfileSwap;
 		try {
 			swap = await withProfileLock(() => swapProfileFor(app, operator));
@@ -485,7 +452,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		const runArgs =
 			kind === "explore"
 				? [app]
-				: [task, app, ...(record ? ["--record"] : []), ...(noVision ? ["--no-vision"] : [])];
+				: [task, app, ...(rec.record ? ["--record"] : []), ...(rec.noVision ? ["--no-vision"] : [])];
 
 		let spawned: Spawned;
 		try {
@@ -523,10 +490,152 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			pid: spawned.pid,
 			kind,
 			app,
-			artifacts: job.artifacts,
+			artifacts: rec.artifacts,
 			profile: describeSwap(swap),
 			...(swap.fresh ? { signinNeeded: true } : {}),
 		};
+	}
+
+	/**
+	 * Start the queue's head if the host is free. Called wherever the lease can have just
+	 * freed — finalise, reap, startup — and safe to call anywhere else: an acquire against a
+	 * held lease refuses, and the drain simply stands down until the next finalise.
+	 *
+	 * `draining`/`redrain` exist because a drain is async (the profile swap awaits an app
+	 * quitting) and a job can end WHILE one is in flight — its finalise's drain call would
+	 * find the flag up and return, and with nothing scheduled after it the queue would stall
+	 * with a free host. A suppressed call instead marks `redrain`, and the running drain
+	 * loops once more before putting the flag down.
+	 */
+	let draining = false;
+	let redrain = false;
+	async function drain(): Promise<void> {
+		if (draining) {
+			redrain = true;
+
+			return;
+		}
+		draining = true;
+		try {
+			do {
+				redrain = false;
+				for (;;) {
+					const next = listQueued(root)[0];
+					if (!next) break;
+
+					const claim = acquire(
+						{ jobId: next.id, operator: next.operator, kind: next.kind, app: next.app, startedAt: new Date().toISOString(), pid: process.pid },
+						runnerDir,
+					);
+					// Busy again — a submit won the host back. Its finalise drains; stand down.
+					if (!claim.ok) break;
+					if (claim.reclaimed) log(`reclaimed lease from dead pid ${claim.reclaimed.pid} (job ${claim.reclaimed.jobId})`);
+
+					// `startedAt` is reset to NOW so elapsed time measures the run, not the wait;
+					// `queuedAt` keeps the wait auditable. A record that vanished mid-drain (hand
+					// deleted, disk gone) frees the claim and moves on.
+					const rec = updateJob(next.id, { state: "running", startedAt: new Date().toISOString() }, root);
+					if (!rec) {
+						release(runnerDir, next.id);
+						continue;
+					}
+					log(`job ${next.id} dequeued: ${rec.kind} ${rec.app} (operator ${rec.operator}, ${listQueued(root).length} still queued)`);
+
+					const res = await startJob(rec);
+					// Started: the host is busy and its finalise owns the next drain.
+					if (res.ok) break;
+					// A queued job that cannot start must not wedge the ones behind it: startJob
+					// already marked it failed and released, so the loop offers the host to the next.
+					log(`queued job ${next.id} failed to start: ${"error" in res ? res.error : "unknown"}`);
+				}
+			} while (redrain);
+		} finally {
+			draining = false;
+		}
+	}
+
+	async function submit(params: Params): Promise<RunnerResponse> {
+		if (params.kind !== undefined && params.kind !== "explore" && params.kind !== "task")
+			return { ok: false, error: `kind must be "task" or "explore", got ${JSON.stringify(params.kind)}` };
+		const kind: JobKind = params.kind === "explore" ? "explore" : "task";
+		const app = String(params.app ?? "").trim();
+		// Verbatim, start to finish. `auditTaskPrompt` in agent.ts is the authoritative gate
+		// and refuses a hinted prompt there (exit 2, visible in the job log); rewriting or
+		// pre-screening the text here would put a second, divergent copy of that rule on the
+		// wire — and the whole value of the gate is that there is exactly one.
+		const task = typeof params.task === "string" ? params.task : "";
+		const operator = String(params.operator ?? "unknown").trim() || "unknown";
+		if (!app) return { ok: false, error: "app is required" };
+		if (kind === "task" && !task.trim()) return { ok: false, error: "task is required" };
+
+		// Before acquire(), not after: every return past this point has to release the lease, and
+		// a validation branch that forgets to leaves the Mac permanently busy with no run on it.
+		const record = flag(params, "record");
+		const noVision = flag(params, "noVision");
+		const queue = flag(params, "queue");
+		if (typeof record !== "boolean") return record;
+		if (typeof noVision !== "boolean") return noVision;
+		if (typeof queue !== "boolean") return queue;
+
+		const id = mintJobId(kind, app);
+		const claim = acquire(
+			{ jobId: id, operator, kind, app, startedAt: new Date().toISOString(), pid: process.pid },
+			runnerDir,
+		);
+		if (!claim.ok) {
+			// The lease is a mutex over the DRIVER and stays one; the registry can hold any
+			// number of queued records. `queue: false` keeps the refusal, because it is the
+			// answer `--host auto`'s race depends on: a dispatcher walking idle hosts needs
+			// "someone beat you to it" to mean "ask the next Mac", not "joined a line here".
+			if (!queue)
+				return {
+					ok: false,
+					error: claim.reason,
+					busy: true,
+					operator: claim.holder.lease.operator,
+					app: claim.holder.lease.app,
+					kind: claim.holder.lease.kind,
+					jobId: claim.holder.lease.jobId,
+					elapsedSec: claim.holder.heldSec,
+				};
+
+			const job = createJob({ id, kind, app, task, operator, record, noVision, queued: true }, root);
+			// 1-based place in the drain order. Ids are minted here, monotonic within this
+			// process, and the drain serves oldest-first — so the index is the wait.
+			const position = listQueued(root).findIndex((q) => q.id === id) + 1;
+			log(`job ${id} queued: ${kind} ${app} (operator ${operator}, position ${position} behind ${claim.holder.lease.jobId})`);
+
+			return {
+				ok: true,
+				jobId: id,
+				queued: true,
+				position,
+				kind,
+				app,
+				artifacts: job.artifacts,
+				behind: {
+					operator: claim.holder.lease.operator,
+					app: claim.holder.lease.app,
+					kind: claim.holder.lease.kind,
+					jobId: claim.holder.lease.jobId,
+					elapsedSec: claim.holder.heldSec,
+				},
+			};
+		}
+		if (claim.reclaimed) log(`reclaimed lease from dead pid ${claim.reclaimed.pid} (job ${claim.reclaimed.jobId})`);
+
+		// The registry write itself can fail — ENOSPC, EACCES — and handle()'s generic catch
+		// knows nothing about the lease. Left held it names pid=<this runner>, which is always
+		// alive, so reap() never reclaims it and the host stays busy until a runner restart.
+		let job: JobRecord;
+		try {
+			job = createJob({ id, kind, app, task, operator, record, noVision }, root);
+		} catch (e) {
+			release(runnerDir, id);
+			throw e;
+		}
+
+		return startJob(job);
 	}
 
 	/**
@@ -843,8 +952,19 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		const tcc = perms
 			? { tccOk: perms.accessibility && perms.screenRecording && stale.length === 0, permissions: perms, ...(stale.length ? { staleGrants: stale } : {}) }
 			: {};
+		// The queue rides on both states. On busy it is the wait an operator is deciding
+		// against; on idle a non-empty queue is a drain in flight (the swap takes seconds),
+		// and hiding it would make those jobs unfindable from the fleet panel.
+		const queued = listQueued(root).map((q) => ({
+			jobId: q.id,
+			operator: q.operator,
+			app: q.app,
+			kind: q.kind,
+			...(q.queuedAt ? { queuedAt: q.queuedAt } : {}),
+		}));
+		const queue = queued.length ? { queue: queued } : {};
 		const { holder } = inspect(runnerDir);
-		if (!holder) return { ok: true, state: "idle", ...tcc };
+		if (!holder) return { ok: true, state: "idle", ...tcc, ...queue };
 
 		return {
 			ok: true,
@@ -855,6 +975,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			kind: holder.lease.kind,
 			elapsedSec: holder.heldSec,
 			...tcc,
+			...queue,
 		};
 	}
 
@@ -867,6 +988,14 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		if (!id) return { ok: false, error: "nothing is running" };
 		const rec = readJob(id, root);
 		if (!rec) return { ok: false, error: `unknown job ${id}` };
+		// A queued job has no child to signal — leaving the line is a registry write. `stopped`
+		// rather than a deletion, because a cancelled request is still a thing that happened.
+		if (rec.state === "queued") {
+			updateJob(id, { state: "stopped", exitCode: null, endedAt: new Date().toISOString() }, root);
+			log(`job ${id} cancelled while queued`);
+
+			return { ok: true, jobId: id, state: "stopped", note: "cancelled while queued" };
+		}
 		if (rec.state !== "running") return { ok: true, jobId: id, state: rec.state, note: "already finished" };
 
 		stopping.add(id);
@@ -1035,7 +1164,11 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 				send(conn, { ok: true, jobId: id, chunk: chunk.bytes.toString("base64"), nextOffset: offset });
 
 			const rec = readJob(id, root);
-			const running = rec?.state === "running" && pidAlive(rec.pid);
+			// A queued job is alive in the only sense that matters to a follower: its log will
+			// grow once the drain starts it. Ending the stream here would make "dispatch, then
+			// follow" impossible for exactly the jobs the queue exists for.
+			const waiting = rec?.state === "queued";
+			const running = (rec?.state === "running" && pidAlive(rec.pid)) || waiting;
 			if (!follow || (!running && chunk.bytes.length === 0)) {
 				send(conn, {
 					ok: true,
@@ -1193,6 +1326,12 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		});
 	});
 	log(`listening on ${socketPath}`);
+
+	// Queued records survive a restart by construction (they are files); what does not survive
+	// is the finalise whose drain would have started them. One drain here picks the queue back
+	// up — after the socket is listening, so a slow profile swap cannot delay the first status
+	// poll, and after the orphan sweep above, which is what freed the lease it will claim.
+	if (listQueued(root).length) void drain();
 
 	return {
 		socketPath,

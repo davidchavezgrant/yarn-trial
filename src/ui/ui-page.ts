@@ -135,6 +135,8 @@ export const CHROME = String.raw`<meta charset="utf-8">
      rather than being clipped to the row width. */
   .fdetail, .freason { font-size:11.5px; color:var(--dim); word-break:break-word; }
   .freason { color:#e0a97e; }
+  .fqueue { display:flex; gap:6px; align-items:center; font-size:11.5px; color:var(--dim); padding-left:8px; }
+  .fqueue span { flex:1; }
   #creds { font-size:12px; color:var(--dim); }
   #creds .crow { padding:3px 0; word-break:break-all; }
   #creds input { margin-top:6px; }
@@ -942,6 +944,13 @@ function renderFleet() {
           (r.state !== 'busy' && appTarget ? '<button class="mini" data-fact="delete" data-mac="' + esc(r.name) + '">Delete ' + esc(appTarget) + '…</button>' : '') +
         '</div>') +
       (r.detail ? '<div class="fdetail">' + esc(r.detail) + '</div>' : '') +
+      // The line behind the current run, one row per waiting job. Cancel is per-row and NOT
+      // behind confirm(): a queued job has touched nothing yet, so cancelling it destroys
+      // nothing — it is the one fleet action that is safe from a single click.
+      (r.queue || []).map(q =>
+        '<div class="fqueue"><span>⏳ ' + esc(q.detail) + '</span>' +
+        (signinBusy ? '' : '<button class="mini" data-fact="cancelq" data-mac="' + esc(r.name) + '" data-job="' + esc(q.jobId) + '">Cancel</button>') +
+        '</div>').join('') +
       (r.reason ? '<div class="freason">' + esc(r.reason) + '</div>' : '') +
     '</div>').join('') +
     (signinMsg ? '<div class="' + (signinMsg.ok ? 'fdetail' : 'freason') + '">' + esc(signinMsg.text) + '</div>' : '');
@@ -952,10 +961,12 @@ function renderFleet() {
   offers = view.offers || [];
   renderJobs();
   // The fold's badge: a busy Mac must stay visible while the panel is closed, or folding it
-  // hides the one state that explains why a dispatch was refused.
+  // hides the one state that explains why a dispatch was refused. Queued jobs ride along —
+  // "2 busy · 3 queued" is the whole fleet picture in one chip.
   const busy = view.rows.filter((r) => r.state === 'busy').length;
-  el('fleetsum').style.display = busy ? 'inline-block' : 'none';
-  el('fleetsum').textContent = busy ? busy + ' busy' : '';
+  const waiting = view.rows.reduce((n, r) => n + (r.queue ? r.queue.length : 0), 0);
+  el('fleetsum').style.display = busy || waiting ? 'inline-block' : 'none';
+  el('fleetsum').textContent = (busy ? busy + ' busy' : '') + (busy && waiting ? ' · ' : '') + (waiting ? waiting + ' queued' : '');
   renderAttach();
 }
 
@@ -975,7 +986,11 @@ function renderAttach() {
   box.style.display = live.length ? 'block' : 'none';
   box.innerHTML = live.map(o => {
     const row = fleetRows[o.host];
-    return '<div class="offer"><span>' + esc(o.host) + ' — ' + esc((row && row.detail) || o.app || o.jobId) + '</span>' +
+    // A queued offer describes ITSELF (operator · app), never the row — the row's detail is
+    // the run in front of it, and labelling the wait with someone else's run invites a
+    // misdirected Follow.
+    const what = o.queued ? ((o.operator || '?') + ' · ' + (o.app || o.jobId) + ' — queued') : ((row && row.detail) || o.app || o.jobId);
+    return '<div class="offer"><span>' + esc(o.host) + ' — ' + esc(what) + '</span>' +
       '<button class="mini" data-follow="' + esc(o.jobId) + '" data-host="' + esc(o.host) + '" data-app="' + esc(o.app || '') + '">Follow</button>' +
       '<button class="mini" data-dismiss="' + esc(o.jobId) + '">Dismiss</button></div>';
   }).join('');
@@ -1359,6 +1374,12 @@ el('fleet').addEventListener('click', async (e) => {
     say(r.ok, (r.ok ? '✓ ' : '✗ ') + r.message);
     line((r.ok ? '✓ ' : '✗ ') + r.message, null);
   };
+  // Cancel-in-queue skips confirm(): the job never started, so there is nothing to undo.
+  // It still runs through ask() like every panel action — one in flight at a time, outcome
+  // in the shared transient plus a durable line in the log pane.
+  if (act === 'cancelq') {
+    return ask('cancelling ' + b.dataset.job + ' on ' + mac + '…', () => bus.cancelQueued(mac, b.dataset.job));
+  }
   if (act === 'install') { installForm = { mac: mac, name: sel && !selUrl() ? sel : el('q').value.trim(), url: '' }; renderFleet(); return; }
   if (act === 'install-cancel') { installForm = null; renderFleet(); return; }
   if (act === 'install-go') {

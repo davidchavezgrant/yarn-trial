@@ -14,6 +14,15 @@ import { DEFAULT_SSH_TIMEOUT_MS, firstLine, lastFrame, runnerArgv, runSsh, type 
 
 export type FleetState = "idle" | "busy" | "unknown";
 
+/** One waiting job, as the runner's `status` reports it. */
+export interface FleetQueueEntry {
+	jobId: string;
+	operator?: string;
+	app?: string;
+	kind?: string;
+	queuedAt?: string;
+}
+
 export interface FleetRow {
 	name: string;
 	reachable: boolean;
@@ -31,6 +40,12 @@ export interface FleetRow {
 	 * wire up.
 	 */
 	jobId?: string;
+	/**
+	 * Jobs waiting behind the current run, oldest first. Depth is what an operator decides
+	 * against ("two ahead of me — use another Mac"); the entries are what the panel renders
+	 * with a cancel button, so both cross rather than just a count.
+	 */
+	queue?: FleetQueueEntry[];
 	/**
 	 * Whether the remote has its Accessibility and Screen Recording grants. A host can be
 	 * perfectly reachable and still unable to run anything, and that failure is invisible
@@ -92,6 +107,20 @@ async function hostStatus(host: HostEntry, run: SshRunner, timeoutMs: number): P
 
 	const state: FleetState = parsed?.state === "idle" || parsed?.state === "busy" ? parsed.state : "unknown";
 
+	// Shape-checked like everything else off the wire: an entry with no jobId cannot be
+	// followed or cancelled, so it is dropped rather than rendered as a dead row.
+	const queue = Array.isArray(parsed?.queue)
+		? parsed.queue
+				.filter((q: unknown): q is Record<string, unknown> => !!q && typeof q === "object" && typeof (q as any).jobId === "string")
+				.map((q) => ({
+					jobId: String(q.jobId),
+					...(typeof q.operator === "string" ? { operator: q.operator } : {}),
+					...(typeof q.app === "string" ? { app: q.app } : {}),
+					...(typeof q.kind === "string" ? { kind: q.kind } : {}),
+					...(typeof q.queuedAt === "string" ? { queuedAt: q.queuedAt } : {}),
+				}))
+		: [];
+
 	return {
 		name: host.name,
 		reachable: true,
@@ -100,6 +129,7 @@ async function hostStatus(host: HostEntry, run: SshRunner, timeoutMs: number): P
 		...(typeof parsed?.app === "string" ? { app: parsed.app } : {}),
 		...(typeof parsed?.elapsedSec === "number" ? { elapsedSec: parsed.elapsedSec } : {}),
 		...(typeof parsed?.jobId === "string" ? { jobId: parsed.jobId } : {}),
+		...(queue.length ? { queue } : {}),
 		...(typeof parsed?.tccOk === "boolean" ? { tccOk: parsed.tccOk } : {}),
 		...(Array.isArray(parsed?.staleGrants) && parsed.staleGrants.length ? { staleGrants: parsed.staleGrants.map(String) } : {}),
 		...(state === "unknown" ? { reason: `runner reported state ${JSON.stringify(parsed?.state)}` } : {}),
@@ -133,13 +163,26 @@ export function pickIdleHost(rows: FleetRow[]): FleetRow | undefined {
 	return rows.find((r) => r.reachable && r.state === "idle");
 }
 
+/**
+ * Host to QUEUE on when nobody is idle: the busy host with the shortest line, ties going to
+ * inventory order. Same advisory nature as `pickIdleHost` — the length read here can be
+ * stale by a round trip, and the submit's `position` reply is the truth.
+ */
+export function pickShortestQueue(rows: FleetRow[]): FleetRow | undefined {
+	const busy = rows.filter((r) => r.reachable && r.state === "busy");
+	if (!busy.length) return undefined;
+
+	return busy.reduce((best, r) => ((r.queue?.length ?? 0) < (best.queue?.length ?? 0) ? r : best));
+}
+
 /** `./run hosts` — the fleet as a table. The `reason` column is the whole value of this view. */
 async function main(): Promise<void> {
 	const rows = await fleetStatus();
 	for (const r of rows) {
 		// The job id is here because it is the argument to the next command someone types:
 		// seeing a busy host is only useful if you can follow or stop the run on it.
-		const busy = r.state === "busy" ? ` ${r.operator ?? "?"} · ${r.app ?? "?"} · ${r.elapsedSec ?? 0}s${r.jobId ? ` · ${r.jobId}` : ""}` : "";
+		const line = r.queue?.length ? ` · +${r.queue.length} queued` : "";
+		const busy = r.state === "busy" ? ` ${r.operator ?? "?"} · ${r.app ?? "?"} · ${r.elapsedSec ?? 0}s${r.jobId ? ` · ${r.jobId}` : ""}${line}` : "";
 		const tcc = r.staleGrants?.length
 			? ` [${r.staleGrants.join(" + ")} GRANTED TOO LATE — ./run provision --restart]`
 			: r.tccOk === false

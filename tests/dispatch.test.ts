@@ -173,14 +173,15 @@ test("dispatch__TriesNextIdleHost__When__FirstHostLostTheClaimRace", async () =>
 	assert.deepEqual(calls.filter((c) => subcommand(c.argv) === "submit").map((c) => c.host), ["mac1", "mac3"]);
 });
 
-test("dispatch__RefusesWithHolderDetails__When__WholeFleetIsBusy", async () => {
+test("dispatch__RefusesWithHolderDetails__When__WholeFleetIsBusyAndQueueingIsDeclined", async () => {
 	// "no host available" is unactionable. Who has it and for how long is what tells an
-	// operator whether to wait two minutes or go and ask someone.
+	// operator whether to wait two minutes or go and ask someone. `queue: false` is the
+	// caller saying it wants that refusal rather than a place in line.
 	const { run, calls } = recorder((h) =>
 		h.name === "mac3" ? { code: 255, stdout: "", stderr: "ssh: connect to host 10.0.0.3 port 22: Operation timed out\n" } : ok({ state: "busy", operator: h.name === "mac1" ? "david" : "jasper", app: "Yarn", elapsedSec: 1800 }),
 	);
 
-	const result = await dispatch({ host: "auto", app: "Yarn", task: "anything", inventory: FLEET, run, ...noSync });
+	const result = await dispatch({ host: "auto", app: "Yarn", task: "anything", queue: false, inventory: FLEET, run, ...noSync });
 
 	assert.equal(result.ok, false);
 	assert.equal(!result.ok && result.attempts.length, 3);
@@ -188,6 +189,68 @@ test("dispatch__RefusesWithHolderDetails__When__WholeFleetIsBusy", async () => {
 	assert.equal(!result.ok && result.attempts[1].busy?.operator, "jasper");
 	assert.match(!result.ok ? (result.attempts[2].reason ?? "") : "", /Operation timed out/);
 	assert.equal(calls.some((c) => subcommand(c.argv) === "submit"), false, "a submit was sent to a fleet with no idle host");
+});
+
+test("dispatch__QueuesOnTheShortestLine__When__WholeFleetIsBusy", async () => {
+	// The default. mac1 already has one job waiting; mac2 is busy with an empty line, so the
+	// submit goes there — with the queue flag, which is what turns the lease's refusal into a
+	// place in line.
+	const { run, calls } = recorder((h, argv) => {
+		if (subcommand(argv) === "status") {
+			if (h.name === "mac1") return ok({ state: "busy", operator: "david", app: "Yarn", elapsedSec: 60, queue: [{ jobId: "waiting-1", operator: "eve", app: "Yarn", kind: "task" }] });
+			if (h.name === "mac2") return ok({ state: "busy", operator: "jasper", app: "Yarn", elapsedSec: 1800 });
+
+			return { code: 255, stdout: "", stderr: "ssh: connect to host 10.0.0.3 port 22: Operation timed out\n" };
+		}
+
+		return ok({ jobId: "j-q", queued: true, position: 1, artifacts: { log: "out/jobs/j-q/log.txt" }, behind: { operator: "jasper", app: "Yarn", kind: "task", jobId: "j-running", elapsedSec: 1800 } });
+	});
+
+	const result = await dispatch({ host: "auto", app: "Yarn", task: "anything", inventory: FLEET, run, ...noSync });
+
+	assert.equal(result.ok, true);
+	assert.equal(result.ok && result.host.name, "mac2", "the shorter line wins");
+	assert.equal(result.ok && result.queued, true);
+	assert.equal(result.ok && result.position, 1);
+	assert.equal(result.ok && result.behind?.operator, "jasper");
+	const submits = calls.filter((c) => subcommand(c.argv) === "submit");
+	assert.deepEqual(submits.map((c) => c.host), ["mac2"]);
+	// The queue flag crossed inside the spec: without it the busy lease refuses.
+	assert.equal(specOf(submits[0].argv).queue, true);
+});
+
+test("dispatch__AsksIdleHostsWithoutTheQueueFlag__When__QueueingIsWanted", async () => {
+	// Losing the advisory race on an idle host must mean "ask the NEXT idle host", not "join
+	// the first one's line while a free Mac sits below it" — so the walk itself never queues.
+	const { run, calls } = recorder((h, argv) => {
+		if (subcommand(argv) === "status") return h.name === "mac2" ? ok({ state: "busy", operator: "jasper", app: "Yarn", elapsedSec: 90 }) : ok({ state: "idle" });
+		if (h.name === "mac1") return refused({ error: "busy: jasper, task Yarn, 4s", busy: true, operator: "jasper", app: "Yarn", kind: "task", jobId: "j-1", elapsedSec: 4 });
+
+		return ok({ jobId: "j-2", pid: 7, artifacts: { log: "out/jobs/j-2/log.txt" } });
+	});
+
+	const result = await dispatch({ host: "auto", app: "Yarn", task: "anything", inventory: FLEET, run, ...noSync });
+
+	assert.equal(result.ok, true);
+	assert.equal(result.ok && result.host.name, "mac3");
+	assert.equal(result.ok && result.queued, undefined);
+	for (const c of calls.filter((c) => subcommand(c.argv) === "submit"))
+		assert.notEqual(specOf(c.argv)?.queue, true, `the idle walk queued on ${c.host}`);
+});
+
+test("dispatch__QueuesOnTheNamedHost__When__ItIsBusy", async () => {
+	// A named host is a decision already made; busy means wait there, not refuse.
+	const { run } = recorder((_h, argv) =>
+		subcommand(argv) === "status"
+			? ok({ state: "busy", operator: "david", app: "Yarn", elapsedSec: 60 })
+			: ok({ jobId: "j-q", queued: true, position: 2, artifacts: { log: "out/jobs/j-q/log.txt" } }),
+	);
+
+	const result = await dispatch({ host: "mac1", app: "Yarn", task: "anything", inventory: FLEET, run, ...noSync });
+
+	assert.equal(result.ok, true);
+	assert.equal(result.ok && result.queued, true);
+	assert.equal(result.ok && result.position, 2);
 });
 
 test("dispatch__RefusesWithoutALocalFallback__When__AutoFindsNoIdleHost", async () => {

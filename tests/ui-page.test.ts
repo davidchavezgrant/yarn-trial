@@ -757,6 +757,30 @@ test("loadFleet__OffersOnlyUsableActions__When__RowsAndSelectionDiffer", async (
 	assert.ok(ui.nodes.fleet.innerHTML.includes('data-fact="install"'), "install has no app dependency");
 });
 
+test("loadFleet__RendersTheQueueWithCancel__When__JobsAreWaiting", async () => {
+	const rows = [
+		{
+			name: "mac1",
+			state: "busy",
+			detail: "david · Yarn · 63s",
+			queue: [
+				{ jobId: "j-2", detail: "sam · explore Yarn · waiting 3m 04s" },
+				{ jobId: "j-3", detail: "eve · task Yarn · waiting" },
+			],
+		},
+		{ name: "mac2", state: "busy", detail: "aman · Yarn · 10s" },
+	];
+	const ui = mount({ loadFleet: async () => ({ rows, offers: [] }) });
+	await settle();
+	await ui.loadFleet();
+	const html = ui.nodes.fleet.innerHTML;
+	assert.ok(html.includes("sam · explore Yarn · waiting 3m 04s"), "each waiting job renders its own row");
+	assert.ok(html.includes('data-fact="cancelq" data-mac="mac1" data-job="j-2"'), "a queued row offers cancel");
+	assert.ok(html.includes('data-job="j-3"'));
+	// The fold badge counts both dimensions — a closed panel must still say work is stacked.
+	assert.equal(ui.nodes.fleetsum.textContent, "2 busy · 2 queued");
+});
+
 test("loadRuns__OffersTheRender__When__TheSourceArtifactsExistLocally", async () => {
 	// A render button on a card whose frames were never pulled is an error taught as a
 	// feature — it exists only when the render could actually complete.

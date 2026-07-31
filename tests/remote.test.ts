@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { enrollHosts } from "../src/remote/control/enroll.js";
-import { type FleetRow, fleetStatus, pickIdleHost } from "../src/remote/control/fleet.js";
+import { type FleetRow, fleetStatus, pickIdleHost, pickShortestQueue } from "../src/remote/control/fleet.js";
 import { type HostEntry, type Inventory, HOSTS_SCHEMA, importHosts, loadHosts, parseRtsz, resolveHost } from "../src/remote/control/hosts.js";
 import { applyCredentials, parseCredentials, TEAM_SCHEMA } from "../src/remote/control/team.js";
 import { loadRunnerEnv } from "../src/remote/runner/spawn.js";
@@ -421,6 +421,49 @@ test("pickIdleHost__SkipsUnusableRows__When__FleetIsPartlyBusy", () => {
 	];
 	assert.equal(pickIdleHost(rows)?.name, "mac3");
 	assert.equal(pickIdleHost(rows.slice(0, 2)), undefined);
+});
+
+test("fleetStatus__CarriesTheQueue__When__TheRunnerReportsOne", async () => {
+	const rows = await fleetStatus({
+		inventory: inventory(host("mac1", "10.0.0.1")),
+		timeoutMs: 500,
+		run: async () => ({
+			code: 0,
+			stdout: `${JSON.stringify({
+				state: "busy",
+				operator: "david",
+				app: "Yarn",
+				elapsedSec: 60,
+				jobId: "j-running",
+				queue: [
+					{ jobId: "j-2", operator: "sam", app: "Yarn", kind: "explore", queuedAt: "2026-07-31T11:56:56Z" },
+					{ notAJob: true },
+				],
+			})}\n`,
+			stderr: "",
+		}),
+	});
+
+	// The malformed entry is dropped — an id-less row can be neither followed nor cancelled.
+	assert.deepEqual(rows[0].queue, [{ jobId: "j-2", operator: "sam", app: "Yarn", kind: "explore", queuedAt: "2026-07-31T11:56:56Z" }]);
+});
+
+test("pickShortestQueue__PrefersTheShortestLine__When__NobodyIsIdle", () => {
+	const rows: FleetRow[] = [
+		{ name: "mac1", reachable: true, state: "busy", queue: [{ jobId: "a" }, { jobId: "b" }] },
+		{ name: "mac2", reachable: true, state: "busy" },
+		{ name: "mac3", reachable: false, state: "unknown" },
+	];
+	assert.equal(pickShortestQueue(rows)?.name, "mac2");
+	// Ties go to inventory order; an empty or unreachable fleet yields nothing.
+	assert.equal(pickShortestQueue([rows[2]]), undefined);
+	assert.equal(
+		pickShortestQueue([
+			{ name: "mac1", reachable: true, state: "busy" },
+			{ name: "mac2", reachable: true, state: "busy" },
+		])?.name,
+		"mac1",
+	);
 });
 
 test("parseCredentials__Rejects__When__BundleIsUnusable", () => {

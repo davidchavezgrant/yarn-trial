@@ -210,11 +210,19 @@ export function isRemoteHost(host: string | undefined): boolean {
 	return !!host && host.trim().toLowerCase() !== LOCAL_HOST;
 }
 
+export interface FleetQueueView {
+	jobId: string;
+	/** `sam · explore Yarn · waiting 3m 04s`, ready for a row. */
+	detail: string;
+}
+
 export interface FleetRowView {
 	name: string;
 	state: FleetRow["state"];
 	/** Who/what/how long, when busy. Empty otherwise. */
 	detail: string;
+	/** Jobs waiting behind the current run, oldest first, each with a cancellable id. */
+	queue?: FleetQueueView[];
 	/** Why the row is degraded. The column this whole panel exists for. */
 	reason?: string;
 	/** Present only when the grants were actually reported; `false` is a hard warning. */
@@ -237,16 +245,31 @@ export interface FleetRowView {
  * decision an operator makes from this panel — wait, or go and ask whoever holds the box — is
  * entirely a function of that duration.
  */
-export function describeFleetRow(row: FleetRow): FleetRowView {
+export function describeFleetRow(row: FleetRow, now: () => number = Date.now): FleetRowView {
 	const detail =
 		row.state === "busy"
 			? [row.operator ?? "?", row.app ?? "?", formatElapsed(row.elapsedSec ?? 0)].join(" · ")
 			: "";
+	// The wait is computed from queuedAt rather than reported by the runner, because the
+	// runner's status is a snapshot and a queue entry's age keeps growing between polls.
+	const queue = (row.queue ?? []).map((q) => {
+		const since = q.queuedAt ? Date.parse(q.queuedAt) : Number.NaN;
+
+		return {
+			jobId: q.jobId,
+			detail: [
+				q.operator ?? "?",
+				`${q.kind ?? "task"} ${q.app ?? "?"}`,
+				Number.isFinite(since) ? `waiting ${formatElapsed(Math.max(0, (now() - since) / 1000))}` : "waiting",
+			].join(" · "),
+		};
+	});
 
 	return {
 		name: row.name,
 		state: row.state,
 		detail,
+		...(queue.length ? { queue } : {}),
 		...(row.reason ? { reason: row.reason } : {}),
 		...(typeof row.tccOk === "boolean" ? { tccOk: row.tccOk } : {}),
 		...(row.staleGrants?.length ? { staleGrants: row.staleGrants } : {}),
@@ -287,7 +310,9 @@ export async function fleetView(status: typeof fleetStatus = fleetStatus): Promi
 	try {
 		const rows = await status();
 
-		return { rows: rows.map(describeFleetRow), offers: attachOffers(rows) };
+		// Not `.map(describeFleetRow)`: its second parameter is a clock, and map would feed it
+		// the array index — every queue entry would read as waiting since 1970.
+		return { rows: rows.map((r) => describeFleetRow(r)), offers: attachOffers(rows) };
 	} catch (e) {
 		return { rows: [], offers: [], error: (e as Error).message };
 	}
@@ -521,6 +546,34 @@ export async function installAppView(
 }
 
 /**
+ * Cancel a job waiting in a host's queue, from the fleet panel. The runner's `stop` verb
+ * already knows a queued job has no child to signal and just marks it stopped; this wraps
+ * that in the same `{ok, message}` shape every other panel action answers with.
+ */
+export async function cancelQueuedView(
+	hostName: string,
+	jobId: string,
+	load: () => Inventory = loadHosts,
+	stop: typeof stopRemote = stopRemote,
+): Promise<ActionView> {
+	const host = namedHost(hostName, load);
+	if ("ok" in host) return host;
+	if (!jobId.trim()) return { ok: false, message: "No job id — refresh the fleet panel and try again." };
+
+	let res: StopResult;
+	try {
+		res = await stop(host.name, jobId);
+	} catch (e) {
+		return { ok: false, message: (e as Error).message };
+	}
+	if (!res.ok) return { ok: false, message: `${host.name}: ${res.error ?? "the runner refused"}` };
+
+	// The runner distinguishes "cancelled while queued" from "stopped a running job" in its
+	// note; pass that through, since the second can happen if the drain won the race.
+	return { ok: true, message: `${jobId} on ${host.name}: ${res.note ?? (res.state === "stopped" ? "cancelled" : `now ${res.state ?? "stopped"}`)}` };
+}
+
+/**
  * Forget the saved Screen Sharing password for a Mac. Local by nature — the item lives in THIS
  * operator's login keychain — so unlike its siblings above, nothing here crosses ssh.
  */
@@ -553,6 +606,8 @@ export interface AttachOffer {
 	app?: string;
 	operator?: string;
 	elapsedSec?: number;
+	/** The job is waiting in the host's line, not running yet. Follow works either way. */
+	queued?: boolean;
 }
 
 /**
@@ -568,15 +623,27 @@ export interface AttachOffer {
  * on mac2 and what are they doing" is the same question the panel exists to answer.
  */
 export function attachOffers(rows: FleetRow[]): AttachOffer[] {
-	return rows
-		.filter((r) => r.state === "busy" && r.jobId)
-		.map((r) => ({
+	// Queued jobs are offered too: `logs --follow` on the far side waits through the queued
+	// state, so following one shows nothing until the drain starts it and then streams the
+	// run from its first line — which is exactly re-attaching to work you dispatched earlier.
+	return rows.flatMap((r) => [
+		...(r.state === "busy" && r.jobId
+			? [{
+					host: r.name,
+					jobId: r.jobId,
+					...(r.app ? { app: r.app } : {}),
+					...(r.operator ? { operator: r.operator } : {}),
+					...(r.elapsedSec !== undefined ? { elapsedSec: r.elapsedSec } : {}),
+				}]
+			: []),
+		...(r.queue ?? []).map((q) => ({
 			host: r.name,
-			jobId: r.jobId as string,
-			...(r.app ? { app: r.app } : {}),
-			...(r.operator ? { operator: r.operator } : {}),
-			...(r.elapsedSec !== undefined ? { elapsedSec: r.elapsedSec } : {}),
-		}));
+			jobId: q.jobId,
+			queued: true,
+			...(q.app ? { app: q.app } : {}),
+			...(q.operator ? { operator: q.operator } : {}),
+		})),
+	]);
 }
 
 /**

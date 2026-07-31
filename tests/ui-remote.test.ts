@@ -155,6 +155,59 @@ test("attachOffers__FindsTheLiveJob__When__AHostIsBusy", () => {
 	assert.deepEqual(offers, [{ host: "mac2", jobId: "explore-j1", app: "Yarn", operator: "david", elapsedSec: 900 }]);
 });
 
+test("attachOffers__IncludesQueuedJobs__When__AHostHasALine", () => {
+	// A queued job is followable — the remote's log stream waits through the queued state —
+	// so it is offered like a live one, marked queued so the row can say "waiting".
+	const offers = attachOffers([
+		{
+			name: "mac2",
+			reachable: true,
+			state: "busy",
+			jobId: "j-running",
+			app: "Yarn",
+			operator: "david",
+			elapsedSec: 60,
+			queue: [{ jobId: "j-waiting", operator: "sam", app: "Yarn", kind: "explore" }],
+		},
+	]);
+
+	assert.deepEqual(offers, [
+		{ host: "mac2", jobId: "j-running", app: "Yarn", operator: "david", elapsedSec: 60 },
+		{ host: "mac2", jobId: "j-waiting", queued: true, app: "Yarn", operator: "sam" },
+	]);
+});
+
+test("describeFleetRow__RendersTheQueue__When__JobsAreWaiting", () => {
+	const now = Date.parse("2026-07-31T12:00:00Z");
+	const view = describeFleetRow(
+		{
+			name: "mac2",
+			reachable: true,
+			state: "busy",
+			operator: "david",
+			app: "Yarn",
+			elapsedSec: 60,
+			jobId: "j-running",
+			queue: [
+				{ jobId: "j-2", operator: "sam", app: "Yarn", kind: "explore", queuedAt: "2026-07-31T11:56:56Z" },
+				{ jobId: "j-3", operator: "eve", app: "Yarn", kind: "task" },
+			],
+		},
+		() => now,
+	);
+
+	assert.deepEqual(view.queue, [
+		{ jobId: "j-2", detail: "sam · explore Yarn · waiting 3m 04s" },
+		// No queuedAt (an older runner): still rendered, without a made-up age.
+		{ jobId: "j-3", detail: "eve · task Yarn · waiting" },
+	]);
+});
+
+test("describeFleetRow__OmitsTheQueue__When__NobodyIsWaiting", () => {
+	const view = describeFleetRow({ name: "mac1", reachable: true, state: "busy", operator: "david", app: "Yarn", elapsedSec: 60 });
+	assert.equal(view.queue, undefined);
+});
+
 test("push__EmitsWholeLines__When__ChunkBoundarySplitsALine", () => {
 	// follow() delivers byte-boundary chunks; the page classifies each onLine by regex. A step
 	// line split across two calls matches neither half.

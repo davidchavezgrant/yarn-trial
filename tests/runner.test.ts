@@ -9,6 +9,7 @@ import {
 	createJob,
 	type JobRecord,
 	listJobs,
+	listQueued,
 	mintJobId,
 	pidAlive,
 	readJob,
@@ -788,6 +789,196 @@ test("submit__SaysNothingAboutSignin__When__TheOperatorAlreadyOwnsTheApp", async
 			if (pid) try { process.kill(-pid, "SIGKILL"); } catch {}
 			await runner.close();
 		}
+	});
+});
+
+/**
+ * Like fakeSpawner, but each child exits quickly and on its own — the shape queue tests need,
+ * because the drain only runs when a run actually ENDS and killing detached pids from the
+ * test is a race the suite should not have to win.
+ */
+function quickSpawner(lifeSec = 0.3): { calls: Array<{ command: string; args: string[] }>; spawn: any } {
+	const calls: Array<{ command: string; args: string[] }> = [];
+
+	return {
+		calls,
+		spawn: (cmd: { command: string; args: string[] }, opts: { logFile: string }) => {
+			calls.push(cmd);
+			fs.appendFileSync(opts.logFile, "pretend agent output\n");
+			const child = spawn("/bin/sh", ["-c", `sleep ${lifeSec}`], { detached: true, stdio: "ignore" });
+			child.unref();
+
+			return { pid: child.pid as number, child };
+		},
+	};
+}
+
+test("submit__QueuesTheJob__When__TheHostIsBusyAndQueueIsAsked", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const prevData = process.env.YARN_RUNNER_DATA;
+		process.env.YARN_RUNNER_DATA = dir;
+		const spawner = fakeSpawner();
+		const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
+		let pid = 0;
+		try {
+			const [first] = await request(runner.socketPath, "submit", { kind: "task", app: "Yarn", task: "change the cursor type", operator: "dave" });
+			assert.equal(first.ok, true);
+			pid = first.pid;
+
+			const [second] = await request(runner.socketPath, "submit", { kind: "explore", app: "Yarn", operator: "sam", queue: true });
+			assert.equal(second.ok, true);
+			assert.equal(second.queued, true);
+			assert.equal(second.position, 1);
+			assert.equal(second.behind.jobId, first.jobId, "the reply names the run it is waiting behind");
+			assert.equal(spawner.calls.length, 1, "a queued job spawns nothing yet");
+			assert.equal(readJob(second.jobId)?.state, "queued");
+			assert.equal(readJob(second.jobId)?.pid, 0);
+
+			// A second queued job lands behind the first — the drain order is submission order.
+			const [third] = await request(runner.socketPath, "submit", { kind: "task", app: "Yarn", task: "open settings", operator: "eve", queue: true });
+			assert.equal(third.position, 2);
+
+			// Status reports the line so the fleet panel can render it.
+			const [status] = await request(runner.socketPath, "status");
+			assert.equal(status.state, "busy");
+			assert.deepEqual(status.queue.map((q: any) => q.jobId), [second.jobId, third.jobId]);
+			assert.equal(status.queue[0].operator, "sam");
+		} finally {
+			if (pid) try { process.kill(-pid, "SIGKILL"); } catch {}
+			await runner.close();
+			if (prevData === undefined) delete process.env.YARN_RUNNER_DATA;
+			else process.env.YARN_RUNNER_DATA = prevData;
+		}
+	});
+});
+
+test("submit__StillRefuses__When__TheHostIsBusyAndQueueIsNotAsked", async () => {
+	// `--host auto` depends on the refusal: "busy" means "ask the next Mac". Only an explicit
+	// queue flag opts into waiting here instead.
+	await withTempAsync("yr-serve-", async (dir) => {
+		const prevData = process.env.YARN_RUNNER_DATA;
+		process.env.YARN_RUNNER_DATA = dir;
+		const spawner = fakeSpawner();
+		const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
+		let pid = 0;
+		try {
+			const [first] = await request(runner.socketPath, "submit", { kind: "task", app: "Yarn", task: "change the cursor type", operator: "dave" });
+			pid = first.pid;
+			const [refused] = await request(runner.socketPath, "submit", { kind: "task", app: "Yarn", task: "open settings", operator: "sam" });
+			assert.equal(refused.ok, false);
+			assert.equal(refused.busy, true);
+		} finally {
+			if (pid) try { process.kill(-pid, "SIGKILL"); } catch {}
+			await runner.close();
+			if (prevData === undefined) delete process.env.YARN_RUNNER_DATA;
+			else process.env.YARN_RUNNER_DATA = prevData;
+		}
+	});
+});
+
+test("drain__StartsTheQueuedJob__When__TheRunningOneEnds", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const prevData = process.env.YARN_RUNNER_DATA;
+		process.env.YARN_RUNNER_DATA = dir;
+		const spawner = quickSpawner();
+		const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
+		try {
+			const [first] = await request(runner.socketPath, "submit", { kind: "task", app: "Yarn", task: "change the cursor type", operator: "dave" });
+			const [second] = await request(runner.socketPath, "submit", { kind: "task", app: "Yarn", task: "open settings", operator: "sam", queue: true });
+			assert.equal(second.queued, true);
+
+			// The first child exits on its own (~0.3s); the drain must then spawn the second.
+			await waitFor("the queued job to start", () => spawner.calls.length === 2, 10_000);
+			// No assertion on a transient "running" state: the drained child lives ~0.3s and may
+			// already be done by the first poll. The durable fields carry the story instead.
+			await waitFor("the drained job to finish", () => readJob(second.jobId)?.state === "done", 10_000);
+			const rec = readJob(second.jobId);
+			assert.ok(rec, "the drained job's record survives");
+			assert.ok(rec.pid > 0, "the dequeued job ran under its own child pid");
+			assert.ok(rec.queuedAt, "the wait stays auditable");
+			assert.ok(Date.parse(rec.startedAt) >= Date.parse(rec.queuedAt ?? ""), "startedAt is reset at spawn time");
+			assert.equal(readJob(first.jobId)?.state, "done");
+			await waitFor("the lease to free", () => inspect(dir).holder === undefined, 5_000);
+		} finally {
+			await runner.close();
+			if (prevData === undefined) delete process.env.YARN_RUNNER_DATA;
+			else process.env.YARN_RUNNER_DATA = prevData;
+		}
+	});
+});
+
+test("stop__CancelsTheQueuedJob__When__ItHasNotStarted", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const prevData = process.env.YARN_RUNNER_DATA;
+		process.env.YARN_RUNNER_DATA = dir;
+		const spawner = fakeSpawner();
+		const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
+		let pid = 0;
+		try {
+			const [first] = await request(runner.socketPath, "submit", { kind: "task", app: "Yarn", task: "change the cursor type", operator: "dave" });
+			pid = first.pid;
+			const [second] = await request(runner.socketPath, "submit", { kind: "task", app: "Yarn", task: "open settings", operator: "sam", queue: true });
+
+			const [stopped] = await request(runner.socketPath, "stop", { jobId: second.jobId });
+			assert.equal(stopped.ok, true);
+			assert.equal(stopped.state, "stopped");
+			assert.match(String(stopped.note), /queued/);
+			assert.equal(readJob(second.jobId)?.state, "stopped");
+			// The running job is untouched, and the queue is empty.
+			assert.equal(readJob(first.jobId)?.state, "running");
+			const [status] = await request(runner.socketPath, "status");
+			assert.equal(status.queue, undefined);
+		} finally {
+			if (pid) try { process.kill(-pid, "SIGKILL"); } catch {}
+			await runner.close();
+			if (prevData === undefined) delete process.env.YARN_RUNNER_DATA;
+			else process.env.YARN_RUNNER_DATA = prevData;
+		}
+	});
+});
+
+test("startRunner__ResumesTheQueue__When__ARestartLeftQueuedJobs", async () => {
+	// The queue is durable records, so the only thing a restart loses is the finalise whose
+	// drain would have started the head. Startup owes it one drain.
+	await withTempAsync("yr-serve-", async (dir) => {
+		const prevData = process.env.YARN_RUNNER_DATA;
+		process.env.YARN_RUNNER_DATA = dir;
+		const spawner = quickSpawner();
+		try {
+			// A queued record left behind by a previous runner incarnation, no lease held.
+			createJob({ id: mintJobId("task", "Yarn"), kind: "task", app: "Yarn", task: "open settings", operator: "sam", queued: true });
+			const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
+			try {
+				await waitFor("the surviving queued job to start", () => spawner.calls.length === 1, 10_000);
+			} finally {
+				await runner.close();
+			}
+		} finally {
+			if (prevData === undefined) delete process.env.YARN_RUNNER_DATA;
+			else process.env.YARN_RUNNER_DATA = prevData;
+		}
+	});
+});
+
+test("listQueued__ServesOldestFirst__When__SeveralAreWaiting", () => {
+	withTemp("yr-jobs-", (root) => {
+		writeJob(job({ id: "2026-07-31T10-00-01-yarn", state: "queued" }), root);
+		writeJob(job({ id: "2026-07-31T10-00-03-yarn", state: "queued" }), root);
+		writeJob(job({ id: "2026-07-31T10-00-02-yarn", state: "done" }), root);
+		writeJob(job({ id: "explore-2026-07-31T10-00-02-yarn", state: "queued" }), root);
+
+		assert.deepEqual(
+			listQueued(root).map((r) => r.id),
+			["2026-07-31T10-00-01-yarn", "explore-2026-07-31T10-00-02-yarn", "2026-07-31T10-00-03-yarn"],
+		);
+	});
+});
+
+test("sweepOrphans__LeavesQueuedJobsAlone__When__TheRunnerRestarts", () => {
+	withTemp("yr-jobs-", (root) => {
+		writeJob(job({ id: "2026-07-31T10-00-01-yarn", state: "queued", pid: 0 }), root);
+		assert.deepEqual(sweepOrphans(root), []);
+		assert.equal(readJob("2026-07-31T10-00-01-yarn", root)?.state, "queued");
 	});
 });
 

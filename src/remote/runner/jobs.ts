@@ -31,8 +31,12 @@ export type JobKind = "task" | "explore";
  * `orphaned` is deliberately distinct from `failed`: the run's own exit status is unknown
  * (nobody was there to collect it) and its artifacts may be complete, truncated, or absent.
  * Collapsing it into `failed` would assert something we did not observe.
+ *
+ * `queued` is a job accepted while another held the lease: no child exists yet (pid 0), and
+ * the runner starts it when the lease frees. The record is durable like every other state,
+ * which is what lets a queue survive a runner restart.
  */
-export type JobState = "running" | "done" | "failed" | "orphaned" | "stopped";
+export type JobState = "queued" | "running" | "done" | "failed" | "orphaned" | "stopped";
 
 /**
  * Where a finished job's output landed, as paths relative to the data root — the same
@@ -70,9 +74,14 @@ export interface JobRecord {
 	/** Who submitted it, for the busy message on a refused acquire. */
 	operator: string;
 	state: JobState;
-	/** The child's pid, or 0 in the instant between minting the record and the spawn. */
+	/** The child's pid, or 0 while the job is queued or in the instant before the spawn. */
 	pid: number;
 	startedAt: string;
+	/**
+	 * When the job entered the queue, set only for jobs that waited. `startedAt - queuedAt` is
+	 * the wait, and the drain overwrites `startedAt` at spawn time so elapsed math stays honest.
+	 */
+	queuedAt?: string;
 	endedAt?: string;
 	/** Null when the child was signalled rather than exiting, or when nobody collected it. */
 	exitCode?: number | null;
@@ -82,6 +91,13 @@ export interface JobRecord {
 	 * crash it was or the distinction is unactionable.
 	 */
 	signal?: string;
+	/**
+	 * The submit flags, persisted because a queued job is spawned later — possibly by a
+	 * different runner process after a restart — and the record is the only place the options
+	 * survive. Absent on records written before the queue existed, which reads as false.
+	 */
+	record?: boolean;
+	noVision?: boolean;
 	artifacts: JobArtifacts;
 }
 
@@ -97,6 +113,9 @@ export interface JobInit {
 	task: string;
 	operator: string;
 	record?: boolean;
+	noVision?: boolean;
+	/** Accepted behind a held lease: the record starts `queued` and the drain spawns it later. */
+	queued?: boolean;
 }
 
 /** Job ids are used as path segments and arrive over a socket, so they are pattern-checked. */
@@ -168,18 +187,22 @@ export function createJob(init: JobInit, root = jobsDir()): JobRecord {
 	fs.mkdirSync(dir, { recursive: true });
 	fs.writeFileSync(path.join(dir, "log.txt"), "", { flag: "a" });
 
+	const now = new Date().toISOString();
 	const rec: JobRecord = {
 		id,
 		kind: init.kind,
 		app: init.app,
 		task: init.task,
 		operator: init.operator,
-		state: "running",
+		state: init.queued ? "queued" : "running",
 		// Filled in by the caller the moment the child exists. A crash in that window leaves
 		// a pid of 0, which `pidAlive` reads as dead and the sweep resolves to `orphaned` —
 		// the correct answer, since no child was ever confirmed.
 		pid: 0,
-		startedAt: new Date().toISOString(),
+		startedAt: now,
+		...(init.queued ? { queuedAt: now } : {}),
+		...(init.record ? { record: true } : {}),
+		...(init.noVision ? { noVision: true } : {}),
 		artifacts: artifactsFor(id, init),
 	};
 	writeJob(rec, root);
@@ -265,6 +288,18 @@ export function listJobs(root = jobsDir()): JobRecord[] {
 		.sort((a, b) => (stamp(a) < stamp(b) ? 1 : stamp(a) > stamp(b) ? -1 : 0))
 		.map((n) => readJob(n, root))
 		.filter((r): r is JobRecord => r !== undefined);
+}
+
+/**
+ * The queue, oldest first — the drain order. Derived from the registry on every call rather
+ * than held in memory, so the queue IS the set of `queued` records and survives a runner
+ * restart with no reconciliation step of its own. `listJobs` sorts newest-first for display;
+ * this reverses it because a queue that served newest-first would starve its oldest entry.
+ */
+export function listQueued(root = jobsDir()): JobRecord[] {
+	return listJobs(root)
+		.filter((r) => r.state === "queued")
+		.reverse();
 }
 
 /**

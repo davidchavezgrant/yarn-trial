@@ -12,6 +12,7 @@ import {
 	annotateRuns,
 	appChoices,
 	beginSignin,
+	cancelQueuedView,
 	clearAuthView,
 	completeSignin,
 	deleteAppView,
@@ -239,6 +240,7 @@ window.__bus = {
   // Fleet-panel overflow actions. All answer {ok, message} for the same transient slot.
   authClear: (host, app) => ipcRenderer.invoke('auth:clear', { host, app }),
   appDelete: (host, app) => ipcRenderer.invoke('app:delete', { host, app }),
+  cancelQueued: (host, jobId) => ipcRenderer.invoke('queue:cancel', { host, jobId }),
   appInstall: (host, app, url) => ipcRenderer.invoke('app:install', { host, app, url }),
   loadCreds: () => ipcRenderer.invoke('creds'),
   saveKey: (key) => ipcRenderer.invoke('creds:save', key),
@@ -735,6 +737,12 @@ ipcMain.handle("auth:clear", (_event, { host, app }: { host: string; app?: strin
 
 ipcMain.handle("app:delete", (_event, { host, app }: { host: string; app?: string }) =>
 	deleteAppView(String(host ?? ""), typeof app === "string" ? app : undefined),
+);
+
+// Cancel a job waiting in a host's queue. Not destructive — the job never started — which is
+// why it is the one fleet verb without a confirm() in front of it on the renderer side.
+ipcMain.handle("queue:cancel", (_event, { host, jobId }: { host: string; jobId?: string }) =>
+	cancelQueuedView(String(host ?? ""), String(jobId ?? "")),
 );
 
 // Long-running by design: the download happens on the far Mac and can take minutes. The
