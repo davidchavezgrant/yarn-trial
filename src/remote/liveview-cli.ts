@@ -253,7 +253,11 @@ async function main(): Promise<void> {
 	// in-process (interactive local mode, stdout is a human's terminal) is safe to show.
 	const shownUrl = token ? srv.url.replace(`t=${token}`, "t=<redacted>") : srv.url;
 	console.log(`\nviewer ready — open this in your browser:\n\n  ${shownUrl}\n`);
-	console.log("it shows the frontmost window on this Mac. click it, sign in, close the tab when done.");
+	console.log(
+		resolved.engine === "cdp"
+			? "it shows the page on the debug endpoint and follows the flow across popups. sign in, close the tab when done."
+			: "it shows the frontmost window on this Mac. click it, sign in, close the tab when done.",
+	);
 	console.log("(Ctrl-C to stop the server.)");
 
 	const stop = async () => {

@@ -123,3 +123,24 @@ fleet Mac's default browser to be the debug-flagged Chrome; provisioning for tha
 separately. onExit still fires only on primary-endpoint death; the browser leg dying just
 pops the follow stack. Native dialogs and passkey sheets remain SCK territory — force
 `--sck` for those.
+
+**Validated live 2026-07-31** — the transport mechanics, end to end on a real Chrome
+(local, `./run liveview --cdp`, viewer driven by a real browser; every assertion
+machine-checked against the target's own `/json/list` titles, not eyeballed):
+
+1. frames: viewer canvas painted the screencast, title bar tracked the page;
+2. click: viewer fraction → `Input.dispatchMouseEvent` → page handler fired;
+3. typing: text commands → `insertText` → input value landed intact ("hello cdp");
+4. same-endpoint hop: `window.open` popup took the stream (title bar followed), a click
+   through the viewer closed it, and the stream POPPED BACK to the opener;
+5. cross-endpoint hop: a second Chrome launched on 9777 mid-session was lazily attached
+   and its newest EXISTING page taken (the page predates the attach — the case a
+   page-event listener alone would miss forever);
+6. endpoint death: killing the 9777 Chrome popped the stream back to the primary, and a
+   further click proved the popped-back session live, not a stale frame.
+
+What this does NOT yet prove: a real OAuth sign-in (real provider, real yarn:// return
+deep-link) and the fleet path (runner-spawned CLI over the tunnel). The `yarn` scheme and
+its origin are now in `AUTO_LAUNCH_PROTOCOLS` — scheme read off Yarn.app's Info.plist,
+origin off app.asar's auth endpoints — the origin still wants confirming against a real
+handoff.

@@ -685,8 +685,11 @@ export class CdpBackend {
 				if (this.demo) {
 					// Who holds the caret, as tag.class — an IIFE because evaluate strings
 					// are expressions (see FOCUS_CHECK below).
+					// "E:" prefix marks an editable holder (contenteditable / input / textarea),
+					// so the chunk loop below can tell focus ARRIVING at an editor from focus
+					// LEAVING one — the two directions get opposite treatment.
 					const ACTIVE_DESC =
-						"(() => { const a = document.activeElement; return a ? a.tagName.toLowerCase() + (a.className ? '.' + String(a.className).trim().split(/\\s+/)[0] : '') : 'nothing'; })()";
+						"(() => { const a = document.activeElement; if (!a) return 'nothing'; const e = a.isContentEditable || a.tagName === 'INPUT' || a.tagName === 'TEXTAREA'; return (e ? 'E:' : '') + a.tagName.toLowerCase() + (a.className ? '.' + String(a.className).trim().split(/\\s+/)[0] : ''); })()";
 					// Focus arrives by a visible click, then the text by real keystrokes.
 					// The keystrokes are page.keyboard events, NOT locator.pressSequentially:
 					// the locator form runs playwright's editability check, which rejects
@@ -776,13 +779,35 @@ export class CdpBackend {
 					// round and the tail of the narration leaked wherever focus went. A
 					// holder change stops the typing at a chunk boundary and reports exactly
 					// how much landed, instead of spraying the rest.
-					const holder = (await this.page.evaluate(ACTIVE_DESC).catch(() => "")) as string;
+					// Yarn taught both failure directions live: its TipTap editor mounts
+					// ASYNCHRONOUSLY (focus sits on <body> for a beat, then the editor grabs
+					// it — keystrokes sent early go nowhere), and its scene-splitting
+					// re-render can blur the editor mid-sentence and take the tail of the
+					// narration with it. So: refuse to START at a non-editable holder (wait
+					// briefly for the editor to wake), ADOPT focus that arrives at an
+					// editable, POLL for focus that leaves one to come back, and abort with
+					// exact progress only when it provably went elsewhere.
+					let holder = (await this.page.evaluate(ACTIVE_DESC).catch(() => "")) as string;
+					for (let tries = 0; tries < 6 && !holder.startsWith("E:"); tries++) {
+						await new Promise((r) => setTimeout(r, 200));
+						holder = (await this.page.evaluate(ACTIVE_DESC).catch(() => "")) as string;
+					}
+					if (!holder.startsWith("E:"))
+						throw new Error(
+							`nothing editable holds the caret (focus is on <${holder}>) — nothing was typed. Click the field first, or pass its ref so the harness clicks it.`,
+						);
 					const { chunks } = chunkText(text);
 					let typed = "";
 					for (const chunk of chunks) {
 						if (typed) {
-							const now = (await this.page.evaluate(ACTIVE_DESC).catch(() => "")) as string;
-							if (now !== holder)
+							let now = (await this.page.evaluate(ACTIVE_DESC).catch(() => "")) as string;
+							if (!now.startsWith("E:"))
+								for (let tries = 0; tries < 6 && !now.startsWith("E:"); tries++) {
+									await new Promise((r) => setTimeout(r, 200));
+									now = (await this.page.evaluate(ACTIVE_DESC).catch(() => "")) as string;
+								}
+							if (now.startsWith("E:")) holder = now; // arrivals and re-mounts are adopted
+							else
 								throw new Error(
 									`typing interrupted after ${typed.length} of ${text.length} characters — focus moved from <${holder}> to <${now}>. ` +
 										`Landed so far: "…${typed.slice(-40)}". Re-observe, put the caret back, and continue with the REMAINING text only.`,

@@ -171,14 +171,18 @@ export interface AutoLaunchProtocolEntry {
 }
 
 /**
- * EMPTY on purpose — the mechanism is wired, the data is not known yet. Yarn's own URL scheme
- * is written nowhere in this repo: the only trace is the dialog title the SCK auto-presser
- * matches ("Open Yarn.app?"), which names the APP, not the scheme. Read the scheme off a real
- * handoff — the yarn-something:// URL Chrome is asking about while that dialog is up — and add
- * it here with the OAuth provider's origin(s). DO NOT guess it: a wrong scheme grades the host
- * clean while every handoff still stops on the dialog.
+ * The scheme is READ, not guessed (rule: a wrong scheme grades the host clean while every
+ * handoff still stops on the dialog). Provenance, 2026-07-31:
+ *   - protocol "yarn": Yarn.app's own registration — Info.plist CFBundleURLTypes[0]
+ *     .CFBundleURLSchemes = ["yarn"] (app bundle v0.0.119, read via plutil).
+ *   - origin: the app's auth endpoints all live at https://y-prod-api.onrender.com
+ *     (/auth/google, /auth/google-web, /auth/sso — strings in app.asar). That is the origin
+ *     expected to fire the yarn:// return; CONFIRM against a real handoff before trusting a
+ *     graded-clean host, and widen here if the dialog names a different origin.
  */
-export const AUTO_LAUNCH_PROTOCOLS: AutoLaunchProtocolEntry[] = [];
+export const AUTO_LAUNCH_PROTOCOLS: AutoLaunchProtocolEntry[] = [
+	{ protocol: "yarn", allowedOrigins: ["https://y-prod-api.onrender.com"] },
+];
 
 /** Chromium's own constraint (bare, lowercase) — which also keeps the XML below inert in a shell. */
 const BARE_PROTOCOL = /^[a-z][a-z0-9+.-]*$/;
@@ -242,9 +246,13 @@ export function autoLaunchWriteLines(entries: AutoLaunchProtocolEntry[] = AUTO_L
 	];
 }
 
-/** Everything the graders scan: the boolean table, plus the allowlist key once it has entries. */
-function policedKeyNames(): string[] {
-	return [...CHROME_POLICY.map((p) => p.key), ...(AUTO_LAUNCH_PROTOCOLS.length ? [AUTO_LAUNCH_POLICY_KEY] : [])];
+/**
+ * Everything the graders scan: the boolean table, plus the allowlist key once it has entries.
+ * `entries` is injectable so grading tests pin their own policed set instead of inheriting
+ * whatever the live table holds this week (filling it broke eight of them once already).
+ */
+function policedKeyNames(entries: AutoLaunchProtocolEntry[] = AUTO_LAUNCH_PROTOCOLS): string[] {
+	return [...CHROME_POLICY.map((p) => p.key), ...(entries.length ? [AUTO_LAUNCH_POLICY_KEY] : [])];
 }
 
 export type PolicyLevel = "mandatory" | "recommended" | "unset";
@@ -281,7 +289,10 @@ export type PlistReader = (path: string) => Record<string, unknown> | undefined;
  * wins over a user one, and reporting the user one while a managed one exists would describe a
  * host that is not the host in front of you.
  */
-export function readChromePolicy(read: PlistReader, opts: { home: string; user: string; chromeInstalled: boolean; chromeRunning?: boolean }): ChromePolicyState {
+export function readChromePolicy(
+	read: PlistReader,
+	opts: { home: string; user: string; chromeInstalled: boolean; chromeRunning?: boolean; autoLaunch?: AutoLaunchProtocolEntry[] },
+): ChromePolicyState {
 	const expand = (p: string): string => p.replace("__HOME__", opts.home.replace(/\/+$/, "")).replace("__USER__", opts.user);
 	const sources: [PolicyLevel, Record<string, unknown> | undefined][] = [
 		...MANDATORY_PLISTS.map((p): [PolicyLevel, Record<string, unknown> | undefined] => ["mandatory", read(expand(p))]),
@@ -291,7 +302,7 @@ export function readChromePolicy(read: PlistReader, opts: { home: string; user: 
 	return {
 		chromeInstalled: opts.chromeInstalled,
 		...(opts.chromeRunning === undefined ? {} : { chromeRunning: opts.chromeRunning }),
-		keys: policedKeyNames().map((key) => {
+		keys: policedKeyNames(opts.autoLaunch).map((key) => {
 			for (const [level, doc] of sources) {
 				// `in`, not a truthiness test: the value we want to find is `false`, and every
 				// shorter spelling of this check reports a correctly-policed host as unset.
