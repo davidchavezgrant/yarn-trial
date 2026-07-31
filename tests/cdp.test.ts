@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CDP_ACT_TOOL, CDP_RULES, cdpActTool, cdpRules, demoClickPlan, originMatches, parseAiSnapshot, playwrightKey } from "../src/backends/cdp.js";
+import { CDP_ACT_TOOL, CDP_RULES, cdpActTool, cdpRules, demoClickPlan, originMatches, parseAiSnapshot, playwrightKey, webPageChoice } from "../src/backends/cdp.js";
 
 // A real ai-mode snapshot shape, taken from the live probe that preceded this backend
 // (headless Chrome 139, playwright-core 1.62): roles, quoted names, [ref]/[box]/flag
@@ -196,4 +196,36 @@ test("cdpActTool__MatchesTheTypingContract__When__DemoModeIsOn", () => {
 	assert.match(text(false), /Replaces/);
 	assert.match(text(true), /caret/);
 	assert.doesNotMatch(text(true), /Replaces/);
+});
+
+// ---- webPageChoice: which tab a web run drives, and whether the run OWNS it ----------------
+// Ownership is what teardown needs: a bench run's created tab left open on Wikipedia was what
+// an operator's sign-in viewer opened onto (2026-07-31). Adopted tabs are the operator's (or
+// browser-login's seed) and must survive the run; a tab the run created — or a blank one it
+// colonized, whose entire content is run residue — is the run's to close.
+
+test("webPageChoice__AdoptsTheTargetTab__When__OneMatchesTheOrigin", () => {
+	assert.deepEqual(
+		webPageChoice(["chrome://newtab/", "https://en.wikipedia.org/wiki/Ada_Lovelace"], "https://en.wikipedia.org"),
+		{ index: 1, owned: false },
+	);
+});
+
+test("webPageChoice__Refuses__When__TwoTabsMatchTheOrigin", () => {
+	assert.throws(
+		() => webPageChoice(["https://en.wikipedia.org/wiki/A", "https://en.wikipedia.org/wiki/B"], "https://en.wikipedia.org"),
+		/2 tabs are open/,
+	);
+});
+
+test("webPageChoice__ColonizesABlankTabAsOwned__When__NoneMatchTheOrigin", () => {
+	assert.deepEqual(
+		webPageChoice(["https://example.com/", "about:blank"], "https://en.wikipedia.org"),
+		{ index: 1, owned: true },
+	);
+});
+
+test("webPageChoice__CreatesAPageAsOwned__When__NothingSuitableExists", () => {
+	// -1 = no usable tab: the caller newPage()s, and that page is the run's to close.
+	assert.deepEqual(webPageChoice(["https://example.com/"], "https://en.wikipedia.org"), { index: -1, owned: true });
 });

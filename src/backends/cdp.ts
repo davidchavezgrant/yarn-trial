@@ -234,6 +234,26 @@ export function originMatches(pageUrl: string, origin: string): boolean {
 }
 
 /**
+ * Which existing tab a web run should drive, and whether the run OWNS what it drives.
+ *
+ * Ownership is what close() needs: a tab the run created — or a blank one it colonized,
+ * whose entire content is run residue — is the run's to close on the way out. An adopted
+ * tab already on the target origin is the operator's (or browser-login's seed) and must
+ * survive the run. Left unclosed, run tabs pile up in the shared flagged Chrome: a bench
+ * run's Wikipedia tab was what an operator's sign-in viewer opened onto (2026-07-31).
+ *
+ * `index: -1` means no usable tab exists — the caller creates one, and owns it.
+ */
+export function webPageChoice(urls: string[], origin: string): { index: number; owned: boolean } {
+	const matching = urls.map((u, i) => i).filter((i) => originMatches(urls[i], origin));
+	// Two tabs on the target site: driving the wrong one looks like it worked. Refuse.
+	if (matching.length > 1) throw new Error(`${matching.length} tabs are open on ${origin} — close the spares so the target is unambiguous`);
+	if (matching.length === 1) return { index: matching[0], owned: false };
+
+	return { index: urls.indexOf("about:blank"), owned: true };
+}
+
+/**
  * Demo-mode pointer pacing. The dwell sits between the move and the press so a :hover
  * transition has real wall-clock to render before the click's effect replaces it —
  * 150–250ms per the plan; long enough for a CSS transition, short enough not to read as
@@ -305,6 +325,10 @@ export class CdpBackend {
 		private demo = false,
 		/** The app name for re-picking a window when the driven one closes (Electron only). */
 		private appName?: string,
+		/** The tab this run created or colonized (web only) — the run's to close on the way
+		 *  out. Held as the PAGE, not a flag: ensurePage can re-point `this.page` mid-run,
+		 *  and close() must never shut a tab the run did not open. */
+		private ownedPage?: Page,
 	) {
 		page.setDefaultTimeout(ACTION_TIMEOUT_MS);
 	}
@@ -383,17 +407,14 @@ export class CdpBackend {
 			if (!context) throw new Error(`attached to ${endpoint} but it has no browser context`);
 
 			let page: Page;
+			let ownedPage: Page | undefined;
 			let attachInfo: CdpBackend["attachInfo"];
 			if (target.kind === "web") {
-				const origin = target.origin;
-				const matching = context.pages().filter((p) => originMatches(p.url(), origin));
-				// Two tabs on the target site: driving the wrong one looks like it worked. Refuse.
-				if (matching.length > 1)
-					throw new Error(`${matching.length} tabs are open on ${origin} — close the spares so the target is unambiguous`);
-				page = matching[0]
-					?? context.pages().find((p) => p.url() === "about:blank")
-					?? (await context.newPage());
-				if (!originMatches(page.url(), origin)) await page.goto(target.url, { waitUntil: "domcontentloaded" });
+				const pages = context.pages();
+				const choice = webPageChoice(pages.map((p) => p.url()), target.origin);
+				page = choice.index >= 0 ? pages[choice.index] : await context.newPage();
+				if (choice.owned) ownedPage = page;
+				if (!originMatches(page.url(), target.origin)) await page.goto(target.url, { waitUntil: "domcontentloaded" });
 			} else {
 				// Electron: the endpoint exposes every window plus devtools and background
 				// pages. Gather the facts (across ALL contexts — Electron does not promise a
@@ -453,6 +474,7 @@ export class CdpBackend {
 				target.kind === "web" ? target.url : undefined,
 				opts.demo === true,
 				target.kind === "app" ? target.name : undefined,
+				ownedPage,
 			);
 			backend.attachInfo = attachInfo;
 
@@ -1017,8 +1039,24 @@ export class CdpBackend {
 	 * signed-in profile, and the next run reattaches to it in milliseconds. This is the
 	 * inverse of the cua posture, where close() tears down a shared daemon (LIMITATIONS
 	 * §6) — here there is nothing shared to tear down.
+	 *
+	 * The run's OWN tab does close: leaving it is how a bench run's Wikipedia tab ended up
+	 * on an operator's sign-in screen (2026-07-31). Adopted tabs (webPageChoice) and app
+	 * windows are never owned, so they survive as before. Runs after teardown — this is the
+	 * last call in a run's life, so the journal replay has already used the page.
+	 *
+	 * The LAST tab is blanked, not closed: a window-less Chrome keeps answering its debug
+	 * endpoint but connectOverCDP refuses it ("Browser context management is not supported",
+	 * reproduced locally 2026-07-31 — one tab present, same Chrome, connects fine), so
+	 * closing the final tab would break the NEXT run's acquire. Blanking removes the content
+	 * — which is the clutter — and leaves exactly the tab webPageChoice colonizes.
 	 */
 	async close(): Promise<void> {
+		if (this.ownedPage && !this.ownedPage.isClosed()) {
+			const lastTab = this.browser.contexts().flatMap((c) => c.pages()).length <= 1;
+			if (lastTab) await this.ownedPage.goto("about:blank").catch(() => {});
+			else await this.ownedPage.close().catch(() => {});
+		}
 		await this.browser.close().catch(() => {});
 	}
 }
