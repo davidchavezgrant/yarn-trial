@@ -881,8 +881,18 @@ export class CdpBackend {
 								}
 							// Only the SAME holder continues — a re-mounted editor of the same
 							// class produces an identical desc, so Yarn's mid-typing re-mounts
-							// pass, while focus arriving at a DIFFERENT editable (a spawned
-							// overlay or composer) or nothing aborts with exact progress.
+							// pass. Focus at a DIFFERENT editable gets a short grace first:
+							// Yarn's first-scene sync parks focus on a timeline comment input
+							// (editor-timeline-commentsThread-input-*) ~11 chars into typing
+							// (reproduced two runs in a row) — if the original holder takes
+							// focus back, no character went astray (typing only resumes on a
+							// holder match), so aborting was pure noise. Staying away is a
+							// real theft and aborts with exact progress as before.
+							if (now !== holder && now.startsWith("E:"))
+								for (let tries = 0; tries < 10 && now !== holder; tries++) {
+									await new Promise((r) => setTimeout(r, 200));
+									now = (await this.page.evaluate(ACTIVE_DESC).catch(() => "")) as string;
+								}
 							if (now !== holder)
 								throw new Error(
 									`typing interrupted after ${typed.length} of ${text.length} characters — focus moved from <${holder}> to <${now}>. ` +
