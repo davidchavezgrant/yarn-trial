@@ -511,7 +511,16 @@ YARN_RUNNER_DATA="$CHECKOUT"
 YARN_RUNNER_RESOURCES="$CHECKOUT"
 export YARN_RUNNER_DATA YARN_RUNNER_RESOURCES
 
-[ -d node_modules ] || npm install --silent || exit 1
+# Dependencies freshen the same way the build below does: rsync preserves mtimes, so a
+# package manifest newer than npm's own install marker (rewritten by every install) means the
+# sync brought a dependency change this node_modules predates. "[ -d node_modules ]" alone
+# stranded every host provisioned before a new dependency landed — playwright-core was on
+# disk in package.json and missing from node_modules on all three Macs (2026-07-31).
+if [ ! -f node_modules/.package-lock.json ] ||
+	[ package.json -nt node_modules/.package-lock.json ] ||
+	[ package-lock.json -nt node_modules/.package-lock.json ]; then
+	npm install --silent || exit 1
+fi
 # Same freshness test as ./run: rsync preserves mtimes, so a source file newer than the built
 # entry point is exactly the signal that this host is about to serve the previous code.
 if [ ! -f dist-electron/electron/main.js ] ||

@@ -252,6 +252,13 @@ test("provisionHost__ShipsAnExecutableElectronServeAgent__When__StagingThePayloa
 			serve.body.indexOf('exec "$ELECTRON"') < serve.body.indexOf("exec npx electron"),
 			"the npx fallback must come after the direct exec, never before it",
 		);
+		// Dependencies freshen on the same mtime signal as the build. "[ -d node_modules ]"
+		// alone stranded every already-provisioned host when playwright-core landed: the
+		// directory existed, so the new dependency was never installed (2026-07-31, all three
+		// Macs). Both manifests are compared against npm's own install marker.
+		assert.match(serve.body, /package\.json -nt node_modules\/\.package-lock\.json/);
+		assert.match(serve.body, /package-lock\.json -nt node_modules\/\.package-lock\.json/);
+		assert.equal(/\[ -d node_modules \] \|\| npm install/.test(serve.body), false, "the existence-only install condition must stay gone");
 		// And in the GUI domain: a user-domain job has no window server session.
 		assert.match(agent.body, /launchctl bootstrap "gui\/\$U"/);
 		assert.equal(/bootstrap "user\//.test(agent.body), false);
