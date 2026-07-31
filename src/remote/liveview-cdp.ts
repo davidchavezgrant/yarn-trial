@@ -341,6 +341,32 @@ export function isIdlePage(url: string): boolean {
 	return u === "" || u === "about:blank" || u === "chrome://newtab/" || u === "chrome://new-tab-page/" || u === "edge://newtab/";
 }
 
+/**
+ * How a page on the BROWSER leg enters the follow stack: whose tab is this — the flow's, or
+ * the operator's?
+ *
+ * Reported 2026-07-31: with a leftover Wikipedia tab in the flagged Chrome (bench-run
+ * residue), the sign-in viewer opened onto Wikipedia and never switched to the Google page.
+ * Two policy errors with one root — ranking was decided from the URL alone, sampled once:
+ *
+ *  - A PRE-EXISTING tab is the operator's, however live its URL looks. It parks: reachable
+ *    with cmd+] (the mac3 interstitial lesson — unselectable equals nonexistent), but never
+ *    the stream's owner, and it never promotes itself — an old tab navigating is ambient
+ *    (auto-refresh, a redirect it was parked on), not the flow.
+ *  - A NEW tab is the flow's next leg, but Chrome creates it as about:blank and navigates it
+ *    a beat later — so its follow-time URL says "idle" exactly when it matters most. It parks
+ *    AND arms a one-shot promotion: the moment its main frame lands somewhere real, it takes
+ *    the stream. A new tab that already carries a real URL just goes live.
+ *
+ * Browser origin only. Primary pages keep their own promotion channel (`cameHome` on every
+ * main-frame navigation), which is why web-target flows never showed this bug.
+ */
+export function browserPageDisposition(preExisting: boolean, url: string): { rank: "live" | "parked"; promoteOnNavigate: boolean } {
+	if (preExisting) return { rank: "parked", promoteOnNavigate: false };
+
+	return isIdlePage(url) ? { rank: "parked", promoteOnNavigate: true } : { rank: "live", promoteOnNavigate: false };
+}
+
 /** How long the endpoint gets to answer /json/version. The target is already running (the
  *  runner foregrounds it before the viewer link goes out), so this is a liveness check, not
  *  a launch wait. */
@@ -645,9 +671,25 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 		sync();
 	};
 
+	/**
+	 * One-shot: the first main-frame navigation that lands somewhere real takes the page live.
+	 * The handoff's tab is born about:blank and becomes the auth page a beat later — a rank
+	 * decided at follow time says "parked" exactly when it matters most (browserPageDisposition
+	 * has the full account of the leftover-Wikipedia-tab report this closes).
+	 */
+	const armPromotion = (page: Page) => {
+		const promote = () => {
+			if (closed || isIdlePage(page.url())) return;
+			page.off("framenavigated", promote);
+			stack.push(page, "browser");
+			sync();
+		};
+		page.on("framenavigated", promote);
+	};
+
 	/** Put a page under follow: wire its close to the pop, push it (newest wins), converge. */
 	const followed = new WeakSet<Page>();
-	const follow = (page: Page, origin: FollowOrigin) => {
+	const follow = (page: Page, origin: FollowOrigin, preExisting = false) => {
 		if (closed || followed.has(page)) return;
 		if (/^(devtools|chrome-extension):/.test(page.url())) return;
 		followed.add(page);
@@ -658,8 +700,14 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 		// The deep-link return: only the primary target's own navigation counts, and only after
 		// the stream has already wandered off to a browser leg. A browser page navigating is
 		// just the OAuth chain doing its several redirects.
-		if (origin === "primary") page.on("framenavigated", (f) => { if (f === page.mainFrame()) cameHome(page); });
-		stack.push(page, origin, isIdlePage(page.url()));
+		if (origin === "primary") {
+			page.on("framenavigated", (f) => { if (f === page.mainFrame()) cameHome(page); });
+			stack.push(page, origin, isIdlePage(page.url()));
+		} else {
+			const d = browserPageDisposition(preExisting, page.url());
+			if (d.promoteOnNavigate) armPromotion(page);
+			stack.push(page, origin, d.rank === "parked");
+		}
 		sync();
 	};
 
@@ -677,7 +725,10 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 	const watch = (b: Browser, origin: FollowOrigin) => {
 		for (const c of b.contexts()) {
 			c.on("page", (p) => follow(p, origin));
-			for (const p of c.pages()) follow(p, origin);
+			// Adopted as PRE-EXISTING: on the browser leg that parks them (an operator's old
+			// tabs are reachable with cmd+], never the stream's owner); primary pages ignore
+			// the flag — an app window that exists is exactly the thing to stream.
+			for (const p of c.pages()) follow(p, origin, true);
 		}
 	};
 
@@ -723,12 +774,18 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 		watch(b, "browser");
 		// A Chrome that was silent at session start was launched mid-flow — by the handoff's
 		// `open`, carrying its page BEFORE this attach could see a `page` event. That page IS
-		// the flow's next leg: follow the newest one. A Chrome that answered at start holds
-		// the operator's old tabs; those are never followed, only pages opened from here on.
+		// the flow's next leg: watch() above adopted it PARKED like any pre-existing page
+		// (right for an operator's old tabs, wrong for this one — the Chrome exists BECAUSE
+		// of the handoff), so take the newest live, or arm the same one-shot promotion a
+		// born-blank new tab gets. A Chrome that answered at start holds the operator's old
+		// tabs; those stay parked — reachable with cmd+], never streamed unbidden.
 		if (launchedMidFlow) {
 			const cand = b.contexts().flatMap((c) => c.pages()).filter((p) => !/^(devtools|chrome-extension):/.test(p.url()));
 			const newest = cand.at(-1);
-			if (newest) follow(newest, "browser");
+			if (newest && !isIdlePage(newest.url())) {
+				stack.push(newest, "browser");
+				sync();
+			} else if (newest) armPromotion(newest);
 		}
 	};
 

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+	browserPageDisposition,
 	cdpModifiers,
 	cdpQuality,
 	FollowStack,
@@ -291,6 +292,32 @@ test("homeTransitionGate__TreatsAForeignOriginAsAbsence__When__TheFlowDetoursThr
 	assert.equal(fire(HOME, "Library"), false);
 	assert.equal(fire("https://accounts.google.com/signin/challenge", "Library"), false);
 	assert.equal(fire(HOME, "Library"), true);
+});
+
+// ---- browserPageDisposition: whose tab is this — the flow's, or the operator's? -----------
+// Reported 2026-07-31: with a leftover Wikipedia tab in the flagged Chrome (a bench run's
+// residue), the sign-in viewer opened onto Wikipedia and never switched to the Google page.
+// Two policy errors, one function now: an adopted pre-existing tab was ranked LIVE by its
+// URL (non-idle → top of stack, stealing the stream), and the handoff's new tab was ranked
+// once at follow time — born about:blank → parked — with nothing re-ranking it when it
+// navigated to the auth URL a beat later.
+
+test("browserPageDisposition__ParksItWithoutPromotion__When__TheTabPreExistsTheAttach", () => {
+	// The operator's old tab: reachable via cmd+], never the stream's owner — no matter how
+	// interesting its URL looks, and even if it later navigates on its own.
+	assert.deepEqual(browserPageDisposition(true, "https://en.wikipedia.org/wiki/Ada_Lovelace"), { rank: "parked", promoteOnNavigate: false });
+	assert.deepEqual(browserPageDisposition(true, "chrome://newtab/"), { rank: "parked", promoteOnNavigate: false });
+});
+
+test("browserPageDisposition__ParksItAndArmsPromotion__When__ANewTabIsBornBlank", () => {
+	// The handoff's tab: Chrome creates it as about:blank and navigates it to the provider a
+	// moment later. Parked now, promoted the moment it becomes a real page.
+	assert.deepEqual(browserPageDisposition(false, "about:blank"), { rank: "parked", promoteOnNavigate: true });
+	assert.deepEqual(browserPageDisposition(false, ""), { rank: "parked", promoteOnNavigate: true });
+});
+
+test("browserPageDisposition__RanksItLive__When__ANewTabArrivesWithARealUrl", () => {
+	assert.deepEqual(browserPageDisposition(false, "https://accounts.google.com/v3/signin/identifier"), { rank: "live", promoteOnNavigate: false });
 });
 
 test("homeTransitionGate__NeverFires__When__TheSessionStartUrlIsUnparseable", () => {
