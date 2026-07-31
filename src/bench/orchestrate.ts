@@ -273,6 +273,34 @@ export async function runChallenger(
 	return submitted ? EXIT_OK : EXIT_REFUSED;
 }
 
+/**
+ * Push this checkout to the Macs before dispatching. The fleet runs a RSYNCED COPY, so a fix
+ * committed locally does not reach it — and a benchmark run on stale code produces data that
+ * looks fine and means nothing.
+ *
+ * This is not hypothetical: on 2026-07-31 a Responses-API pairing fix was committed and phase
+ * 1 fired immediately, so all four explores ran the pre-fix code and died on the same 400 the
+ * commit had just fixed. Syncing here makes that structurally impossible rather than merely
+ * detectable — provision is idempotent and takes seconds, which is cheaper than one wasted
+ * explore, let alone a wasted phase.
+ *
+ * Skipped when a dispatch fake is injected (tests never touch the fleet) and non-fatal on
+ * failure: a Mac that cannot be reached will refuse its dispatch a moment later with a
+ * clearer message than a provisioning stack trace.
+ */
+async function syncFleet(opts: PhaseOptions, log: (s: string) => void): Promise<void> {
+	if (opts.dispatchFn) return;
+	try {
+		const { provisionFleet } = await import("../remote/control/provision.js");
+		const { loadHosts } = await import("../remote/control/hosts.js");
+		const rows = await provisionFleet(loadHosts());
+		const bad = rows.filter((r) => !r.ok);
+		log(`fleet synced: ${rows.length - bad.length}/${rows.length} host(s) up to date${bad.length ? ` — ${bad.map((r) => r.host).join(", ")} FAILED` : ""}`);
+	} catch (e) {
+		log(`fleet sync skipped: ${(e as Error).message}`);
+	}
+}
+
 export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<number> {
 	const log = opts.log ?? console.log;
 	const outRoot = opts.outRoot ?? outDir();
@@ -326,6 +354,7 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 	}
 
 	const dispatchFn = opts.dispatchFn ?? (await defaultDispatch());
+	await syncFleet(opts, log);
 	let submitted = 0;
 	let refused = 0;
 	for (const p of ready) {

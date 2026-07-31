@@ -64,6 +64,31 @@ const CHROME_BIN = process.env.CDP_CHROME ?? "/Applications/Google Chrome.app/Co
 /** Off cua's 9222 convention on purpose: a driver-owned Chrome and ours must never collide. */
 const DEFAULT_PORT = envNum("CDP_PORT", 9777);
 
+/** Does the endpoint have at least one attachable page? `[ ]` means Chrome has no windows. */
+async function hasPageTarget(endpoint: string): Promise<boolean> {
+	try {
+		const res = await fetch(`${endpoint}/json/list`, { signal: AbortSignal.timeout(4000) });
+		const list = (await res.json()) as Array<{ type?: string }>;
+
+		return Array.isArray(list) && list.some((t) => t.type === "page");
+	} catch {
+		// Unreachable or unparseable: let connectOverCDP produce the real error rather than
+		// guessing here. Returning true skips the repair, which is the conservative choice.
+		return true;
+	}
+}
+
+/** Open one blank tab over the DevTools HTTP API, giving Playwright a context to attach to. */
+async function openBlankPage(endpoint: string): Promise<void> {
+	// PUT is what current Chrome requires for /json/new; older builds accepted GET.
+	try {
+		await fetch(`${endpoint}/json/new?about:blank`, { method: "PUT", signal: AbortSignal.timeout(5000) });
+	} catch {
+		// Non-fatal: if this fails, connectOverCDP fails next with its own message, and a
+		// swallowed repair attempt must not mask that.
+	}
+}
+
 /**
  * Locator timeout. Playwright's 30s default is tuned for tests that wait for apps to
  * settle; here a ref that does not resolve within a few seconds is a stale ref, and the
@@ -400,6 +425,22 @@ export class CdpBackend {
 					`  open -a "<App>" --args --remote-debugging-port=${port}\n` +
 					`or point CDP_URL at an existing endpoint.`,
 			);
+
+		// A Chrome whose last window was closed keeps RUNNING on macOS: the process lives, the
+		// endpoint answers /json/version, and endpointAlive above is satisfied — but
+		// /json/list is `[ ]` and there is no browser context. connectOverCDP then dies on
+		// `Browser.setDownloadBehavior: Browser context management is not supported`, which
+		// names neither the cause nor the fix.
+		//
+		// Reached on mac3 on 2026-07-31 after a human signed a site in and closed the window,
+		// so it is the NORMAL aftermath of the sign-in flow this profile exists to support,
+		// not an exotic state. Materialise a page before connecting rather than relaunching:
+		// the browser is the session holder, and killing it to fix a missing tab would throw
+		// away the very sign-in that made the profile worth keeping.
+		if (target.kind === "web" && !(await hasPageTarget(endpoint))) {
+			console.log(`${endpoint} is alive but has no page (Chrome outlived its last window) — opening one`);
+			await openBlankPage(endpoint);
+		}
 
 		const browser = await chromium.connectOverCDP(endpoint);
 		try {
