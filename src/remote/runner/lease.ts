@@ -7,12 +7,13 @@ import { type JobKind, pidAlive } from "./jobs.js";
 /**
  * One run at a time, per Mac.
  *
- * This is a mutex and not a queue, deliberately. A second driver session shuts down the
- * shared daemon and kills the run already in flight (LIMITATIONS §6) — the damage lands on
- * the run that was already working, so the only safe answer to "start another" is no. The
- * UI's single-run guard in `RunController` says the same thing; this is that guard promoted
- * to a file, because the claimants are now separate SSH invocations rather than clicks in
- * one process.
+ * This is a mutex, deliberately. A second driver session shuts down the shared daemon and
+ * kills the run already in flight (LIMITATIONS §6) — the damage lands on the run that was
+ * already working, so the only safe answer to "start another NOW" is no. The UI's
+ * single-run guard in `RunController` says the same thing; this is that guard promoted to a
+ * file, because the claimants are now separate SSH invocations rather than clicks in one
+ * process. The job QUEUE (serve.ts `drain`, `queued` records in the registry) is not an
+ * exception to this: queued jobs wait their turn for this same mutex, one claim at a time.
  *
  * **Validity is liveness, never a TTL.** A lease expiring on a clock is wrong in both
  * directions and there is no interval that isn't: too short and a grounding pass loses its

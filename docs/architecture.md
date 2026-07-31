@@ -222,6 +222,14 @@ Load-bearing decisions:
   never argv text (sshd joins remote args into one login-shell string).
 - **One run per Mac**, enforced by a liveness-based lease (`src/remote/runner/lease.ts`) — cua's
   shared-daemon shutdown makes a second session fatal to the first (LIMITATIONS §6).
+- **A busy Mac queues instead of refusing** (2026-07-31): submits land as durable `queued`
+  records in the job registry and the runner drains them oldest-first through the same
+  swap→spawn path when the lease frees (`drain()` in `src/remote/runner/serve.ts`). The queue
+  survives runner restarts because it IS the registry. `dispatch auto` still walks idle hosts
+  first and only queues (shortest line) when nobody is idle; the fleet panel shows each
+  waiting job with a cancel button, and following a queued job streams from its first line
+  once it starts. Cancelling a queued job is `stop` with its jobId — no child exists yet, so
+  it is a pure registry write.
 - **Sign-in is human, once per app per Mac** (`./run signin` full-desktop screen share, or
   `./run liveview` window-scoped SCK capture + input injection in a browser tab). No
   credential ever enters the agent loop — every observation and frame reaches the model
