@@ -21,7 +21,7 @@ const pct = (num: number, den: number): string => (den === 0 ? "—" : `${num}/$
 const fmt = (v: number | string | boolean | undefined): string =>
 	v === undefined ? "—" : typeof v === "number" && !Number.isInteger(v) ? v.toFixed(1) : String(v);
 
-interface ArmRollup {
+export interface ArmRollup {
 	arm: Arm;
 	entries: ManifestEntry[];
 	collected: ManifestEntry[];
@@ -52,7 +52,8 @@ const mean = (xs: number[]): number | undefined => (xs.length ? xs.reduce((a, b)
 const nums = (entries: ManifestEntry[], pick: (m: RunMetrics) => number | undefined): number[] =>
 	entries.map((e) => (e.metrics ? pick(e.metrics) : undefined)).filter((n): n is number => typeof n === "number");
 
-function rollup(arm: Arm, entries: ManifestEntry[]): ArmRollup {
+/** Exported for the live dashboard (dash.ts), which charts the same numbers the report tabulates. */
+export function rollup(arm: Arm, entries: ManifestEntry[]): ArmRollup {
 	const collected = entries.filter((e) => e.collected);
 	const withScopes = collected.filter((e) => (e.metrics?.mutationScopes?.length ?? 0) > 0);
 
@@ -124,14 +125,14 @@ const taskRow = (r: ArmRollup, model: string): string =>
 const costCell = (c: CostRollup): string => (c.priced === 0 ? (c.unpriced ? `?×${c.unpriced}` : "—") : `${usd(c.usd)}${c.unpriced ? ` +${c.unpriced}?` : ""}`);
 
 /** The model passes present for an arm, in first-seen order; [undefined] when none ran yet. */
-const modelPasses = (m: Manifest, armId: string): Array<string | undefined> => {
+export const modelPasses = (m: Manifest, armId: string): Array<string | undefined> => {
 	const seen: Array<string | undefined> = [];
 	for (const e of m.entries) if (e.armId === armId && !seen.includes(e.model)) seen.push(e.model);
 
 	return seen.length ? seen : [undefined];
 };
 
-const passLabel = (model: string | undefined): string => model ?? "(default)";
+export const passLabel = (model: string | undefined): string => model ?? "(default)";
 
 /**
  * What the whole manifest cost, split by model pass — the number David asked for, and the

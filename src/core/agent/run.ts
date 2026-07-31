@@ -8,6 +8,7 @@ import { envNum } from "../../env.js";
 import {
 	ACT_TOOL,
 	checkableCount,
+	sessionEndingChord,
 	DEMO_ACT_TOOL,
 	DEMO_DRIVER_RULES,
 	DEMO_VISION_ONLY_RULES,
@@ -645,6 +646,28 @@ export async function main(): Promise<void> {
 			// expectation arrives silently — and an unverifiable action that "worked"
 			// is indistinguishable from one we simply never checked. Refuse to act
 			// until the model commits to a checkable claim.
+			// Before the expectation check, because a chord that closes the app is refused
+			// however well-specified its expectation is. The task agent has no label guards
+			// (its irreversible-action carve-out lives in the prompt), so this is its only
+			// structural protection against ending its own run — see gates.ts for the explore
+			// pass that pressed cmd+Q 162 actions deep and could not observe anything after.
+			const chord = sessionEndingChord(input.action);
+			if (chord) {
+				console.log(`    -> ✗ refused: ${chord}`);
+				messages.push({
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: toolUse.id,
+							is_error: true,
+							content: `ACTION NOT EXECUTED — refused: ${chord}. Never quit, hide, or minimise the app you are driving: you cannot observe or verify anything afterwards and the run ends. Choose another action.`,
+						},
+					],
+				});
+				continue;
+			}
+
 			const checkable = checkableCount(input.expectation);
 			if (!checkable) {
 				console.log("    -> ✗ rejected: no checkable expectation (textIncludes/textExcludes)");

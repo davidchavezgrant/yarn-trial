@@ -92,6 +92,39 @@ export function destructiveTarget(action: any, obs: ObservationBundle, web = fal
 }
 
 /**
+ * Chords that make the target APP GO AWAY, named individually.
+ *
+ * The label guards above deliberately refuse to judge keystrokes, on the correct reasoning
+ * that guessing at key combinations would block the pass from typing. This is not a guess.
+ * These three chords have one meaning each on macOS and no legitimate use in a UI-automation
+ * run: the agent never needs to quit, hide, or minimise the thing it is driving.
+ *
+ * Learned the expensive way on 2026-07-31: an explore pass 162 actions deep into Yarn pressed
+ * cmd+Q. The label guard saw a keystroke with no control attached and passed it; the driver
+ * then reported the target "running but not observable" and blamed an inactive macOS Space,
+ * so the diagnostic sent the operator hunting for a window that no longer existed. The pass's
+ * map was demoted to salvage and 162 actions of work went unfinished.
+ *
+ * cmd+W is NOT here: closing a tab or a dialog is ordinary navigation, and on a browser
+ * target it is something a pass may legitimately need.
+ */
+const SESSION_ENDING_CHORDS: Array<{ key: string; meaning: string }> = [
+	{ key: "q", meaning: "quits the application" },
+	{ key: "h", meaning: "hides the application" },
+	{ key: "m", meaning: "minimises the window" },
+];
+
+export function sessionEndingChord(action: any): string | undefined {
+	if (String(action?.name) !== "press_key") return undefined;
+	const mods = (Array.isArray(action?.modifiers) ? action.modifiers : []).map((m: unknown) => String(m).toLowerCase());
+	if (!mods.some((m: string) => m === "cmd" || m === "command" || m === "meta")) return undefined;
+	const key = String(action?.key ?? "").toLowerCase();
+	const hit = SESSION_ENDING_CHORDS.find((c) => c.key === key);
+
+	return hit ? `cmd+${hit.key} ${hit.meaning}` : undefined;
+}
+
+/**
  * The control this action would PRESS, or undefined when the action presses nothing.
  *
  * Only *pressing* things is guarded. A keystroke can be destructive too, but nothing

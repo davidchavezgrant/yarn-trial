@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bench dash</title>
+<link rel="icon" href="data:,">
+<style>
+	/* Dark-only by design: this is the operator view of a colo fleet, matched to the
+	   terminal it is launched from. Palette per the validated reference instance. */
+	:root {
+		color-scheme: dark;
+		--plane: #0d0d0d;
+		--surface: #1a1a19;
+		--ink: #ffffff;
+		--ink-2: #c3c2b7;
+		--muted: #898781;
+		--grid: #2c2c2a;
+		--baseline: #383835;
+		--border: rgba(255, 255, 255, 0.10);
+		--s1: #3987e5; /* blue */
+		--s2: #d95926; /* orange */
+		--s3: #199e70; /* aqua */
+		--s4: #c98500; /* yellow */
+		--s5: #d55181; /* magenta */
+		--good: #0ca30c;
+		--warning: #fab219;
+		--serious: #ec835a;
+		--critical: #d03b3b;
+	}
+	* { box-sizing: border-box; }
+	body {
+		margin: 0; background: var(--plane); color: var(--ink-2);
+		font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+	}
+	header {
+		display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap;
+		padding: 14px 20px 10px; border-bottom: 1px solid var(--border);
+		position: sticky; top: 0; background: var(--plane); z-index: 5;
+	}
+	header h1 { font-size: 15px; color: var(--ink); margin: 0; font-weight: 600; }
+	.hero { display: flex; gap: 22px; margin-left: auto; }
+	.hero .tile { text-align: right; }
+	.hero .v { font-size: 19px; color: var(--ink); font-weight: 600; }
+	.hero .k { font-size: 11px; color: var(--muted); }
+	#conn { width: 8px; height: 8px; border-radius: 50%; background: var(--critical); display: inline-block; margin-right: 6px; }
+	#conn.ok { background: var(--good); }
+	.meta { font-size: 11px; color: var(--muted); }
+	main { padding: 16px 20px 60px; display: grid; gap: 16px; }
+	.card {
+		background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+		padding: 12px 14px;
+	}
+	.card h2 { font-size: 12px; font-weight: 600; color: var(--ink); margin: 0 0 4px; letter-spacing: .02em; }
+	.card .sub { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+	.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; }
+	.empty { color: var(--muted); font-size: 12px; padding: 18px 0; }
+
+	/* fleet */
+	#fleet { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+	.host { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+	.host .name { color: var(--ink); font-weight: 600; }
+	.host .row { display: flex; gap: 8px; align-items: center; margin-top: 4px; font-size: 12px; }
+	.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+	.q { color: var(--muted); font-size: 11px; margin-top: 4px; }
+	.warn { color: var(--warning); font-size: 11px; }
+
+	/* matrix board */
+	table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+	th { text-align: left; font-size: 11px; color: var(--muted); font-weight: 500; padding: 3px 10px 3px 0; border-bottom: 1px solid var(--grid); }
+	td { padding: 4px 10px 4px 0; border-bottom: 1px solid var(--grid); font-size: 12px; vertical-align: top; }
+	tr:last-child td { border-bottom: none; }
+	td.arm { color: var(--ink); white-space: nowrap; }
+	td.flags { color: var(--muted); font-family: ui-monospace, monospace; font-size: 11px; }
+	.phase-h td { color: var(--muted); font-size: 11px; letter-spacing: .05em; text-transform: uppercase; padding-top: 12px; border-bottom: none; }
+	.chip {
+		display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border);
+		border-radius: 10px; padding: 1px 8px; margin: 1px 3px 1px 0; font-size: 11px; white-space: nowrap;
+	}
+	.chip .dot { flex: none; }
+	.num { color: var(--ink-2); }
+
+	/* charts */
+	svg { display: block; width: 100%; height: auto; }
+	.legend { display: flex; gap: 14px; flex-wrap: wrap; margin: 2px 0 8px; font-size: 11px; color: var(--ink-2); }
+	.legend .sw { width: 9px; height: 9px; border-radius: 2px; display: inline-block; margin-right: 5px; vertical-align: -1px; }
+	text { font: 11px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--muted); }
+	text.val { fill: var(--ink-2); font-variant-numeric: tabular-nums; }
+	text.lbl { fill: var(--ink-2); }
+
+	#tooltip {
+		position: fixed; pointer-events: none; z-index: 20; display: none;
+		background: #242423; border: 1px solid var(--border); border-radius: 6px;
+		padding: 6px 9px; font-size: 11px; color: var(--ink); max-width: 320px;
+		box-shadow: 0 4px 14px rgba(0,0,0,.5); white-space: pre-line;
+	}
+
+	/* events */
+	#events { max-height: 260px; overflow-y: auto; font-family: ui-monospace, monospace; font-size: 11px; }
+	#events .t { color: var(--muted); margin-right: 8px; }
+	#events div { padding: 1px 0; }
+	.scroll { max-height: 420px; overflow-y: auto; }
+</style>
+</head>
+<body>
+<header>
+	<h1><span id="conn"></span>bench dash</h1>
+	<span class="meta" id="metaline">connecting…</span>
+	<div class="hero">
+		<div class="tile"><div class="v" id="h-collected">–</div><div class="k">collected / submitted</div></div>
+		<div class="tile"><div class="v" id="h-live">–</div><div class="k">running · queued</div></div>
+		<div class="tile"><div class="v" id="h-success">–</div><div class="k">successes</div></div>
+		<div class="tile"><div class="v" id="h-cost">–</div><div class="k">est. spend</div></div>
+	</div>
+</header>
+<main>
+	<section id="fleet"></section>
+
+	<section class="card">
+		<h2>Matrix</h2>
+		<div class="sub" id="board-sub"></div>
+		<div class="scroll" id="board"></div>
+	</section>
+
+	<section class="grid2">
+		<div class="card"><h2>Phase 1 — discovery per backend</h2><div class="sub">controls actuated / dismissed / seen per explore arm — the leaner-vs-blinder question</div><div id="chart-explore"></div></div>
+		<div class="card"><h2>Task outcomes by arm</h2><div class="sub">collected runs by verdict; pending = submitted, not yet collected</div><div id="chart-outcomes"></div></div>
+		<div class="card"><h2>Grounding effect — steps x̄</h2><div class="sub">grounded vs ungrounded, per backend (phase 2 core)</div><div id="chart-steps"></div></div>
+		<div class="card"><h2>Grounding effect — output tokens x̄</h2><div class="sub">same arms, token cost of going in blind</div><div id="chart-tokens"></div></div>
+		<div class="card"><h2>Attention — offered vs shown</h2><div class="sub">mean interactive elements observed vs list lines rendered into the prompt</div><div id="chart-attention"></div></div>
+		<div class="card"><h2>Cumulative est. cost</h2><div class="sub" id="cost-sub"></div><div id="chart-cost"></div></div>
+		<div class="card"><h2>Queue wait vs run time</h2><div class="sub">per collected job, from job records</div><div id="chart-timing"></div></div>
+		<div class="card"><h2>Judge</h2><div class="sub">offline adversarial re-grade; disagreements with self-report are the finding</div><div id="judge"></div></div>
+	</section>
+
+	<section class="card">
+		<h2>Events</h2>
+		<div id="events" class="empty">nothing yet</div>
+	</section>
+</main>
+<div id="tooltip"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+const SERIES = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181"];
+const STATUS = { good: "#0ca30c", warning: "#fab219", serious: "#ec835a", critical: "#d03b3b" };
+const OUTCOME_COLORS = {
+	succeeded: STATUS.good, "gave-up": STATUS.critical, unready: STATUS.warning,
+	crashed: STATUS.serious, stopped: "#898781", "hinted-refused": "#d55181",
+	failed: STATUS.critical, pending: "#383835",
+};
+const fmtMoney = (n) => n < 0.01 && n > 0 ? "$" + n.toFixed(4) : "$" + n.toFixed(2);
+const fmtDur = (s) => s == null ? "–" : s >= 3600 ? Math.floor(s / 3600) + "h" + String(Math.floor(s % 3600 / 60)).padStart(2, "0") + "m" : s >= 60 ? Math.floor(s / 60) + "m" + String(Math.round(s % 60)).padStart(2, "0") + "s" : Math.round(s) + "s";
+const fmtNum = (n) => n == null ? "–" : Number.isInteger(n) ? String(n) : n >= 100 ? String(Math.round(n)) : n.toFixed(1);
+const fmtK = (n) => n == null ? "–" : n >= 10000 ? (n / 1000).toFixed(0) + "k" : n >= 1000 ? (n / 1000).toFixed(1) + "k" : fmtNum(n);
+const hhmm = (iso) => { const d = new Date(iso); return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); };
+
+// var, not let: top-level var binds to window, so a debugger (or a test driving the page)
+// can inject a synthetic state and call render() by hand.
+var state = null;
+var receivedAt = 0;
+
+/* ---- svg chart helpers ------------------------------------------------------------- */
+
+/** Bar anchored to the baseline with the DATA END rounded (r=4), per the mark spec. */
+function barPath(x, y, w, h, r, horizontal) {
+	r = Math.min(r, w / 2, Math.max(h, 1) / 2, horizontal ? h / 2 : w / 2);
+	if (h <= 0 && !horizontal) return "";
+	if (horizontal) {
+		// grows rightward from x; rounded right end
+		return `M${x},${y} h${Math.max(w - r, 0)} a${r},${r} 0 0 1 ${r},${r} v${h - 2 * r} a${r},${r} 0 0 1 ${-r},${r} h${-Math.max(w - r, 0)} z`;
+	}
+	// grows upward to y; rounded top
+	return `M${x},${y + h} v${-(h - r)} a${r},${r} 0 0 1 ${r},${-r} h${w - 2 * r} a${r},${r} 0 0 1 ${r},${r} v${h - r} z`;
+}
+
+function legend(series) {
+	return `<div class="legend">${series.map((s) => `<span><span class="sw" style="background:${s.color}"></span>${esc(s.name)}</span>`).join("")}</div>`;
+}
+
+/** Grouped vertical bars. groups: [{label, values:[…]}] aligned with series: [{name,color}]. */
+function vBars(groups, series, opts = {}) {
+	const fmt = opts.fmt || fmtNum;
+	const W = 460, H = 190, padL = 42, padB = 22, padT = 12, padR = 8;
+	const max = Math.max(1, ...groups.flatMap((g) => g.values.filter((v) => v != null)));
+	const iw = W - padL - padR, ih = H - padT - padB;
+	const gw = iw / groups.length;
+	const bw = Math.min(26, (gw - 8) / series.length - 2);
+	const y = (v) => padT + ih * (1 - v / max);
+	const ticks = 4;
+	let svg = "";
+	for (let i = 0; i <= ticks; i++) {
+		const tv = max * i / ticks, ty = y(tv);
+		svg += `<line x1="${padL}" x2="${W - padR}" y1="${ty}" y2="${ty}" stroke="${i === 0 ? "var(--baseline)" : "var(--grid)"}" stroke-width="1"/>`;
+		svg += `<text x="${padL - 6}" y="${ty + 3}" text-anchor="end">${fmt(tv)}</text>`;
+	}
+	const labelBars = groups.length * series.length <= 8;
+	groups.forEach((g, gi) => {
+		const cx = padL + gw * gi + gw / 2;
+		const total = series.length * bw + (series.length - 1) * 2; // 2px surface gap between bars
+		series.forEach((s, si) => {
+			const v = g.values[si];
+			if (v == null) return;
+			const bx = cx - total / 2 + si * (bw + 2);
+			const by = y(v), bh = padT + ih - by;
+			svg += `<path d="${barPath(bx, by, bw, bh, 4, false)}" fill="${s.color}" data-tip="${esc(g.label)} — ${esc(s.name)}: ${fmt(v)}"/>`;
+			if (labelBars && v > 0) svg += `<text class="val" x="${bx + bw / 2}" y="${by - 4}" text-anchor="middle">${fmt(v)}</text>`;
+		});
+		svg += `<text class="lbl" x="${cx}" y="${H - 6}" text-anchor="middle">${esc(g.label)}</text>`;
+	});
+	return legend(series) + `<svg viewBox="0 0 ${W} ${H}">${svg}</svg>`;
+}
+
+/** Horizontal stacked bars. rows: [{label, tip, segs:[{name,color,value}]}]. */
+function hStack(rows, seriesNames, opts = {}) {
+	const fmt = opts.fmt || fmtNum;
+	const W = 460, rowH = 22, padL = opts.padL || 150, padR = 46;
+	const H = rows.length * rowH + 8;
+	const max = Math.max(1, ...rows.map((r) => r.segs.reduce((a, s) => a + s.value, 0)));
+	const iw = W - padL - padR;
+	let svg = "";
+	rows.forEach((r, ri) => {
+		const cy = 4 + ri * rowH;
+		svg += `<text class="lbl" x="${padL - 8}" y="${cy + 13}" text-anchor="end">${esc(r.label)}</text>`;
+		let x = padL;
+		const visible = r.segs.filter((s) => s.value > 0);
+		visible.forEach((s, si) => {
+			const w = Math.max(s.value / max * iw - (si < visible.length - 1 ? 2 : 0), 1.5); // 2px surface gap
+			const last = si === visible.length - 1;
+			const shape = last
+				? `<path d="${barPath(x, cy + 3, w, rowH - 9, 4, true)}" fill="${s.color}"`
+				: `<rect x="${x}" y="${cy + 3}" width="${w}" height="${rowH - 9}" fill="${s.color}"`;
+			svg += shape + ` data-tip="${esc(r.label)}\n${esc(s.name)}: ${fmt(s.value)}${r.tip ? "\n" + esc(r.tip) : ""}"/>`;
+			x += w + 2;
+		});
+		const total = r.segs.reduce((a, s) => a + s.value, 0);
+		if (total > 0) svg += `<text class="val" x="${x + 4}" y="${cy + 13}">${fmt(total)}</text>`;
+	});
+	const series = seriesNames.filter((s) => rows.some((r) => r.segs.some((g) => g.name === s.name && g.value > 0)));
+	return (series.length > 1 ? legend(series) : "") + `<svg viewBox="0 0 ${W} ${H}">${svg}</svg>`;
+}
+
+/** Cumulative step line with area wash and per-point hover markers. */
+function stepLine(points, color, opts = {}) {
+	const fmtY = opts.fmtY || fmtNum;
+	const W = 460, H = 180, padL = 52, padB = 22, padT = 10, padR = 12;
+	const max = Math.max(...points.map((p) => p.y)) * 1.08 || 1;
+	const iw = W - padL - padR, ih = H - padT - padB;
+	const xs = points.map((_, i) => padL + (points.length === 1 ? iw / 2 : i / (points.length - 1) * iw));
+	const y = (v) => padT + ih * (1 - v / max);
+	let svg = "";
+	for (let i = 0; i <= 3; i++) {
+		const tv = max * i / 3, ty = y(tv);
+		svg += `<line x1="${padL}" x2="${W - padR}" y1="${ty}" y2="${ty}" stroke="${i === 0 ? "var(--baseline)" : "var(--grid)"}" stroke-width="1"/>`;
+		svg += `<text x="${padL - 6}" y="${ty + 3}" text-anchor="end">${fmtY(tv)}</text>`;
+	}
+	let d = "";
+	points.forEach((p, i) => {
+		const px = xs[i], py = y(p.y);
+		d += i === 0 ? `M${px},${py}` : `H${px}V${py}`; // step-after
+	});
+	svg += `<path d="${d}V${y(0)}H${xs[0]}z" fill="${color}" opacity="0.14" stroke="none"/>`;
+	svg += `<path d="${d}" fill="none" stroke="${color}" stroke-width="2"/>`;
+	points.forEach((p, i) => {
+		svg += `<circle cx="${xs[i]}" cy="${y(p.y)}" r="4" fill="${color}" stroke="var(--surface)" stroke-width="2" data-tip="${esc(p.label)}"/>`;
+	});
+	svg += `<text x="${padL}" y="${H - 6}">${esc(points[0].x)}</text><text x="${W - padR}" y="${H - 6}" text-anchor="end">${esc(points[points.length - 1].x)}</text>`;
+	return `<svg viewBox="0 0 ${W} ${H}">${svg}</svg>`;
+}
+
+/* ---- sections ----------------------------------------------------------------------- */
+
+function statusChip(e) {
+	const color = e.status === "running" ? SERIES[0] : e.status === "queued" ? "#898781" :
+		e.status === "awaiting-collect" ? STATUS.warning : OUTCOME_COLORS[e.status] || "#898781";
+	// Running chips carry a js-elapsed span so the 1s ticker advances them between SSE
+	// pushes — a static "running 22m43s" that jumps every 20s reads as frozen.
+	let label = e.status === "running"
+		? `running ${elapsedSpan(e.elapsedSec)}`
+		: esc(e.status);
+	if (e.status === "queued" && e.queuePosition) label += " #" + e.queuePosition;
+	if (e.stalled) label += " ⚠stalled";
+	const extra = e.collected && e.steps != null ? ` · ${e.steps} steps${e.usd != null ? " · " + fmtMoney(e.usd) : ""}` : "";
+	const judge = e.judgeTrajectory ? ` · judge ${e.judgeTrajectory[0]}` : "";
+	return `<span class="chip" data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${e.note ? "\n" + esc(e.note) : ""}">` +
+		`<span class="dot" style="background:${color}"></span>${esc(e.host)} · ${label}${esc(extra)}${esc(judge)}</span>`;
+}
+
+/** An elapsed readout the 1s ticker keeps advancing. base = seconds as of receivedAt. */
+function elapsedSpan(sec) {
+	return `<span class="js-elapsed" data-base="${sec || 0}">${fmtDur(sec || 0)}</span>`;
+}
+
+function renderFleet() {
+	const f = state.fleet;
+	if (!f.rows.length) {
+		$("fleet").innerHTML = `<div class="card empty">fleet: ${esc(f.error || "no poll yet")}</div>`;
+		return;
+	}
+	$("fleet").innerHTML = f.rows.map((r) => {
+		const color = !r.reachable ? STATUS.critical : r.state === "busy" ? SERIES[0] : r.state === "idle" ? STATUS.good : STATUS.warning;
+		const busy = r.state === "busy"
+			? `<div class="row"><span class="num">${esc(r.app || "?")}</span><span class="meta">${elapsedSpan(r.elapsedSec)}</span></div>
+			   <div class="q">${esc(r.jobId || "")}${r.stalled ? ' <span class="warn">⚠ stalled ' + fmtDur(r.logSilenceSec) + ' silent</span>' : ""}</div>`
+			: "";
+		const queue = r.queue && r.queue.length
+			? `<div class="q">queue: ${r.queue.map((q) => esc(armOf(q.jobId) || q.app || q.jobId)).join(" → ")}</div>` : "";
+		const tcc = r.tccOk === false ? `<div class="warn">no TCC grants</div>` : "";
+		return `<div class="host"><div class="row"><span class="dot" style="background:${color}"></span><span class="name">${esc(r.name)}</span>
+			<span class="meta">${esc(r.reachable ? r.state : "unreachable")}${r.operator ? " · " + esc(r.operator) : ""}</span></div>
+			${busy}${queue}${tcc}${r.reason ? `<div class="q">${esc(r.reason)}</div>` : ""}</div>`;
+	}).join("");
+}
+
+function armOf(jobId) {
+	for (const a of state.arms) for (const p of a.passes) if (p.entries.some((e) => e.jobId === jobId)) return a.id;
+	return null;
+}
+
+function renderBoard() {
+	const phases = [...new Set(state.arms.map((a) => a.phase))].sort();
+	let html = `<table><tr><th>arm</th><th>flags</th><th>done</th><th>ok</th><th>steps x̄</th><th>s x̄</th><th>tok x̄</th><th>$</th><th>runs</th></tr>`;
+	for (const ph of phases) {
+		const arms = state.arms.filter((a) => a.phase === ph && a.kind !== "compile");
+		if (!arms.some((a) => a.passes.length)) continue;
+		html += `<tr class="phase-h"><td colspan="9">phase ${ph}</td></tr>`;
+		for (const a of arms) {
+			if (!a.passes.length) continue;
+			for (const p of a.passes) {
+				const ex = p.explore;
+				const mid = ex
+					? `<td colspan="4" class="num">${ex.controlsActuated != null ? `${ex.controlsActuated}/${ex.controlsDismissed}/${ex.controlsSeen} controls · ${ex.surfaces ?? "–"} surfaces · ${ex.graphNodes ?? "–"} nodes · ${ex.scopeAmbiguities ?? "–"} ambig` : "–"}</td>`
+					: `<td class="num">${fmtNum(p.meanSteps)}</td><td class="num">${p.meanElapsedSec != null ? fmtDur(p.meanElapsedSec) : "–"}</td><td class="num">${fmtK(p.meanOutputTokens)}</td><td class="num">${p.usd ? fmtMoney(p.usd) : p.unpriced ? "?×" + p.unpriced : "–"}</td>`;
+				html += `<tr><td class="arm" data-tip="${esc(a.informs || "")}">${esc(a.id)}${p.model !== "(default)" ? `<div class="meta">${esc(p.model)}</div>` : ""}</td>
+					<td class="flags">${esc(a.flags)}</td>
+					<td class="num">${p.collected}/${a.n}</td>
+					<td class="num">${p.collected ? p.successes + "/" + p.collected : "–"}</td>
+					${mid}
+					<td>${p.entries.map(statusChip).join("")}</td></tr>`;
+			}
+		}
+	}
+	$("board").innerHTML = html + "</table>";
+	$("board-sub").textContent = `${state.progress.submitted} submitted of ${state.progress.planned} planned runs · ${state.progress.collected} collected`;
+}
+
+function renderExplore() {
+	const arms = state.arms.filter((a) => a.phase === 1 && a.passes.some((p) => p.explore && p.explore.controlsSeen != null));
+	if (!arms.length) { $("chart-explore").innerHTML = `<div class="empty">waiting for a collected explore…</div>`; return; }
+	const groups = arms.flatMap((a) => a.passes.filter((p) => p.explore && p.explore.controlsSeen != null).map((p) => ({
+		label: a.id.replace("p1-explore-", "") + (p.model !== "(default)" ? " · " + p.model : ""),
+		values: [p.explore.controlsActuated, p.explore.controlsDismissed, p.explore.controlsSeen],
+	})));
+	$("chart-explore").innerHTML = vBars(groups, [
+		{ name: "actuated", color: SERIES[0] }, { name: "dismissed", color: SERIES[1] }, { name: "seen", color: SERIES[2] },
+	]);
+}
+
+function renderOutcomes() {
+	const rows = [];
+	for (const a of state.arms) {
+		if (a.kind !== "task" && a.kind !== "replay") continue;
+		for (const p of a.passes) {
+			if (!p.submitted) continue;
+			const kinds = {};
+			for (const e of p.entries) if (e.collected && !e.success) kinds[e.failureKind || "failed"] = (kinds[e.failureKind || "failed"] || 0) + 1;
+			rows.push({
+				label: a.id + (p.model !== "(default)" ? " · " + p.model : ""),
+				segs: [
+					{ name: "succeeded", color: OUTCOME_COLORS.succeeded, value: p.successes },
+					...Object.entries(kinds).map(([k, v]) => ({ name: k, color: OUTCOME_COLORS[k] || STATUS.critical, value: v })),
+					{ name: "pending", color: OUTCOME_COLORS.pending, value: p.submitted - p.collected },
+				],
+			});
+		}
+	}
+	if (!rows.length) { $("chart-outcomes").innerHTML = `<div class="empty">no task runs submitted yet</div>`; return; }
+	const names = ["succeeded", "gave-up", "unready", "hinted-refused", "stopped", "crashed", "failed", "pending"];
+	$("chart-outcomes").innerHTML = hStack(rows, names.map((n) => ({ name: n, color: OUTCOME_COLORS[n] })), { padL: 170, fmt: (v) => String(Math.round(v)) });
+}
+
+function groundingChart(el, pick, fmt) {
+	const cell = (backend, grounded) => {
+		const arm = state.arms.find((a) => a.id === `p2-${backend}-${grounded ? "grounded" : "ungrounded"}`);
+		const p = arm && arm.passes[0];
+		return p && p.collected ? pick(p) : null;
+	};
+	const groups = ["ax", "cdp"].map((b) => ({ label: b, values: [cell(b, true), cell(b, false)] }));
+	if (!groups.some((g) => g.values.some((v) => v != null))) { $(el).innerHTML = `<div class="empty">waiting for phase-2 core runs…</div>`; return; }
+	$(el).innerHTML = vBars(groups, [{ name: "grounded", color: SERIES[0] }, { name: "ungrounded", color: SERIES[1] }], { fmt });
+}
+
+function renderAttention() {
+	const arms = state.arms.filter((a) => /^p2-(ax|cdp)-(un)?grounded$/.test(a.id) && a.passes.some((p) => p.meanObsNodes != null));
+	if (!arms.length) { $("chart-attention").innerHTML = `<div class="empty">waiting for phase-2 runs…</div>`; return; }
+	const groups = arms.map((a) => ({ label: a.id.replace("p2-", ""), values: [a.passes[0].meanObsNodes, a.passes[0].meanShownLines] }));
+	$("chart-attention").innerHTML = vBars(groups, [{ name: "observed nodes", color: SERIES[0] }, { name: "shown to model", color: SERIES[1] }]);
+}
+
+function renderCost() {
+	const c = state.cost;
+	$("h-cost").textContent = fmtMoney(c.totalUsd) + (c.unpriced ? ` +${c.unpriced}?` : "");
+	$("cost-sub").textContent = c.passes.map((p) => `${p.pass}: ${fmtMoney(p.usd)} over ${p.priced} run(s)${p.unpriced ? ` (+${p.unpriced} unpriced)` : ""}`).join(" · ") || "published-rate estimates, not an invoice";
+	if (!state.costSeries.length) { $("chart-cost").innerHTML = `<div class="empty">no priced runs collected yet</div>`; return; }
+	$("chart-cost").innerHTML = stepLine(
+		state.costSeries.map((p) => ({ x: hhmm(p.t), y: p.cumulativeUsd, label: `${p.jobId}\n${hhmm(p.t)} — cumulative ${fmtMoney(p.cumulativeUsd)}` })),
+		SERIES[0], { fmtY: fmtMoney },
+	);
+}
+
+function renderTiming() {
+	const rows = [];
+	for (const a of state.arms) for (const p of a.passes) for (const e of p.entries)
+		if (e.queueWaitSec != null || e.runSec != null)
+			rows.push({ label: a.id, tip: e.jobId + " on " + e.host, segs: [
+				{ name: "queue wait", color: SERIES[1], value: e.queueWaitSec || 0 },
+				{ name: "run", color: SERIES[0], value: e.runSec || 0 },
+			] });
+	if (!rows.length) { $("chart-timing").innerHTML = `<div class="empty">no collected job records yet</div>`; return; }
+	$("chart-timing").innerHTML = `<div class="scroll">` + hStack(rows, [
+		{ name: "queue wait", color: SERIES[1] }, { name: "run", color: SERIES[0] },
+	], { padL: 140, fmt: fmtDur }) + `</div>`;
+}
+
+function renderJudge() {
+	const j = state.judge;
+	if (!j.judged) { $("judge").innerHTML = `<div class="empty">no judged runs yet — the dash folds verdicts in after \`bench judge\` + collect</div>`; return; }
+	const line = (name, t) => `<div class="row" style="gap:14px"><span style="min-width:70px" class="num">${name}</span>
+		<span class="chip"><span class="dot" style="background:${STATUS.good}"></span>PASS ${t.pass}</span>
+		<span class="chip"><span class="dot" style="background:${STATUS.critical}"></span>FAIL ${t.fail}</span>
+		<span class="chip"><span class="dot" style="background:${STATUS.warning}"></span>UNPROVEN ${t.unproven}</span></div>`;
+	let html = `<div class="sub">${j.judged} run(s) judged</div>` + line("trajectory", j.trajectory) + line("visual", j.visual);
+	html += `<div class="sub" style="margin-top:10px">disagreements</div>`;
+	html += j.disagreements.length
+		? j.disagreements.map((d) => `<div class="q">⚠ <b>${esc(d.armId)}</b> ${esc(d.jobId)}: self-report ${d.success} vs judge ${esc(d.judgeTrajectory || "?")}${d.judgeScope ? " · scope " + esc(d.judgeScope) : ""}</div>`).join("")
+		: `<div class="q">none — every judged verdict matches its self-report</div>`;
+	$("judge").innerHTML = html;
+}
+
+function renderEvents() {
+	if (!state.events.length) return;
+	const el = $("events");
+	el.classList.remove("empty");
+	el.innerHTML = state.events.slice().reverse().map((e) => `<div><span class="t">${hhmm(e.t)}</span>${esc(e.line)}</div>`).join("");
+}
+
+function render() {
+	if (!state) return;
+	const p = state.progress;
+	$("h-collected").textContent = `${p.collected} / ${p.submitted}`;
+	$("h-live").textContent = `${p.running} · ${p.queued}`;
+	$("h-success").textContent = String(p.successes);
+	$("metaline").textContent = `${state.date} · fleet ${state.fleet.polledAt ? hhmm(state.fleet.polledAt) : "–"} · ${state.autoCollect ? "auto-collect on" : "collect off (pure reader)"} · updated ${hhmm(state.generatedAt)}`;
+	renderFleet(); renderBoard(); renderExplore(); renderOutcomes();
+	groundingChart("chart-steps", (x) => x.meanSteps, fmtNum);
+	groundingChart("chart-tokens", (x) => x.meanOutputTokens, fmtK);
+	renderAttention(); renderCost(); renderTiming(); renderJudge(); renderEvents();
+}
+
+/* ---- wiring -------------------------------------------------------------------------- */
+
+const es = new EventSource("/events");
+es.onmessage = (ev) => { state = JSON.parse(ev.data); receivedAt = Date.now(); $("conn").classList.add("ok"); render(); };
+es.onerror = () => $("conn").classList.remove("ok");
+
+// Elapsed tickers between pushes: every js-elapsed span (fleet cards AND matrix run chips)
+// advances from the last push's base — the page reads as live even between SSE frames.
+setInterval(() => {
+	if (!state) return;
+	document.querySelectorAll(".js-elapsed").forEach((el) => {
+		el.textContent = fmtDur(Number(el.dataset.base) + (Date.now() - receivedAt) / 1000);
+	});
+}, 1000);
+
+// One shared tooltip; delegation covers SVG marks and chips alike.
+const tip = $("tooltip");
+document.addEventListener("mouseover", (ev) => {
+	const t = ev.target.closest("[data-tip]");
+	if (!t || !t.dataset.tip) { tip.style.display = "none"; return; }
+	tip.textContent = t.dataset.tip;
+	tip.style.display = "block";
+});
+document.addEventListener("mousemove", (ev) => {
+	if (tip.style.display !== "block") return;
+	const pad = 12;
+	tip.style.left = Math.min(ev.clientX + pad, innerWidth - tip.offsetWidth - 8) + "px";
+	tip.style.top = Math.min(ev.clientY + pad, innerHeight - tip.offsetHeight - 8) + "px";
+});
+document.addEventListener("mouseout", (ev) => { if (!ev.relatedTarget?.closest?.("[data-tip]")) tip.style.display = "none"; });
+</script>
+</body>
+</html>

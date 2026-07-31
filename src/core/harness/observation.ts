@@ -191,10 +191,15 @@ export class TargetNotObservableError extends Error {
 						`To stop it recurring on a machine that exists to be driven, turn off the screen\n` +
 						`lock and display sleep on that host.`
 				: `"${app}" is running but not observable (${detail}), and neither foregrounding nor\n` +
-						`relaunching it helped. The screen is unlocked, so most likely it is on an inactive\n` +
-						`macOS Space that it keeps restoring itself onto — another app is fullscreen, or the\n` +
-						`window belongs to a different desktop. Bring the app onto the active Space (click it\n` +
-						`in the Dock or ⌘-Tab to it), then re-run.`,
+						`relaunching it helped. The screen is unlocked, so the likely causes are:\n` +
+						`  · the run itself closed, hid or minimised the app — check the last action in the\n` +
+						`    log before this error (an explore pass pressed cmd+Q on 2026-07-31 and this\n` +
+						`    message blamed Spaces, sending the operator after a window that no longer\n` +
+						`    existed). sessionEndingChord() in harness/gates.ts now refuses those chords,\n` +
+						`    so a run on current code should not reach this by its own hand.\n` +
+						`  · an inactive macOS Space it keeps restoring itself onto — another app is\n` +
+						`    fullscreen, or the window belongs to a different desktop. Bring the app onto\n` +
+						`    the active Space (click it in the Dock or ⌘-Tab to it), then re-run.`,
 		);
 		this.name = "TargetNotObservableError";
 	}

@@ -12,6 +12,7 @@ import {
 	declaredRemaining,
 	declaredSummary,
 	externalityTarget,
+	sessionEndingChord,
 	frontierCredit,
 	frontierDismiss,
 	frontierIngest,
@@ -425,6 +426,20 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 		// Both gates read the HARNESS's AX observation — they are guards, not perception —
 		// and their refusal messages name the offending control's label, which is a small,
 		// accepted information leak to a vision-only model: safety wins over arm purity.
+		// Checked before the label gates: a chord has no control attached, so those cannot see
+		// it. Not conditioned on GUARD_ON — that switch exists to let a pass reach risky
+		// CONTENT, never to let it end its own session.
+		const chord = sessionEndingChord(input.action);
+		if (chord) {
+			p.refusals++;
+			console.log(`  REFUSED: ${chord} — the pass cannot operate an app it has closed`);
+			p.messages.push({
+				role: "user",
+				content: [{ type: "tool_result", tool_use_id: toolUse.id, is_error: true, content: `Refused: ${chord}. Never quit, hide, or minimise the app you are exploring — you cannot observe it afterwards and the pass ends. Continue with another action.` }],
+			});
+			continue;
+		}
+
 		const external = GUARD_ON ? externalityTarget(input.action, obs, web) : undefined;
 		if (external) {
 			p.refusals++;

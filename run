@@ -96,6 +96,9 @@ ${b}bench${n}
   bench phase <1|2|3|4> --go             submit that phase to the fleet queue (without --go: preview)
   bench collect                          pull finished runs, compute metrics, rewrite the report
   bench judge                            re-grade landed runs with the offline judge (idempotent)
+  dash [--port N] [--no-collect] [--web] live dashboard (Electron): fleet, matrix progress, charts
+                                         as results land (auto-runs collect; --no-collect = pure
+                                         reader; --web = headless server on localhost:4642)
 
 ${b}setup & health${n}
   doctor                                 check permissions, keys, deps before demoing
@@ -221,6 +224,20 @@ bench)
 	# on the far side from their own ~/.yarn-runner/env.
 	shift
 	exec npx tsx src/bench/orchestrate.ts "$@"
+	;;
+
+dash)
+	# Live view over the benchmark manifest + fleet (src/bench/dash.ts + electron/dash.ts).
+	# Auto-runs the idempotent `bench collect` on a loop so results land while the fleet
+	# drains; --no-collect makes it a pure reader. Electron window by default; --web serves
+	# headless on http://localhost:4642 instead. No assert_no_run_in_flight: it reads
+	# registries and pulls artifacts, never starts a driver session. No have_key: no model.
+	shift
+	if [[ " $* " == *" --web "* || ${1:-} == --web ]]; then
+		exec npx tsx src/bench/dash.ts "$@"
+	fi
+	npx tsc -p tsconfig.electron.json
+	exec npx electron dist-electron/electron/dash.js "$@"
 	;;
 
 browser-wipe)

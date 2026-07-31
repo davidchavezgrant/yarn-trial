@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { actionTarget, destructiveTarget, externalityTarget, gatedId, gatedSection, reversibleTarget } from "../src/core/harness.js";
+import { actionTarget, destructiveTarget, externalityTarget, gatedId, gatedSection, reversibleTarget, sessionEndingChord } from "../src/core/harness.js";
 import type { InteractiveElement, ObservationBundle } from "../src/core/harness.js";
 
 const bundle: ObservationBundle = {
@@ -184,4 +184,32 @@ test("gatedSection__IsEmpty__When__NoTierOneReads", () => {
 test("destructiveTarget__IgnoresEnter__When__TargetIsAMacApp", () => {
 	// Unchanged for apps: guessing at keystrokes would stop a pass from typing at all.
 	assert.equal(destructiveTarget({ name: "press_key", key: "return", element_index: 7 }, webCtl("Submit"), false), undefined);
+});
+
+test("sessionEndingChord__RefusesTheChordsThatCloseTheApp__When__PressedWithCommand", () => {
+	// Learned on 2026-07-31: an explore pass 162 actions into Yarn pressed cmd+Q. The label
+	// guards saw a keystroke with no control attached and passed it, the driver then could not
+	// observe the target, and the diagnostic blamed an inactive macOS Space — so the operator
+	// would have hunted for a window that no longer existed.
+	for (const key of ["q", "h", "m", "Q"]) {
+		const verdict = sessionEndingChord({ name: "press_key", key, modifiers: ["cmd"] });
+		assert.ok(verdict, `cmd+${key} must be refused`);
+	}
+	// Every accepted spelling of the modifier — a guard that only knows one is not a guard.
+	for (const mod of ["cmd", "command", "meta", "Cmd"]) {
+		assert.ok(sessionEndingChord({ name: "press_key", key: "q", modifiers: [mod] }), mod);
+	}
+});
+
+test("sessionEndingChord__LeavesOrdinaryInputAlone__When__NoCommandOrHarmlessKey", () => {
+	// The label guards deliberately refuse to judge keystrokes, because guessing at chords
+	// would block the pass from typing. This list stays narrow for the same reason.
+	assert.equal(sessionEndingChord({ name: "press_key", key: "q" }), undefined, "plain q is typing");
+	assert.equal(sessionEndingChord({ name: "type_text", text: "quit" }), undefined);
+	assert.equal(sessionEndingChord({ name: "press_key", key: "a", modifiers: ["cmd"] }), undefined, "cmd+a selects");
+	assert.equal(sessionEndingChord({ name: "press_key", key: "s", modifiers: ["cmd"] }), undefined, "cmd+s saves");
+	// cmd+W is deliberately allowed: closing a tab or dialog is ordinary navigation, and on a
+	// browser target a pass may legitimately need it.
+	assert.equal(sessionEndingChord({ name: "press_key", key: "w", modifiers: ["cmd"] }), undefined);
+	assert.equal(sessionEndingChord({ name: "click", element_index: 3 }), undefined);
 });
