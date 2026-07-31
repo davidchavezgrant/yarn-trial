@@ -1,6 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { CdpBackend } from "../backends/cdp.js";
-import { CDP_ACT_TOOL } from "../backends/cdp.js";
 import type { Driver } from "./driver.js";
 import { envNum } from "../env.js";
 import {
@@ -224,12 +223,15 @@ async function restoreOne(a: TeardownArgs, m: Mutation, index: number): Promise<
 		},
 	];
 
+	// Loaded lazily so src/backends/ stays deletable without breaking default ax teardowns.
+	const actTool = a.cdp ? (await import("../backends/cdp.js")).CDP_ACT_TOOL : ACT_TOOL;
+
 	for (let step = 1; step <= a.budget; step++) {
 		const r = await a.client.messages.create({
 			model: a.model,
 			max_tokens: 2000,
 			system: SYSTEM,
-			tools: [a.cdp ? CDP_ACT_TOOL : ACT_TOOL],
+			tools: [actTool],
 			messages,
 		});
 		a.usage.modelCalls++;
