@@ -355,7 +355,38 @@ export interface DashDetail {
 	steps: DetailStep[];
 	/** settingKeys the run's journal recorded as actually mutated. */
 	mutatedKeys: string[];
+	/**
+	 * Traversal counts over THIS graph aggregated across every collected task/replay run
+	 * that consumed it (same grounding arm + model pass) — the tree view's heat. Keyed by
+	 * node id, so it is per-graph by construction: ax and cdp maps name nodes differently.
+	 */
+	heat?: { surfaces: Record<string, number>; controls: Record<string, number>; runs: number };
 	note?: string;
+}
+
+function heatFor(
+	graph: NonNullable<DashDetail["graph"]>,
+	exploreArmId: string,
+	model: string | undefined,
+	manifest: Manifest,
+	dataDir: string,
+): DashDetail["heat"] {
+	const out = { surfaces: {} as Record<string, number>, controls: {} as Record<string, number>, runs: 0 };
+	for (const e of manifest.entries) {
+		if (!e.collected || e.model !== model) continue;
+		const a = armById(e.armId);
+		if (!a || a.kind === "explore" || a.kind === "compile" || groundingArmId(a) !== exploreArmId) continue;
+		const runLog = readJsonFile(path.join(dataDir, "out", "runs", `${e.jobId}.json`));
+		const rawSteps = Array.isArray(runLog?.steps) ? runLog.steps : [];
+		if (!rawSteps.length) continue;
+		out.runs++;
+		for (const st of matchPath(graph, rawSteps)) {
+			if (st.edgeTo) out.surfaces[st.edgeTo] = (out.surfaces[st.edgeTo] ?? 0) + 1;
+			if (st.nodeId) out.controls[st.nodeId] = (out.controls[st.nodeId] ?? 0) + 1;
+		}
+	}
+
+	return out;
 }
 
 /**
@@ -501,6 +532,7 @@ export function buildDetail(jobId: string, manifest: Manifest, opts: { dataDir?:
 		...(source ? { graphSource: source } : {}),
 		steps,
 		mutatedKeys,
+		...(graph ? { heat: heatFor(graph, exploreArmId, entry.model, manifest, dataDir) } : {}),
 		...(notes.length ? { note: notes.join("; ") } : {}),
 	};
 }

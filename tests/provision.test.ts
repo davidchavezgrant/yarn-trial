@@ -929,3 +929,21 @@ test("provisionHost__BouncesTheRunnerAnyway__When__ForceIsPassed", async () => {
 		assert.ok(rec.remote.map((c) => c.join(" ")).join(" | ").includes("install-launchagent"), "force must bounce it");
 	});
 });
+
+test("SYNC_EXCLUDES__WithholdsAppmaps__When__ShippingTheCheckout", async () => {
+	// Appmaps are the fleet's OUTPUT. rsync cannot tell a newer map from an older one, so
+	// shipping this directory pushes whatever the laptop holds over a map a Mac wrote minutes
+	// ago — a completed phase-1 pass replaced by a stale local copy, leaving phase 2's
+	// grounded arms grounded on the wrong map while still labelled grounded.
+	// syncAppmaps() compares stamps via beats() and is the only thing that may move them.
+	await inTempDir("yarn-source-", async (source) => {
+		const rec = fleetDouble(source);
+		await provisionHost(host("mac1"), { ...rec.opts, syncOnly: true });
+		const rsyncArgs = rec.rsync.flat();
+		const excluded = rsyncArgs.filter((a, i) => rsyncArgs[i - 1] === "--exclude");
+		assert.ok(excluded.includes("/docs/appmaps/"), `appmaps must be withheld, got: ${excluded.join(" ")}`);
+		// Recipes are NOT excluded here — syncRecipes owns them by the same argument, but this
+		// assertion is about the map path that actually regressed.
+		assert.ok(excluded.includes("/.env"), "the secret exclusions must survive any edit to this list");
+	});
+});

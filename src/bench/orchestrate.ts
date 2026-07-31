@@ -296,6 +296,17 @@ async function syncFleet(opts: PhaseOptions, log: (s: string) => void): Promise<
 		// syncOnly: a FULL provision reinstalls the LaunchAgent, which boots the runner out and
 		// orphans whatever it was running. Dispatching one arm must never kill another's work.
 		const rows = await provisionFleet(loadHosts(), { syncOnly: true });
+		// Code and maps travel by DIFFERENT mechanisms, deliberately. The rsync above excludes
+		// docs/appmaps because it would overwrite blindly; syncAppmaps compares each side's
+		// stamp and moves a map only when it is genuinely newer. Phase 2's grounded arms depend
+		// on the phase-1 map having reached the Mac they land on, and this is what puts it
+		// there. Never fatal — a Mac that is asleep costs a note, not a refused dispatch.
+		const { syncAppmaps } = await import("../remote/control/appmaps.js");
+		const maps = await syncAppmaps();
+		// `adopted` is the direction that matters here: a map this laptop replaced with a newer
+		// one FROM the fleet is a phase-1 result arriving, and it is worth naming rather than
+		// counting — that is the artifact phase 2 will ground on.
+		if (maps.transfers.length) log(`appmaps converged: ${maps.transfers.length} transfer(s)${maps.adopted.length ? `; adopted from fleet: ${maps.adopted.join(", ")}` : ""}`);
 		const bad = rows.filter((r) => !r.ok);
 		log(`fleet code synced (no runner restart): ${rows.length - bad.length}/${rows.length} host(s)${bad.length ? ` — ${bad.map((r) => r.host).join(", ")} FAILED` : ""}`);
 	} catch (e) {

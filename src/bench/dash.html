@@ -115,6 +115,18 @@
 		display: inline-block; min-width: 13px; text-align: center; background: var(--s1);
 		color: #fff; border-radius: 8px; font-size: 10px; padding: 0 4px; margin-left: 5px; vertical-align: 1px;
 	}
+	.btnv {
+		background: none; border: 1px solid var(--border); color: var(--ink-2);
+		border-radius: 6px; padding: 2px 10px; font-size: 11px; cursor: pointer; font: inherit;
+	}
+	.btnv:hover { border-color: var(--s1); color: var(--ink); }
+	#treeModal { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.75); z-index: 30; display: none; }
+	#treeModal.on { display: flex; flex-direction: column; }
+	#treeModal .tm-bar {
+		display: flex; align-items: baseline; gap: 12px; padding: 10px 16px;
+		background: var(--surface); border-bottom: 1px solid var(--border); color: var(--ink);
+	}
+	#treeModal .tm-body { flex: 1; overflow: auto; background: var(--plane); }
 
 	/* charts */
 	svg { display: block; width: 100%; height: auto; }
@@ -173,6 +185,13 @@
 		<div id="events" class="empty">nothing yet</div>
 	</section>
 </main>
+<div id="treeModal">
+	<div class="tm-bar">
+		<b id="tm-title"></b><span class="meta" id="tm-sub"></span>
+		<button class="btnv" id="tm-close" style="margin-left:auto">close ✕</button>
+	</div>
+	<div class="tm-body" id="tm-body"></div>
+</div>
 <div id="tooltip"></div>
 
 <script>
@@ -498,13 +517,11 @@ function detailBody(d) {
 	return note + `<div class="detail"><div class="d-steps">${steps}</div><div class="d-map">${mapTree(d)}</div></div>`;
 }
 
-// The graph renders as a sitemap tree — node ids are path-like ("brand-kit/screen-clips"),
-// so surfaces nest by prefix and controls hang off their surface. The run's path overlays
-// as numbered badges: a number on a surface is the step that ARRIVED there (a matched
-// navigation edge), a number on a control is the step that operated it.
-function mapTree(d) {
+// Shared index over a detail's graph + path: both the inline tree and the full tree view
+// read this. Node ids are path-like ("brand-kit/screen-clips"), so surfaces nest by prefix
+// and controls hang off their surface.
+function graphIndex(d) {
 	const g = d.graph;
-	if (!g) return `<div class="empty">no appmap graph for this arm yet</div>`;
 	const surfaces = g.nodes.filter((n) => n.kind === "surface");
 	const controls = g.nodes.filter((n) => n.kind === "control");
 	const sids = new Set(surfaces.map((s) => s.id));
@@ -518,14 +535,24 @@ function mapTree(d) {
 		if (s.nodeId) (nodeSteps[s.nodeId] = nodeSteps[s.nodeId] || []).push(s.index);
 		if (s.edgeTo) (surfSteps[s.edgeTo] = surfSteps[s.edgeTo] || []).push(s.index);
 	}
-	const pathSurfs = new Set(Object.keys(surfSteps));
-	for (const id of Object.keys(nodeSteps)) pathSurfs.add(parentOf(id));
-	for (const sid of [...pathSurfs]) { let p = sid; while (p && p !== "root") { p = parentOf(p); pathSurfs.add(p); } }
 	const mutated = new Set(d.mutatedKeys);
 	const scopesByKey = {};
 	for (const c of controls) if (c.settingKey) (scopesByKey[c.settingKey] = scopesByKey[c.settingKey] || new Set()).add(c.scope);
 	const ctrlsBySurf = {};
 	for (const c of controls) { const p = parentOf(c.id); (ctrlsBySurf[p] = ctrlsBySurf[p] || []).push(c); }
+	return { surfaces, controls, parentOf, nodeSteps, surfSteps, mutated, scopesByKey, ctrlsBySurf };
+}
+
+// The inline tree: nested <details>, path surfaces default-open. A number on a surface is
+// the step that ARRIVED there (a matched navigation edge); on a control, the step that
+// operated it.
+function mapTree(d) {
+	if (!d.graph) return `<div class="empty">no appmap graph for this arm yet</div>`;
+	const { surfaces, controls, parentOf, nodeSteps, surfSteps, mutated, scopesByKey, ctrlsBySurf } = graphIndex(d);
+	const pathSurfs = new Set(Object.keys(surfSteps));
+	for (const id of Object.keys(nodeSteps)) pathSurfs.add(parentOf(id));
+	for (const sid of [...pathSurfs]) { let p = sid; while (p && p !== "root") { p = parentOf(p); pathSurfs.add(p); } }
+	const g = d.graph;
 	// Manual open/close of surfaces must survive the SSE re-render: if any of this graph's
 	// surfaces were on screen, trust that snapshot; otherwise default-open the path.
 	const trustSnapshot = surfaces.some((s) => prevOpenSurfs.has(s.id));
@@ -555,6 +582,73 @@ function mapTree(d) {
 	return `<div class="d-note">${surfaces.length} surfaces · ${controls.length} controls · blue = on the run's path (numbers = step order) · orange = mutated by the run · ⚠ = dual-scope setting</div>`
 		+ roots.map(renderSurf).join("")
 		+ (unplaced.length ? `<details class="surf" data-sid="root-ctrls"${trustSnapshot ? (prevOpenSurfs.has("root-ctrls") ? " open" : "") : " open"}><summary>${esc(g.home || "home")}</summary><div>${unplaced.map(chip).join("")}</div></details>` : "");
+}
+
+// The full tree view: every surface and control at once as a node-link diagram, scrollable.
+// Leaves take one row each; a parent centres on its children (tidy-tree lite — no force
+// layout, the id hierarchy IS the structure). Two overlays, deliberately on different
+// channels: EDGE THICKNESS is aggregate heat (how often collected runs on this graph
+// traversed to that node — hot paths thick, cold hairline), COLOR is the selected run
+// (blue = this run went there, numbers = its step order, orange ring = it mutated this).
+function treeSvg(d) {
+	const { parentOf, nodeSteps, surfSteps, mutated, scopesByKey, ctrlsBySurf, surfaces } = graphIndex(d);
+	const heat = d.heat || { surfaces: {}, controls: {}, runs: 0 };
+	const maxHeat = Math.max(1, ...Object.values(heat.surfaces), ...Object.values(heat.controls));
+	const kidsSurf = {};
+	for (const s of surfaces) { const p = parentOf(s.id); if (p !== s.id) (kidsSurf[p] = kidsSurf[p] || []).push(s); }
+	const childrenOf = (n) => n.kind === "control" ? [] : [...(kidsSurf[n.id] || []), ...(ctrlsBySurf[n.id] || [])];
+	const rowH = 19, colW = 260, padX = 24, padY = 24;
+	let leafY = 0, maxDepth = 0;
+	const pos = {};
+	const place = (n, depth) => {
+		maxDepth = Math.max(maxDepth, depth);
+		const kids = childrenOf(n);
+		if (!kids.length) { pos[n.id] = { x: depth, y: leafY++ }; return pos[n.id].y; }
+		const ys = kids.map((k) => place(k, depth + 1));
+		pos[n.id] = { x: depth, y: (Math.min(...ys) + Math.max(...ys)) / 2 };
+		return pos[n.id].y;
+	};
+	const root = { id: "root", kind: "surface", title: (d.graph && d.graph.home) || "home" };
+	place(root, 0);
+	const X = (p) => padX + p.x * colW, Y = (p) => padY + p.y * rowH + rowH / 2;
+	let edges = "", nodes = "";
+	const draw = (n, parent) => {
+		const p = pos[n.id];
+		const steps = (n.kind === "control" ? nodeSteps[n.id] : surfSteps[n.id]) || [];
+		const visits = (n.kind === "control" ? heat.controls[n.id] : heat.surfaces[n.id]) || 0;
+		if (parent) {
+			const a = pos[parent.id];
+			const w = visits ? 1 + 3 * Math.sqrt(visits / maxHeat) : 1;
+			const stroke = steps.length ? "var(--s1)" : visits ? "var(--baseline)" : "var(--grid)";
+			edges += `<path d="M${X(a) + 8},${Y(a)} C${X(a) + colW * 0.5},${Y(a)} ${X(p) - colW * 0.45},${Y(p)} ${X(p) - 7},${Y(p)}" fill="none" stroke="${stroke}" stroke-width="${Math.max(w, steps.length ? 1.8 : w).toFixed(1)}"/>`;
+		}
+		const isMut = n.settingKey && mutated.has(n.settingKey);
+		const amb = n.settingKey && scopesByKey[n.settingKey] && scopesByKey[n.settingKey].size > 1;
+		const fill = steps.length ? "var(--s1)" : n.kind === "surface" ? "var(--ink-2)" : "var(--baseline)";
+		const tip = [
+			n.id,
+			n.settingKey ? `setting: ${n.settingKey} (${n.scope} scope)` : n.scope ? `${n.scope} scope` : "",
+			`visits: ${visits} across ${heat.runs} collected run(s)`,
+			steps.length ? `this run: step ${steps.join(", ")}` : "",
+			amb ? "⚠ dual-scope setting" : "",
+			isMut ? "mutated by this run" : "",
+		].filter(Boolean).join("\n");
+		nodes += `<g data-tip="${esc(tip)}"><circle cx="${X(p)}" cy="${Y(p)}" r="${n.kind === "surface" ? 4.5 : 3}" fill="${fill}"${isMut ? ' stroke="var(--s2)" stroke-width="2"' : ""}/>` +
+			`<text x="${X(p) + 10}" y="${Y(p) + 3.5}"${n.kind === "surface" ? ' class="lbl"' : ""}>${esc(n.title)}${amb ? " ⚠" : ""}${steps.length ? `<tspan fill="var(--s1)">  ${steps.join(",")}</tspan>` : ""}</text></g>`;
+		for (const k of childrenOf(n)) draw(k, n);
+	};
+	draw(root, null);
+	const w = padX * 2 + (maxDepth + 1) * colW, h = padY * 2 + Math.max(leafY, 1) * rowH;
+	return `<svg width="${w}" height="${h}" style="min-width:${w}px;display:block">${edges}${nodes}</svg>`;
+}
+
+function openTree(job) {
+	const d = detailCache[job];
+	if (!d || !d.graph) return;
+	$("tm-title").textContent = "appmap tree";
+	$("tm-sub").textContent = `${d.armId} · ${job} · ${d.graphSource || ""} · thick = traversed often across ${d.heat ? d.heat.runs : 0} collected run(s) · blue = this run's path · orange = mutated`;
+	$("tm-body").innerHTML = treeSvg(d);
+	$("treeModal").classList.add("on");
 }
 
 // The board reads as a drain timeline: within each section, rows whose runs FINISHED come

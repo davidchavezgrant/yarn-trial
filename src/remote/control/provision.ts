@@ -74,6 +74,18 @@ const SYNC_EXCLUDES = [
 	// the top is a runner serving code nobody can find in the tree.
 	"/dist-electron/",
 	"/tmp/",
+	/**
+	 * Appmaps are the fleet's OUTPUT, not its input, and rsync cannot tell a newer map from an
+	 * older one — it just overwrites. Shipping this directory therefore pushes whatever this
+	 * laptop happens to hold over a map a Mac wrote minutes ago: a phase-1 pass could complete,
+	 * and the next dispatch's code sync would replace its map with a stale local copy, leaving
+	 * phase 2's grounded arms grounded on the wrong thing while still labelled grounded.
+	 *
+	 * `syncAppmaps()` in remote/control/appmaps.ts is the mechanism that belongs here. It reads
+	 * each side's stamp and propagates only when `beats()` says one is newer, so convergence
+	 * cannot regress a map. Excluding the directory is what forces every path through it.
+	 */
+	"/docs/appmaps/",
 	// The two secrets, named rather than pattern-matched: a pattern that stops matching is
 	// silent, and both of these grant more than the machine they would land on.
 	"/.env",
