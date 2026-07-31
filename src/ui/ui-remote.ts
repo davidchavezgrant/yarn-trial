@@ -22,7 +22,6 @@ import {
 import { type FleetRow, fleetStatus } from "../remote/control/fleet.js";
 import { type HostEntry, hostsPath, type Inventory, loadHosts, resolveHost } from "../remote/control/hosts.js";
 import { autoSync, type SyncOptions } from "../remote/control/appmaps.js";
-import { checkinAfterRun } from "../remote/control/creds.js";
 import { installApp, resolveAppSource } from "../remote/control/install.js";
 import { clearAppAuth, deleteRemoteApp } from "../remote/control/manage.js";
 import { busyHosts, describeSessionWipe, sessionWipeHost } from "../remote/control/session-wipe.js";
@@ -870,13 +869,6 @@ export interface RemoteDeps {
 	 * here so a test never rsyncs three real Macs; answers a note, or nothing when nothing moved.
 	 */
 	sync(opts?: SyncOptions): Promise<string | undefined>;
-	/**
-	 * Seal the run's session back into the credential vault — the check-IN half, shared with the
-	 * CLI so both front ends do it identically. Optional and best-effort: absent in a test's deps
-	 * (so the suite never reaches a real vault or Mac), and even in production a failure only
-	 * returns a note. Gated internally on `YARN_VAULT`.
-	 */
-	checkinAfterRun?(args: { host: string; app: string; operator: string; exitCode: number | null | undefined }): Promise<string[]>;
 }
 
 export function defaultRemoteDeps(): RemoteDeps {
@@ -889,7 +881,6 @@ export function defaultRemoteDeps(): RemoteDeps {
 		sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
 		record: recordRemoteRun,
 		sync: autoSync,
-		checkinAfterRun: (args) => checkinAfterRun(args),
 	};
 }
 
@@ -1122,12 +1113,6 @@ export class RemoteRunController {
 			for (const a of pulled.artifacts)
 				if (a.state !== "missing") handlers.onLine(`${a.state === "pulled" ? "✓" : "✗"} ${a.rel}${a.detail ? ` — ${a.detail}` : ""}`);
 			this.deps.record(jobId, host);
-			// The credential vault's check-IN, the same one the CLI does — seal this run's session
-			// back so the next run (on any box) starts from it. Best-effort and gated on YARN_VAULT
-			// inside the dep; absent in tests. Uses the operator the far side recorded on the job.
-			if (pulled.job)
-				for (const note of await (this.deps.checkinAfterRun?.({ host, app: pulled.job.app, operator: pulled.job.operator, exitCode: result.exitCode }) ?? []))
-					handlers.onLine(note);
 			// Exit 3 is agent.ts refusing to drive an app that is not at its declared home state.
 			// The remedy is the same whatever the cause — somebody looks at that Mac — and the
 			// command has to be written here because the agent, running on the far side, does not

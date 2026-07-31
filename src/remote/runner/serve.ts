@@ -10,7 +10,7 @@ import { ensureBrowserEndpoint, ensureElectronEndpoint } from "../../backends/el
 import { sidecarStatus } from "../../core/axdom.js";
 import { screenIsLocked } from "../../core/harness/observation.js";
 import { envNum } from "../../env.js";
-import { dataRoot, outDir, relToData, resourcesRoot } from "../../paths.js";
+import { dataRoot, outDir, resourcesRoot } from "../../paths.js";
 import { type ChromePolicyState, inspectChromePolicy, MANDATORY_PLISTS } from "../chrome-policy.js";
 import { firstLine } from "../control/ssh.js";
 import { listApps } from "../../core/apps.js";
@@ -41,13 +41,11 @@ import {
 	type AuthClear,
 	clearOperatorData,
 	describeAuthClear,
-	describeInstall,
 	describeSwap,
 	type ProfileSwap,
 	resolveBundleId,
 	swapProfile,
 } from "./profiles.js";
-import { exportProfile, importProfile } from "./credbundle.js";
 import { type AppDelete, deleteAppBundle, describeAppDelete } from "./uninstall.js";
 import {
 	childEnv,
@@ -137,17 +135,6 @@ export function unsafeRelPath(p: string): string | undefined {
 	}
 
 	return undefined;
-}
-
-/**
- * A filesystem-safe stem for a staging tar, from an operator and an app. Not a security boundary
- * — every path it feeds stays inside the runner-owned `out/credstage/` directory — only a way to
- * keep one operator+app's staged tar from colliding with another's.
- */
-function slugForStage(operator: string, app: string): string {
-	const safe = (s: string): string => s.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^[.-]+/, "") || "x";
-
-	return `${safe(operator)}-${safe(app)}`;
 }
 
 /** Fixed port for the liveview server, so the runner and the operator's `ssh -L` agree without a round trip. */
@@ -318,16 +305,6 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 	for (const job of sweepOrphans(root)) log(`orphaned ${job.id}: pid ${job.pid} is gone`);
 	const stale = reclaimStale(runnerDir);
 	if (stale) log(`reclaimed lease from dead pid ${stale.pid} (job ${stale.jobId})`);
-
-	/**
-	 * Where a credential bundle is staged as a plaintext tar on its way to or from the vault.
-	 * Created here so the vault's rsync can push into it without depending on a modern rsync's
-	 * `--mkpath`, which the macOS system rsync does not have. Under the data root's `out/`, so it
-	 * is swept with every other generated artifact — and every bundle here is deleted the moment
-	 * its verb finishes, because a plaintext session tar must not outlive the transfer.
-	 */
-	const credStageDir = path.join(dataRoot(), "out", "credstage");
-	fs.mkdirSync(credStageDir, { recursive: true, mode: 0o700 });
 
 	/**
 	 * What TCC said the moment this process came up.
@@ -1172,122 +1149,6 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 	}
 
 	/**
-	 * Snapshot an operator's session for an app into a staging tar, for the vault to pull home
-	 * (the check-IN after a run). Read-only with respect to the live session — it copies, never
-	 * moves — so it takes nothing away from this box; the operator is still signed in here after.
-	 *
-	 * Refused while the lease is held: a run driving the app is mutating its session mid-flight,
-	 * and a snapshot of a half-written cookie jar is worse than waiting. In practice the vault
-	 * calls this at pull time, after the run released the lease. Under the profile lock because a
-	 * concurrent swap moves the very paths being copied.
-	 */
-	async function credExport(params: Params): Promise<RunnerResponse> {
-		const app = String(params.app ?? "").trim();
-		const operator = String(params.operator ?? "").trim();
-		if (!app) return { ok: false, error: "app is required" };
-		if (!operator) return { ok: false, error: "operator is required" };
-
-		const { holder } = inspect(runnerDir);
-		if (holder)
-			return {
-				ok: false,
-				error: `${holder.lease.operator} is running ${holder.lease.app} here (${holder.heldSec}s) — a session snapshot mid-run would be inconsistent`,
-				busy: true,
-				operator: holder.lease.operator,
-				app: holder.lease.app,
-				kind: holder.lease.kind,
-				jobId: holder.lease.jobId,
-				elapsedSec: holder.heldSec,
-			};
-
-		const outFile = path.join(credStageDir, `${slugForStage(operator, app)}.export.tar.gz`);
-		let res: Awaited<ReturnType<typeof exportProfile>>;
-		try {
-			const bundleId = await resolveBundleId(app);
-			res = await withProfileLock(() => exportProfile({ app, operator, outFile, ...(bundleId ? { bundleId } : {}) }));
-		} catch (e) {
-			return { ok: false, error: `could not snapshot ${operator}'s ${app} session: ${(e as Error).message}` };
-		}
-		log(`credexport: ${operator} ${app} — ${res.found ? `${res.source}, ${res.paths.length} path(s), ${res.bytes}B` : "nothing to export"}`);
-
-		return {
-			ok: true,
-			app,
-			operator,
-			found: res.found,
-			source: res.source,
-			paths: res.paths,
-			bytes: res.bytes,
-			// Data-root-relative so the vault rsyncs it by the same key both machines share. Absent
-			// when there was nothing to export, so the caller does not pull a file that is not there.
-			...(res.found ? { stagePath: relToData(outFile) } : {}),
-		};
-	}
-
-	/**
-	 * Ingest a bundle the vault pushed (as a plaintext tar under `out/credstage/`) and make it the
-	 * live session on this box — the check-OUT before a run. Unpacks into the operator's parked
-	 * store and installs it live, parking any other operator's session first.
-	 *
-	 * Refused while the lease is held (the same busy shape as `signin`): this quits and re-homes
-	 * the app's data, which corrupts a run in flight. Under the profile lock for the same reason
-	 * every data-moving verb is. The staging tar is DELETED after import: it is plaintext session
-	 * data and must not linger on disk past the transfer.
-	 */
-	async function credImport(params: Params): Promise<RunnerResponse> {
-		const app = String(params.app ?? "").trim();
-		const operator = String(params.operator ?? "").trim();
-		const stagePath = String(params.stagePath ?? "").trim();
-		if (!app) return { ok: false, error: "app is required" };
-		if (!operator) return { ok: false, error: "operator is required" };
-		if (!stagePath) return { ok: false, error: "stagePath is required" };
-
-		// The path came over the wire. Refuse anything but a plain relative path (unsafeRelPath),
-		// AND confine it to the staging directory — a bundle path is never anywhere else, and this
-		// stops a crafted stagePath from pointing the untar's SOURCE at an arbitrary readable file.
-		const bad = unsafeRelPath(stagePath);
-		if (bad) return { ok: false, error: `unsafe stagePath ${JSON.stringify(stagePath)}: ${bad}` };
-		if (!stagePath.startsWith("out/credstage/")) return { ok: false, error: `stagePath must be under out/credstage/, got ${JSON.stringify(stagePath)}` };
-		const tarFile = path.join(dataRoot(), stagePath);
-		if (!fs.existsSync(tarFile)) return { ok: false, error: `no staged bundle at ${stagePath} on this Mac` };
-
-		const { holder } = inspect(runnerDir);
-		if (holder)
-			return {
-				ok: false,
-				error: `${holder.lease.operator} is running ${holder.lease.app} here (${holder.heldSec}s) — installing a session would pull app data out from under their run`,
-				busy: true,
-				operator: holder.lease.operator,
-				app: holder.lease.app,
-				kind: holder.lease.kind,
-				jobId: holder.lease.jobId,
-				elapsedSec: holder.heldSec,
-			};
-
-		let res: Awaited<ReturnType<typeof importProfile>>;
-		try {
-			const bundleId = await resolveBundleId(app);
-			res = await withProfileLock(() => importProfile({ app, operator, tarFile, ...(bundleId ? { bundleId } : {}) }));
-		} catch (e) {
-			return { ok: false, error: `could not install ${operator}'s ${app} session: ${(e as Error).message}` };
-		} finally {
-			fs.rmSync(tarFile, { force: true });
-		}
-		log(`credimport: ${describeInstall(res.install)}`);
-
-		return {
-			ok: true,
-			app,
-			operator,
-			action: res.install.action,
-			restored: res.install.restored,
-			parked: res.install.parked,
-			paths: res.paths,
-			...(res.install.previousOwner ? { previousOwner: res.install.previousOwner } : {}),
-		};
-	}
-
-	/**
 	 * Whether an app is at its declared home — the signal that a sign-in took.
 	 *
 	 * Delegated to a child process rather than answered here; `src/core/ready.ts` documents why at
@@ -1627,8 +1488,6 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			// method name IS the subcommand and cannot carry a capital.
 			authclear: () => authClear(params),
 			appdelete: () => appDelete(params),
-			credexport: () => credExport(params),
-			credimport: () => credImport(params),
 		};
 		const async = handlers[String(req.method)];
 		if (async) {

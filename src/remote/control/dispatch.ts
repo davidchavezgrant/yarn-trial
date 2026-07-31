@@ -8,7 +8,6 @@ import { dataRoot, recipesDir } from "../../paths.js";
 import { EXIT_REFUSED as CTL_REFUSED, EXIT_UNREACHABLE as CTL_UNREACHABLE } from "../runner/ctl.js";
 import type { JobArtifacts, JobKind, JobRecord } from "../runner/jobs.js";
 import { autoSync, autoSyncRecipes, type SyncOptions } from "./appmaps.js";
-import { checkinAfterRun, checkoutSession, runningElsewhere, vaultEnabled } from "./creds.js";
 import { type FleetRow, type FleetState, fleetStatus, pickIdleHost, pickShortestQueue } from "./fleet.js";
 import { defaultOperator, type HostEntry, type Inventory, loadHosts, resolveHost } from "./hosts.js";
 import { assertSafeRemotePath, DEFAULT_SSH_TIMEOUT_MS, firstLine, lastFrame, remoteDataRoot, runnerArgv, runnerHome, runSsh, runTransport, rsyncShell, SPAWN_FAILED_EXIT, type SshResult, type SshRunner, sshArgv, TIMEOUT_EXIT } from "./ssh.js";
@@ -115,12 +114,6 @@ export interface DispatchOptions {
 	 * refusal for callers that want to react to busy themselves.
 	 */
 	queue?: boolean;
-	/**
-	 * Override the credential vault for this dispatch. Absent = follow `vaultEnabled()` (on unless
-	 * `YARN_VAULT=0`). `false` runs the core submit path with no checkout/checkin — how the protocol
-	 * tests and any caller that wants to manage sessions itself opt out.
-	 */
-	vault?: boolean;
 	operator?: string;
 	inventory?: Inventory;
 	/** The ssh call, injected so tests exercise the fall-through logic without a network. */
@@ -294,22 +287,7 @@ export async function dispatch(opts: DispatchOptions): Promise<DispatchResult> {
 	const appmapNote = await (opts.sync ?? autoSync)({ inventory: inv });
 	const syncNote = [recipeNote, appmapNote].filter(Boolean).join("\n") || undefined;
 
-	// The credential vault (on by default; YARN_VAULT=0 disables). Two hooks around the submit:
-	// refuse if this operator's session for this app is already live elsewhere (single-writer per
-	// session), and check the session OUT onto the box just before its submit — the checkin is the
-	// run's other end, in `attach`. A replay carries no per-operator session concern beyond the app
-	// it drives, so it takes the same path. All best-effort: a vault that stumbles logs a note and
-	// the run proceeds to sign in and verify itself, exactly as it would with the feature off.
-	const vault = opts.vault ?? vaultEnabled();
-	if (vault) {
-		const rows = await fleetStatus({ inventory: inv, run, timeoutMs: DEFAULT_SSH_TIMEOUT_MS });
-		const busyOn = runningElsewhere(rows, spec.operator, opts.app);
-		if (busyOn) return { ok: false, error: `${spec.operator}'s ${opts.app} session is already running on ${busyOn} — one run per session at a time (fleet vault)`, attempts };
-	}
-
 	for (const { host, queue } of targets) {
-		let vaultNote: string | undefined;
-		if (vault) vaultNote = await checkoutOnto(host, opts.app, spec.operator, inv, run);
 		const res = await run(host, runnerArgv("submit", queue ? { ...spec, queue: true } : spec), { timeoutMs: opts.timeoutMs ?? SUBMIT_TIMEOUT_MS });
 		const frame = lastFrame(res.stdout);
 		if (frame?.ok === true && typeof frame.jobId === "string")
@@ -325,11 +303,7 @@ export async function dispatch(opts: DispatchOptions): Promise<DispatchResult> {
 				...(typeof frame.position === "number" ? { position: frame.position } : {}),
 				...(frame.behind && typeof frame.behind === "object" ? { behind: frame.behind as BusyHolder } : {}),
 				attempts,
-				...(() => {
-					const combined = [syncNote, vaultNote].filter(Boolean).join("\n");
-
-					return combined ? { syncNote: combined } : {};
-				})(),
+				...(syncNote ? { syncNote } : {}),
 				...(typeof frame.profile === "string" ? { profile: frame.profile } : {}),
 				...(frame.signinNeeded === true ? { signinNeeded: true } : {}),
 			};
@@ -340,25 +314,6 @@ export async function dispatch(opts: DispatchOptions): Promise<DispatchResult> {
 	}
 
 	return { ok: false, error: attempts.map((a) => `${a.host}: ${a.reason}`).join("; ") || "no host accepted the run", attempts };
-}
-
-/**
- * Check an operator's session out onto the box about to run, returning the one-line note for the
- * operator's log. Best-effort by construction: any failure becomes a note and a `null`-ish return,
- * never a thrown error, because the run's own readiness gate and sign-in fallback are the safety
- * net — the vault is an optimisation over "sign in on every box", not a precondition for a run.
- */
-async function checkoutOnto(host: HostEntry, app: string, operator: string, inv: Inventory, run: SshRunner): Promise<string | undefined> {
-	try {
-		const co = await checkoutSession({ host, app, operator }, { inventory: inv, run });
-		if (co.action === "installed") return `vault: ${operator}'s ${app} session restored onto ${host.name}`;
-		if (co.action === "skipped-owned") return `vault: ${operator}'s ${app} session already live on ${host.name}`;
-		if (co.action === "no-bundle") return `vault: no stored ${app} session for ${operator} — ${host.name} will sign in`;
-
-		return `vault: checkout to ${host.name} failed (${co.error}) — proceeding; the run will verify and sign in if needed`;
-	} catch (e) {
-		return `vault: checkout error (${(e as Error).message}) — proceeding`;
-	}
 }
 
 /**
@@ -979,11 +934,6 @@ async function attach(host: string, jobId: string, fromByte: number): Promise<nu
 	const remedy = signinRemedy(followed.exitCode, host, result.job?.app);
 	if (remedy) console.error(remedy);
 
-	// The vault's other end (on by default; YARN_VAULT=0 disables). Shared with the Electron
-	// controller's `collect` so both front ends check a session in identically — see
-	// `checkinAfterRun`.
-	if (result.job)
-		for (const note of await checkinAfterRun({ host, app: result.job.app, operator: result.job.operator, exitCode: followed.exitCode })) console.error(note);
 	// A grounding pass is only worth its forty minutes once; every other Mac should have it
 	// without anyone remembering to ask. Best-effort by construction — the run already
 	// succeeded, and a sleeping peer must not turn that into a failure.

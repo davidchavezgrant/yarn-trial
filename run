@@ -87,12 +87,7 @@ ${b}sign-in & sessions${n}
   signin <mac> ["App"]                   screen-share to a Mac to sign an app in by hand
   liveview [<mac>] ["App"]               window-scoped sign-in: drive just one window in a browser
   browser-login <https://site>           one-time local sign-in, so later web runs are logged in
-  creds status|audit                     what signed-in sessions the fleet vault holds
-  creds checkout <mac> "App"             push your stored session onto a box (auto; YARN_VAULT=0 disables)
-  creds checkin <local|mac> "App"        seal a signed-in session into the vault (local preferred)
-  creds signout-everywhere "App"         wipe your session for an app across the whole fleet + vault
   signout <mac> "App"                    sign YOU out of an app on that Mac (deletes your data there)
-  keychain ...                           Safe Storage equalization for Electron targets (manual, rare)
   browser-wipe [<mac>|all] [--go]        wipe Chrome profiles on the Macs (accounts, passwords)
   session-wipe [<mac>|all] [--go]        close every GUI app on the Macs, wipe all session data
 
@@ -207,24 +202,6 @@ signout | uninstall)
 	# they delete on the far side — nothing variable crosses as argv text. No have_key: no
 	# model involved. The verb itself is passed through, so no shift.
 	exec npx tsx src/remote/control/manage.ts "$@"
-	;;
-
-creds)
-	# The credential vault: move an operator's signed-in session between fleet Macs so a run can
-	# land on any free box and still be that operator. status/audit/checkin/checkout/
-	# signout-everywhere. Sessions ride the same pinned rsync/ssh channel as everything else;
-	# the vault at ~/.yarn-runner/credstore seals them at rest. Around a dispatch this runs
-	# automatically (YARN_VAULT=0 disables it); these are the manual handles. No have_key: no model.
-	shift
-	exec npx tsx src/remote/control/creds.ts "$@"
-	;;
-
-keychain)
-	# Manual macOS keychain equalization for a native/Electron target whose session is in the
-	# encrypted cookie jar — run ON a box (over signin/ssh). Web targets never need it. No
-	# have_key: no model. See src/remote/keychain-cli.ts for the once-per-app procedure.
-	shift
-	exec npx tsx src/remote/keychain-cli.ts "$@"
 	;;
 
 appmaps)

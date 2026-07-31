@@ -54,11 +54,7 @@ function specOf(argv: string[]): any {
  * not the fleet, but they are still outbound connections that sit until they time out. That is
  * both what the header above forbids and why this file took ~9s per dispatch test.
  */
-// `vault: false` too: these exercise the CORE submit protocol (verbatim task, arm flags,
-// injection-safety, profile-swap relaying), which is orthogonal to the credential vault. The
-// vault's dispatch integration is covered in creds.test.ts; here it would only add status/checkout
-// calls the assertions on `calls` are not about.
-const noSync = { sync: async () => undefined, vault: false };
+const noSync = { sync: async () => undefined };
 
 function recorder(reply: (host: HostEntry, argv: string[]) => SshResult): { run: SshRunner; calls: { host: string; argv: string[] }[] } {
 	const calls: { host: string; argv: string[] }[] = [];
@@ -167,7 +163,6 @@ test("dispatch__SyncsRecipesBeforeTheSubmit__When__TheKindIsReplay", async () =>
 		noRescue: true,
 		inventory: FLEET,
 		run,
-		vault: false,
 		sync: async () => {
 			order.push("appmap-sync");
 
