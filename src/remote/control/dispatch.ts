@@ -10,7 +10,7 @@ import type { JobArtifacts, JobKind, JobRecord } from "../runner/jobs.js";
 import { autoSync, autoSyncRecipes, type SyncOptions } from "./appmaps.js";
 import { type FleetRow, type FleetState, fleetStatus, pickIdleHost, pickShortestQueue } from "./fleet.js";
 import { defaultOperator, type HostEntry, type Inventory, loadHosts, resolveHost } from "./hosts.js";
-import { assertSafeRemotePath, DEFAULT_SSH_TIMEOUT_MS, firstLine, lastFrame, remoteDataRoot, runnerArgv, runnerHome, runSsh, runTransport, rsyncShell, SPAWN_FAILED_EXIT, type SshResult, type SshRunner, sshArgv } from "./ssh.js";
+import { assertSafeRemotePath, DEFAULT_SSH_TIMEOUT_MS, firstLine, lastFrame, remoteDataRoot, runnerArgv, runnerHome, runSsh, runTransport, rsyncShell, SPAWN_FAILED_EXIT, type SshResult, type SshRunner, sshArgv, TIMEOUT_EXIT } from "./ssh.js";
 
 /**
  * The local half of a dispatched run: submit it to a Mac in the fleet, watch it, bring the
@@ -308,7 +308,7 @@ export async function dispatch(opts: DispatchOptions): Promise<DispatchResult> {
 				...(frame.signinNeeded === true ? { signinNeeded: true } : {}),
 			};
 
-		const attempt = attemptFrom(host, res, frame);
+		const attempt = attemptFrom(host, res, frame, opts);
 		attempts.push(attempt);
 		if (attempt.fatal) break;
 	}
@@ -327,7 +327,7 @@ export async function dispatch(opts: DispatchOptions): Promise<DispatchResult> {
  * worse than stopping — so only exit 3, which the remote itself defines as "nothing was
  * listening", is treated as safe to skip past.
  */
-function attemptFrom(host: HostEntry, res: SshResult, frame?: Record<string, any>): DispatchAttempt {
+function attemptFrom(host: HostEntry, res: SshResult, frame?: Record<string, any>, opts?: { timeoutMs?: number }): DispatchAttempt {
 	if (frame?.ok === false) {
 		const busy = frame.busy === true;
 
@@ -351,7 +351,14 @@ function attemptFrom(host: HostEntry, res: SshResult, frame?: Record<string, any
 
 	return {
 		host: host.name,
-		reason: firstLine(res.stderr) || `runnerctl exited ${res.code}`,
+		// A timeout has no stderr, and "runnerctl exited 124" tells an operator nothing about
+		// what to do — observed 2026-07-31 on a submit whose runner was mid-launch of the target
+		// app, which routinely outlasts the call budget. Name the condition and the fix instead;
+		// the run itself may well be alive on that Mac, which is the part worth knowing.
+		reason:
+			res.code === TIMEOUT_EXIT
+				? `no answer within ${Math.round((opts?.timeoutMs ?? SUBMIT_TIMEOUT_MS) / 1000)}s — the runner may still be launching the app; check ./run dispatch ${host.name} jobs`
+				: firstLine(res.stderr) || `runnerctl exited ${res.code}`,
 		fatal: res.code !== CTL_UNREACHABLE,
 	};
 }

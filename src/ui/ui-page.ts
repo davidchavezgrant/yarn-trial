@@ -1077,6 +1077,12 @@ function renderFleet() {
       // is an error teaches people to stop reading outcomes.
       (signinBusy ? '' :
         '<div class="factions">' +
+          // Sign IN is deliberately first-class, not only a remedy offered after a run refuses.
+          // Until 2026-07-31 the portal could ONLY be reached by submitting a run and having it
+          // fail the readiness check — so a Mac you KNEW was signed out still cost a wasted run,
+          // and a refusal the panel failed to classify (a submit timeout, say) left no route to
+          // the portal at all. Signing a Mac in is a thing an operator decides to do.
+          (r.state !== 'busy' && appTarget ? '<button class="mini" data-fact="signin" data-mac="' + esc(r.name) + '">Sign in to ' + esc(appTarget) + '…</button>' : '') +
           (r.state !== 'busy' && appTarget ? '<button class="mini" data-fact="signout" data-mac="' + esc(r.name) + '">Sign out of ' + esc(appTarget) + '…</button>' : '') +
           // Electron has no window.prompt, so Install is an inline form, not a dialog — the
           // repaint-safe state lives in installForm and survives the 15s probe repaint.
@@ -1551,7 +1557,17 @@ el('fleet').addEventListener('click', async (e) => {
   }
   // The two destructive verbs need a MAC APP target; the buttons only render with one, and
   // this guard is the backstop for a stale row.
-  if (!sel || selUrl()) return say(false, '✗ pick a Mac app in the list first — ' + (act === 'signout' ? 'sign-out' : 'delete') + ' needs one');
+  if (!sel || selUrl()) return say(false, '✗ pick a Mac app in the list first — ' + (act === 'signin' ? 'sign-in' : act === 'signout' ? 'sign-out' : 'delete') + ' needs one');
+  // Sign in on purpose, not only as a remedy. Routes through the same unready flow the
+  // automatic path uses — one implementation of "open the portal, wait for home, put it
+  // away" — but reachable when nothing has failed yet.
+  if (act === 'signin') {
+    unready = { app: sel, host: mac, msg: '', busy: false };
+    unreadyGen++;
+    renderUnready();
+
+    return runUnreadyFix();
+  }
   if (act === 'signout') {
     if (!confirm('Sign out of ' + sel + ' on ' + mac + '?\n\nDeletes YOUR ' + sel + ' data on that Mac: the live copy if you own it, plus your parked profile. Other operators keep theirs.')) return;
     return ask('signing out of ' + sel + ' on ' + mac + '…', () => bus.authClear(mac, sel));

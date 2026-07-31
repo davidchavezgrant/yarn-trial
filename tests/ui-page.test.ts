@@ -1217,3 +1217,18 @@ test("openJobLog__AttachesUnderTheViewer__When__AJobRowIsClicked", async () => {
 	assert.equal(ui.nodes.viewertitle.textContent, "j-9 @ mac2");
 	assert.equal(ui.nodes.taskform.style.display, "none");
 });
+
+// ---- sign-in is a first-class action, not only a remedy ----------------------------------
+
+test("fleetPanel__OffersSignIn__When__AMacAppIsSelected", () => {
+	// Until 2026-07-31 the sign-in portal could ONLY be reached by submitting a run and having
+	// it fail readiness: a Mac you already knew was signed out cost a wasted run, and a refusal
+	// the panel could not classify (a submit timeout) left no route to the portal at all.
+	const html = APP_JS + CHROME;
+
+	assert.match(html, /data-fact="signin"/);
+	assert.match(html, /Sign in to /);
+	// It routes through the same unready flow the automatic path uses — one implementation of
+	// "open the portal, wait for home, put it away".
+	assert.match(html, /act === 'signin'[\s\S]{0,220}runUnreadyFix\(\)/);
+});

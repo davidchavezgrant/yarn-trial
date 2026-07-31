@@ -782,3 +782,26 @@ test("signinRemedy__SaysNothing__When__TheJobRecordIsMissingItsApp", () => {
 	// record leaves it undefined. Half a command is worse than none.
 	assert.equal(signinRemedy(3, "mac2", undefined), undefined);
 });
+
+// ---- a timed-out submit says what happened -----------------------------------------------
+
+test("dispatch__NamesTheTimeout__When__TheSubmitGetsNoAnswer", async () => {
+	// Observed 2026-07-31: a submit whose runner was mid-launch of the target app outlasted the
+	// call budget, and the panel showed "runnerctl exited 124" — a number that tells an operator
+	// nothing, for a run that was in fact alive on that Mac. The reason now names the condition
+	// and where to look, because the run continuing is the part worth knowing.
+	const res = await dispatch({
+		host: "mac1",
+		app: "Yarn",
+		task: "show me how to change the cursor type",
+		inventory: FLEET,
+		...noSync,
+		run: async () => ({ code: 124, stdout: "", stderr: "" }),
+	});
+
+	assert.equal(res.ok, false);
+	if (res.ok) return;
+	assert.match(res.error, /no answer within \d+s/);
+	assert.match(res.error, /may still be launching/);
+	assert.equal(res.error.includes("runnerctl exited 124"), false, "the bare exit code is what this replaced");
+});
