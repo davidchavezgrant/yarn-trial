@@ -231,8 +231,11 @@ export interface AppMapHome {
 export interface AppMap {
 	app: string;
 	capturedAt: string;
-	/** "explore" only — same provenance rule as the prose map. */
-	provenance: "explore";
+	/**
+	 * "explore" (element-grounded pass) or "explore-vision" (screenshots-only pass, whose
+	 * coverage tallies are the model's own declarations) — same provenance rule as the prose map.
+	 */
+	provenance: "explore" | "explore-vision";
 	/** sha256 prefix of the prose map written in the same pass, pairing the two artifacts. */
 	proseSha256?: string;
 	/** Wall-clock the pass took, e.g. "1h07m". The grounding budget is per-app, so the cost

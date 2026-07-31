@@ -19,6 +19,7 @@ export const provenanceHeader = (p: {
 	backend: string;
 	findCalls: number;
 	vision: boolean;
+	visionOnly?: boolean;
 	guidance?: string;
 	salvaged?: boolean;
 	stopped: string;
@@ -30,11 +31,15 @@ export const provenanceHeader = (p: {
 	gatedRead?: number;
 	gatedRefused?: number;
 }): string =>
-	`<!-- provenance: explore | app: ${p.app} | date: ${new Date().toISOString().slice(0, 10)} | backend: ${p.backend}${p.vision ? "" : " | vision: off"} | actions: ${p.actions} | elapsed: ${p.elapsed} | findings: ${p.findings} | finds: ${p.findCalls}` +
-	` | controls: ${p.actuated} actuated / ${p.dismissed} dismissed / ${p.seen} seen | surfaces: ${p.surfaces} | chapters: ${p.chapters} | stopped: ${p.stopped}` +
-	` | descent: ${DESCENT_ON ? "on" : "off"} | gated: ${p.gatedRead ?? 0} read / ${p.gatedRefused ?? 0} refused` +
+	`<!-- provenance: ${p.visionOnly ? "explore-vision" : "explore"} | app: ${p.app} | date: ${new Date().toISOString().slice(0, 10)} | backend: ${p.backend}${p.vision ? "" : " | vision: off"} | actions: ${p.actions} | elapsed: ${p.elapsed} | findings: ${p.findings} | finds: ${p.findCalls}` +
+	` | controls${p.visionOnly ? " (DECLARED)" : ""}: ${p.actuated} actuated / ${p.dismissed} dismissed / ${p.seen} seen | surfaces: ${p.surfaces} | chapters: ${p.chapters} | stopped: ${p.stopped}` +
+	` | descent: ${DESCENT_ON && !p.visionOnly ? "on" : "off"} | gated: ${p.gatedRead ?? 0} read / ${p.gatedRefused ?? 0} refused` +
 	`${p.guidance ? " | operator-guidance: yes" : ""}${p.salvaged ? " | salvaged: session died before finish" : ""} -->\n` +
-	"<!-- controls actuated/seen is a LOWER BOUND ON BREADTH, not a coverage percentage: the denominator only grows as surfaces are opened, and operating a control is not understanding it. -->\n" +
+	(p.visionOnly
+		? // The declared frontier's known weakness, stated where the numbers are: the model
+			// itself is the only witness to what it saw, so these tallies cannot bound coverage.
+			"<!-- controls tallies are DECLARED — self-reported by the model from screenshots, not measured against an element list. A control the pass never declared is invisible to these numbers. -->\n"
+		: "<!-- controls actuated/seen is a LOWER BOUND ON BREADTH, not a coverage percentage: the denominator only grows as surfaces are opened, and operating a control is not understanding it. -->\n") +
 	"<!-- Written by src/core/explore.ts. DO NOT HAND-EDIT: edits make this a curated recipe, not exploration output — move such notes to docs/recipes/<app>.md instead. -->\n\n";
 
 export const hm = (ms: number): string => {
@@ -43,17 +48,27 @@ export const hm = (ms: number): string => {
 	return m >= 60 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m` : `${m}m`;
 };
 
-export const coverageNow = (p: Pass, stopped: string) => ({
-	seen: p.ledger.seen.size,
-	actuated: [...p.ledger.actuated].filter((k) => p.ledger.seen.has(k)).length,
-	dismissed: p.ledger.dismissed.size,
-	surfaces: new Set([...p.ledger.seen.values()].map((e) => e.surface)).size,
-	chapters: p.chapters,
-	stopped,
-	dismissals: [...new Set(p.ledger.dismissed.values())],
-	gatedRead: p.gated.filter((g) => g.tierReached === 1).length,
-	gatedRefused: p.gated.filter((g) => g.tierReached === 0).length,
-});
+export const coverageNow = (p: Pass, stopped: string) => {
+	// A vision-only pass counts the DECLARED ledger: the mechanical one is deliberately left
+	// empty there (see the loop), and reporting zeros for a pass that surveyed forty controls
+	// would misfile self-reported coverage as no coverage. Both ledgers share the shape this
+	// needs — seen entries carrying a surface, an operated/actuated set, a dismissal map.
+	const seen: Map<string, { surface: string }> = p.visionOnly ? p.declared.seen : p.ledger.seen;
+	const operated = p.visionOnly ? p.declared.operated : p.ledger.actuated;
+	const dismissed = p.visionOnly ? p.declared.dismissed : p.ledger.dismissed;
+
+	return {
+		seen: seen.size,
+		actuated: [...operated].filter((k) => seen.has(k)).length,
+		dismissed: dismissed.size,
+		surfaces: new Set([...seen.values()].map((e) => e.surface)).size,
+		chapters: p.chapters,
+		stopped,
+		dismissals: [...new Set(dismissed.values())],
+		gatedRead: p.gated.filter((g) => g.tierReached === 1).length,
+		gatedRefused: p.gated.filter((g) => g.tierReached === 0).length,
+	};
+};
 
 export const checkpoint = (p: Pass): void => {
 	fs.writeFileSync(
@@ -64,7 +79,7 @@ export const checkpoint = (p: Pass): void => {
 				// docs/appmaps/<slug>.json as-is, without hand-adding fields.
 				app: p.app,
 				capturedAt: new Date().toISOString(),
-				provenance: "explore",
+				provenance: p.visionOnly ? "explore-vision" : "explore",
 				actions: p.actions,
 				elapsed: hm(Date.now() - p.startedAt),
 				coverage: coverageNow(p, "in-progress"),
@@ -102,6 +117,7 @@ export const writeArtifacts = (p: Pass, out: FinishInput, stopped: StopReason, s
 			backend: p.backendKind,
 			findCalls: p.findCalls,
 			vision: p.vision,
+			visionOnly: p.visionOnly,
 			guidance: p.guidance,
 			salvaged,
 			...cov,
@@ -127,14 +143,14 @@ export const writeArtifacts = (p: Pass, out: FinishInput, stopped: StopReason, s
 	const jsonPath = demoted ? p.salvageGraphPath : p.graphPath;
 	fs.writeFileSync(prosePath, prose);
 	console.log(`\n=== exploration ${salvaged ? "SALVAGED" : "finished"} after ${p.actions} actions, ${elapsed}, ${p.findings.length} findings ===`);
-	console.log(`stopped: ${stopped} | controls: ${cov.actuated} actuated / ${cov.dismissed} dismissed / ${cov.seen} seen across ${cov.surfaces} surfaces | chapters: ${p.chapters}`);
+	console.log(`stopped: ${stopped} | controls${p.visionOnly ? " (declared)" : ""}: ${cov.actuated} actuated / ${cov.dismissed} dismissed / ${cov.seen} seen across ${cov.surfaces} surfaces | chapters: ${p.chapters}`);
 	if (p.refusals > 0) console.log(`safety guard refused ${p.refusals} action(s) on destructive-looking labels`);
 	console.log(`grounding notes: ${prosePath}`);
 
 	const graph: AppMap = {
 		app: p.app,
 		capturedAt: new Date().toISOString(),
-		provenance: "explore",
+		provenance: p.visionOnly ? "explore-vision" : "explore",
 		proseSha256: createHash("sha256").update(prose).digest("hex").slice(0, 12),
 		elapsed,
 		coverage: cov,

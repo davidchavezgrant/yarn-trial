@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { ACT_TOOL } from "../harness.js";
 import type { TargetVocabulary } from "../target.js";
 import { DISMISS_CAP } from "./config.js";
 
@@ -25,7 +26,11 @@ export const CLAIM_TOOL: Anthropic.Tool = {
 	},
 };
 
-export const systemPrompt = (rules: string, vocab: TargetVocabulary, descent: boolean, vision = true): string => `You are an exploration agent building grounding notes for ${vocab.subject}, so a future task-running agent can navigate it directly without dead ends. You drive it through a UI driver: each turn you receive ${vocab.container}'s elements (addressing handle, role, label/value)${vision ? " and a screenshot" : "; element frames give positions — there is no screenshot"}, and you perform ONE action via the "act" tool.
+export const systemPrompt = (rules: string, vocab: TargetVocabulary, descent: boolean, vision = true, visionOnly = false): string => `You are an exploration agent building grounding notes for ${vocab.subject}, so a future task-running agent can navigate it directly without dead ends. You drive it through a UI driver: each turn you receive ${
+	visionOnly
+		? `a screenshot of ${vocab.container} and NOTHING else — no element list, no addressing handles`
+		: `${vocab.container}'s elements (addressing handle, role, label/value)${vision ? " and a screenshot" : "; element frames give positions — there is no screenshot"}`
+}, and you perform ONE action via the "act" tool.
 
 Your goal is a map, not a task: systematically visit the main surfaces — ${vocab.surfaces} — and record where things live and how to operate them.
 
@@ -52,9 +57,24 @@ Use the "record" tool whenever you learn something a task agent would need: wher
 
 # How this run ends
 
-There is no step budget and no time limit. After every action you are told the FRONTIER: interactive controls that have been seen in some observation but never operated. The run ends when that list is empty, and "finish" is refused while it is not.
+There is no step budget and no time limit. ${
+	visionOnly
+		? `After every action you are told the DECLARED FRONTIER: controls you have surveyed (or named as an act target) but never operated. It is built ONLY from your own declarations — there is no element list on this pass — so survey every screen honestly: a control you never declare is a hole in the map that nothing can detect, and it reads exactly like a control that does not exist. The run ends when that list is empty, and "finish" is refused while it is not (or while you have surveyed nothing).`
+		: `After every action you are told the FRONTIER: interactive controls that have been seen in some observation but never operated. The run ends when that list is empty, and "finish" is refused while it is not.`
+}
 
 Because there is no clock, a slow surface is worth waiting for rather than abandoning — a long render, an upload, an assistant of the app's own thinking. Call wait with a generous "seconds" (a whole minute or several is fine; one long wait costs one action, many short ones cost many) instead of poking at an unchanged screen. A surface you gave up on early is a hole in the map that reads exactly like a surface that does not exist.
+${
+	visionOnly
+		? `
+# Survey discipline (vision-only pass)
+
+- SURVEY BEFORE ACTING. On every screen you have not surveyed — including after an action changes what is visible — call "survey" with the surface's name and every control you can read in the screenshot, before operating anything on it. Costs a turn, not an action.
+- Every act that operates a control (click, drag, type_text, set_value) must carry "target": the name and surface of the control it operates, spelled exactly as you surveyed it. That is how the frontier learns what you covered; a mis-named target credits the wrong entry. Waits and bare keystrokes need no target.
+- Name surfaces consistently: pick one name per panel/menu (use its visible title) and reuse it verbatim in survey, target, and dismiss. The frontier matches by exact name and surface.
+`
+		: ""
+}
 
 So you have two ways to shrink it, and both are legitimate:
 - Operate the control (this is the default: it is how surfaces get discovered — opening one panel adds everything inside it to the frontier).
@@ -131,6 +151,72 @@ const HOME_SCHEMA = {
 		description: { type: "string", description: 'What is on screen once it is reached, e.g. "left-rail Library view".' },
 	},
 	required: ["surface", "control", "description"],
+};
+
+/**
+ * Vision-only: the model declares the controls it can SEE on the current screen. This is the
+ * only way entries reach the declared frontier (src/core/harness/declared-frontier.ts) — a
+ * pass with no element list has no mechanical seen-set, so coverage is whatever the model
+ * declares. A turn, not an action, like record.
+ */
+export const SURVEY_TOOL: Anthropic.Tool = {
+	name: "survey",
+	description:
+		"Declare the interactive controls you can SEE in the current screenshot, for one surface. Call this on every screen before operating anything on it, " +
+		"and again when an action reveals new controls. Idempotent — re-declaring a control refreshes it. This is how your coverage is counted: a control you never survey is invisible to the frontier.",
+	input_schema: {
+		type: "object",
+		properties: {
+			surface: { type: "string", description: 'The panel/menu these controls sit in, e.g. "Brand Kit". Use "" (empty) for the top-level chrome, and reuse the same name verbatim in act targets and dismiss.' },
+			controls: {
+				type: "array",
+				items: {
+					type: "object",
+					properties: {
+						name: { type: "string", description: "The control's visible label, exactly as rendered." },
+						note: { type: "string", description: "Optional: what it appears to be (icon-only buttons, ambiguous labels)." },
+					},
+					required: ["name"],
+				},
+			},
+		},
+		required: ["surface", "controls"],
+	},
+};
+
+/**
+ * The act tool for a vision-only pass: ACT_TOOL plus a REQUIRED `target` naming the control
+ * the action operates. Derived rather than re-written so the action vocabulary can never
+ * drift from the element-grounded tool's; the loop rejects element_index at runtime (the
+ * model was never shown one, so any index is a fabrication).
+ */
+export const VISION_ACT_TOOL: Anthropic.Tool = {
+	...ACT_TOOL,
+	description:
+		"Perform one UI action on the target window, addressed by SCREENSHOT PIXEL (x/y — there are no element handles on this pass), " +
+		"and declare in `target` which control it operates.",
+	input_schema: {
+		...ACT_TOOL.input_schema,
+		properties: {
+			...(ACT_TOOL.input_schema as { properties: Record<string, unknown> }).properties,
+			target: {
+				type: "object",
+				properties: {
+					name: { type: "string", description: "The control this action operates, spelled exactly as you surveyed it." },
+					surface: { type: "string", description: 'Its containing surface, exactly as you surveyed it. "" for top level.' },
+				},
+				required: ["name", "surface"],
+				description:
+					"The declared identity of the control being operated — this is how the frontier records your coverage. " +
+					"REQUIRED for click/right_click/double_click/drag/type_text/set_value (the harness rejects them without it); " +
+					"omit for wait and bare keystrokes, which operate nothing.",
+			},
+		},
+		// `target` is enforced at runtime for operating verbs only — putting it in `required`
+		// here would force the model to fabricate one for `wait`, and a fabricated target is
+		// exactly the false coverage the declared frontier must not count.
+		required: (ACT_TOOL.input_schema as { required: string[] }).required,
+	},
 };
 
 export const EXTRA_TOOLS: Anthropic.Tool[] = [

@@ -4,6 +4,12 @@ import type { CdpBackend } from "../../backends/cdp.js";
 import type { Driver } from "../driver.js";
 import {
 	actionTarget,
+	declaredCredit,
+	declaredDismiss,
+	declaredIngest,
+	declaredMatches,
+	declaredRemaining,
+	declaredSummary,
 	externalityTarget,
 	frontierCredit,
 	frontierDismiss,
@@ -58,6 +64,25 @@ export type LoopDeps = {
 
 export async function runExploreLoop({ p, client, model, overlay, interrupted, driver, cdp, win, doObserve }: LoopDeps): Promise<void> {
 	let blindStreak = 0;
+	/**
+	 * Vision-only fork points, gathered here so the loop body reads the same in both modes.
+	 * On a vision-only pass the model's ledger is DECLARED — built from its own survey/target
+	 * calls (src/core/harness/declared-frontier.ts) — because the mechanical frontier's summary
+	 * lists element names straight off the AX tree, which would leak the element list to a
+	 * model meant to see only pixels. The harness's own observations keep flowing to the
+	 * safety gates, the mutation journal and the blind-streak stop either way: the arm changes
+	 * what the model SEES, never what the run can prove.
+	 */
+	const vo = p.visionOnly;
+	const summary = () => (vo ? declaredSummary(p.declared) : frontierSummary(p.ledger));
+	const remaining = () => (vo ? declaredRemaining(p.declared) : frontierRemaining(p.ledger));
+	// The mechanical ledger stays EMPTY on a vision-only pass rather than being fed silently:
+	// the stamp's tallies must be the declared ones, and two ledgers would be two answers to
+	// "what did this pass cover".
+	const ingest = (o: ObservationBundle) => {
+		if (!vo) frontierIngest(p.ledger, o);
+	};
+	const obsBlocks = (o: ObservationBundle) => observationBlocks(o, p.vision, !vo);
 	// Same handoff as the loop below: the banner starts visible and only a setDriving(false)
 	// takes it down, so the opening observation has to be the thing that lowers it — else it
 	// sits red through the first (long) model call with the machine idle.
@@ -68,7 +93,7 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 	} finally {
 		overlay.setDriving(false);
 	}
-	frontierIngest(p.ledger, obs);
+	ingest(obs);
 	p.messages.push({
 		role: "user",
 		content: [
@@ -77,9 +102,9 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 				text:
 					`Explore "${p.app}". There is no step budget and no time limit: this run ends when the frontier of un-operated controls is empty. ` +
 					"If a surface takes minutes to respond — some apps embed an agent of their own — wait for it rather than moving on.\n\n" +
-					`${frontierSummary(p.ledger)}\n\nInitial observation follows.`,
+					`${summary()}\n\nInitial observation follows.`,
 			},
-			...observationBlocks(obs, p.vision),
+			...obsBlocks(obs),
 		],
 	});
 
@@ -129,10 +154,12 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 						`This is chapter ${p.chapters}: the earlier transcript has been cleared to bound context. Nothing else has changed — the app is where you left it, and everything below is what you recorded.\n\n` +
 						`# Findings so far (${p.findings.length}${p.findings.length > 120 ? ", most recent 120 shown" : ""})\n${noteList}\n\n` +
 						`# Graph so far (${p.graphNodes.size} nodes, ${p.graphEdges.size} edges)\n${nodeList || "(none recorded yet — start recording nodes as you go)"}\n\n` +
-						`# ${frontierSummary(p.ledger)}\n\n` +
+						// The declared frontier survives the reset the same way the AX one does: in
+						// the seed. Without it a vision-only chapter would forget its own coverage.
+						`# ${summary()}\n\n` +
 						"There is no time limit on this pass — take as long as a surface needs. Current observation follows.",
 				},
-				...observationBlocks(obs, p.vision),
+				...obsBlocks(obs),
 			],
 		});
 
@@ -164,14 +191,18 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 		p.messages.push({ role: "assistant", content: response.content });
 
 		if (!toolUse) {
-			p.messages.push({ role: "user", content: "Call exactly one tool (act, record, dismiss, or finish)." });
+			p.messages.push({ role: "user", content: `Call exactly one tool (act, ${vo ? "survey, " : ""}record, dismiss, or finish).` });
 			continue;
 		}
 
 		if (toolUse.name === "finish") {
-			const rest = frontierRemaining(p.ledger);
-			if (rest.length > 0 && ++finishRefusals <= 3) {
-				console.log(`  finish refused (${finishRefusals}/3): ${rest.length} control(s) still un-operated`);
+			const rest = remaining();
+			// A vision-only pass with NOTHING surveyed has an empty frontier by construction —
+			// the ledger only holds what the model declared — so an empty ledger is refused the
+			// same way a non-empty one is: zero declarations is zero coverage, not full coverage.
+			const unfinished = rest.length > 0 || (vo && p.declared.seen.size === 0);
+			if (unfinished && ++finishRefusals <= 3) {
+				console.log(`  finish refused (${finishRefusals}/3): ${rest.length} control(s) still un-operated${vo && p.declared.seen.size === 0 ? " (nothing surveyed)" : ""}`);
 				p.messages.push({
 					role: "user",
 					content: [
@@ -179,7 +210,7 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 							type: "tool_result",
 							tool_use_id: toolUse.id,
 							content:
-								`Not yet — the frontier is not empty, and there is no time limit on this pass.\n\n${frontierSummary(p.ledger)}\n\n` +
+								`Not yet — the frontier is not empty, and there is no time limit on this pass.\n\n${summary()}\n\n` +
 								"Operate the ones that could open a surface you have not mapped. Dismiss the ones that are content rather than navigation, or that you must not touch — with a reason. " +
 								"Then finish will be accepted.",
 						},
@@ -187,7 +218,7 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 				});
 				continue;
 			}
-			writeArtifacts(p, toolUse.input as FinishInput, rest.length > 0 ? "frontier-conceded" : "frontier-empty");
+			writeArtifacts(p, toolUse.input as FinishInput, unfinished ? "frontier-conceded" : "frontier-empty");
 
 			return;
 		}
@@ -221,6 +252,26 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 			continue;
 		}
 
+		// Vision-only only: the model declares what it can SEE on the current screen, which is
+		// the sole way entries reach the declared frontier. A turn, not an action — like record.
+		if (toolUse.name === "survey") {
+			const input = toolUse.input as { surface?: string; controls?: Array<{ name?: string; note?: string }> };
+			const added = declaredIngest(p.declared, String(input.surface ?? ""), input.controls ?? []);
+			const rest = declaredRemaining(p.declared);
+			console.log(`  survey "${input.surface ?? "<top level>"}": +${added} new, ${p.declared.seen.size} declared, ${rest.length} on frontier`);
+			p.messages.push({
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: toolUse.id,
+						content: `surveyed: ${added} new control(s) declared (${p.declared.seen.size} total). ${rest.length} on the frontier.`,
+					},
+				],
+			});
+			continue;
+		}
+
 		if (toolUse.name === "dismiss") {
 			const input = toolUse.input as { names?: string[]; surface?: string; reason: string };
 			let text: string;
@@ -229,7 +280,7 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 				// separate decisions, and it is how a pass reaches "frontier-empty" cheaply.
 				// Refused only when the surface is vague: a genuinely repetitive named panel
 				// (80 identical list rows) is exactly what bulk dismissal is for.
-				const matches = frontierMatches(p.ledger, input);
+				const matches = vo ? declaredMatches(p.declared, input) : frontierMatches(p.ledger, input);
 				if (matches.length > DISMISS_CAP && isVagueSurface(input.surface)) {
 					const surfaces = [...new Set(matches.map((e) => e.surface || "<top level>"))].slice(0, 12);
 					console.log(`  dismiss REFUSED: ${matches.length} controls across ${surfaces.length} surface(s), no specific surface named`);
@@ -249,8 +300,8 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 					});
 					continue;
 				}
-				const gone = frontierDismiss(p.ledger, input);
-				const rest = frontierRemaining(p.ledger);
+				const gone = vo ? declaredDismiss(p.declared, input) : frontierDismiss(p.ledger, input);
+				const rest = remaining();
 				// A silent zero match reads as "done" and the model moves on leaving the
 				// entries in place; worse, it retries the same call with cosmetic variants.
 				// Naming the surfaces that DO exist turns a wasted turn into a correction.
@@ -313,8 +364,54 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 			continue;
 		}
 
-		const input = toolUse.input as { reasoning?: string; action: any };
+		const input = toolUse.input as { reasoning?: string; action: any; target?: { name?: string; surface?: string } };
 		const web = p.target.kind === "web";
+
+		if (vo) {
+			// This pass never showed the model an element list, so an element_index here is a
+			// fabricated number — executing it would actuate whatever element the walk happens
+			// to put at that position. Rejected unexecuted, same gate as the task agent's.
+			if (input.action?.element_index !== undefined) {
+				console.log("  REFUSED: element_index in a vision-only pass");
+				p.messages.push({
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: toolUse.id,
+							is_error: true,
+							content:
+								"ACTION NOT EXECUTED — you passed element_index, but this pass has no element list; any index is a guess. " +
+								"Address the target by screenshot pixel (x/y, from_x/from_y/to_x/to_y) and name it in `target`.",
+						},
+					],
+				});
+				continue;
+			}
+			// The declared target is the ONLY way an action reaches the frontier here, so an
+			// act that operates a control without naming one would be an action the coverage
+			// tallies can never account for. Only OPERATING verbs are held to it: a wait or an
+			// escape press operates nothing, and forcing a target there would make the model
+			// fabricate one — which the credit below would then count as coverage.
+			const operates = ["click", "right_click", "double_click", "drag", "type_text", "set_value"].includes(String(input.action?.name));
+			if (operates && !input.target?.name?.trim()) {
+				console.log("  REFUSED: act without a declared target in a vision-only pass");
+				p.messages.push({
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: toolUse.id,
+							is_error: true,
+							content:
+								`ACTION NOT EXECUTED — a ${input.action?.name} operates a control, so on this pass it must declare \`target\` ({name, surface}): ` +
+								"the control it operates, spelled as you surveyed it. That declaration is how the frontier records your coverage. Re-issue the action with a target.",
+						},
+					],
+				});
+				continue;
+			}
+		}
 
 		// Unattended-safety pre-flight, now two gates with opposite answers (see
 		// externalityTarget/reversibleTarget). Opting out is its OWN switch
@@ -323,6 +420,10 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 		//
 		// EXTERNALITY — commits off the machine. Refused always, descent or not: one-way is
 		// one-way, and reading the boundary would mean crossing it.
+		//
+		// Both gates read the HARNESS's AX observation — they are guards, not perception —
+		// and their refusal messages name the offending control's label, which is a small,
+		// accepted information leak to a vision-only model: safety wins over arm purity.
 		const external = GUARD_ON ? externalityTarget(input.action, obs, web) : undefined;
 		if (external) {
 			p.refusals++;
@@ -347,11 +448,13 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 
 		// REVERSIBLE — mutates local state that can be put back, or merely opens a local
 		// flow behind a scary label. Refused by default; under EXPLORE_DESCENT it is pressed
-		// ONCE to read the boundary and then Escaped without committing.
+		// ONCE to read the boundary and then Escaped without committing. Descent is forced
+		// OFF on a vision-only pass — boundary reading is an element-identity feature — so
+		// the reversible path always takes this refuse branch there.
 		const reversible = GUARD_ON ? reversibleTarget(input.action, obs, web) : undefined;
 		let descending = false;
 		if (reversible) {
-			if (!DESCENT_ON) {
+			if (!DESCENT_ON || vo) {
 				p.refusals++;
 				const node = actionTarget(input.action, obs);
 				p.gated.push({ id: gatedId(node, reversible), tierReached: 0, boundary: "not opened — descent off", stoppedBecause: "descent:off", scratchUsed: false });
@@ -435,12 +538,26 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 		// credits nothing, which under-counts rather than guessing.
 		let credited: string[] = [];
 		if (!isError) {
-			let creditAction = input.action;
-			if (creditAction?.query !== undefined && creditAction.ref === undefined && creditAction.element_index === undefined) {
-				const ref = resolvedRef ?? uniqueQueryHandle(String(creditAction.query), preObs);
-				if (ref !== undefined) creditAction = { ...creditAction, ref };
+			if (vo) {
+				// The declared target IS the credit: no observation is consulted, so the model
+				// cannot be credited for a control it did not name. Acting on a never-surveyed
+				// control ingests it at the same moment — operating something is also seeing it.
+				// A non-operating action (wait, a bare keystroke) may carry no target and
+				// credits nothing, which under-counts rather than fabricates.
+				const targetName = input.target?.name?.trim();
+				if (targetName) {
+					const { key, surveyed } = declaredCredit(p.declared, { name: targetName, surface: input.target?.surface ?? "" });
+					credited = [key];
+					if (!surveyed) console.log(`    target "${targetName}" was never surveyed — ingested and credited`);
+				}
+			} else {
+				let creditAction = input.action;
+				if (creditAction?.query !== undefined && creditAction.ref === undefined && creditAction.element_index === undefined) {
+					const ref = resolvedRef ?? uniqueQueryHandle(String(creditAction.query), preObs);
+					if (ref !== undefined) creditAction = { ...creditAction, ref };
+				}
+				credited = frontierCredit(p.ledger, creditAction, preObs);
 			}
-			credited = frontierCredit(p.ledger, creditAction, preObs);
 		}
 
 		if (obs.appContent === 0) {
@@ -560,18 +677,20 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 			}
 		}
 
-		const before = p.ledger.seen.size;
-		frontierIngest(p.ledger, obs);
-		const rest = frontierRemaining(p.ledger);
-		const discovered = p.ledger.seen.size - before;
+		const before = vo ? p.declared.seen.size : p.ledger.seen.size;
+		ingest(obs);
+		const rest = remaining();
+		const discovered = (vo ? p.declared.seen.size : p.ledger.seen.size) - before;
 		console.log(
 			`    -> ${credited.length} credited, ${discovered > 0 ? `+${discovered} new, ` : ""}${rest.length} on frontier, ${hm(Date.now() - p.startedAt)} elapsed`,
 		);
 
 		const frontierNote =
 			rest.length === 0
-				? "\n\nTHE FRONTIER IS EMPTY — every interactive control seen so far has been operated or dismissed. Call finish now, unless you know of a surface you have not opened."
-				: `\n\n${frontierSummary(p.ledger)}`;
+				? vo
+					? "\n\nTHE DECLARED FRONTIER IS EMPTY — every control you surveyed has been operated or dismissed. If this screen (or any you saw) still shows controls you never declared, survey them now; otherwise call finish."
+					: "\n\nTHE FRONTIER IS EMPTY — every interactive control seen so far has been operated or dismissed. Call finish now, unless you know of a surface you have not opened."
+				: `\n\n${summary()}`;
 		p.messages.push({
 			role: "user",
 			content: [
@@ -581,7 +700,7 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 					is_error: isError,
 					content: [
 						{ type: "text", text: `Driver result: ${resultText}${frontierNote}\n\nNew observation follows.` },
-						...observationBlocks(obs, p.vision),
+						...obsBlocks(obs),
 					],
 				},
 			],

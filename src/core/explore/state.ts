@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import fs from "node:fs";
-import { failedProvider, mergeGraph, newFrontier, OUT, runKey } from "../harness.js";
+import { failedProvider, mergeGraph, newDeclaredLedger, newFrontier, OUT, runKey } from "../harness.js";
 import { appmapsDir } from "../../paths.js";
 import { type Target, targetSlug } from "../target.js";
 import type { AppMap, AppMapEdge, AppMapHome, AppMapNode, GatedBoundary } from "../../types.js";
@@ -10,11 +10,15 @@ export type FinishInput = { document: string; nodes?: AppMapNode[]; edges?: AppM
 export type GraphInput = { nodes?: AppMapNode[]; edges?: AppMapEdge[] };
 export type StopReason = "frontier-empty" | "action-ceiling" | "frontier-conceded" | "interrupted" | "error";
 
-export const newPass = (target: Target, app: string, backendKind: string, vision: boolean, guidance: string | undefined) => {
+export const newPass = (target: Target, app: string, backendKind: string, vision: boolean, guidance: string | undefined, visionOnly = false) => {
 	const findings: string[] = [];
 	const slug = targetSlug(target);
-	const outPath = `${appmapsDir()}/${slug}.md`;
-	const graphPath = `${appmapsDir()}/${slug}.json`;
+	// A vision-only pass writes to its own `.vision.*` pair, NEVER over the element-grounded
+	// map: the two are different grounding tiers and the benchmark compares them, so one
+	// overwriting the other would destroy the very artifact it is measured against.
+	const variant = visionOnly ? ".vision" : "";
+	const outPath = `${appmapsDir()}/${slug}${variant}.md`;
+	const graphPath = `${appmapsDir()}/${slug}${variant}.json`;
 	fs.mkdirSync(appmapsDir(), { recursive: true });
 	fs.mkdirSync(`${OUT}/runs`, { recursive: true });
 
@@ -27,6 +31,10 @@ export const newPass = (target: Target, app: string, backendKind: string, vision
 	// pass is 40 minutes of actions, so losing it to one bad route is the expensive case.
 	const badProviders = new Set<string>();
 	const ledger = newFrontier();
+	// The vision-only pass's coverage ledger, built from the model's own survey/target
+	// declarations rather than observations. Present on every pass (cheap, empty when unused)
+	// so the loop can be typed against one Pass shape.
+	const declared = newDeclaredLedger();
 
 	/**
 	 * The graph, accumulated as the pass goes rather than assembled at the end.
@@ -64,6 +72,7 @@ export const newPass = (target: Target, app: string, backendKind: string, vision
 		app,
 		backendKind,
 		vision,
+		visionOnly,
 		guidance,
 		findings,
 		outPath,
@@ -78,6 +87,7 @@ export const newPass = (target: Target, app: string, backendKind: string, vision
 		startedAt,
 		badProviders,
 		ledger,
+		declared,
 		graphNodes,
 		graphEdges,
 		gated,

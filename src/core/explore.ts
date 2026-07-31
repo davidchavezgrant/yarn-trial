@@ -10,6 +10,7 @@ import {
 	makeClient,
 	observe,
 	onInterrupt,
+	VISION_ONLY_RULES,
 	type WindowRef,
 } from "./harness.js";
 import type { CdpBackend } from "../backends/cdp.js";
@@ -23,11 +24,11 @@ import { parseCli } from "./explore/cli.js";
 import { DESCENT_ON, MAX_ACTIONS } from "./explore/config.js";
 import { runExploreLoop } from "./explore/loop.js";
 import { requestFinish } from "./explore/model.js";
-import { CLAIM_TOOL, EXTRA_TOOLS, systemPrompt } from "./explore/prompt.js";
+import { CLAIM_TOOL, EXTRA_TOOLS, SURVEY_TOOL, systemPrompt, VISION_ACT_TOOL } from "./explore/prompt.js";
 import { accumulatedGraph, newPass } from "./explore/state.js";
 
 async function main(): Promise<void> {
-	const { target, app, guidance, backendKind, vision } = parseCli();
+	const { target, app, guidance, backendKind, vision, noAx } = parseCli();
 	const { client, model } = makeClient();
 	// A grounding pass clicks through the whole app for minutes on end — same takeover as a
 	// task run, different colour so the mode is readable at a glance.
@@ -40,7 +41,7 @@ async function main(): Promise<void> {
 		await driver?.close();
 		await cdp?.close();
 	});
-	const p = newPass(target, app, backendKind, vision, guidance);
+	const p = newPass(target, app, backendKind, vision, guidance, noAx);
 
 	try {
 		// On the CDP backend there is no driver and no window: the page is the target, and
@@ -66,14 +67,20 @@ async function main(): Promise<void> {
 		const doObserve = (name: string) => (cdp ? cdp.observe(name) : observe(driver!, win!, name, {}));
 		// The claim tool is only offered under descent — a non-descent pass never creates
 		// anything, so a claim ledger it can't act on is just a distraction in the prompt.
-		const extra = DESCENT_ON ? [...EXTRA_TOOLS, CLAIM_TOOL] : EXTRA_TOOLS;
+		// Descent is forced off on a vision-only pass (boundary reading is an element-identity
+		// feature), so the claim tool goes with it.
+		const descent = DESCENT_ON && !noAx;
+		const extra = descent ? [...EXTRA_TOOLS, CLAIM_TOOL] : EXTRA_TOOLS;
 		if (cdp) {
 			const { CDP_ACT_TOOL, CDP_FIND_TOOL, CDP_RULES } = await import("../backends/cdp.js");
 			p.tools = [CDP_ACT_TOOL, CDP_FIND_TOOL, ...extra];
-			p.basePrompt = systemPrompt(CDP_RULES, targetVocabulary(target), DESCENT_ON, vision);
+			p.basePrompt = systemPrompt(CDP_RULES, targetVocabulary(target), descent, vision);
+		} else if (noAx) {
+			p.tools = [VISION_ACT_TOOL, SURVEY_TOOL, ...extra];
+			p.basePrompt = systemPrompt(VISION_ONLY_RULES, targetVocabulary(target), descent, vision, true);
 		} else {
 			p.tools = [ACT_TOOL, ...extra];
-			p.basePrompt = systemPrompt(DRIVER_RULES, targetVocabulary(target), DESCENT_ON, vision);
+			p.basePrompt = systemPrompt(DRIVER_RULES, targetVocabulary(target), descent, vision);
 		}
 		console.log(
 			cdp
@@ -142,6 +149,7 @@ async function main(): Promise<void> {
 					backend: p.backendKind,
 					findCalls: p.findCalls,
 					vision: p.vision,
+					visionOnly: p.visionOnly,
 					guidance: p.guidance,
 					salvaged: true,
 					...coverageNow(p, "error"),
@@ -150,7 +158,7 @@ async function main(): Promise<void> {
 			const rawGraph: AppMap = {
 				app: p.app,
 				capturedAt: new Date().toISOString(),
-				provenance: "explore",
+				provenance: p.visionOnly ? "explore-vision" : "explore",
 				coverage: coverageNow(p, "error"),
 				nodes: [...p.graphNodes.values()],
 				edges: [...p.graphEdges.values()],
