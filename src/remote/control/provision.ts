@@ -175,7 +175,10 @@ export async function provisionHost(host: HostEntry, opts: ProvisionOptions = {}
 		// Same source as every other entry point: `run` sources ../yarn/.env before exec'ing
 		// node, so the key is in the environment or it does not exist. Absent is not an error —
 		// a host can be provisioned by someone who has no key and get one later from the GUI.
-		stageProvisioningFiles(stage, process.env.OPENROUTER_API_KEY, process.env.ANTHROPIC_API_KEY);
+		stageProvisioningFiles(stage, process.env.OPENROUTER_API_KEY, process.env.ANTHROPIC_API_KEY, {
+			...(process.env.AZURE_OPENAI_API_KEY ? { key: process.env.AZURE_OPENAI_API_KEY } : {}),
+			...(process.env.AZURE_OPENAI_ENDPOINT ? { endpoint: process.env.AZURE_OPENAI_ENDPOINT } : {}),
+		});
 		synced = await attempt(() => rsync(rsyncArgv(host, source, REMOTE_CHECKOUT), { timeoutMs: opts.syncTimeoutMs ?? SYNC_TIMEOUT_MS }));
 		if (synced.ok) synced = await attempt(() => rsync(rsyncArgv(host, stage, `${REMOTE_CHECKOUT}/${STAGE_DIR}`), { timeoutMs }));
 	} catch (e) {
@@ -397,7 +400,7 @@ export function doctorProblems(report: RemoteDoctor): string[] {
 	const problems: string[] = [];
 
 	if (report.apiKey === undefined || report.apiKey === "MISSING")
-		problems.push(`no model API key — put OPENROUTER_API_KEY or ANTHROPIC_API_KEY in ${report.runnerDir ?? "~/.yarn-runner"}/env`);
+		problems.push(`no model API key — put OPENROUTER_API_KEY, ANTHROPIC_API_KEY or the AZURE_OPENAI pair in ${report.runnerDir ?? "~/.yarn-runner"}/env`);
 	if (report.envFile?.warning) problems.push(report.envFile.warning);
 	if (report.tools?.ffmpeg === false) problems.push("ffmpeg missing — --record cannot assemble an mp4");
 	if (report.tools?.python3 === false) problems.push("python3 missing — pixel-delta verification degrades");
@@ -477,7 +480,24 @@ export function rsyncArgv(host: HostEntry, source: string, remoteDir: string): s
  * because their content is multi-line shell and XML — the one thing that must never be
  * interpolated into an argv sshd is about to flatten into a shell string.
  */
-export function stageProvisioningFiles(dir: string, modelKey?: string, anthropicKey?: string): string[] {
+/**
+ * An endpoint is a URL rather than a key, so it gets its own check: https only (the key rides
+ * in a header and must not cross plaintext), and no quote or whitespace, because the value is
+ * written inside a single-quoted shell assignment the far side sources.
+ */
+function checkEndpoint(url: string): string {
+	const value = url.trim();
+	if (!/^https:\/\/[^\s'"]+$/.test(value)) throw new Error(`AZURE_OPENAI_ENDPOINT must be an https URL with no quotes or spaces, got ${JSON.stringify(value)}`);
+
+	return value;
+}
+
+export function stageProvisioningFiles(
+	dir: string,
+	modelKey?: string,
+	anthropicKey?: string,
+	azure?: { key?: string; endpoint?: string },
+): string[] {
 	const files: [name: string, body: string, mode: number][] = [
 		["runnerctl", RUNNERCTL_SHIM, 0o755],
 		["yarn-runner-serve", SERVE_SHIM, 0o755],
@@ -500,6 +520,12 @@ export function stageProvisioningFiles(dir: string, modelKey?: string, anthropic
 	const envLines = [
 		...(modelKey ? [`OPENROUTER_API_KEY='${checkModelKey(modelKey)}'`] : []),
 		...(anthropicKey ? [`ANTHROPIC_API_KEY='${checkModelKey(anthropicKey)}'`] : []),
+		// The Azure Responses pair travels together or not at all: makeClient refuses an
+		// `azure/*` model with only one of them, and shipping half would turn a benchmark arm
+		// into a startup error on the far side.
+		...(azure?.key && azure.endpoint
+			? [`AZURE_OPENAI_API_KEY='${checkModelKey(azure.key)}'`, `AZURE_OPENAI_ENDPOINT='${checkEndpoint(azure.endpoint)}'`]
+			: []),
 	];
 	if (envLines.length) files.push(["env", `${envLines.join("\n")}\n`, 0o600]);
 
@@ -730,7 +756,7 @@ install -m 755 "$PROV/yarn-runner-serve" "$HOME/.local/bin/yarn-runner-serve"
 # (nothing sent, host already has one), absent (nothing sent, host has none — the only
 # state that needs action).
 KEY=absent
-if grep -qE '^[[:space:]]*(export[[:space:]]+)?(OPENROUTER|ANTHROPIC)_API_KEY[[:space:]]*=' "$HOME/.yarn-runner/env" 2>/dev/null; then
+if grep -qE '^[[:space:]]*(export[[:space:]]+)?(OPENROUTER|ANTHROPIC|AZURE_OPENAI)_API_KEY[[:space:]]*=' "$HOME/.yarn-runner/env" 2>/dev/null; then
 	KEY=present
 fi
 if [ -f "$PROV/env" ]; then

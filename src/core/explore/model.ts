@@ -1,3 +1,4 @@
+import type { ModelClient } from "../harness.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { outputEffort, providerRouting, retryTransient } from "../harness.js";
 import { writeArtifacts } from "./artifacts.js";
@@ -9,7 +10,7 @@ import { type FinishInput, noteProvider, type Pass, type StopReason } from "./st
  * transcript, and the provider-routing ignore list. `extra` is the single key that differs by
  * call site — cache_control on the loop call, tool_choice on the pinned finish call.
  */
-export const streamCall = (p: Pass, client: Anthropic, model: string, extra: Record<string, unknown>): Promise<Anthropic.Message> =>
+export const streamCall = (p: Pass, client: ModelClient, model: string, extra: Record<string, unknown>): Promise<Anthropic.Message> =>
 	retryTransient(
 		() =>
 			client.messages
@@ -32,7 +33,7 @@ export const streamCall = (p: Pass, client: Anthropic, model: string, extra: Rec
  * finish (action ceiling, dead session). One model call, tool_choice pinned,
  * no driver needed — everything required is already in the transcript and the graph.
  */
-export const requestFinish = async (p: Pass, client: Anthropic, model: string, why: string, stopped: StopReason, salvaged: boolean): Promise<void> => {
+export const requestFinish = async (p: Pass, client: ModelClient, model: string, why: string, stopped: StopReason, salvaged: boolean): Promise<void> => {
 	p.messages.push({ role: "user", content: why });
 	// Streamed, like the loop call: the SDK refuses a non-streaming request whose
 	// max_tokens could exceed a 10-minute generation, and the finish payload is the

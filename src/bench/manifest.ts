@@ -34,6 +34,8 @@ export interface RunMetrics {
 	provenance?: string;
 	/** What actually ran, off the run log — the manifest entry's `model` is only what was asked for. */
 	model?: string;
+	/** Which wire served it: anthropic | openrouter | azure-responses. See makeClient. */
+	transport?: string;
 	backend?: string;
 	vision?: boolean;
 	ax?: boolean;

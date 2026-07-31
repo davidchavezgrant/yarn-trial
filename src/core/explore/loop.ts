@@ -1,3 +1,4 @@
+import type { ModelClient } from "../harness.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { boundaryDescription, classifyBoundary } from "../boundary.js";
 import type { CdpBackend } from "../../backends/cdp.js";
@@ -52,7 +53,7 @@ const uniqueQueryHandle = (query: string, obs: ObservationBundle): string | numb
 
 export type LoopDeps = {
 	p: Pass;
-	client: Anthropic;
+	client: ModelClient;
 	model: string;
 	overlay: Overlay;
 	interrupted: () => boolean;

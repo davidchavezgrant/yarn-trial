@@ -1,3 +1,4 @@
+import type { ModelClient } from "./harness.js";
 import Anthropic from "@anthropic-ai/sdk";
 import type { CdpBackend } from "../backends/cdp.js";
 import type { Driver } from "./driver.js";
@@ -118,7 +119,7 @@ export interface TeardownArgs {
 	 *  the CDP path through the page. Same journal, same checks, same receipt either way. */
 	driver?: Driver;
 	cdp?: CdpBackend;
-	client: Anthropic;
+	client: ModelClient;
 	model: string;
 	app: string;
 	journal: Mutation[];

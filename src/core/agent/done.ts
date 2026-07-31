@@ -1,3 +1,4 @@
+import type { ModelClient } from "../harness.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { checkableCount, verificationTallies, verify, visualJudge } from "../harness.js";
 import type { ObservationBundle, PromptAudit, VisualVerdict } from "../harness.js";
@@ -12,7 +13,7 @@ export interface DoneContext {
 	sync: DriverSync;
 	overlay: Overlay;
 	doObserve: (name: string) => Promise<ObservationBundle>;
-	client: Anthropic;
+	client: ModelClient;
 	model: string;
 	judgeMode: string;
 	task: string;
