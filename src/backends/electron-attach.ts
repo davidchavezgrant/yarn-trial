@@ -1,6 +1,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
+import type { Target } from "../core/target.js";
 
 /**
  * Electron attach for the CDP backend: resolve an app NAME into a debuggable endpoint,
@@ -36,6 +37,42 @@ export const KEEP_RENDERING_FLAGS = ["--disable-backgrounding-occluded-windows",
  *  Chrome (updaters, single-instance locks), so this is double the Chrome budget. */
 const LAUNCH_TIMEOUT_MS = 20_000;
 const LAUNCH_POLL_MS = 250;
+
+/**
+ * The two endpoint failures where falling back to the AX backend is sound, marked so the
+ * runner can check them by TYPE — the repo rule is to never regex-match error prose (it
+ * broke twice against cua's messages). Everything else in this module stays a plain Error
+ * on purpose: not-installed fails on ax too but with a worse message, and a port collision
+ * or a wrong-owner endpoint is an environment fault the operator must see, not route around.
+ *
+ * - "port-stripped": the app was launched WITH --remote-debugging-port and the endpoint
+ *   never answered — the signature of argv-sanitizing hardening (Figma-style) that strips
+ *   the flag before Chromium ever sees it.
+ * - "running-without-port": the app is already running and a debug port cannot be added to
+ *   a live process. Quitting the user's app is not this code's call — but driving the app
+ *   exactly where it stands is what the AX path does.
+ */
+export class EndpointUnavailableError extends Error {
+	constructor(
+		readonly reason: "port-stripped" | "running-without-port",
+		message: string,
+	) {
+		super(message);
+		this.name = "EndpointUnavailableError";
+	}
+}
+
+/**
+ * The runner's cdp→ax fallback decision, in one place: eligible only for an APP target
+ * failing with the marked error above. A web target's endpoint failure is about OUR
+ * Chrome, not a hardened app, and any other error — not-installed, port collision,
+ * wrong-owner endpoint — is an environment fault the operator must see. The instanceof
+ * IS the contract: a plain Error carrying identical prose stays fatal, because matching
+ * message text is the regex-over-prose pattern this repo has been burned by twice.
+ */
+export function fallbackEligible(err: unknown, targetKind: Target["kind"]): err is EndpointUnavailableError {
+	return targetKind === "app" && err instanceof EndpointUnavailableError;
+}
 
 /** Poll a debugging endpoint until it answers, or give up. */
 export async function endpointAlive(url: string, attempts: number, delayMs: number): Promise<boolean> {
@@ -178,7 +215,8 @@ export async function ensureElectronEndpoint(appName: string, preferredPort: num
 		const declared = debugPortFromArgv(argv);
 		if (declared === undefined) {
 			if (process.env.BENCH_QUIT_PORTLESS !== "1")
-				throw new Error(
+				throw new EndpointUnavailableError(
+					"running-without-port",
 					`${appName} is already running WITHOUT a debug port, and one cannot be added to a live process. ` +
 						`Quit ${appName} (cmd+Q) and re-run — the run relaunches it with --remote-debugging-port=${preferredPort}.`,
 				);
@@ -190,7 +228,12 @@ export async function ensureElectronEndpoint(appName: string, preferredPort: num
 		} else {
 			const endpoint = `http://127.0.0.1:${declared}`;
 			if (!(await endpointAlive(endpoint, 8, 250)))
-				throw new Error(`${appName} is running with --remote-debugging-port=${declared} but ${endpoint} is not answering`);
+				// The flag is on the argv yet nothing listens: an argv-sanitizing app strips it
+				// before Chromium sees it, so ps shows the launch-time flag over a dead port.
+				throw new EndpointUnavailableError(
+					"port-stripped",
+					`${appName} is running with --remote-debugging-port=${declared} but ${endpoint} is not answering`,
+				);
 			if (declared !== preferredPort) console.log(`${appName} already exposes its own debug port ${declared} — attaching there`);
 
 			return { endpoint, port: declared };
@@ -216,7 +259,8 @@ export async function ensureElectronEndpoint(appName: string, preferredPort: num
 	child.on("error", () => {});
 	child.unref();
 	if (!(await endpointAlive(endpoint, Math.ceil(LAUNCH_TIMEOUT_MS / LAUNCH_POLL_MS), LAUNCH_POLL_MS)))
-		throw new Error(
+		throw new EndpointUnavailableError(
+			"port-stripped",
 			`${appName} launched but exposed no debugging endpoint at ${endpoint} within ${LAUNCH_TIMEOUT_MS / 1000}s — ` +
 				`it may ignore Chromium switches, or an updater relaunched it without them`,
 		);
