@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { appmapsDir, dataRoot, outDir } from "./paths.js";
-import { listApps, listRecordedRuns, pruneUiState, readUiState, RunController, writeUiState } from "./ui-core.js";
+import { listApps, listRecordedRuns, pruneUiState, readUiState, RunController, streamPump, writeUiState } from "./ui-core.js";
 
 /**
  * Each test gets its own data root rather than writing out/ui-state.json into the checkout.
@@ -211,4 +211,38 @@ test("listApps__ListsNoWebTargets__When__OnlyAppAppmapsExist", () => {
 		fs.writeFileSync(`${appmapsDir()}/yarn.md`, "<!-- provenance: explore -->");
 		assert.equal(listApps().some((a) => a.kind === "web"), false);
 	});
+});
+
+test("streamPump__ReassemblesTheLine__When__AChunkBoundaryFallsMidLine", () => {
+	// The exact defect the log pane showed: a chunk ending inside a step line emitted
+	// "[12] click" and " \"Save\" ✓ verified" as two rows, neither matching the step pattern.
+	const got: string[] = [];
+	const pump = streamPump((l) => got.push(l));
+	const text = Buffer.from('[12] click "Save" ✓ verified\n[13] type "Paris" ✓ verified\n');
+	pump.push(text.subarray(0, 10));
+	pump.push(text.subarray(10));
+	pump.end();
+	assert.deepEqual(got, ['[12] click "Save" ✓ verified', '[13] type "Paris" ✓ verified']);
+});
+
+test("streamPump__KeepsTheGlyphIntact__When__AChunkBoundaryFallsInsideIt", () => {
+	// ✓ is three bytes; Buffer.toString() on a cut mid-glyph produced replacement characters
+	// and turned "✓ verified" into "�� verified" — which reads as a failed run.
+	const got: string[] = [];
+	const pump = streamPump((l) => got.push(l));
+	const text = Buffer.from('[12] click "Save" ✓ verified\n');
+	// Byte 19 is inside the ✓ (bytes 18-20).
+	pump.push(text.subarray(0, 19));
+	pump.push(text.subarray(19));
+	pump.end();
+	assert.deepEqual(got, ['[12] click "Save" ✓ verified']);
+});
+
+test("streamPump__EmitsTheFinalLine__When__TheStreamEndsWithoutANewline", () => {
+	// A process's last words — usually the reason it stopped — rarely end in a newline.
+	const got: string[] = [];
+	const pump = streamPump((l) => got.push(l));
+	pump.push(Buffer.from("exit reason: session lease lost"));
+	pump.end();
+	assert.deepEqual(got, ["exit reason: session lease lost"]);
 });

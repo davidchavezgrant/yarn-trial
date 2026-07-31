@@ -20,12 +20,16 @@ interface FakeEl {
 	style: { display?: string };
 	disabled: boolean;
 	checked: boolean;
-	children: unknown[];
+	children: FakeEl[];
+	onclick?: () => unknown;
 	addEventListener(): void;
 	querySelector(): null;
-	appendChild(): void;
+	appendChild(c: FakeEl): void;
+	removeChild(c: FakeEl): void;
 }
 
+// Children are a real array so the log-cap logic is observable: trimLog counts and removes
+// through exactly these two methods, and a no-op appendChild would make the cap untestable.
 const el = (): FakeEl => ({
 	value: "",
 	textContent: "",
@@ -37,7 +41,13 @@ const el = (): FakeEl => ({
 	children: [],
 	addEventListener() {},
 	querySelector: () => null,
-	appendChild() {},
+	appendChild(c: FakeEl) {
+		this.children.push(c);
+	},
+	removeChild(c: FakeEl) {
+		const i = this.children.indexOf(c);
+		if (i >= 0) this.children.splice(i, 1);
+	},
 });
 
 const IDS = [
@@ -54,6 +64,11 @@ interface Harness {
 	syncUrlRow(): boolean;
 	selUrl(): string | undefined;
 	isBrowser(name: string): boolean;
+	appendLine(text: string): void;
+	line(text: string, owner?: string | null): void;
+	errText(e: unknown): string;
+	dropStaleSelection(): void;
+	host: string;
 }
 
 /**
@@ -101,7 +116,8 @@ function mount(): Harness {
 		"setInterval",
 		"setTimeout",
 		`${APP_JS.replace(/<\/script>\s*$/, "")}
-		return { get sel(){return sel}, set sel(v){sel=v}, set apps(v){apps=v}, check, syncUrlRow, selUrl, isBrowser };`,
+		return { get sel(){return sel}, set sel(v){sel=v}, set apps(v){apps=v}, get host(){return host}, set host(v){host=v},
+			check, syncUrlRow, selUrl, isBrowser, appendLine, line, errText, dropStaleSelection };`,
 	);
 	const noTimer = () => 0;
 	const api = fn({ __bus: bus, addEventListener() {} }, document, noTimer, noTimer) as Harness;
@@ -214,4 +230,66 @@ test("check__ReadsGroundedFromTheSite__When__ABrowserIsPointedAtOne", () => {
 	ui.nodes.task.value = "change my timezone to Paris";
 	ui.check();
 	assert.equal(ui.nodes.ground.textContent, "Ground");
+});
+
+test("appendLine__CapsTheDom__When__ARunOutlivesTheScrollback", () => {
+	// line() always trimmed its ARRAY to 400, but nothing trimmed the pane: a 40-minute
+	// grounding pass grew the DOM without bound and every append got costlier for the run's
+	// whole life. The cap must hold in the DOM too.
+	const ui = mount();
+	for (let i = 0; i < 450; i++) ui.appendLine(`[${i}] click "Save"`);
+	assert.ok(ui.nodes.log.children.length <= 400, `log pane holds ${ui.nodes.log.children.length} nodes; the cap is 400`);
+	// Oldest dropped, newest kept — a terminal, not a ring of arbitrary rows.
+	assert.equal(ui.nodes.log.children[ui.nodes.log.children.length - 1]!.textContent, '[449] click "Save"');
+});
+
+test("line__FilesUnderTheGivenOwner__When__OneIsPassedExplicitly", () => {
+	// The app-list note reports about the SELECTION; before owner existed it was filed into
+	// whatever app happened to be mid-run, splicing list chatter into that run's transcript.
+	// Ownership is observable through painting: a line owned by an app that is not on screen
+	// must be captured for that app's buffer, not drawn into the visible pane.
+	const ui = mount();
+	ui.sel = "Yarn";
+	ui.line("· note about another app", "Notes");
+	ui.line("▶ real output");
+	const texts = ui.nodes.log.children.map((c) => c.textContent);
+	assert.ok(!texts.includes("· note about another app"), "a line owned by another app must not paint into the visible pane");
+	assert.ok(texts.includes("▶ real output"), "the selection's own line paints");
+});
+
+test("errText__NamesTheFailure__When__TheRejectionIsNotAnError", () => {
+	// A main-process handler that throws a string (or nothing) must not render "✗ undefined"
+	// in the log — that reads like a value the agent printed.
+	const ui = mount();
+	assert.equal(ui.errText(new Error("boom")), "boom");
+	assert.equal(ui.errText("plain string"), "plain string");
+	assert.equal(ui.errText(undefined), "unknown error");
+});
+
+test("dropStaleSelection__ClearsSel__When__TheSavedAppIsNotOnThisHost", () => {
+	// ui-state.json can name an app deleted since last session, or the selector can point at a
+	// different Mac. Run must not offer to dispatch at a target the host will not resolve.
+	const ui = mount();
+	ui.apps = [{ name: "Notes" }];
+	ui.sel = "Yarn";
+	ui.dropStaleSelection();
+	assert.equal(ui.sel, null);
+});
+
+test("dropStaleSelection__KeepsSel__When__TheAppExistsOnTheHost", () => {
+	const ui = mount();
+	ui.apps = [{ name: "Yarn" }];
+	ui.sel = "Yarn";
+	ui.dropStaleSelection();
+	assert.equal(ui.sel, "Yarn");
+});
+
+test("dropStaleSelection__KeepsSel__When__TheSelectionIsATypedUrl", () => {
+	// A typed URL is a legitimate target that is never in the apps list.
+	const ui = mount();
+	ui.apps = [];
+	ui.nodes.q.value = "https://www.notion.so";
+	ui.sel = "www.notion.so";
+	ui.dropStaleSelection();
+	assert.equal(ui.sel, "www.notion.so");
 });

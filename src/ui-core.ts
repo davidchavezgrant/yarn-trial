@@ -305,7 +305,7 @@ export class LineSplitter {
  * mid-glyph turned `✓ verified` into `�� verified`, which reads as a failed run. `StringDecoder`
  * holds the partial code point instead.
  */
-function streamPump(emit: (line: string) => void): { push: (buf: Buffer) => void; end: () => void } {
+export function streamPump(emit: (line: string) => void): { push: (buf: Buffer) => void; end: () => void } {
 	const decoder = new StringDecoder("utf8");
 	const splitter = new LineSplitter();
 

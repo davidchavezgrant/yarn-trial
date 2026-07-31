@@ -37,18 +37,29 @@ export interface UiBus {
 	 * Open a screen-sharing session on a Mac so a person can clear a sign-in wall by hand.
 	 * Resolves once the viewer has been asked to open — not once anyone has signed in.
 	 */
-	signin(host: string, app?: string): Promise<{ ok: boolean; message: string; url?: string }>;
+	signin(host: string, app?: string): Promise<{ ok: boolean; message: string; url?: string; watch?: { host: string; app: string } }>;
+	/**
+	 * The second half of a sign-in: resolves once the app on that Mac reaches its home screen —
+	 * minutes later, when a person finishes an SSO round trip. Separate from `signin` so the
+	 * viewer-opening reply is not held for all of it.
+	 */
+	signinWait(host: string, app: string): Promise<{ ok: boolean; message: string }>;
 	/** `modelKey` is a boolean by construction — the key itself never crosses this seam. */
 	loadCreds(): Promise<{ present: boolean; fingerprint?: string; path: string; modelKey: boolean }>;
 	saveKey(key: string): Promise<{ ok: true; credentials: { modelKey: boolean } } | { ok: false; error: string }>;
 	loadHostPref(): Promise<{ host: string }>;
 	/** Fire-and-forget, like saveState: a lost preference must never block a click. */
 	saveHostPref(host: string): void;
-		rows: { name: string; state: string; detail: string; reason?: string; tccOk?: boolean; jobId?: string }[];
-	/** Per-app task text + log scrollback, and the app selected last. */
-	loadState(): Promise<{ lastApp?: string; byApp: Record<string, { task: string; log: string[] }> }>;
+	/**
+	 * Per-app task text + log scrollback, and the app selected last.
+	 *
+	 * `url` must appear in BOTH signatures: the host's `pruneUiState` rebuilds each entry field
+	 * by field, so a field the renderer writes but this type omits looks safe here and silently
+	 * fails to round-trip if the host side forgets it — this line is where a reader checks.
+	 */
+	loadState(): Promise<{ lastApp?: string; byApp: Record<string, { task: string; log: string[]; url?: string }> }>;
 	/** Fire-and-forget so it can also run from `beforeunload`, where a round trip would not finish. */
-	saveState(state: { lastApp?: string; byApp: Record<string, { task: string; log: string[] }> }): void;
+	saveState(state: { lastApp?: string; byApp: Record<string, { task: string; log: string[]; url?: string }> }): void;
 	onStarted(cb: (d: { app: string; task: string }) => void): void;
 	onLine(cb: (line: string) => void): void;
 	/**
@@ -203,7 +214,9 @@ let host = 'local';
 // someone else's grounding pass.
 let offers = [], fleetRows = {}, dismissed = new Set(), probing = false;
 // Outcome of the last sign-in click, kept outside the row markup because the fleet list is
-// rebuilt every fifteen seconds and a message rendered into a row would vanish before it was read.
+// rebuilt every fifteen seconds and a message rendered into a row would vanish before it was
+// read. 'paints' counts repaints so the message can also retire: without that it outlived its
+// moment, and "opening mac2…" sat under the panel for the rest of the session.
 let signinMsg = null;
 // The last run that turned around at the door — {app, host, msg} — or null.
 //
@@ -214,6 +227,10 @@ let signinMsg = null;
 let unready = null;
 
 const esc = (s) => String(s == null ? '' : s).replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
+
+// A rejected IPC call arrives as an Error, but a handler that threw a string or nothing does
+// not — and "✗ undefined" in the log reads like something the agent printed.
+const errText = (e) => (e && e.message) || (e ? String(e) : 'unknown error');
 
 // Log lines belong to the app whose run produced them, not to whatever happens to be
 // selected when they arrive: switching targets mid-run must not splice this run's output
@@ -321,18 +338,35 @@ async function loadApps() {
   // silently repopulates the list with the wrong machine's apps.
   const asked = host;
   el('q').placeholder = 'Searching ' + asked + '…';
-  const res = await bus.loadApps(asked);
+  let res;
+  try {
+    res = await bus.loadApps(asked);
+  } catch (e) {
+    // An unreachable Mac used to leave "Searching mac2…" up forever with nothing in the log
+    // to say the request died rather than being slow — and the rejection escaped unhandled.
+    if (asked === host) { el('q').placeholder = 'Search apps…'; line('✗ listing apps on ' + asked + ': ' + errText(e)); }
+
+    return;
+  }
   if (asked !== host) return;
 
   apps = (res && res.apps) || [];
   el('q').placeholder = asked === 'local' ? 'Search apps…' : 'Search apps on ' + asked + '…';
-  if (res && res.note) line('· ' + res.note);
+  // Owner is the SELECTION: this note is about the list on screen, and defaulting would file
+  // it into the running app's terminal whenever a run is in flight.
+  if (res && res.note) line('· ' + res.note, sel);
   render();
+  dropStaleSelection();
 }
 
 /** Reselect the last app and repopulate its task + terminal before the first paint. */
 async function restore() {
-  const saved = await bus.loadState();
+  let saved = null;
+  try {
+    saved = await bus.loadState();
+  } catch {
+    // No memory is a working shell; a rejection here must not stop boot.
+  }
   uiState = saved && saved.byApp ? saved : { byApp: {} };
   if (uiState.lastApp) {
     sel = uiState.lastApp;
@@ -342,6 +376,25 @@ async function restore() {
   renderLog(sel);
   render();
   check();
+}
+
+// The saved selection can name an app that no longer exists on the selected host — deleted
+// since last session, or the selector now points at a different Mac. The task pane stays (its
+// text is still the user's), but Run must not offer to dispatch at a target the host will not
+// resolve. Called after every loadApps(), which is the moment 'apps' becomes trustworthy.
+function dropStaleSelection() {
+  if (!sel || apps.some(a => a.name === sel)) return;
+  // A typed URL is a legitimate selection that is never in 'apps'; keep it.
+  if (typedUrl() && new URL(typedUrl()).host === sel) return;
+  // A run in flight owns the pane and its own app name; resolve the mismatch when it ends.
+  if (running) return;
+  const gone = sel;
+  sel = null;
+  renderLog(null);
+  render();
+  check();
+  // After renderLog: painted into the now-empty pane, unowned, so it survives the repaint.
+  line('· ' + gone + ' is not on ' + host + ' — pick a target from the list', null);
 }
 
 function selectApp(name) {
@@ -428,7 +481,50 @@ function foldable(text) {
   }
   foldEl.querySelector('div').appendChild(Object.assign(document.createElement('div'), { textContent: text, className: 't-meta' }));
   foldEl.querySelector('summary').textContent = ++foldCount + ' setup line' + (foldCount === 1 ? '' : 's') + ' (grounding, scope ambiguities) — click to expand';
-  log.scrollTop = log.scrollHeight;
+  schedulePaint();
+}
+
+// Whether the view is riding the bottom of the log. Autoscroll used to be unconditional,
+// which made a live log unreadable: scroll up to see what step 6 did and the next line — a
+// second later, for the whole run — yanks the view back down. Now scrolling away releases the
+// pin and scrolling back to (near) the bottom re-arms it. The slack is one line's height-ish:
+// "close enough to the bottom to mean 'following'".
+let pinned = true;
+function notePin() {
+  const log = el('log');
+  // Unlaid-out pane (first paint, fake DOM) measures 0/undefined everywhere; stay pinned.
+  if (!log.clientHeight) { pinned = true; return; }
+  pinned = log.scrollHeight - log.scrollTop - log.clientHeight <= 40;
+}
+
+// The pane is capped like the buffer always was. line() trims its array to LOG_LINES_KEPT,
+// but nothing trimmed the DOM, so a 40-minute grounding pass grew it without bound and every
+// append got costlier for the life of the run.
+function trimLog() {
+  const log = el('log');
+  const over = log.children.length - LOG_LINES_KEPT;
+  if (over <= 0) return;
+  // The fold is one element holding many lines, and future foldable() calls append into it.
+  // Removing it would detach them from the document silently, so it is never excess.
+  const removable = [...log.children].filter(n => n !== foldEl);
+  for (let i = 0; i < over && i < removable.length; i++) log.removeChild(removable[i]);
+}
+
+// One layout pass per animation frame instead of one per line. Reading scrollHeight forces a
+// synchronous reflow, and the agent is chatty by design — per-line measuring turned a busy
+// stretch into a stuttering window. Appends stay synchronous (order is preserved); only the
+// measuring — trim and scroll — coalesces.
+let paintQueued = false;
+function schedulePaint() {
+  if (paintQueued) return;
+  paintQueued = true;
+  const paint = () => {
+    paintQueued = false;
+    trimLog();
+    if (pinned) { const log = el('log'); log.scrollTop = log.scrollHeight; }
+  };
+  // The fake-DOM harness has no rAF; painting inline there keeps the behaviour observable.
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(paint); else paint();
 }
 
 // DOM only. Split out from line() because replaying a stored terminal must paint the same
@@ -447,7 +543,7 @@ function appendLine(text) {
   const log = el('log');
   if (log.querySelector('.empty')) log.innerHTML = '';
   log.appendChild(d);
-  log.scrollTop = log.scrollHeight;
+  schedulePaint();
 }
 
 /** Repaint the terminal from an app's stored scrollback. */
@@ -455,13 +551,18 @@ function renderLog(app) {
   const log = el('log');
   log.innerHTML = '';
   foldEl = null; foldCount = 0;
+  // Switching apps means switching runs: follow the new one from its tail.
+  pinned = true;
   const lines = app ? stateFor(app).log : [];
   if (!lines.length) { log.innerHTML = '<span class="empty">Output appears here.</span>'; return; }
   for (const t of lines) appendLine(t);
 }
 
-function line(text) {
-  const owner = runningApp || sel;
+// 'owner' names whose terminal the text belongs to; the default is the run in flight, then
+// the selection. Callers reporting about the SELECTION (the app-list note, say) must pass it
+// explicitly, or their line lands in whatever app happens to be mid-run at the moment.
+function line(text, owner) {
+  owner = owner !== undefined ? owner : (runningApp || sel);
   if (owner) {
     const buf = stateFor(owner).log;
     buf.push(text);
@@ -539,10 +640,21 @@ async function loadHostList() {
 async function loadFleet() {
   if (probing) return;
   probing = true;
-  let view;
+  let view, watchdog = null;
   try {
-    view = await bus.loadFleet();
+    // The race is what keeps 'probing' from latching true forever. A REJECTED probe already
+    // released it via the finally, but a probe that never settles — one ssh wedged against a
+    // Mac that answers TCP and nothing else — held it for the life of the window, and every
+    // later 15s tick returned at the first line above. The panel froze on stale rows with no
+    // error anywhere. Generous deadline: the point is only that it cannot be infinite.
+    view = await Promise.race([
+      bus.loadFleet(),
+      new Promise((_, rej) => { watchdog = setTimeout(() => rej(new Error('fleet probe timed out')), 60000); }),
+    ]);
+  } catch (e) {
+    view = { rows: [], offers: offers, error: errText(e) };
   } finally {
+    if (watchdog !== null) clearTimeout(watchdog);
     probing = false;
   }
   const box = el('fleet');
@@ -566,6 +678,9 @@ async function loadFleet() {
       (r.reason ? '<div class="freason">' + esc(r.reason) + '</div>' : '') +
     '</div>').join('') +
     (signinMsg ? '<div class="' + (signinMsg.ok ? 'fdetail' : 'freason') + '">' + esc(signinMsg.text) + '</div>' : '');
+
+  // Let a sign-in outcome survive two repaints (~30s at the probe cadence) and then retire it.
+  if (signinMsg && ++signinMsg.paints >= 3) signinMsg = null;
 
   offers = view.offers || [];
   renderAttach();
@@ -617,7 +732,16 @@ function renderUnready() {
 }
 
 async function loadCreds() {
-  const c = await bus.loadCreds();
+  let c;
+  try {
+    c = await bus.loadCreds();
+  } catch (e) {
+    // This panel is what people open when a run cannot authenticate; a failure to read the
+    // credentials must render as words there, not as an unhandled rejection and an empty fold.
+    el('creds').innerHTML = '<div class="crow"><span class="bad">' + esc(errText(e)) + '</span></div>';
+
+    return;
+  }
   // The key is never rendered, only its presence — this panel is the part of the UI people
   // screenshot when asking why a run could not authenticate.
   el('creds').innerHTML =
@@ -629,7 +753,12 @@ async function loadCreds() {
     '<div class="crow" id="keymsg"></div>';
   paintKeyState(c.modelKey);
   el('savekey').onclick = async () => {
-    const r = await bus.saveKey(el('key').value);
+    let r;
+    try {
+      r = await bus.saveKey(el('key').value);
+    } catch (e) {
+      r = { ok: false, error: errText(e) };
+    }
     // Cleared unconditionally: the field is the only copy of the value in this renderer, and
     // leaving it populated is how a secret ends up in a screen recording of the app.
     el('key').value = '';
@@ -647,8 +776,24 @@ function paintKeyState(present) {
 }
 
 let runSig = '';
+let runsBusy = false;
 async function loadRuns(force) {
-  const runs = await bus.loadRuns();
+  // Three callers race here — the 4s timer, the refresh button, onDone — and the host walks
+  // every run log on disk to answer. Overlapping passes can resolve out of order and repaint
+  // the OLDER answer over the newer, which right after a run finishes means the new recording
+  // flashes in and vanishes until the next tick. One at a time; the next tick catches up.
+  if (runsBusy) return;
+  runsBusy = true;
+  let runs;
+  try {
+    runs = await bus.loadRuns();
+  } catch {
+    // The gallery is a nicety — a failed rescan must not surface as an unhandled rejection
+    // every 4 seconds. The next tick retries by construction.
+    return;
+  } finally {
+    runsBusy = false;
+  }
   const box = el('runs');
   // Rebuilding innerHTML tears down any <video> mid-playback, and this runs on a timer —
   // so redraw only when the set of runs actually changed. Signature over ids, not the
@@ -664,10 +809,12 @@ async function loadRuns(force) {
   const open = new Set([...box.querySelectorAll('.run')].filter(c => c.querySelector('video')).map(c => c.dataset.id));
 
   box.innerHTML = runs.map((r, i) =>
-    '<div class="run" data-i="' + i + '" data-id="' + r.id + '">' +
-      '<div class="task">' + r.task.replace(/</g,'&lt;') + '</div>' +
+    // esc() everywhere, not a bare '<' swap: the task text is arbitrary user input landing in
+    // markup, and data-id sits inside a quoted attribute where an unescaped quote breaks out.
+    '<div class="run" data-i="' + i + '" data-id="' + esc(r.id) + '">' +
+      '<div class="task">' + esc(r.task) + '</div>' +
       '<div class="meta">' +
-        '<span>' + r.app.replace(/</g,'&lt;') + '</span>' +
+        '<span>' + esc(r.app) + '</span>' +
         // Only fleet runs are tagged. Badging local ones too would erase the distinction the
         // badge exists to draw.
         (r.host ? '<span class="badge r">' + esc(r.host) + '</span>' : '') +
@@ -706,16 +853,36 @@ for (const ev of ['input', 'change', 'keyup', 'paste']) el('url').addEventListen
 // Run button enabled next to a visible "this will be refused" warning. 'change' catches
 // the stragglers; the server re-checks regardless.
 for (const ev of ['input', 'change', 'keyup', 'paste']) el('task').addEventListener(ev, () => setTimeout(() => { check(); saveSoon(); }, 0));
-el('go').onclick = async () => {
-  const err = await bus.run({ app: sel, task: el('task').value.trim(), record: el('record').checked, noVision: el('novision').checked, host: host, url: selUrl() });
+/**
+ * Dispatch exactly once per click.
+ *
+ * 'running' only flips when the host echoes 'started', and getting there is an IPC round trip
+ * plus a process spawn — long enough to click twice. The second click reached a controller
+ * that had not registered the first run yet, so both dispatched, and two driver sessions kill
+ * each other (LIMITATIONS §6). Disabling on the click closes the window; check() afterwards
+ * restores the true state, which for a run that did start means staying disabled.
+ */
+async function dispatchOnce(id, send) {
+  const b = el(id);
+  if (b.disabled) return;
+  b.disabled = true;
+  let err;
+  try {
+    err = await send();
+  } catch (e) {
+    // An IPC rejection is a run that did not start; without this it was an unhandled
+    // rejection and a button disabled until something else happened to call check().
+    err = errText(e);
+  }
   if (err) line('✗ ' + err);
-};
+  check();
+}
+
+el('go').onclick = () => dispatchOnce('go', () =>
+  bus.run({ app: sel, task: el('task').value.trim(), record: el('record').checked, noVision: el('novision').checked, host: host, url: selUrl() }));
 el('stop').onclick = () => bus.stop();
 el('refresh').onclick = () => loadRuns(true);
-el('ground').onclick = async () => {
-  const err = await bus.ground(sel, host, selUrl());
-  if (err) line('✗ ' + err);
-};
+el('ground').onclick = () => dispatchOnce('ground', () => bus.ground(sel, host, selUrl()));
 // loadApps too: the list is per-host, so switching machines must re-ask rather than leave the
 // previous Mac's inventory on screen looking like this one's.
 el('host').onchange = () => { host = el('host').value; bus.saveHostPref(host); check(); loadApps(); };
@@ -726,10 +893,15 @@ el('fleet').onclick = async (e) => {
   const b = e.target.closest ? e.target.closest('button[data-signin]') : null;
   if (!b) return;
   b.disabled = true;
-  signinMsg = { ok: true, text: 'opening ' + b.dataset.signin + '…' };
+  signinMsg = { ok: true, text: 'opening ' + b.dataset.signin + '…', paints: 0 };
   loadFleet();
-  const r = await bus.signin(b.dataset.signin, sel || undefined);
-  signinMsg = { ok: r.ok, text: r.message };
+  let r;
+  try {
+    r = await bus.signin(b.dataset.signin, sel || undefined);
+  } catch (err) {
+    r = { ok: false, message: errText(err) };
+  }
+  signinMsg = { ok: r.ok, text: r.message, paints: 0 };
   loadFleet();
 };
 // Same two-step as the fleet row's Sign in — open the screen share, then wait for the app to
@@ -742,7 +914,12 @@ el('unready').onclick = async (e) => {
   b.disabled = true;
   unready = { app: target.app, host: target.host, msg: 'opening ' + target.host + '…' };
   renderUnready();
-  const r = await bus.signin(target.host, target.app || undefined);
+  let r;
+  try {
+    r = await bus.signin(target.host, target.app || undefined);
+  } catch (err) {
+    r = { ok: false, message: errText(err) };
+  }
   unready = { app: target.app, host: target.host, msg: r.message };
   renderUnready();
   loadFleet();
@@ -750,7 +927,12 @@ el('unready').onclick = async (e) => {
 
   // Resolves when a person finishes signing in, which can be minutes. The panel clears itself
   // on success: the machine is ready and there is nothing left here to act on.
-  const done = await bus.signinWait(r.watch.host, r.watch.app);
+  let done;
+  try {
+    done = await bus.signinWait(r.watch.host, r.watch.app);
+  } catch (err) {
+    done = { ok: false, message: errText(err) };
+  }
   if (done.ok) { unready = null; renderUnready(); line('✓ ' + done.message); }
   else { unready = { app: target.app, host: target.host, msg: done.message }; renderUnready(); }
   loadFleet();
@@ -762,7 +944,12 @@ el('attach').onclick = async (e) => {
   if (!b) return;
   if (b.dataset.dismiss) { dismissed.add(b.dataset.dismiss); renderAttach(); return; }
   if (!b.dataset.follow) return;
-  const err = await bus.attach(b.dataset.host, b.dataset.follow, b.dataset.app);
+  let err;
+  try {
+    err = await bus.attach(b.dataset.host, b.dataset.follow, b.dataset.app);
+  } catch (e) {
+    err = errText(e);
+  }
   if (err) line('✗ ' + err);
 };
 
@@ -775,12 +962,16 @@ setInterval(() => loadRuns(false), 4000);
 // send-not-invoke precisely so it survives being called here.
 window.addEventListener('beforeunload', flush);
 
+// Passive: this fires on every wheel tick mid-scroll and must never be able to block one.
+el('log').addEventListener('scroll', notePin, { passive: true });
+
 // Restore first so the shell opens on the app you were last driving; loadApps() either way,
 // since an unreadable state file must not leave the list empty.
 restore().then(loadApps, loadApps);
 // Independent of restore(): an unreadable ui-state.json must not cost the host selector, which
-// is the one control that decides whether a click runs here or on another machine.
-loadHostList().catch(() => {});
+// is the one control that decides whether a click runs here or on another machine. Loud on
+// failure — a silent catch here looks exactly like having no fleet.
+loadHostList().catch((e) => line('✗ host list: ' + errText(e)));
 loadRuns();
 </script>`;
 
