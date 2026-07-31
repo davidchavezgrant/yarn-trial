@@ -4,7 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { appExecutable, canMintTargets, debugPortFromArgv, isMainProcessOf, pickMainPage } from "../src/backends/electron-attach.js";
+import { appExecutable, canMintTargets, chooseFlaggedChrome, debugPortFromArgv, isMainProcessOf, pickMainPage, strayChromes } from "../src/backends/electron-attach.js";
 
 // The shape a real Electron endpoint presents: the app's window is NOT alone — its
 // devtools, extension machinery and hidden background window are all page targets too,
@@ -200,4 +200,35 @@ test("canMintTargets__ReturnsTrue__When__OnlyTheCleanupCloseFails", async () => 
 
 test("canMintTargets__ReturnsFalse__When__NothingListens", async () => {
 	assert.equal(await canMintTargets("http://127.0.0.1:1", 500), false);
+});
+
+// ---- stray-Chrome pruning: one Chrome per Mac, and it is the flagged one -------------------
+// Three incidents in one day (2026-07-31): a second portless Chrome swallowing the OAuth
+// handoff (LaunchServices delivers the URL to whichever instance registered first, invisible
+// to the screencast), and orphaned "Chrome for Testing" zombies beside the real one. The
+// selection is pure so the kill list is testable: the keeper must never be in it.
+
+const FLAGGED = { pid: 100, argv: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9777 --user-data-dir=/x" };
+const PORTLESS = { pid: 200, argv: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" };
+const CFT = { pid: 300, argv: "/Users/x/cache/chrome-for-testing/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing --allow-pre-commit-input" };
+
+test("chooseFlaggedChrome__PicksTheFlaggedMain__When__APortlessOneRunsBeside", () => {
+	assert.deepEqual(chooseFlaggedChrome([PORTLESS, FLAGGED]), { ...FLAGGED, port: 9777 });
+});
+
+test("chooseFlaggedChrome__ReturnsUndefined__When__NoMainDeclaresAPort", () => {
+	assert.equal(chooseFlaggedChrome([PORTLESS, CFT]), undefined);
+});
+
+test("strayChromes__ListsEverythingButTheKeeper__When__StraysRunBesideIt", () => {
+	assert.deepEqual(strayChromes([FLAGGED, PORTLESS, CFT], FLAGGED.pid), [PORTLESS, CFT]);
+});
+
+test("strayChromes__ListsEveryMain__When__ThereIsNoKeeper", () => {
+	// No healthy flagged instance: everything goes before the relaunch.
+	assert.deepEqual(strayChromes([FLAGGED, PORTLESS], undefined), [FLAGGED, PORTLESS]);
+});
+
+test("strayChromes__ListsNothing__When__OnlyTheKeeperRuns", () => {
+	assert.deepEqual(strayChromes([FLAGGED], FLAGGED.pid), []);
 });

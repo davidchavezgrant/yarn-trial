@@ -179,7 +179,15 @@ export function isMainProcessOf(argv: string, executable: string): boolean {
 	);
 }
 
-function mainProcessArgv(executable: string): string | undefined {
+/** One running main process: enough to attach to it (argv → port) or kill it (pid). */
+export interface ChromeMain {
+	pid: number;
+	argv: string;
+}
+
+/** Every MAIN process of the app whose outer executable this is — see isMainProcessOf for
+ *  what "main" excludes. More than one entry is the multi-instance state pruning exists for. */
+function chromeMains(executable: string): ChromeMain[] {
 	// The pgrep pattern is the BUNDLE root, so nested-bundle mains match too; the filter
 	// below is what separates them from Frameworks helpers.
 	const bundle = executable.replace(/\/Contents\/MacOS\/[^/]+$/, "");
@@ -190,16 +198,110 @@ function mainProcessArgv(executable: string): string | undefined {
 			.trim()
 			.split("\n");
 	} catch {
-		return undefined; // exit 1: no match at all, helpers included
+		return []; // exit 1: no match at all, helpers included
 	}
+	const mains: ChromeMain[] = [];
 	for (const pid of pids) {
 		try {
 			const argv = execFileSync("ps", ["-o", "command=", "-p", pid], { encoding: "utf8" }).trim();
-			if (isMainProcessOf(argv, executable)) return argv;
+			if (isMainProcessOf(argv, executable)) mains.push({ pid: Number(pid), argv });
 		} catch {}
 	}
 
+	return mains;
+}
+
+function mainProcessArgv(executable: string): string | undefined {
+	return chromeMains(executable)[0]?.argv;
+}
+
+/**
+ * The main to KEEP: the one whose argv declares a debug port. First of several — two flagged
+ * instances is pathological, and the caller health-checks whichever this picks before
+ * trusting it (an unhealthy keeper is pruned with the rest and replaced by a relaunch).
+ */
+export function chooseFlaggedChrome(mains: ChromeMain[]): (ChromeMain & { port: number }) | undefined {
+	for (const m of mains) {
+		const port = debugPortFromArgv(m.argv);
+		if (port !== undefined) return { ...m, port };
+	}
+
 	return undefined;
+}
+
+/**
+ * The kill list: every main except the keeper. Pure, so "the keeper is never in it" is a
+ * tested property rather than a hope — this list goes straight to SIGTERM.
+ *
+ * Why it exists (three incidents, 2026-07-31): LaunchServices delivers an OAuth handoff URL
+ * to whichever Chrome instance registered first, so a second portless Chrome silently
+ * swallows sign-ins where no screencast can see them; and orphaned "Chrome for Testing"
+ * zombies accumulate beside the real one. One Chrome per Mac, and it is the flagged one.
+ */
+export function strayChromes(mains: ChromeMain[], keepPid: number | undefined): ChromeMain[] {
+	return mains.filter((m) => m.pid !== keepPid);
+}
+
+/** Playwright-launched test browsers ("Google Chrome for Testing"), wherever they live —
+ *  the cache path varies by install, so these match by binary name rather than bundle root.
+ *  Two of them were found orphaned on mac3 (2026-07-31), running for nobody. */
+function chromeForTestingMains(): ChromeMain[] {
+	let pids: string[];
+	try {
+		pids = execFileSync("pgrep", ["-f", "Google Chrome for Testing"], { encoding: "utf8" }).trim().split("\n");
+	} catch {
+		return [];
+	}
+	const mains: ChromeMain[] = [];
+	for (const pid of pids) {
+		try {
+			const argv = execFileSync("ps", ["-o", "command=", "-p", pid], { encoding: "utf8" }).trim();
+			const bin = argv.split(" --")[0];
+			if (bin.endsWith("/Contents/MacOS/Google Chrome for Testing") && !bin.includes("/Contents/Frameworks/")) mains.push({ pid: Number(pid), argv });
+		} catch {}
+	}
+
+	return mains;
+}
+
+/** How long a SIGTERMed Chrome gets to exit before SIGKILL. Chrome's shutdown handler is
+ *  fast; a browser still alive after this is not shutting down. */
+const PRUNE_TERM_WAIT_MS = 5_000;
+const PRUNE_POLL_MS = 250;
+
+function pidAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Kill every Chrome main except the keeper — real Chromes AND Chrome-for-Testing zombies —
+ * pid-precise (an AppleScript `quit` cannot address one instance of two). SIGTERM first,
+ * SIGKILL whatever remains after the wait. Returns what was pruned so the caller can log
+ * it: a killed browser must never be silent.
+ */
+export async function pruneStrayChromes(bin: string, keepPid: number | undefined): Promise<ChromeMain[]> {
+	const strays = strayChromes([...chromeMains(bin), ...chromeForTestingMains()], keepPid);
+	for (const s of strays) {
+		try {
+			process.kill(s.pid, "SIGTERM");
+		} catch {}
+	}
+	const deadline = Date.now() + PRUNE_TERM_WAIT_MS;
+	while (strays.some((s) => pidAlive(s.pid)) && Date.now() < deadline) await new Promise((r) => setTimeout(r, PRUNE_POLL_MS));
+	for (const s of strays)
+		if (pidAlive(s.pid)) {
+			try {
+				process.kill(s.pid, "SIGKILL");
+			} catch {}
+		}
+
+	return strays;
 }
 
 /** The debug port an argv declares, if any. Pure, for tests. */
@@ -367,23 +469,36 @@ export function pickMainPage(pages: PageCandidate[], appName: string): number {
  *
  * Idempotent: an already-flagged Chrome is attached to wherever ITS argv says, never relaunched.
  */
-export async function ensureBrowserEndpoint(opts: { port: number; profileDir: string; bin?: string } ): Promise<{ endpoint: string; port: number; relaunched: boolean }> {
+export async function ensureBrowserEndpoint(opts: { port: number; profileDir: string; bin?: string; prune?: boolean }): Promise<{ endpoint: string; port: number; relaunched: boolean }> {
 	const bin = opts.bin ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-	const argv = mainProcessArgv(bin);
-	const declared = argv ? debugPortFromArgv(argv) : undefined;
+	const mains = chromeMains(bin);
+	const flagged = chooseFlaggedChrome(mains);
 
-	if (argv && declared !== undefined) {
-		const endpoint = `http://127.0.0.1:${declared}`;
-		if ((await endpointAlive(endpoint, 8, 250)) && (await canMintTargets(endpoint))) return { endpoint, port: declared, relaunched: false };
-		// Flag on the argv but nothing listening (a stale ps entry, a Chrome that died
-		// mid-boot) — or listening WITHOUT being able to mint a target (the mac1 zombie:
+	let keeper: (ChromeMain & { port: number }) | undefined;
+	if (flagged) {
+		const endpoint = `http://127.0.0.1:${flagged.port}`;
+		if ((await endpointAlive(endpoint, 8, 250)) && (await canMintTargets(endpoint))) keeper = flagged;
+		// Otherwise: flag on the argv but nothing listening (a stale ps entry, a Chrome that
+		// died mid-boot) — or listening WITHOUT being able to mint a target (the mac1 zombie:
 		// /json/version answered for hours over a hung Target.createTarget). Both are the
 		// same verdict: replace it rather than report an endpoint runs cannot use.
 	}
 
-	if (argv) {
-		// The quit that `ensureElectronEndpoint` refuses to do. Chrome reopens its tabs from the
-		// profile, so what a human left on screen survives the relaunch.
+	// One Chrome per Mac, and it is the flagged one. LaunchServices delivers an OAuth handoff
+	// to whichever instance registered first, so a stray portless Chrome swallows sign-ins
+	// where no screencast can see them (three incidents on 2026-07-31). OPT-IN: the runner
+	// passes prune on fleet Macs; on an operator's own machine their personal Chrome is not
+	// ours to kill, and the flag stays off.
+	if (opts.prune === true)
+		for (const s of await pruneStrayChromes(bin, keeper?.pid))
+			console.log(`pruned stray Chrome (pid ${s.pid}): ${s.argv.slice(0, 140)}`);
+
+	if (keeper) return { endpoint: `http://127.0.0.1:${keeper.port}`, port: keeper.port, relaunched: false };
+
+	if (!opts.prune && mains.length > 0) {
+		// The quit that `ensureElectronEndpoint` refuses to do (pruning already handled this
+		// pid-precisely above). Chrome reopens its tabs from the profile, so what a human
+		// left on screen survives the relaunch.
 		const { quitApp } = await import("../core/appctl.js");
 		await quitApp("Google Chrome").catch(() => {});
 	}
@@ -411,5 +526,5 @@ export async function ensureBrowserEndpoint(opts: { port: number; profileDir: st
 	if (!(await canMintTargets(endpoint)))
 		throw new Error(`Chrome relaunched at ${endpoint} but cannot create a page target — it came up wedged; retry, or restart it by hand`);
 
-	return { endpoint, port: opts.port, relaunched: argv !== undefined };
+	return { endpoint, port: opts.port, relaunched: mains.length > 0 };
 }

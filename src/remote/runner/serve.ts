@@ -246,7 +246,7 @@ export interface ServeOptions {
 	 * Bring up the OAuth browser's debug endpoint, relaunching a flagless Chrome to do it.
 	 * Injected so the suite neither launches nor QUITS a real browser.
 	 */
-	ensureBrowser?: (opts: { port: number; profileDir: string }) => Promise<{ endpoint: string; port: number; relaunched: boolean }>;
+	ensureBrowser?: (opts: { port: number; profileDir: string; prune?: boolean }) => Promise<{ endpoint: string; port: number; relaunched: boolean }>;
 	/**
 	 * Whether something is already listening on the liveview port. Injected so the "a login is
 	 * already up" branch is testable without binding a real socket.
@@ -979,7 +979,11 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			// Non-fatal for the same reason as above: without it the OAuth page is simply unseen,
 			// which is the state we were already in.
 			try {
-				const browser = await ensureBrowserFor({ port: CDP_BROWSER_PORT, profileDir: browserProfileDir() });
+				// prune: this is a fleet Mac the runner owns — every Chrome that is not the
+				// flagged one is a hazard here (a stray portless instance swallows the OAuth
+				// handoff; orphaned test browsers wedge and hoard memory). Never set on an
+				// operator's own machine.
+				const browser = await ensureBrowserFor({ port: CDP_BROWSER_PORT, profileDir: browserProfileDir(), prune: true });
 				log(`liveview: Chrome listening for CDP on ${browser.endpoint}${browser.relaunched ? " (relaunched — it was running without the flag)" : ""}`);
 			} catch (e) {
 				log(`liveview: no CDP endpoint for Chrome (${(e as Error).message}) — an external OAuth leg will not be visible`);
