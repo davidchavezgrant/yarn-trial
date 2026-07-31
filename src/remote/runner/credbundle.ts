@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { quitApp } from "../../core/appctl.js";
 import { appSlug } from "../../paths.js";
 import {
 	type AppIdentity,
@@ -53,13 +54,22 @@ export interface ExportOptions {
 	home?: string;
 	root?: string;
 	exec?: TarExec;
+	/** Stop the app before its live profile is copied. Injected in tests; production uses `quitApp`. */
+	quit?: (app: string) => Promise<void>;
 }
 
 /**
  * Pack this operator's session for the app into `outFile`. Snapshots the LIVE data when the
- * operator owns it (a best-effort snapshot — the app may be running, so a torn cookie DB is
- * possible; the readiness probe on the receiving box is the backstop, and a bad snapshot degrades
- * to a sign-in, never to a wrong session), or tars their parked profile otherwise.
+ * operator owns it, or tars their parked profile otherwise.
+ *
+ * QUIT BEFORE SNAPSHOT — this is load-bearing, not hygiene. A running Electron/Chromium app holds
+ * its cookie jar and localStorage open as LevelDB/SQLite with un-flushed writes, so copying those
+ * files WHILE THE APP RUNS captures a torn database the app then refuses to load — it crash-loops
+ * on the restoring box (observed live on Yarn: stacked crashpad handlers, no window). `quitApp`
+ * does a graceful AppleScript quit so the app flushes and closes its own storage, and WAITS until
+ * it is gone, so the copy that follows is of a quiesced, consistent profile. This is the exact
+ * rule `swapProfile` already follows for the same reason. The caller (checkin, post-run) can
+ * afford the quit; the app reopens on the next run.
  */
 export async function exportProfile(opts: ExportOptions): Promise<ExportResult> {
 	const home = opts.home ?? os.homedir();
@@ -69,6 +79,13 @@ export async function exportProfile(opts: ExportOptions): Promise<ExportResult> 
 	const id: AppIdentity = { name: opts.app, ...(opts.bundleId ? { bundleId: opts.bundleId } : {}) };
 
 	if (ownsLive(root, opts.app, opts.operator)) {
+		// Nothing to capture if the app has no data at all; skip the quit in that case so an empty
+		// export never disturbs a running app for no reason.
+		if (!capturePaths(id, home).length) return { found: false, source: "live", paths: [], bytes: 0 };
+
+		// Quit FIRST, then re-capture against the quiesced app — the paths on disk are the same set,
+		// but now flushed and closed.
+		await (opts.quit ?? quitApp)(opts.app);
 		const paths = capturePaths(id, home);
 		if (!paths.length) return { found: false, source: "live", paths: [], bytes: 0 };
 

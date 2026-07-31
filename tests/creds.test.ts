@@ -65,12 +65,13 @@ const DOCTOR = { ok: true, dataRoot: "/remote/data" };
 
 // ── helpers ──────────────────────────────────────────────────────────────────────────────
 
-test("vaultEnabled__DefaultsOn__And__HasAKillSwitch", () => {
-	assert.equal(vaultEnabled({}), true, "opted in: on by default");
-	assert.equal(vaultEnabled({ YARN_VAULT: "1" }), true);
-	assert.equal(vaultEnabled({ YARN_VAULT: "0" }), false, "the kill switch");
+test("vaultEnabled__DefaultsOff__And__OptsInWithTheFlag", () => {
+	// Off by default while the snapshot fix is validated on the fleet; explicit opt-in re-enables.
+	assert.equal(vaultEnabled({}), false, "default off pending live validation");
+	assert.equal(vaultEnabled({ YARN_VAULT: "1" }), true, "explicit opt-in");
+	assert.equal(vaultEnabled({ YARN_VAULT: "on" }), true);
+	assert.equal(vaultEnabled({ YARN_VAULT: "0" }), false);
 	assert.equal(vaultEnabled({ YARN_VAULT: "false" }), false);
-	assert.equal(vaultEnabled({ YARN_VAULT: "off" }), false);
 });
 
 test("runningElsewhere__FindsTheConflict__When__SameSessionLiveOnAnotherBox", () => {

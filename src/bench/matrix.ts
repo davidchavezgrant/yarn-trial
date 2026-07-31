@@ -146,6 +146,29 @@ const PHASE1: Arm[] = [
 		dispatch: { backend: "cdp", url: WEB_EXPLORE_URL },
 		informs: "dom's web-explore path is being deleted on the assumption cdp covers it — this run checks that",
 	},
+	/**
+	 * The vision-only GROUNDING pass — discovery from screenshots alone, no element list.
+	 *
+	 * This is the arm the matrix was missing: it had three vision-only TASK arms and no
+	 * vision-only grounding, so "can this agent work on an app whose AX tree is useless"
+	 * was only ever half-asked. A run-time-only answer is not the deployment question,
+	 * because onboarding a new app starts with discovery.
+	 *
+	 * It writes its own `.vision.*` pair (explore/state.ts) rather than over the
+	 * element-grounded map, precisely so phase 2 can compare the two tiers — and the stamp
+	 * records provenance `explore-vision` with control tallies marked DECLARED, since a
+	 * screenshots-only pass self-reports coverage through the `survey` tool instead of
+	 * measuring it against an element list. Read those numbers as claims, not counts.
+	 */
+	{
+		id: "p1-explore-vision",
+		phase: 1,
+		kind: "explore",
+		app: BENCH_APP,
+		n: 1,
+		dispatch: { backend: "ax", noAx: true },
+		informs: "can grounding itself be done from screenshots — declared coverage, pass duration, map size vs the ax pass",
+	},
 ];
 
 /** Phase 2 core — backend × grounding, n=3 per cell. */
@@ -163,26 +186,44 @@ const PHASE2_SLICES: Arm[] = [
 	// Vision-only is ax-backend-only by construction: cdp observations ARE ref lists.
 	task("p2-vision-only-ungrounded", { backend: "ax", noAx: true, noGrounding: true }, "the floor: screenshots alone, cold"),
 	/**
-	 * ~~p2-vision-only-grounded~~ — CUT 2026-07-31, and the reason is worth keeping: as
-	 * specified it would have produced a WRONG answer rather than no answer.
+	 * Vision-only run against the ORDINARY stamped appmap — the one an ax explore pass wrote.
+	 * No new infrastructure: docs/appmaps/<slug>.md already exists.
 	 *
-	 * It set APPMAP_VARIANT=vision, which resolves to docs/appmaps/<slug>.vision.md — the
-	 * output of a vision-only explore pass, which is deliberately not built yet. A missing map
-	 * does not fail: loadGrounding returns `provenance: "none"` (agent/grounding.ts), which is
-	 * byte-identical to NO_GROUNDING=1. So the arm would have run the SAME conditions as
-	 * p2-vision-only-ungrounded while being labelled the grounded one, and the report would
-	 * have concluded "prose grounding does not help a vision-only agent" from an experiment
-	 * that never ran.
+	 * This replaced an earlier arm that asked for APPMAP_VARIANT=vision, i.e. the output of a
+	 * vision-only explore pass, which is deliberately not built yet. That arm was a trap: a
+	 * missing map does not fail — loadGrounding returns `provenance: "none"` — so it would
+	 * have run the SAME conditions as the ungrounded arm under a grounded label, and the
+	 * report would have concluded prose grounding does not help a blind agent from a treatment
+	 * that was never applied.
 	 *
-	 * It cannot borrow the ordinary appmap instead: that map was written by a pass that could
-	 * read the AX tree, so it names controls a screenshots-only agent could never have
-	 * discovered — the same contamination class as a hinted prompt.
+	 * What this arm DOES prove: whether machine-generated prose lifts a screenshots-only
+	 * agent. That is a shipping configuration — ground once where AX works, then run
+	 * vision-only (no sidecar, no AX flakiness at fleet scale). A lift here means the AX path
+	 * can be dropped at RUN time and kept at GROUNDING time.
 	 *
-	 * The QUESTION survives without it: p2-vision-only-curated puts human-written prose in
-	 * front of the same blind agent. What is lost is only whether MACHINE-generated prose does
-	 * the same, which is exactly the deferred vision-explore pipeline. Restore this arm when
-	 * that pipeline lands and a stamped <slug>.vision.md exists.
+	 * What it does NOT prove, and must not be read as: the AX-hostile-app story. The map was
+	 * written by a pass with strictly more perception than the run, so an app whose AX is
+	 * useless at BOTH stages is still unmeasured — that needs the vision-only explore pass.
+	 * The id says `axmap` so a reader of the report cannot miss which it is.
 	 */
+	task("p2-vision-only-grounded-axmap", { backend: "ax", noAx: true }, "does explore-written prose lift a vision-only agent (map from an ax pass — see the note)"),
+	/**
+	 * The AX-hostile-app story, measured properly: grounding AND actuation both from
+	 * screenshots only. Consumes the `.vision` map that p1-explore-vision writes, so it is
+	 * gated on phase 1 having run — with no map, loadGrounding degrades to provenance "none"
+	 * and this silently becomes a duplicate of the ungrounded arm. `bench collect` records
+	 * provenance per run, so check it reads `explore-vision` before believing this row.
+	 *
+	 * Paired with -axmap above, the two separate a question that was previously conflated:
+	 * -axmap asks whether the AX path can be dropped at RUN time (ground once where AX works),
+	 * this asks whether it can be dropped ENTIRELY.
+	 */
+	task(
+		"p2-vision-only-grounded-visionmap",
+		{ backend: "ax", noAx: true },
+		"grounding and actuation both vision-only — the app-with-no-usable-AX deploy story",
+		{ env: { APPMAP_VARIANT: "vision" } },
+	),
 	task("p2-vision-only-curated", { backend: "ax", noAx: true, useRecipe: true }, "same against the human-written tier"),
 ];
 

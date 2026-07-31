@@ -61,8 +61,11 @@ test("MATRIX__HasUniqueArmIds__When__Defined", () => {
 });
 
 test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
-	// Phase 1: ax + cdp Yarn explores + the cdp web-explore verification run.
-	assert.equal(phaseRunCount(1), 3);
+	// Phase 1: ax + cdp Yarn explores, the cdp web-explore verification run, and the
+	// vision-only grounding pass (added 2026-07-31 — the matrix previously had three
+	// vision-only TASK arms and no vision-only GROUNDING, so the AX-hostile-app question
+	// was only half-asked).
+	assert.equal(phaseRunCount(1), 4);
 	// Phase 2: core 2 backends × 2 grounding × 3, plus 6 slices × 3. Two blocks were cut
 	// 2026-07-31 after their prerequisites were CHECKED rather than assumed (matrix.ts holds
 	// the full reasoning at each site): the Notion Calendar slice (4 arms × 2 = 8 runs — the
@@ -70,7 +73,9 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// gate) and p2-vision-only-grounded (3 runs — its `.vision` appmap does not exist, and a
 	// missing map degrades to provenance "none", making it a silent duplicate of the
 	// ungrounded arm under a grounded label).
-	assert.equal(phaseRunCount(2), 12 + 18);
+	// Phase 2: core 12, plus 8 slices × 3 — the vision-only tier is now four arms
+	// (ungrounded floor / ax-written map / vision-written map / human notes).
+	assert.equal(phaseRunCount(2), 12 + 24);
 	// Phase 3: 2 local compiles + replay ×3 per backend + no-rescue ×3.
 	assert.equal(phaseRunCount(3), 2 + 6 + 3);
 	// Phase 4 (optional): 2 task cells × 2 + 1 compile + 2 replays.
@@ -203,7 +208,13 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		const fake = fakeDispatch();
 		const code = await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
 		assert.equal(code, EXIT_OK);
-		assert.equal(fake.calls.length, 3);
+		// Four: ax + cdp Yarn explores, the cdp web check, and the vision-only grounding pass.
+		assert.equal(fake.calls.length, 4);
+		// The vision-only pass is the one that drops the element list; it must still keep
+		// vision, which the explore CLI enforces (--no-ax --no-vision leaves nothing).
+		const visionPass = fake.calls.find((c) => c.noAx === true);
+		assert.equal(visionPass?.kind, "explore");
+		assert.equal(visionPass?.noVision, undefined);
 		// Explore arms cross with kind explore, their backend, queue semantics, host auto.
 		const ax = fake.calls.find((c) => c.backend === "ax");
 		assert.equal(ax?.kind, "explore");
@@ -216,7 +227,7 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		assert.match(web?.url ?? "", /wikipedia/);
 		// Every accepted job landed in the manifest, uncollected.
 		const m = readManifest(DATE, dir);
-		assert.equal(m.entries.length, 3);
+		assert.equal(m.entries.length, 4);
 		assert.ok(m.entries.every((e) => !e.collected && e.host === "mac1"));
 	});
 });
@@ -228,13 +239,18 @@ test("runPhase__ShapesOptionsPerArm__When__Phase2Dispatches", async () => {
 		m = recordSubmissions(m, [
 			entry("p1-explore-ax", "explore-a", { collected: true, state: "done" }),
 			entry("p1-explore-cdp", "explore-c", { collected: true, state: "done" }),
+			// The vision-only pass has to be collected too, and the gate is right to insist:
+			// p2-vision-only-grounded-visionmap reads the `.vision` map this pass writes, and
+			// with no map loadGrounding degrades to provenance "none" — the arm would run as a
+			// silent duplicate of the ungrounded one. Phase 2 refusing here IS the protection.
+			entry("p1-explore-vision", "explore-v", { collected: true, state: "done" }),
 		]);
 		writeManifest(m, dir);
 
 		const fake = fakeDispatch();
 		const code = await runPhase(2, { go: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
 		assert.equal(code, EXIT_OK);
-		assert.equal(fake.calls.length, 30);
+		assert.equal(fake.calls.length, 36);
 
 		const byFlag = (pred: (c: DispatchOptions) => boolean): DispatchOptions[] => fake.calls.filter(pred);
 		// Task text crosses verbatim and is goal-only for every call.
@@ -250,8 +266,11 @@ test("runPhase__ShapesOptionsPerArm__When__Phase2Dispatches", async () => {
 		// third — the machine-written-appmap arm — was cut, which is why no dispatch carries
 		// appmapVariant: the variant it asked for resolves to a file that does not exist, and
 		// a missing map degrades to no grounding at all rather than failing.
-		assert.equal(byFlag((c) => c.noAx === true).length, 6);
-		assert.equal(byFlag((c) => c.appmapVariant === "vision").length, 0);
+		// Four vision-only arms × 3. Exactly ONE carries appmapVariant: the arm grounded on the
+		// vision-written map. The others are the ungrounded floor, the ax-written map, and the
+		// curated notes — all four differ only in which grounding tier they read.
+		assert.equal(byFlag((c) => c.noAx === true).length, 12);
+		assert.equal(byFlag((c) => c.appmapVariant === "vision").length, 3);
 		// The Notion Calendar slice was cut, so phase 2 must dispatch nothing for it — the
 		// assertion is kept (inverted) rather than deleted, so a careless restore that skips
 		// the fleet-install prereq trips a test instead of burning 8 runs on exit 3.
@@ -277,14 +296,18 @@ test("runPhase__BypassesPhase1Gate__When__ForceIsSet", async () => {
 		const fake = fakeDispatch();
 		const code = await runPhase(2, { go: true, force: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
 		assert.equal(code, EXIT_OK);
-		assert.equal(fake.calls.length, 30);
+		assert.equal(fake.calls.length, 36);
 	});
 });
 
 test("runPhase__SubmitsOnlyMissingSamples__When__ManifestAlreadyHoldsSome", async () => {
 	await withTempAsync("bench-", async (dir) => {
 		let m = readManifest(DATE, dir);
-		m = recordSubmissions(m, [entry("p1-explore-ax", "explore-a"), entry("p1-explore-cdp", "explore-c")]);
+		m = recordSubmissions(m, [
+			entry("p1-explore-ax", "explore-a"),
+			entry("p1-explore-cdp", "explore-c"),
+			entry("p1-explore-vision", "explore-v"),
+		]);
 		writeManifest(m, dir);
 
 		const fake = fakeDispatch();
@@ -726,12 +749,12 @@ test("runPhase__ScopesSampleCountsToTheModelPass__When__TwoModelsRunTheMatrix", 
 	await withTempAsync("bench-", async (dir) => {
 		const a = fakeDispatch();
 		await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: a.fn, log: () => {}, model: "openai/gpt-5.6-sol:nitro" });
-		assert.equal(a.calls.length, 3, "pass A submits the full phase");
+		assert.equal(a.calls.length, 4, "pass A submits the full phase");
 		for (const c of a.calls) assert.equal(c.model, "openai/gpt-5.6-sol:nitro");
 
 		const b = fakeDispatch();
 		await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: b.fn, log: () => {}, model: "claude-fable-5" });
-		assert.equal(b.calls.length, 3, "pass B submits the full phase again — pass A's entries are not its samples");
+		assert.equal(b.calls.length, 4, "pass B submits the full phase again — pass A's entries are not its samples");
 		for (const c of b.calls) assert.equal(c.model, "claude-fable-5");
 
 		// And a re-run of pass A tops up nothing.
