@@ -5,14 +5,11 @@ import { envNum } from "../env.js";
 import {
 	ACT_TOOL,
 	DRIVER_RULES,
-	ensureObservable,
-	findWindow,
 	makeClient,
-	observe,
 	onInterrupt,
 	VISION_ONLY_RULES,
-	type WindowRef,
 } from "./harness.js";
+import type { AxBackend } from "../backends/ax.js";
 import type { CdpBackend } from "../backends/cdp.js";
 import { readJournal } from "./journal.js";
 import { startOverlay } from "./overlay.js";
@@ -48,24 +45,22 @@ async function main(): Promise<void> {
 		// On the CDP backend there is no driver and no window: the page is the target, and
 		// acquisition (launch-or-attach, tab pick, navigate) lives in CdpBackend.acquire —
 		// which is also the whole web-target story now that the driver-owned browser path
-		// went with the dom backend (web targets default to cdp in the CLI).
-		// Backends load lazily at their selection branch so src/backends/ stays deletable
-		// without breaking default ax explores — same seam as agent.ts and teardown.ts.
-		let win: WindowRef | undefined;
+		// went with the dom backend (web targets default to cdp in the CLI). On the ax
+		// backend acquisition and window state live in AxBackend (src/backends/ax.ts).
+		// Backends load lazily at their selection branch so each stays independently
+		// deletable — same seam as agent.ts and teardown.ts.
+		let ax: AxBackend | undefined;
 		if (backendKind === "cdp") {
 			cdp = await (await import("../backends/cdp.js")).CdpBackend.acquire(target);
 		} else if (target.kind === "web") {
 			throw new Error("web targets explore on the cdp backend — pass --backend cdp (or omit it; web targets default there)");
 		} else {
-			await driver!.act({ kind: "tool", name: "launch_app", args: { name: app } });
-			await new Promise((r) => setTimeout(r, 1500));
-			// Reassigned by ensureObservable — see the same call in src/core/agent.ts.
-			win = await findWindow(driver!, app);
+			ax = await (await import("../backends/ax.js")).AxBackend.acquire(target, driver!, app);
 		}
 		// Last chance to take your hands off before the run owns the pointer.
 		await overlay.countdown();
-		if (!cdp) win = await ensureObservable(driver!, win!, app);
-		const doObserve = (name: string) => (cdp ? cdp.observe(name) : observe(driver!, win!, name, {}));
+		if (!cdp) await ax!.ensureObservable();
+		const doObserve = (name: string) => (cdp ? cdp.observe(name) : ax!.observe(name));
 		// The claim tool is only offered under descent — a non-descent pass never creates
 		// anything, so a claim ledger it can't act on is just a distraction in the prompt.
 		// Descent is forced off on a vision-only pass (boundary reading is an element-identity
@@ -86,11 +81,11 @@ async function main(): Promise<void> {
 		console.log(
 			cdp
 				? `exploring ${app} url=${target.kind === "web" ? target.url : "(attached)"} backend=cdp`
-				: `exploring ${app} pid=${win!.pid} window=${win!.windowId} backend=${backendKind}`,
+				: `exploring ${app} pid=${ax!.win.pid} window=${ax!.win.windowId} backend=${backendKind}`,
 		);
 		console.log(`ends when the frontier empties; no time cap, action backstop ${MAX_ACTIONS}\n`);
 
-		await runExploreLoop({ p, client, model, overlay, interrupted, driver, cdp, win, doObserve });
+		await runExploreLoop({ p, client, model, overlay, interrupted, driver, cdp, win: ax?.win, doObserve });
 	} catch (err) {
 		/**
 		 * A dead driver session must not also destroy the map.

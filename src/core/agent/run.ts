@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import type { AxBackend } from "../../backends/ax.js";
 import type { CdpBackend } from "../../backends/cdp.js";
 import { Driver } from "../driver.js";
 import { envNum } from "../../env.js";
@@ -11,15 +12,12 @@ import {
 	DEMO_DRIVER_RULES,
 	DEMO_VISION_ONLY_RULES,
 	DRIVER_RULES,
-	ensureObservable,
 	failedProvider,
 	findScopeAmbiguities,
 	homeVisible,
-	findWindow,
 	loadAppMapGraph,
 	makeClient,
 	observationBlocks,
-	observe,
 	onInterrupt,
 	OUT,
 	outputEffort,
@@ -31,7 +29,7 @@ import {
 	verificationTallies,
 	VISION_ONLY_RULES,
 } from "../harness.js";
-import type { HomeResetResult, ObservationBundle, WindowRef } from "../harness.js";
+import type { HomeResetResult, ObservationBundle } from "../harness.js";
 import { readJournal } from "../journal.js";
 import { startOverlay } from "../overlay.js";
 import { relToData } from "../../paths.js";
@@ -64,10 +62,12 @@ export async function main(): Promise<void> {
 		process.argv.slice(2),
 	);
 	// The backend modules are reached ONLY through these imports, taken once the --backend
-	// flag has selected one: a default ax run never loads src/backends/, so deleting that
-	// directory must not break it. Type-only imports of the same modules elsewhere stay
-	// static — they vanish at compile time.
+	// flag has selected one: every backend lazy-loads from src/backends/ at its selection
+	// branch, so each backend stays independently deletable without breaking runs on the
+	// others. Type-only imports of the same modules elsewhere stay static — they vanish at
+	// compile time.
 	const cdpMod = backendKind === "cdp" ? await import("../../backends/cdp.js") : undefined;
+	const axMod = backendKind === "ax" ? await import("../../backends/ax.js") : undefined;
 
 	const { client, model } = makeClient();
 	// Announce the takeover before the first action. An ax run seizes pointer and keyboard
@@ -107,8 +107,8 @@ export async function main(): Promise<void> {
 	let domEnrichment: { frames: number; unavailable?: string } = { frames: 0, unavailable: "not observed" };
 	/**
 	 * Window geometry, for a post-pass reconciling driver coordinates against the captured frames.
-	 * Declared out here because `win` and the staging result are scoped to the try below, and the
-	 * run log is written from the finally — the same reason homeReset above lives at this level.
+	 * Declared out here because the ax backend and the staging result are scoped to the try below,
+	 * and the run log is written from the finally — the same reason homeReset above lives at this level.
 	 */
 	let windowGeometry: Record<string, unknown> | undefined;
 	let expectationRejections = 0;
@@ -254,30 +254,28 @@ export async function main(): Promise<void> {
 			: [record ? DEMO_ACT_TOOL : ACT_TOOL, CLAIM_TOOL, DONE_TOOL];
 
 	try {
-		// Reassigned by ensureObservable: recovering an unobservable target can relaunch it
-		// onto a new window, and every later call must use that one.
 		// On the CDP backend there is no driver and no window: the page is the target, and
 		// acquisition (launch-or-attach, tab pick, navigate) lives in CdpBackend.acquire —
 		// which is the whole web story too, now that the driver-owned browser path went
-		// with the dom backend (web targets default to cdp in the CLI).
-		let win: WindowRef | undefined;
+		// with the dom backend (web targets default to cdp in the CLI). On the ax backend
+		// the window state lives in AxBackend: ensureObservable can recover onto a NEW
+		// window, so `ax.win` is read fresh at every use rather than held here.
+		let ax: AxBackend | undefined;
 		if (backendKind === "cdp") {
 			cdp = await cdpMod!.CdpBackend.acquire(target, { demo: record });
 		} else if (target.kind === "web") {
 			throw new Error("web targets run on the cdp backend — pass --backend cdp (or omit it; web targets default there)");
 		} else {
-			await driver!.act({ kind: "tool", name: "launch_app", args: { name: app } });
-			await new Promise((r) => setTimeout(r, 1500));
-			win = await findWindow(driver!, app);
+			ax = await axMod!.AxBackend.acquire(target, driver!, app);
 		}
 		// Last chance to take your hands off before the run owns the pointer.
 		await overlay.countdown();
-		if (!cdp) win = await ensureObservable(driver!, win!, app);
-		const doObserve = (name: string) => (cdp ? cdp.observe(name) : observe(driver!, win!, name, {}));
+		if (!cdp) await ax!.ensureObservable();
+		const doObserve = (name: string) => (cdp ? cdp.observe(name) : ax!.observe(name));
 		console.log(
 			cdp
 				? `target: ${app} url=${target.kind === "web" ? target.url : "(attached)"} backend=cdp`
-				: `target: ${app} pid=${win!.pid} window=${win!.windowId} backend=${backendKind}`,
+				: `target: ${app} pid=${ax!.win.pid} window=${ax!.win.windowId} backend=${backendKind}`,
 		);
 
 		// Start from a declared home state, so a run never inherits the previous run's
@@ -322,7 +320,7 @@ export async function main(): Promise<void> {
 
 						return probe.ready ? { result: "root-visible", detail: probe.detail } : { result: "failed", detail: probe.detail };
 					})()
-				: await resetToHome(driver!, win!, app, loadAppMapGraph(slug));
+				: await resetToHome(driver!, ax!.win, app, loadAppMapGraph(slug));
 			overlay.setDriving(false);
 			homeReset = reset.result;
 			console.log(`home reset: ${reset.result} — ${reset.detail}`);
@@ -361,7 +359,7 @@ export async function main(): Promise<void> {
 		}
 		console.log(`task: ${task}\n`);
 
-		if (record) windowGeometry = await startRecording({ cdp, driver, win, app, overlay, recordingDir, framesDir, rec, sync });
+		if (record) windowGeometry = await startRecording({ cdp, driver, win: ax?.win, app, overlay, recordingDir, framesDir, rec, sync });
 
 		// The first observation is the last thing that touches the app before the first model
 		// call, so it owns the handoff: without this the banner — which starts visible and is
@@ -651,7 +649,7 @@ export async function main(): Promise<void> {
 			}
 
 			await executeAction(
-				{ driver, cdp, win, app, doObserve, overlay, sync, rec, records, messages, vision, noAx, cleanupMode, journalPath, graph, demo: record, stepsDir },
+				{ driver, cdp, win: ax?.win, app, doObserve, overlay, sync, rec, records, messages, vision, noAx, cleanupMode, journalPath, graph, demo: record, stepsDir },
 				ls,
 				step,
 				toolUse,
