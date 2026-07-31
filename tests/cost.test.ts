@@ -19,9 +19,28 @@ test("estimateCost__ChargesEachCategoryAtItsOwnRate__When__ModelIsKnown", () => 
 });
 
 test("estimateCost__ReturnsUndefined__When__ModelHasNoRateCard", () => {
-	// Azure/OpenAI bills through the subscription; a guess here would be worse than a blank.
-	assert.equal(estimateCost({ inputTokens: 1_000_000 }, "gpt-5.6-sol"), undefined);
+	assert.equal(estimateCost({ inputTokens: 1_000_000 }, "some-unlisted-model"), undefined);
 	assert.equal(estimateCost({ inputTokens: 1_000_000 }, undefined), undefined);
+});
+
+test("estimateCost__ChargesNothingForCacheWrites__When__ModelIsOnTheResponsesAPI", () => {
+	// OpenAI caching is automatic: a hit is billed cheaper and there is no creation event.
+	// A non-zero cacheWrite here would invent a charge the provider does not levy.
+	assert.equal(estimateCost({ cacheCreationTokens: 10_000_000 }, "gpt-5.6-sol"), 0);
+	// $5 in / $30 out / $0.50 cached — OpenAI standard list, standing in for Azure's
+	// subscription rates, so the primary pass reads as an upper bound.
+	assert.equal(estimateCost({ inputTokens: 1_000_000, outputTokens: 1_000_000, cacheReadTokens: 1_000_000 }, "azure/gpt-5.6-sol"), 5 + 30 + 0.5);
+});
+
+test("estimateCost__DoesNotDoubleBillCachedTokens__When__PricingAResponsesRun", () => {
+	// Responses reports input_tokens as the TOTAL with cached a subset; responses.ts
+	// normalises it to Anthropic semantics (uncached only). This asserts the CONSEQUENCE:
+	// a 78k-input/44k-cached run must cost the uncached remainder at full rate, not 78k.
+	const normalised = estimateCost({ inputTokens: 78_678 - 44_544, cacheReadTokens: 44_544 }, "gpt-5.6-sol");
+	const doubleBilled = estimateCost({ inputTokens: 78_678, cacheReadTokens: 44_544 }, "gpt-5.6-sol");
+	assert.ok(normalised !== undefined && doubleBilled !== undefined);
+	assert.ok(normalised < doubleBilled);
+	assert.equal(Math.round(normalised * 10000) / 10000, Math.round(((78_678 - 44_544) * 5 + 44_544 * 0.5) / 1_000_000 * 10000) / 10000);
 });
 
 test("estimateCost__CountsCacheWritesAsTheDominantCost__When__ARunIsLongLived", () => {
@@ -40,17 +59,19 @@ test("normaliseModel__StripsRoutingDecoration__When__IdCarriesVendorOrSuffix", (
 	}
 });
 
-test("rollupCost__KeepsUnpricedRunsVisible__When__PassesMixProviders", () => {
+test("rollupCost__KeepsUnpricedRunsVisible__When__AModelHasNoRateCard", () => {
+	// Both listed models now price, so the unpriced path is exercised with a model that is
+	// genuinely absent — the case that matters is a run vanishing from a total that then
+	// reads as complete, not which specific vendor happens to be missing today.
 	const r = rollupCost([
 		{ outputTokens: 1_000_000, model: "claude-fable-5" },
 		{ outputTokens: 1_000_000, model: "gpt-5.6-sol" },
-		{ outputTokens: 1_000_000, model: "gpt-5.6-sol" },
+		{ outputTokens: 1_000_000, model: "some-unlisted-model" },
 	]);
-	assert.equal(r.usd, 50);
-	assert.equal(r.priced, 1);
-	// The whole point: two Azure runs must not vanish into a total that then reads as complete.
-	assert.equal(r.unpriced, 2);
-	assert.deepEqual(r.unpricedModels, ["gpt-5.6-sol"]);
+	assert.equal(r.usd, 50 + 30);
+	assert.equal(r.priced, 2);
+	assert.equal(r.unpriced, 1);
+	assert.deepEqual(r.unpricedModels, ["some-unlisted-model"]);
 });
 
 test("usd__KeepsSubCentPrecision__When__AnArmIsCheap", () => {

@@ -168,10 +168,18 @@ test("fromResponsesBody__ProducesAToolUseBlock__When__TheModelCallsAFunction", (
 	assert.deepEqual(tool.input, { name: "click", target: "Save" });
 	// stop_reason is DERIVED: the loops branch on intent, and tool_use drives the act cycle.
 	assert.equal(msg.stop_reason, "tool_use");
-	assert.equal(msg.usage.input_tokens, 100);
+	// input_tokens is normalised to ANTHROPIC semantics — UNCACHED input, cache reads counted
+	// separately — so 100 total with 40 cached becomes 60. Responses reports the total with
+	// cached as a subset; passing that through made the two fields OVERLAP, which double-bills
+	// every cached token when costing (at both the full and the cached rate) and inflates
+	// Azure's apparent input volume against Anthropic's in any cross-model comparison.
+	assert.equal(msg.usage.input_tokens, 60);
 	assert.equal(msg.usage.output_tokens, 20);
 	// The field name is Anthropic's, because that is what the run log and bench collector read.
 	assert.equal(msg.usage.cache_read_input_tokens, 40);
+	// Not 0: Responses has no cache-creation charge at all, and null says "no such concept"
+	// where 0 would say "none happened this call".
+	assert.equal(msg.usage.cache_creation_input_tokens, null);
 });
 
 test("fromResponsesBody__SurvivesMalformedArguments__When__TheModelEmitsBadJson", () => {

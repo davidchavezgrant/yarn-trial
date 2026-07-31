@@ -291,11 +291,26 @@ export function fromResponsesBody(body: Record<string, any>): Anthropic.Message 
 		stop_reason: stop,
 		stop_sequence: null,
 		usage: {
-			input_tokens: Number(u.input_tokens ?? 0),
+			/**
+			 * Normalised to ANTHROPIC semantics, which is the whole job of this boundary: our
+			 * `input_tokens` means UNCACHED input, and cache reads are counted separately.
+			 *
+			 * Responses reports `input_tokens` as the TOTAL, with `cached_tokens` a SUBSET of
+			 * it. Passing that through unchanged makes the two fields overlap, and every
+			 * consumer that treats them as disjoint is then wrong in the same direction —
+			 * cost double-bills the cached portion (at $5/MTok AND $0.50/MTok for the same
+			 * tokens), and any Anthropic-vs-Azure token comparison is skewed by the whole
+			 * cached volume, which on a real run was 44k of 78k.
+			 *
+			 * Clamped at zero: a provider that ever reported more cached than total would
+			 * otherwise produce a negative token count that silently reduces a cost total.
+			 */
+			input_tokens: Math.max(0, Number(u.input_tokens ?? 0) - Number(u.input_tokens_details?.cached_tokens ?? 0)),
 			output_tokens: Number(u.output_tokens ?? 0),
-			// Responses reports cache hits under input_tokens_details; the field name our run
-			// logs and the bench collector read is Anthropic's.
 			cache_read_input_tokens: Number(u.input_tokens_details?.cached_tokens ?? 0),
+			// Responses has no cache-CREATION charge: caching is automatic and a hit is simply
+			// billed cheaper, so there is no write event to report. null, not 0 — the
+			// distinction is "this provider has no such concept" rather than "none happened".
 			cache_creation_input_tokens: null,
 			server_tool_use: null,
 			service_tier: null,

@@ -53,6 +53,24 @@ export const RATES: Record<string, Rates> = {
 	// 2026-09-01. Whoever is here after that date: bump this row.
 	"claude-sonnet-5": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
 	"claude-haiku-4-5": { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+
+	/**
+	 * OpenAI standard list pricing, used for the Azure deployment at David's direction
+	 * (2026-07-31). Azure bills through the subscription at rates we do not have; standard
+	 * OpenAI pricing is the honest stand-in and is expected to run HIGH, so treat the primary
+	 * pass's dollars as an upper bound rather than an invoice.
+	 *
+	 * cacheWrite is 0 because Responses has no cache-creation charge — caching is automatic
+	 * and a hit is simply billed at the cheaper cached-input rate. That is a real structural
+	 * difference from Anthropic, not a missing figure, and it is why this row's cache
+	 * economics do not resemble the Claude rows above.
+	 *
+	 * Correct only because responses.ts normalises `input_tokens` to EXCLUDE cached tokens.
+	 * If that normalisation is ever removed, this row double-bills every cached token.
+	 */
+	"gpt-5.6-sol": { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+	"gpt-5.6-terra": { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 },
+	"gpt-5.6-luna": { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0 },
 };
 
 /** Tokens a run reported. Every field optional — an old artifact simply costs nothing. */
