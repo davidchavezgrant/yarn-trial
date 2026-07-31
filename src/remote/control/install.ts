@@ -647,7 +647,7 @@ export async function resolveAppSource(app: string, spec: string, probe: Downloa
  * two transfers to accomplish one, and on three hosts it is six.
  */
 const FETCH_SCRIPT = `#!/bin/sh
-# Written by src/fleet/remote/install.ts. Edit there, not here — every install overwrites this.
+# Written by src/remote/control/install.ts. Edit there, not here — every install overwrites this.
 set -eu
 STAGE="$HOME/${REMOTE_CHECKOUT}/${INSTALL_STAGE_DIR}"
 REQ="$STAGE/request"
@@ -686,7 +686,7 @@ printf 'fetched %s bytes\\n' "$(wc -c < "$OUT" | tr -d ' ')"
  * the difference between a retry and a support call.
  */
 const INSTALL_SCRIPT = `#!/bin/sh
-# Written by src/fleet/remote/install.ts. Edit there, not here — every install overwrites this.
+# Written by src/remote/control/install.ts. Edit there, not here — every install overwrites this.
 set -eu
 STAGE="$HOME/${REMOTE_CHECKOUT}/${INSTALL_STAGE_DIR}"
 REQ="$STAGE/request"
@@ -793,8 +793,8 @@ PART=""
 printf 'installed=%s\\n' "$DEST/$BASE"
 `;
 
-const USAGE = `usage: tsx src/fleet/remote/install.ts "<App Name>" <https://… | /path/to/App.{app,dmg,zip}> [--host <name>] [--force]
-       tsx src/fleet/remote/install.ts "<App Name>" --check [--host <name>]
+const USAGE = `usage: tsx src/remote/control/install.ts "<App Name>" <https://… | /path/to/App.{app,dmg,zip}> [--host <name>] [--force]
+       tsx src/remote/control/install.ts "<App Name>" --check [--host <name>]
 
   (no --host)     every Mac in hosts.json
   --check         do not change anything; ask each host whether the app is there

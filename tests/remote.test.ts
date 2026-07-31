@@ -4,12 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { enrollHosts } from "../src/fleet/remote/enroll.js";
-import { type FleetRow, fleetStatus, pickIdleHost } from "../src/fleet/remote/fleet.js";
-import { type HostEntry, type Inventory, HOSTS_SCHEMA, importHosts, loadHosts, parseRtsz, resolveHost } from "../src/fleet/remote/hosts.js";
-import { applyCredentials, parseCredentials, TEAM_SCHEMA } from "../src/fleet/remote/team.js";
-import { loadRunnerEnv } from "../src/fleet/runner/spawn.js";
-import { decodeSpec, encodeSpec, keyFingerprint, runnerArgv, sshArgv, tunnelArgv, writeKnownHosts } from "../src/fleet/remote/ssh.js";
+import { enrollHosts } from "../src/remote/control/enroll.js";
+import { type FleetRow, fleetStatus, pickIdleHost } from "../src/remote/control/fleet.js";
+import { type HostEntry, type Inventory, HOSTS_SCHEMA, importHosts, loadHosts, parseRtsz, resolveHost } from "../src/remote/control/hosts.js";
+import { applyCredentials, parseCredentials, TEAM_SCHEMA } from "../src/remote/control/team.js";
+import { loadRunnerEnv } from "../src/remote/runner/spawn.js";
+import { decodeSpec, encodeSpec, keyFingerprint, runnerArgv, sshArgv, tunnelArgv, writeKnownHosts } from "../src/remote/control/ssh.js";
 import { host, inventory, withTemp } from "./fixtures.js";
 
 /**

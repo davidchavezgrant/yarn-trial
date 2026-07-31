@@ -3,8 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { beats, type MapVersion, planTransfers, readAppmaps, type Source, summarise, syncAppmaps } from "../src/fleet/remote/appmaps.js";
-import type { SshResult, SshRunner } from "../src/fleet/remote/ssh.js";
+import { beats, type MapVersion, planTransfers, readAppmaps, type Source, summarise, syncAppmaps } from "../src/remote/control/appmaps.js";
+import type { SshResult, SshRunner } from "../src/remote/control/ssh.js";
 import { host, inventory } from "./fixtures.js";
 
 /**

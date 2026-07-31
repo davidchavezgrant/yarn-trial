@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { deleteAppBundle, describeAppDelete, safeBundleName } from "../src/fleet/runner/uninstall.js";
+import { deleteAppBundle, describeAppDelete, safeBundleName } from "../src/remote/runner/uninstall.js";
 
 /**
  * Uninstalling an app, entirely on temp directories: `appDirs`, `home`, the profile store and

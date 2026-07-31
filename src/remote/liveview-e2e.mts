@@ -2,7 +2,7 @@
 // (1) input injection actually LANDS in a real app, and (2) window-follow switches when the
 // frontmost window changes (the OAuth-handoff proxy). Run by hand on a Mac you are sitting at:
 //
-//   npx tsx src/fleet/liveview-e2e.mts
+//   npx tsx src/remote/liveview-e2e.mts
 //
 // It is not part of `npm test` — it opens real apps and needs the Accessibility grant. It reports
 // PASS/FAIL for each check by reading state back out of the OS, never by asserting the call

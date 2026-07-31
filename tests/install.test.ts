@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import type { HostEntry } from "../src/fleet/remote/hosts.js";
+import type { HostEntry } from "../src/remote/control/hosts.js";
 import {
 	type AppSource,
 	type InstallOptions,
@@ -22,9 +22,9 @@ import {
 	presenceArgv,
 	stageInstallFiles,
 	INSTALL_STAGE_DIR,
-} from "../src/fleet/remote/install.js";
-import { REMOTE_CHECKOUT } from "../src/fleet/remote/provision.js";
-import type { SshResult } from "../src/fleet/remote/ssh.js";
+} from "../src/remote/control/install.js";
+import { REMOTE_CHECKOUT } from "../src/remote/control/provision.js";
+import type { SshResult } from "../src/remote/control/ssh.js";
 import { host, inTempDir, inventory, ok } from "./fixtures.js";
 
 /**

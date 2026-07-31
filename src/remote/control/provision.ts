@@ -471,12 +471,12 @@ export PATH`;
  * `runnerctl` — the only thing SSH ever invokes on a Mac.
  */
 const RUNNERCTL_SHIM = `#!/bin/sh
-# Installed by src/fleet/remote/provision.ts. Edit there, not here — a re-provision overwrites this.
+# Installed by src/remote/control/provision.ts. Edit there, not here — a re-provision overwrites this.
 ${NODE_ON_PATH}
 # Exit 3 is runnerctl's own "cannot reach the runner": a missing checkout is a host problem,
 # not an answer to the request, and the fleet client branches on the distinction.
 cd "$HOME/${REMOTE_CHECKOUT}" || exit 3
-exec npx tsx src/fleet/runner/ctl.ts "$@"
+exec npx tsx src/remote/runner/ctl.ts "$@"
 `;
 
 /**
@@ -485,7 +485,7 @@ exec npx tsx src/fleet/runner/ctl.ts "$@"
  * kept alive while the runner underneath it had already died.
  */
 const SERVE_SHIM = `#!/bin/sh
-# Installed by src/fleet/remote/provision.ts. Edit there, not here — a re-provision overwrites this.
+# Installed by src/remote/control/provision.ts. Edit there, not here — a re-provision overwrites this.
 #
 # This process must be Electron, not node: macOS attributes Accessibility and Screen Recording
 # to the responsible process and children inherit them, so a runner that was a plain node
@@ -588,7 +588,7 @@ const LAUNCH_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 `;
 
 const INSTALL_RUNNERCTL = `#!/bin/sh
-# Installed by src/fleet/remote/provision.ts. Puts runnerctl somewhere \`ssh host runnerctl\` finds it.
+# Installed by src/remote/control/provision.ts. Puts runnerctl somewhere \`ssh host runnerctl\` finds it.
 set -eu
 SRC="$HOME/${REMOTE_CHECKOUT}/${STAGE_DIR}/runnerctl"
 
@@ -615,7 +615,7 @@ echo "runnerctl=$TARGET/runnerctl"
 `;
 
 const INSTALL_LAUNCHAGENT = `#!/bin/sh
-# Installed by src/fleet/remote/provision.ts. Loads the runner as a GUI-domain LaunchAgent.
+# Installed by src/remote/control/provision.ts. Loads the runner as a GUI-domain LaunchAgent.
 set -eu
 LABEL=${LAUNCH_LABEL}
 PROV="$HOME/${REMOTE_CHECKOUT}/${STAGE_DIR}"
@@ -737,7 +737,7 @@ function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const USAGE = `usage: tsx src/fleet/remote/provision.ts [--host <name>] [--doctor | --restart [--all]]
+const USAGE = `usage: tsx src/remote/control/provision.ts [--host <name>] [--doctor | --restart [--all]]
 
   (no flags)      provision every Mac in hosts.json: sync, runnerctl, LaunchAgent
   --host <name>   just that one (name, alias or address)

@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { type HostEntry, HOSTS_SCHEMA, type Inventory } from "../src/fleet/remote/hosts.js";
-import type { SshResult } from "../src/fleet/remote/ssh.js";
+import { type HostEntry, HOSTS_SCHEMA, type Inventory } from "../src/remote/control/hosts.js";
+import type { SshResult } from "../src/remote/control/ssh.js";
 
 /**
  * Shared fixtures for the fleet tests. Not a `.test.ts` file on purpose — the test glob is

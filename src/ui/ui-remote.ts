@@ -18,15 +18,15 @@ import {
 	remoteApps,
 	type StopResult,
 	stopRemote,
-} from "../fleet/remote/dispatch.js";
-import { type FleetRow, fleetStatus } from "../fleet/remote/fleet.js";
-import { type HostEntry, hostsPath, type Inventory, loadHosts, resolveHost } from "../fleet/remote/hosts.js";
-import { autoSync, type SyncOptions } from "../fleet/remote/appmaps.js";
-import { installApp, resolveAppSource } from "../fleet/remote/install.js";
-import { clearAppAuth, deleteRemoteApp } from "../fleet/remote/manage.js";
-import { closeScreenShare, forgetScreenShareLogin, planSignin, waitForHome } from "../fleet/remote/signin.js";
-import { describeCredentials, setModelKey } from "../fleet/remote/team.js";
-import type { JobKind } from "../fleet/runner/jobs.js";
+} from "../remote/control/dispatch.js";
+import { type FleetRow, fleetStatus } from "../remote/control/fleet.js";
+import { type HostEntry, hostsPath, type Inventory, loadHosts, resolveHost } from "../remote/control/hosts.js";
+import { autoSync, type SyncOptions } from "../remote/control/appmaps.js";
+import { installApp, resolveAppSource } from "../remote/control/install.js";
+import { clearAppAuth, deleteRemoteApp } from "../remote/control/manage.js";
+import { closeScreenShare, forgetScreenShareLogin, planSignin, waitForHome } from "../remote/control/signin.js";
+import { describeCredentials, setModelKey } from "../remote/control/team.js";
+import type { JobKind } from "../remote/runner/jobs.js";
 import { UNREADY_EXIT } from "../core/harness.js";
 import { LineSplitter, type RunHandlers } from "./ui-core.js";
 

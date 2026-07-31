@@ -6,7 +6,7 @@ import {
 	lifecycleVerdict,
 	startLiveViewServer,
 	type LifecycleState,
-} from "../src/fleet/liveview-server.js";
+} from "../src/remote/liveview-server.js";
 
 // The detached-server self-termination clock. Pure, so tested with explicit clocks — no sockets,
 // no real timers. Guards two failures: a server nobody opens listening forever (max-lifetime), and

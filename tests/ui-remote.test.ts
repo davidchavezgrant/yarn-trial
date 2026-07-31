@@ -3,10 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import type { DispatchOptions, DispatchResult, FollowOptions, FollowResult, PullResult, StopResult } from "../src/fleet/remote/dispatch.js";
-import type { FleetRow } from "../src/fleet/remote/fleet.js";
-import { HOSTS_SCHEMA, type Inventory } from "../src/fleet/remote/hosts.js";
-import { setModelKey } from "../src/fleet/remote/team.js";
+import type { DispatchOptions, DispatchResult, FollowOptions, FollowResult, PullResult, StopResult } from "../src/remote/control/dispatch.js";
+import type { FleetRow } from "../src/remote/control/fleet.js";
+import { HOSTS_SCHEMA, type Inventory } from "../src/remote/control/hosts.js";
+import { setModelKey } from "../src/remote/control/team.js";
 import { host } from "./fixtures.js";
 import {
 	annotateRuns,

@@ -13,10 +13,10 @@ import {
 	stopRemote,
 	type StreamRunner,
 	signinRemedy,
-} from "../src/fleet/remote/dispatch.js";
-import type { SshRunner } from "../src/fleet/remote/ssh.js";
-import type { HostEntry } from "../src/fleet/remote/hosts.js";
-import { decodeSpec, type SshResult } from "../src/fleet/remote/ssh.js";
+} from "../src/remote/control/dispatch.js";
+import type { SshRunner } from "../src/remote/control/ssh.js";
+import type { HostEntry } from "../src/remote/control/hosts.js";
+import { decodeSpec, type SshResult } from "../src/remote/control/ssh.js";
 import { host, inventory, tempDir } from "./fixtures.js";
 
 /**

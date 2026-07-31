@@ -5,12 +5,12 @@ import fs from "node:fs";
 // probe below needs a plain TCP connect, which only node's own module provides.
 import nodeNet from "node:net";
 import { Readable } from "node:stream";
-import { defaultOperator, loadHosts, resolveHost, type HostEntry } from "../src/fleet/remote/hosts.js";
-import { lastFrame, runnerArgv, runSsh, tunnelArgv } from "../src/fleet/remote/ssh.js";
+import { defaultOperator, loadHosts, resolveHost, type HostEntry } from "../src/remote/control/hosts.js";
+import { lastFrame, runnerArgv, runSsh, tunnelArgv } from "../src/remote/control/ssh.js";
 import { SigninPortal } from "../src/ui/ui-signin.js";
 import { appBundlePath, HumanizeController, listApps, listRecordedRuns, parseByteRange, readUiState, resolveVideo, RunController, writeUiState, type RunHandlers, type RunOptions } from "../src/ui/ui-core.js";
 import { page } from "../src/ui/ui-page.js";
-import { describeCredentials, provisionFromBundle } from "../src/fleet/remote/team.js";
+import { describeCredentials, provisionFromBundle } from "../src/remote/control/team.js";
 import {
 	annotateRuns,
 	appChoices,
@@ -28,8 +28,8 @@ import {
 	saveModelKey,
 	writeRemotePrefs,
 } from "../src/ui/ui-remote.js";
-import { startRunner } from "../src/fleet/runner/serve.js";
-import { PACKAGED_ENV } from "../src/fleet/runner/spawn.js";
+import { startRunner } from "../src/remote/runner/serve.js";
+import { PACKAGED_ENV } from "../src/remote/runner/spawn.js";
 
 /**
  * Electron shell for the demo agent.

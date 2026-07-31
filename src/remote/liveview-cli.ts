@@ -16,8 +16,8 @@
 // to a model — a human drives, the session lands in the app's own storage.
 
 import { pathToFileURL } from "node:url";
-import { loadHosts, resolveHost } from "./remote/hosts.js";
-import { lastFrame, runnerArgv, runSsh } from "./remote/ssh.js";
+import { loadHosts, resolveHost } from "./control/hosts.js";
+import { lastFrame, runnerArgv, runSsh } from "./control/ssh.js";
 import { loginBlockedByRun } from "./liveview.js";
 import { startLiveViewServer } from "./liveview-server.js";
 

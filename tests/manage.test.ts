@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { type HostEntry, HOSTS_SCHEMA, type Inventory } from "../src/fleet/remote/hosts.js";
-import { clearAppAuth, deleteRemoteApp } from "../src/fleet/remote/manage.js";
-import { decodeSpec, type SshResult, type SshRunner } from "../src/fleet/remote/ssh.js";
+import { type HostEntry, HOSTS_SCHEMA, type Inventory } from "../src/remote/control/hosts.js";
+import { clearAppAuth, deleteRemoteApp } from "../src/remote/control/manage.js";
+import { decodeSpec, type SshResult, type SshRunner } from "../src/remote/control/ssh.js";
 import { host } from "./fixtures.js";
 
 /**

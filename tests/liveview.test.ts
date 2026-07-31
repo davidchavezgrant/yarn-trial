@@ -15,8 +15,8 @@ import {
 	spawnEngine,
 	toEngineMouse,
 	toEngineScroll,
-} from "../src/fleet/liveview.js";
-import { acquire, type Lease } from "../src/fleet/runner/lease.js";
+} from "../src/remote/liveview.js";
+import { acquire, type Lease } from "../src/remote/runner/lease.js";
 
 // ---- clampFraction ----------------------------------------------------------------------
 

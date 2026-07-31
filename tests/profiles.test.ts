@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { capturePaths, clearOperatorData, describeAuthClear, describeSwap, livePaths, profileDir, readOwners, swapProfile } from "../src/fleet/runner/profiles.js";
+import { capturePaths, clearOperatorData, describeAuthClear, describeSwap, livePaths, profileDir, readOwners, swapProfile } from "../src/remote/runner/profiles.js";
 
 /**
  * Per-operator app data, entirely on temp directories.

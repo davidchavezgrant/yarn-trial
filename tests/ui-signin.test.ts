@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { HostEntry } from "../src/fleet/remote/hosts.js";
+import type { HostEntry } from "../src/remote/control/hosts.js";
 import { SigninPortal, type PortalDeps } from "../src/ui/ui-signin.js";
 
 /**

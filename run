@@ -52,7 +52,7 @@ if [[ ! -f $runner_dir/id_ed25519 ]]; then
 			# Braces are load-bearing: the ellipsis is multibyte UTF-8 and bash reads those
 			# bytes as part of the identifier, so "$bundle…" is an unbound variable under set -u.
 			echo "installing team credentials from ${bundle}…"
-			npx tsx src/fleet/remote/enroll.ts || true
+			npx tsx src/remote/control/enroll.ts || true
 			break
 		fi
 	done
@@ -118,18 +118,18 @@ enroll)
 	# "$@" is not decoration: without it --export never reaches enroll.ts, which reads it from
 	# process.argv, and the export silently does a plain enroll instead.
 	shift
-	exec npx tsx src/fleet/remote/enroll.ts "$@"
+	exec npx tsx src/remote/control/enroll.ts "$@"
 	;;
 
 hosts)
-	exec npx tsx src/fleet/remote/fleet.ts
+	exec npx tsx src/remote/control/fleet.ts
 	;;
 
 provision)
 	# Pushes this checkout to each Mac and installs the LaunchAgent that holds the runner
 	# socket. Must follow enroll: it reuses the pinned known_hosts and the fleet identity.
 	shift
-	exec npx tsx src/fleet/remote/provision.ts "$@"
+	exec npx tsx src/remote/control/provision.ts "$@"
 	;;
 
 dispatch)
@@ -137,7 +137,7 @@ dispatch)
 	# remote lease is the mutex for the target. No have_key either — the model key is read on
 	# the far side from its own ~/.yarn-runner/env, so requiring one here is a false refusal.
 	shift
-	exec npx tsx src/fleet/remote/dispatch.ts "$@"
+	exec npx tsx src/remote/control/dispatch.ts "$@"
 	;;
 
 install)
@@ -146,7 +146,7 @@ install)
 	# and copy cleanly and still leave nothing named what the run will try to open. Must follow
 	# enroll: it reuses the pinned known_hosts and the fleet identity.
 	shift
-	exec npx tsx src/fleet/remote/install.ts "$@"
+	exec npx tsx src/remote/control/install.ts "$@"
 	;;
 
 signin)
@@ -155,7 +155,7 @@ signin)
 	# a human does it once per app per Mac over screen sharing and the app keeps the session.
 	# No have_key: this never talks to a model.
 	shift
-	exec npx tsx src/fleet/remote/signin.ts "$@"
+	exec npx tsx src/remote/control/signin.ts "$@"
 	;;
 
 signout | uninstall)
@@ -163,7 +163,7 @@ signout | uninstall)
 	# (authclear/appdelete), which refuse while a run holds the lease and derive every path
 	# they delete on the far side — nothing variable crosses as argv text. No have_key: no
 	# model involved. The verb itself is passed through, so no shift.
-	exec npx tsx src/fleet/remote/manage.ts "$@"
+	exec npx tsx src/remote/control/manage.ts "$@"
 	;;
 
 browser-login)
@@ -186,7 +186,7 @@ liveview)
 	# lease at all, and pgrep catches that case the lease cannot see.
 	assert_no_run_in_flight
 	shift
-	exec npx tsx src/fleet/liveview-cli.ts "$@"
+	exec npx tsx src/remote/liveview-cli.ts "$@"
 	;;
 
 doctor)

@@ -8,7 +8,7 @@ import { readJsonOr } from "../fsutil.js";
 // One capturedAt reader for the whole codebase — the sync's. A second parser here could
 // disagree with it about what counts as stamped. It is a pure local-file read; importing it
 // pulls no ssh behaviour into the local shell, at module load or at call time.
-import { readCapturedAt } from "../fleet/remote/appmaps.js";
+import { readCapturedAt } from "../remote/control/appmaps.js";
 import { buildRunArgs, isBrowserApp, type Target, webTarget } from "../core/target.js";
 
 /**

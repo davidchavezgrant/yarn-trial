@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { acceptKey, encodeFrame, handshakeResponse, WS_MAX_BUFFERED_BYTES, WsDecoder } from "../src/fleet/liveview-ws.js";
+import { acceptKey, encodeFrame, handshakeResponse, WS_MAX_BUFFERED_BYTES, WsDecoder } from "../src/remote/liveview-ws.js";
 
 // ---- acceptKey: the RFC 6455 handshake hash (canonical vector from §1.3) -----------------
 

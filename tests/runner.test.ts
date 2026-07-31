@@ -16,11 +16,11 @@ import {
 	sweepOrphans,
 	updateJob,
 	writeJob,
-} from "../src/fleet/runner/jobs.js";
-import { acquire, adopt, defaultRunnerDir, describeHolder, inspect, type Lease, release } from "../src/fleet/runner/lease.js";
-import { childEnv, isPackaged, PACKAGED_ENV, resolveRunCommand, spawnDetached } from "../src/fleet/runner/spawn.js";
-import { parseArgs } from "../src/fleet/runner/ctl.js";
-import { staleGrants, startRunner } from "../src/fleet/runner/serve.js";
+} from "../src/remote/runner/jobs.js";
+import { acquire, adopt, defaultRunnerDir, describeHolder, inspect, type Lease, release } from "../src/remote/runner/lease.js";
+import { childEnv, isPackaged, PACKAGED_ENV, resolveRunCommand, spawnDetached } from "../src/remote/runner/spawn.js";
+import { parseArgs } from "../src/remote/runner/ctl.js";
+import { staleGrants, startRunner } from "../src/remote/runner/serve.js";
 import { resourcesRoot } from "../src/paths.js";
 import { tempDir, withTemp, withTempAsync } from "./fixtures.js";
 
@@ -649,7 +649,7 @@ test("startRunner__ReportsIdle__When__NoLeaseIsHeld", async () => {
 		const runner = await startRunner(dir, { ...noSwap, log: () => {} });
 		try {
 			const [res] = await request(runner.socketPath, "status");
-			// Exactly the shape src/fleet/remote/fleet.ts parses.
+			// Exactly the shape src/remote/control/fleet.ts parses.
 			assert.equal(res.ok, true);
 			assert.equal(res.state, "idle");
 			// The directory is the access control: Node creates the socket 0755 and there is a
@@ -1354,7 +1354,7 @@ test("parseArgs__DecodesSpec__When__TaskTextWouldBeShellSyntax", () => {
  */
 function runCtl(argv: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
 	return new Promise((resolve, reject) => {
-		const child = spawn("npx", ["tsx", "src/fleet/runner/ctl.ts", ...argv], { cwd: resourcesRoot() });
+		const child = spawn("npx", ["tsx", "src/remote/runner/ctl.ts", ...argv], { cwd: resourcesRoot() });
 		let stdout = "";
 		let stderr = "";
 		child.stdout.on("data", (d) => (stdout += d.toString()));

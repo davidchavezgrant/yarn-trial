@@ -357,7 +357,7 @@ export function importHostsFile(rtszPath: string, opts: { user: string; sshPort?
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
 	const [rtsz, user] = process.argv.slice(2);
 	if (!rtsz || !user) {
-		console.error('usage: tsx src/fleet/remote/hosts.ts <workspace.rtsz> <ssh-user>   # merges into hosts.json, never overwrites');
+		console.error('usage: tsx src/remote/control/hosts.ts <workspace.rtsz> <ssh-user>   # merges into hosts.json, never overwrites');
 		process.exit(2);
 	}
 	const result = importHostsFile(rtsz, { user });

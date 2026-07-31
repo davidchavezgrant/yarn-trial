@@ -1,4 +1,4 @@
-import type { HostEntry } from "../fleet/remote/hosts.js";
+import type { HostEntry } from "../remote/control/hosts.js";
 
 /**
  * The GUI's sign-in portal: the window-scoped liveview login, owned end to end by the shell.

@@ -16,7 +16,7 @@ import { defaultRunnerDir } from "./lease.js";
  * joins the remote arguments into a single string and hands it to the login shell, which
  * re-splits it. A task string containing a quote, a `$`, or a `;` is therefore shell input on
  * the far side. base64's alphabet has no intersection with shell syntax, so `--spec` survives
- * that round trip with no quoting at all — see `encodeSpec` in src/fleet/remote/ssh.ts, which is
+ * that round trip with no quoting at all — see `encodeSpec` in src/remote/control/ssh.ts, which is
  * the other end of this contract.
  */
 

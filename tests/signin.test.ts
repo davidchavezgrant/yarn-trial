@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
-import type { HostEntry } from "../src/fleet/remote/hosts.js";
-import { explainCloseFailure, forgetScreenShareLogin, launchCommand, planSignin, vncUrl, waitForHome } from "../src/fleet/remote/signin.js";
-import type { SshResult } from "../src/fleet/remote/ssh.js";
+import type { HostEntry } from "../src/remote/control/hosts.js";
+import { explainCloseFailure, forgetScreenShareLogin, launchCommand, planSignin, vncUrl, waitForHome } from "../src/remote/control/signin.js";
+import type { SshResult } from "../src/remote/control/ssh.js";
 import { ok, PIN } from "./fixtures.js";
 
 /**

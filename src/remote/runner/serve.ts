@@ -8,7 +8,7 @@ import { openApp } from "../../core/appctl.js";
 import { sidecarStatus } from "../../core/axdom.js";
 import { screenIsLocked } from "../../core/harness.js";
 import { dataRoot, resourcesRoot } from "../../paths.js";
-import { firstLine } from "../remote/ssh.js";
+import { firstLine } from "../control/ssh.js";
 import { listApps } from "../../ui/ui-core.js";
 import {
 	acquire,
@@ -663,7 +663,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		}
 
 		const token = randomBytes(18).toString("base64url");
-		const cmd = resolveRunCommand("src/fleet/liveview-cli.ts");
+		const cmd = resolveRunCommand("src/remote/liveview-cli.ts");
 		try {
 			liveviewPid = spawnRun(
 				{ command: cmd.command, args: [...cmd.args] },
