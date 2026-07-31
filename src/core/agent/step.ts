@@ -251,8 +251,11 @@ export async function executeAction(
 	ls.lastShot = curShot;
 	// `wait` legitimately changes nothing, so exempt it from the discrimination
 	// requirement (its point is that already-true state persists).
+	// The error TEXT rides along: it previously reached only the model, so a remote run's
+	// console and run log said "action errored" five times while the reason (a refused
+	// focus, a boxless target, a stale ref) was invisible to the operator diagnosing it.
 	let verdict: VerifyResult = isError
-		? { verified: false, note: "action errored" }
+		? { verified: false, note: `action errored: ${resultText.slice(0, 200)}` }
 		: verify(input.expectation, ls.obs.haystack, input.action.name === "wait" ? undefined : prevHaystack);
 
 	/**
