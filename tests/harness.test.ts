@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import { test } from "node:test";
 import { bestClass, descriptorFor, lookup, sidecarStatus } from "../src/core/axdom.js";
-import { overlayEnv, scriptEnvKeys } from "../src/core/overlay.js";
+import { backendSeizesInput, NOOP_OVERLAY, overlayEnv, scriptEnvKeys, startOverlay, wantOverlay } from "../src/core/overlay.js";
 
 // axdom: the DOM-attribute enrichment that recovers what the AX projection drops.
 // These are the pure formatting decisions — the sidecar walk itself needs a live app.
@@ -119,4 +119,48 @@ test("overlayEnv__CarriesPauseFile__When__Built", () => {
 	// Named explicitly rather than left to the scrape: this is the one that was missing, and
 	// a regression here silently un-fixes the banner rather than failing anything.
 	assert.equal(overlayEnv("drive", "t", 1, "/tmp/go", "/tmp/pause").OVERLAY_PAUSE, "/tmp/pause");
+});
+
+// The banner is gated on input DELIVERY: cdp injects into the renderer and never touches
+// the operator's pointer, so warning there trains the operator to ignore the banner that
+// matters. Everything else — including delivery strings that don't exist yet — warns,
+// because a missing banner lets a hand into a live run and a surplus one is only noise.
+
+test("backendSeizesInput__ReturnsFalse__When__BackendIsCdp", () => {
+	assert.equal(backendSeizesInput("cdp"), false);
+});
+
+test("backendSeizesInput__ReturnsTrue__When__BackendIsAxOrUnknown", () => {
+	assert.equal(backendSeizesInput("ax"), true);
+	assert.equal(backendSeizesInput("some-future-backend"), true);
+});
+
+test("startOverlay__ReturnsNoop__When__BackendIsHandsOff", () => {
+	// Identity, not behavior: NOOP_OVERLAY is the sentinel for "no child process was
+	// spawned", which is the whole point — a cdp run must not put a JXA panel on screen.
+	// OVERLAY is pinned unset so a forcing value in the shell cannot flash a real panel
+	// mid-test-suite.
+	const prev = process.env.OVERLAY;
+	delete process.env.OVERLAY;
+	try {
+		assert.equal(startOverlay("drive", "t", "cdp"), NOOP_OVERLAY);
+	} finally {
+		if (prev !== undefined) process.env.OVERLAY = prev;
+	}
+});
+
+// The env overrides are tested through wantOverlay (the pure gate startOverlay calls)
+// rather than startOverlay itself: forcing OVERLAY=1 through the real thing would spawn
+// an osascript child and flash a panel on every `npm test`.
+
+test("wantOverlay__ShowsBanner__When__OverlayEnvForcesIt", () => {
+	// The only way to see the banner over a cdp target (e.g. iterating on the banner
+	// itself against a cheap web run).
+	assert.equal(wantOverlay("cdp", { OVERLAY: "1" }), true);
+});
+
+test("wantOverlay__SuppressesBanner__When__OverlayEnvIsZero", () => {
+	// OVERLAY=0 must keep winning on ax — it exists for filming takes where the banner
+	// would be in frame, and those run on the driver.
+	assert.equal(wantOverlay("ax", { OVERLAY: "0" }), false);
 });

@@ -288,7 +288,7 @@ async function main(): Promise<void> {
 
 	fs.mkdirSync(OUT, { recursive: true });
 	// A probe reads mostly, but it clicks and drags too — the machine is still not yours.
-	const overlay = startOverlay("probe", `Agent probing ${APP} — do not touch`);
+	const overlay = startOverlay("probe", `Agent probing ${APP} — do not touch`, "ax");
 	const driver = await Driver.start("canvas-probe");
 	// The probe sleeps a lot, and a Ctrl-C mid-sleep would otherwise exit without end_session,
 	// leaking the driver session for its 300s lifetime and colliding with the next run on the

@@ -212,9 +212,10 @@ async function main(): Promise<void> {
 		return;
 	}
 
-	const overlay = startOverlay("drive", `Agent restoring ${app} — do not touch`);
-	// --url selects the CDP-direct backend, mirroring the run that wrote the journal. The
-	// same rule as agent.ts: when cdp is set there is no driver at all. Loaded lazily so
+	// --url selects the CDP-direct backend, mirroring the run that wrote the journal — and,
+	// same as everywhere, a cdp replay never takes the operator's input, so no banner.
+	const overlay = startOverlay("drive", `Agent restoring ${app} — do not touch`, url ? "cdp" : "ax");
+	// The same rule as agent.ts: when cdp is set there is no driver at all. Loaded lazily so
 	// src/backends/ stays deletable without breaking journal replays for ax runs.
 	const cdp = url ? await (await import("../backends/cdp.js")).CdpBackend.acquire(webTarget(url)) : undefined;
 	const driver = cdp ? undefined : await Driver.start("cleanup");

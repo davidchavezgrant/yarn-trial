@@ -70,11 +70,13 @@ export async function main(): Promise<void> {
 	const cdpMod = backendKind === "cdp" ? await import("../../backends/cdp.js") : undefined;
 
 	const { client, model } = makeClient();
-	// Announce the takeover before the first action. A run seizes pointer and keyboard for
-	// minutes and is otherwise indistinguishable from an idle machine, so anyone sitting in
-	// front of it cannot tell when it is safe to type. OVERLAY=0 suppresses it for takes
-	// where the banner would be in frame.
-	const overlay = startOverlay("drive", `Agent driving ${app} — do not touch`);
+	// Announce the takeover before the first action. An ax run seizes pointer and keyboard
+	// for minutes and is otherwise indistinguishable from an idle machine, so anyone sitting
+	// in front of it cannot tell when it is safe to type. On cdp there is no takeover to
+	// announce — input goes to the renderer, the operator keeps the machine — so this is a
+	// no-op there (backendSeizesInput). OVERLAY=0 suppresses it for takes where the banner
+	// would be in frame.
+	const overlay = startOverlay("drive", `Agent driving ${app} — do not touch`, backendKind);
 	// The CDP backend runs with NO cua driver at all — that absence is its reason to exist
 	// (no session TTL, no shared daemon, no consent gate; see src/backends/cdp.ts). Everything below
 	// that needs the driver is therefore conditional on this being set.

@@ -31,8 +31,9 @@ async function main(): Promise<void> {
 	const { target, app, guidance, backendKind, vision, noAx } = parseCli();
 	const { client, model } = makeClient();
 	// A grounding pass clicks through the whole app for minutes on end — same takeover as a
-	// task run, different colour so the mode is readable at a glance.
-	const overlay = startOverlay("explore", `Agent exploring ${app} — do not touch`);
+	// task run, and the same backend gate: a cdp pass never touches the operator's input,
+	// so it shows no banner (backendSeizesInput in overlay.ts).
+	const overlay = startOverlay("explore", `Agent exploring ${app} — do not touch`, backendKind);
 	// Same posture as agent.ts: the CDP backend runs with no cua driver at all — that absence
 	// is its reason to exist. Everything below that needs the driver is conditional on this.
 	const driver = backendKind === "cdp" ? undefined : await Driver.start("explore");

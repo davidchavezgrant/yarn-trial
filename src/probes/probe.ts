@@ -16,7 +16,7 @@ function section(title: string, payload: unknown): void {
 async function main(): Promise<void> {
 	const target = process.argv[2] ?? "Linear";
 	console.log("starting driver (in-process, no daemon)...");
-	const overlay = startOverlay("probe", `Agent probing ${target} — do not touch`);
+	const overlay = startOverlay("probe", `Agent probing ${target} — do not touch`, "ax");
 	const driver = await Driver.start("probe");
 
 	try {

@@ -116,7 +116,9 @@ async function main(): Promise<void> {
 	const journalPath = `${OUT}/runs/${stamp}.journal.jsonl`;
 
 	console.log(`=== replay: ${recipe.task} (${recipe.app}, ${recipe.steps.length} steps, from ${recipe.compiledFrom}) ===`);
-	const overlay = startOverlay("drive", `Agent replaying on ${recipe.app} — do not touch`);
+	// wantCdp is the replay's actual delivery, whatever the recipe says: a cdp replay keeps
+	// its hands off the operator's input, so it shows no banner (backendSeizesInput).
+	const overlay = startOverlay("drive", `Agent replaying on ${recipe.app} — do not touch`, wantCdp ? "cdp" : "ax");
 	// Lazy, matching the rest of core/: no static value-imports of backends/.
 	const cdp = wantCdp ? await (await import("../backends/cdp.js")).CdpBackend.acquire(target) : undefined;
 	const driver = cdp ? undefined : await Driver.start("replay");

@@ -6,10 +6,15 @@ import { envNum } from "../env.js";
 /**
  * An always-on-top banner saying the machine is being driven.
  *
- * Runs seize the pointer and keyboard for minutes at a time, and from the outside a driven
- * app is indistinguishable from an idle one until a click lands somewhere unexpected. The
- * banner exists so a human in front of the machine can tell, at a glance and without reading
- * a terminal, whether it is safe to touch anything.
+ * Runs on the ax backend seize the pointer and keyboard for minutes at a time, and from the
+ * outside a driven app is indistinguishable from an idle one until a click lands somewhere
+ * unexpected. The banner exists so a human in front of the machine can tell, at a glance and
+ * without reading a terminal, whether it is safe to touch anything.
+ *
+ * It is keyed to the backend's input DELIVERY, not to the run's mode or observation channel
+ * (see backendSeizesInput): a cdp run never touches the operator's pointer, so it gets no
+ * banner at all — a warning that is up when nothing is being taken over trains the operator
+ * to ignore the one that matters.
  *
  * There is no banner primitive in the driver, so this shells to JXA — the same escape hatch
  * stageWindowForRecording() already uses — and builds a borderless NSPanel. It is a separate
@@ -248,7 +253,38 @@ export interface Overlay {
 	stop(): void;
 }
 
-const NOOP: Overlay = { async countdown() {}, setDriving() {}, stop() {} };
+/** Exported so a test can assert by identity that a hands-off backend got no banner. */
+export const NOOP_OVERLAY: Overlay = { async countdown() {}, setDriving() {}, stop() {} };
+
+/**
+ * Does this backend's input delivery take the operator's pointer/keyboard?
+ *
+ * This is the banner's whole gate, and it is keyed on DELIVERY, not on mode or observation
+ * channel. cdp injects input over the debug protocol straight into the renderer: the OS
+ * pointer never moves, focus never changes, and the run works with the app occluded — a
+ * banner there warns about a takeover that is not happening, which trains the operator to
+ * ignore the banner that matters. ax (the cua driver) posts real CGEvents — coordinate
+ * clicks and drags are pinned foreground in toActionRequest() — so it takes the machine
+ * over regardless of what the model was shown; a vision-only (--no-ax) run rides this same
+ * delivery and warns like any other ax run.
+ *
+ * Unknown backends warn. A banner that should not be up is an annoyance; one that should
+ * have been up and was not lets a hand into a live run.
+ */
+export const backendSeizesInput = (backend: string): boolean => backend !== "cdp";
+
+/**
+ * The whole gate, pure so it is testable without spawning a JXA child: OVERLAY=0 always
+ * wins (recordings where the banner would be in frame), OVERLAY=1 forces the banner up
+ * even on a hands-off backend (iterating on the banner itself against a cheap web run),
+ * and otherwise the backend's delivery decides.
+ */
+export const wantOverlay = (backend: string, env: NodeJS.ProcessEnv = process.env): boolean => {
+	if (env.OVERLAY === "0") return false;
+	if (env.OVERLAY === "1") return true;
+
+	return backendSeizesInput(backend);
+};
 
 /** Seconds of warning before a run takes the pointer. COUNTDOWN=0 skips it. */
 const COUNTDOWN_SECONDS = envNum("COUNTDOWN", 3);
@@ -300,10 +336,14 @@ export const overlayEnv = (
  * Show the banner until `stop()`. Never throws and never blocks: if osascript is missing or
  * the panel fails to build, the run proceeds silently.
  *
- * Set OVERLAY=0 to suppress it (recordings where the banner would be in frame).
+ * `backend` is required so every caller declares its input delivery: a backend that never
+ * touches the operator's pointer (cdp) gets no banner at all — countdown() resolving
+ * immediately included, since a "starting in 3" for a run the operator can type through
+ * is noise. Set OVERLAY=0 to suppress it unconditionally (recordings where the banner
+ * would be in frame); OVERLAY=1 forces it up even for a hands-off backend.
  */
-export function startOverlay(mode: keyof typeof MODES, text: string): Overlay {
-	if (process.env.OVERLAY === "0") return NOOP;
+export function startOverlay(mode: keyof typeof MODES, text: string, backend: string): Overlay {
+	if (!wantOverlay(backend)) return NOOP_OVERLAY;
 
 	let child: ChildProcess | undefined;
 	let stopped = false;
