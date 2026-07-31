@@ -52,7 +52,7 @@ if [[ ! -f $runner_dir/id_ed25519 ]]; then
 			# Braces are load-bearing: the ellipsis is multibyte UTF-8 and bash reads those
 			# bytes as part of the identifier, so "$bundle…" is an unbound variable under set -u.
 			echo "installing team credentials from ${bundle}…"
-			npx tsx src/remote/enroll.ts || true
+			npx tsx src/fleet/remote/enroll.ts || true
 			break
 		fi
 	done
@@ -82,7 +82,7 @@ die() {
 # A run started while another is in flight kills BOTH: the second driver session shuts down
 # the shared daemon (LIMITATIONS §6). Cheaper to refuse here than to lose a 20-action run.
 assert_no_run_in_flight() {
-	if pgrep -f "tsx src/(agent|explore)\.ts" >/dev/null 2>&1; then
+	if pgrep -f "tsx src/core/(agent|explore)\.ts" >/dev/null 2>&1; then
 		die "a run is already in flight — driver sessions are not concurrent-safe (LIMITATIONS §6).
 Wait for it, or: pkill -f 'tsx src/'"
 	fi
@@ -108,7 +108,7 @@ explore)
 	[[ $# -ge 2 ]] || die 'usage: ./run explore "App Name" | ./run explore --url https://example.com'
 	assert_no_run_in_flight
 	shift
-	exec npx tsx src/explore.ts "$@"
+	exec npx tsx src/core/explore.ts "$@"
 	;;
 
 enroll)
@@ -118,18 +118,18 @@ enroll)
 	# "$@" is not decoration: without it --export never reaches enroll.ts, which reads it from
 	# process.argv, and the export silently does a plain enroll instead.
 	shift
-	exec npx tsx src/remote/enroll.ts "$@"
+	exec npx tsx src/fleet/remote/enroll.ts "$@"
 	;;
 
 hosts)
-	exec npx tsx src/remote/fleet.ts
+	exec npx tsx src/fleet/remote/fleet.ts
 	;;
 
 provision)
 	# Pushes this checkout to each Mac and installs the LaunchAgent that holds the runner
 	# socket. Must follow enroll: it reuses the pinned known_hosts and the fleet identity.
 	shift
-	exec npx tsx src/remote/provision.ts "$@"
+	exec npx tsx src/fleet/remote/provision.ts "$@"
 	;;
 
 dispatch)
@@ -137,7 +137,7 @@ dispatch)
 	# remote lease is the mutex for the target. No have_key either — the model key is read on
 	# the far side from its own ~/.yarn-runner/env, so requiring one here is a false refusal.
 	shift
-	exec npx tsx src/remote/dispatch.ts "$@"
+	exec npx tsx src/fleet/remote/dispatch.ts "$@"
 	;;
 
 install)
@@ -146,7 +146,7 @@ install)
 	# and copy cleanly and still leave nothing named what the run will try to open. Must follow
 	# enroll: it reuses the pinned known_hosts and the fleet identity.
 	shift
-	exec npx tsx src/remote/install.ts "$@"
+	exec npx tsx src/fleet/remote/install.ts "$@"
 	;;
 
 signin)
@@ -155,7 +155,7 @@ signin)
 	# a human does it once per app per Mac over screen sharing and the app keeps the session.
 	# No have_key: this never talks to a model.
 	shift
-	exec npx tsx src/remote/signin.ts "$@"
+	exec npx tsx src/fleet/remote/signin.ts "$@"
 	;;
 
 signout | uninstall)
@@ -163,7 +163,7 @@ signout | uninstall)
 	# (authclear/appdelete), which refuse while a run holds the lease and derive every path
 	# they delete on the far side — nothing variable crosses as argv text. No have_key: no
 	# model involved. The verb itself is passed through, so no shift.
-	exec npx tsx src/remote/manage.ts "$@"
+	exec npx tsx src/fleet/remote/manage.ts "$@"
 	;;
 
 browser-login)
@@ -173,7 +173,7 @@ browser-login)
 	[[ $# -ge 2 ]] || die 'usage: ./run browser-login https://www.notion.so'
 	assert_no_run_in_flight
 	shift
-	exec npx tsx src/browser-login.ts "$@"
+	exec npx tsx src/backends/browser-login.ts "$@"
 	;;
 
 liveview)
@@ -186,7 +186,7 @@ liveview)
 	# lease at all, and pgrep catches that case the lease cannot see.
 	assert_no_run_in_flight
 	shift
-	exec npx tsx src/liveview-cli.ts "$@"
+	exec npx tsx src/fleet/liveview-cli.ts "$@"
 	;;
 
 doctor)
@@ -235,6 +235,6 @@ doctor)
 	# Anything else is a task string: ./run "show me how to X" ["App"] [--record ...]
 	have_key || die "no API key: export OPENROUTER_API_KEY or ANTHROPIC_API_KEY (or put it in .env)"
 	assert_no_run_in_flight
-	exec npx tsx src/agent.ts "$@"
+	exec npx tsx src/core/agent.ts "$@"
 	;;
 esac

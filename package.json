@@ -6,14 +6,14 @@
     "doc": "docs"
   },
   "scripts": {
-    "probe": "tsx src/probe.ts",
+    "probe": "tsx src/probes/probe.ts",
     "typecheck": "tsc",
-    "test": "tsx --test src/*.test.ts",
-    "agent": "tsx src/agent.ts",
-    "explore": "tsx src/explore.ts",
-    "cleanup": "tsx src/cleanup.ts",
-    "home": "tsx src/home.ts",
-    "humanize": "tsx src/humanize.ts",
+    "test": "tsx --test tests/*.test.ts",
+    "agent": "tsx src/core/agent.ts",
+    "explore": "tsx src/core/explore.ts",
+    "cleanup": "tsx src/core/cleanup.ts",
+    "home": "tsx src/core/home.ts",
+    "humanize": "tsx src/cursor/humanize.ts",
     "build:native": "swiftc -O native/axdom.swift -o native/axdom && swiftc -O native/liveview.swift -o native/liveview",
     "app": "tsc -p tsconfig.electron.json && electron dist-electron/electron/main.js"
   },

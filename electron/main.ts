@@ -1,9 +1,9 @@
 import { app, BrowserWindow, desktopCapturer, ipcMain, net, protocol, shell, systemPreferences } from "electron";
 import fs from "node:fs";
 import { Readable } from "node:stream";
-import { appBundlePath, HumanizeController, listApps, listRecordedRuns, parseByteRange, readUiState, resolveVideo, RunController, writeUiState, type RunHandlers, type RunOptions } from "../src/ui-core.js";
-import { page } from "../src/ui-page.js";
-import { describeCredentials, provisionFromBundle } from "../src/remote/team.js";
+import { appBundlePath, HumanizeController, listApps, listRecordedRuns, parseByteRange, readUiState, resolveVideo, RunController, writeUiState, type RunHandlers, type RunOptions } from "../src/ui/ui-core.js";
+import { page } from "../src/ui/ui-page.js";
+import { describeCredentials, provisionFromBundle } from "../src/fleet/remote/team.js";
 import {
 	annotateRuns,
 	appChoices,
@@ -20,9 +20,9 @@ import {
 	RemoteRunController,
 	saveModelKey,
 	writeRemotePrefs,
-} from "../src/ui-remote.js";
-import { startRunner } from "../src/runner/serve.js";
-import { PACKAGED_ENV } from "../src/runner/spawn.js";
+} from "../src/ui/ui-remote.js";
+import { startRunner } from "../src/fleet/runner/serve.js";
+import { PACKAGED_ENV } from "../src/fleet/runner/spawn.js";
 
 /**
  * Electron shell for the demo agent.
@@ -45,7 +45,7 @@ import { PACKAGED_ENV } from "../src/runner/spawn.js";
  * Packaging note for later: `cua-driver` must ship OUTSIDE ASAR with its executable bit
  * preserved, and be signed before the enclosing app is signed and notarized.
  *
- * The renderer's markup and script live in src/ui-page.ts and reach this process only
+ * The renderer's markup and script live in src/ui/ui-page.ts and reach this process only
  * through `window.__bus`, injected below. That seam is why the page carries no Electron
  * import: the host is swappable and the page's logic stays testable without one.
  */

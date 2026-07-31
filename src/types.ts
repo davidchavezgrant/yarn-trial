@@ -128,7 +128,7 @@ export interface AppMapCoverage {
 	dismissed: number;
 	/** Distinct containing surfaces those controls were found in. */
 	surfaces: number;
-	/** Context resets. See the chapter logic in src/explore.ts. */
+	/** Context resets. See the chapter logic in src/core/explore.ts. */
 	chapters: number;
 	/** frontier-empty | action-ceiling | frontier-conceded | error */
 	stopped: string;
@@ -190,7 +190,7 @@ export interface AppMapHome {
 	description: string;
 	/**
 	 * Where this declaration came from. "explore" is a live pass that operated the app;
-	 * "backfill" (src/home.ts) derived it from the graph a pass already wrote, which is checked
+	 * "backfill" (src/core/home.ts) derived it from the graph a pass already wrote, which is checked
 	 * against the same evidence but cannot notice that the map itself is wrong. Absent on the
 	 * first maps to carry a home at all; read it as "explore".
 	 */
