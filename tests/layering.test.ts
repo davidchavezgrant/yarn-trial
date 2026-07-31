@@ -115,3 +115,16 @@ test("substrate__ImportsNothingFromSrc__When__ItIsTheBottomLayer", () => {
 		assert.deepEqual(tos, [], `src/${m}.ts must not import from src/: ${tos.join(", ")}`);
 	}
 });
+
+test("runnerDaemon__DoesNotLoadTheModelSdk__When__ItStarts", () => {
+	// The per-Mac runner is a LaunchAgent that lives for days and spawns every run as a CHILD.
+	// It has no business holding the Anthropic SDK, and it got one for free by importing the
+	// harness barrel to reach `screenIsLocked` — 52ms and +5MB measured, for one symbol.
+	//
+	// `harness/model.ts` is the SDK's own module, so it is the honest thing to assert on: the
+	// daemon may still reach `harness/observation` (screenIsLocked genuinely needs to know
+	// whether the login window owns the display) without dragging the model client with it.
+	const reach = reachable(importGraph(), "remote/runner/serve");
+	assert.equal(reach.has("core/harness/model"), false, "the runner daemon must not load the model client");
+	assert.equal(reach.has("core/harness"), false, "and must not import the barrel, which would load it transitively");
+});

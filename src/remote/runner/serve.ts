@@ -7,7 +7,7 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { openApp } from "../../core/appctl.js";
 import { sidecarStatus } from "../../core/axdom.js";
-import { screenIsLocked } from "../../core/harness.js";
+import { screenIsLocked } from "../../core/harness/observation.js";
 import { dataRoot, resourcesRoot } from "../../paths.js";
 import { type ChromePolicyState, inspectChromePolicy } from "../chrome-policy.js";
 import { firstLine } from "../control/ssh.js";

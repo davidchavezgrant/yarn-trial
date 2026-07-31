@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { appSlug, mintRunKey } from "../../core/harness.js";
+import { appSlug } from "../../paths.js";
+import { mintRunKey } from "../../core/harness/run.js";
 import { readJsonOr } from "../../fsutil.js";
 import { outDir } from "../../paths.js";
 

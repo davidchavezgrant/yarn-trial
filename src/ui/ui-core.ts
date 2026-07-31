@@ -2,8 +2,9 @@ import { execFileSync, spawn as spawnProcess, type ChildProcess } from "node:chi
 import fs from "node:fs";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import { appSlug, auditTaskPrompt, mintRunKey } from "../core/harness.js";
-import { appmapsDir, dataRoot, outDir, resourcesRoot } from "../paths.js";
+import { auditTaskPrompt } from "../core/harness/verification.js";
+import { mintRunKey } from "../core/harness/run.js";
+import { appmapsDir, appSlug, dataRoot, outDir, resourcesRoot } from "../paths.js";
 import { readJsonOr } from "../fsutil.js";
 // One capturedAt reader for the whole codebase — the sync's. A second parser here could
 // disagree with it about what counts as stamped. It is a pure local-file read; importing it

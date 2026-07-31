@@ -1,4 +1,4 @@
-import { appSlug } from "./harness.js";
+import { appSlug } from "../paths.js";
 
 /**
  * What a run is pointed at.

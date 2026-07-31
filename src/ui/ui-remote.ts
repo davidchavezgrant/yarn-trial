@@ -27,7 +27,7 @@ import { clearAppAuth, deleteRemoteApp } from "../remote/control/manage.js";
 import { closeScreenShare, forgetScreenShareLogin, planSignin, waitForHome } from "../remote/control/signin.js";
 import { describeCredentials, setModelKey } from "../remote/control/team.js";
 import type { JobKind } from "../remote/runner/jobs.js";
-import { UNREADY_EXIT } from "../core/harness.js";
+import { UNREADY_EXIT } from "../core/harness/run.js";
 import { LineSplitter, type RunHandlers } from "./ui-core.js";
 
 /**
