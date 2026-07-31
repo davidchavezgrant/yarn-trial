@@ -270,9 +270,16 @@ export function parseJudgeVerdict(
 	return { trajectory, ...(visual ? { visual } : {}), scope, citations };
 }
 
-/** The run log path with ".json" replaced by ".judge.json" — beside the log, never inside it. */
-export function judgeReportPath(logPath: string): string {
-	return logPath.replace(/\.json$/, ".judge.json");
+/**
+ * The run log path with ".json" replaced by ".judge.json" — beside the log, never inside it.
+ *
+ * `tag` gives a SECOND judge its own artifact (`.judge.<tag>.json`) instead of overwriting
+ * the first. That is what makes cross-judging possible: when a contestant model shares
+ * lineage with the judge, one grader is a conflict, and two verdicts that disagree are worth
+ * more than either alone.
+ */
+export function judgeReportPath(logPath: string, tag?: string): string {
+	return logPath.replace(/\.json$/, tag ? `.judge.${tag}.json` : ".judge.json");
 }
 
 /**
@@ -281,7 +288,7 @@ export function judgeReportPath(logPath: string): string {
  * Throws when the reply is unparseable — an unparseable judge must be loud, not a default
  * verdict: a silent fallback in either direction is a confident answer nobody gave.
  */
-export async function judgeRun(stamp: string, opts?: { noFrames?: boolean; model?: string }): Promise<JudgeReport> {
+export async function judgeRun(stamp: string, opts?: { noFrames?: boolean; model?: string; tag?: string }): Promise<JudgeReport> {
 	const { logPath, log } = resolveRunLog(stamp);
 	const gathered = opts?.noFrames ? { frames: [], stale: false } : trustedFrames(log);
 	const frames = sampleFrames(gathered.frames, envNum("JUDGE_MAX_FRAMES", 12));
@@ -335,7 +342,7 @@ export async function judgeRun(stamp: string, opts?: { noFrames?: boolean; model
 		framesStale: gathered.stale,
 		raw,
 	};
-	fs.writeFileSync(judgeReportPath(logPath), `${JSON.stringify(report, null, "\t")}\n`);
+	fs.writeFileSync(judgeReportPath(logPath, opts?.tag), `${JSON.stringify(report, null, "\t")}\n`);
 
 	return report;
 }

@@ -47,7 +47,11 @@ export function makeClient(want?: string): { client: ModelClient; model: string;
 	// The keyless-Anthropic fallback names Azure rather than OpenRouter: the OpenRouter key
 	// was found dead on 2026-07-31 (401 "User not found"), so defaulting there produced a
 	// confusing mid-run 401 instead of a clear "no key for this transport" refusal.
-	const model = requested || (anthropicKey ? "claude-fable-5" : azureKey ? "azure/gpt-5.6-sol" : "openai/gpt-5.6-sol:nitro");
+	// Azure FIRST (set by David 2026-07-31): OpenAI is the default and the comprehensive
+	// benchmark pass runs on it; Claude is the challenger, tested only against whichever
+	// configuration wins. Precedence used to prefer Anthropic when both keys were present,
+	// which would have silently run the primary pass on the challenger's model.
+	const model = requested || (azureKey ? "azure/gpt-5.6-sol" : anthropicKey ? "claude-fable-5" : "openai/gpt-5.6-sol:nitro");
 
 	// `azure/<deployment>` is the third transport: OpenAI's Responses API, translated at the
 	// boundary (src/core/harness/responses.ts) so no call site knows the difference. The

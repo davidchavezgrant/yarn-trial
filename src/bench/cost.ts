@@ -74,7 +74,43 @@ export const normaliseModel = (model: string): string =>
 		.replace(/^[a-z]+[:/]/i, "")
 		.replace(/:[a-z]+$/i, "");
 
-export const ratesFor = (model: string | undefined): Rates | undefined => (model ? RATES[normaliseModel(model)] : undefined);
+/**
+ * Rates supplied at runtime for a model this file has no card for — Azure/OpenAI, whose
+ * price is tied to the subscription rather than published.
+ *
+ *   MODEL_RATES="gpt-5.6-sol:in=1.25,out=10,cacheRead=0.125,cacheWrite=1.25"
+ *
+ * Semicolon-separate several. This exists so a pass that ran unpriced can be costed LATER by
+ * setting the variable and re-running `bench collect` — the tokens are already in the
+ * manifest, so nothing needs re-running. Unparseable entries are ignored rather than
+ * throwing: a typo in an env var must not take down a report that is otherwise correct.
+ */
+export function envRates(raw = process.env.MODEL_RATES): Record<string, Rates> {
+	const out: Record<string, Rates> = {};
+	for (const chunk of (raw ?? "").split(";")) {
+		const [id, spec] = chunk.split(":");
+		if (!id?.trim() || !spec) continue;
+		const f: Record<string, number> = {};
+		for (const kv of spec.split(",")) {
+			const [k, v] = kv.split("=");
+			const n = Number(v);
+			if (k?.trim() && Number.isFinite(n)) f[k.trim()] = n;
+		}
+		// Input and output are mandatory; cache rates fall back to the standard multipliers
+		// (0.1x read, 1.25x 5-minute write) rather than to zero, which would understate.
+		if (f.in === undefined || f.out === undefined) continue;
+		out[normaliseModel(id)] = { input: f.in, output: f.out, cacheRead: f.cacheRead ?? f.in * 0.1, cacheWrite: f.cacheWrite ?? f.in * 1.25 };
+	}
+
+	return out;
+}
+
+export const ratesFor = (model: string | undefined): Rates | undefined => {
+	if (!model) return undefined;
+	const id = normaliseModel(model);
+
+	return envRates()[id] ?? RATES[id];
+};
 
 /**
  * Dollars for one run, or undefined when the model has no rate card. Undefined is a real

@@ -2,6 +2,7 @@ import { pathToFileURL } from "node:url";
 import { auditTaskPrompt } from "../core/harness.js";
 import { outDir, relToData } from "../paths.js";
 import { AUTO_HOST, type DispatchOptions, dispatchNotes, type DispatchResult } from "../remote/control/dispatch.js";
+import { CHALLENGER_N, challengerNeedsExplore, planChallenger } from "./challenger.js";
 import { collect } from "./collect.js";
 import { rollupCost } from "./cost.js";
 import { fetchTrueCost, reconcile } from "./truecost.js";
@@ -209,6 +210,69 @@ async function runCompiles(phase: Phase, manifest: Manifest, opts: Required<Pick
 const recipeFor = (manifest: Manifest, arm: Arm, model?: string): string | undefined =>
 	entriesForArm(manifest, arm.sourceArm ?? "", model).find((e) => e.recipe && e.state === "done")?.recipe;
 
+/**
+ * Dispatch the challenger slice. Deliberately NOT a phase: its arms are resolved from
+ * collected data rather than declared, and its n differs, so folding it into runPhase would
+ * mean two sets of rules inside one function.
+ *
+ * The explore, when needed, goes out FIRST and alone — its map is an input to the task arms,
+ * and dispatching them together would race a grounded run against a map that does not exist
+ * yet, which degrades silently to provenance "none" instead of failing.
+ */
+export async function runChallenger(
+	plan: NonNullable<ReturnType<typeof planChallenger>>,
+	explore: Arm | undefined,
+	model: string,
+	opts: { log?: (s: string) => void; outRoot?: string; date?: string; dispatchFn?: DispatchFn } = {},
+): Promise<number> {
+	const log = opts.log ?? console.log;
+	const outRoot = opts.outRoot ?? outDir();
+	const date = opts.date ?? utcDate();
+	const dispatchFn = opts.dispatchFn ?? (await defaultDispatch());
+	let manifest = readManifest(date, outRoot);
+
+	const exploreDone = explore ? entriesForArm(manifest, explore.id, model).some((e) => e.collected) : true;
+	const wave: Array<{ arm: Arm; sample: number }> = [];
+	if (explore && !exploreDone) wave.push({ arm: explore, sample: 0 });
+	else
+		for (const arm of plan.arms)
+			for (let i = entriesForArm(manifest, arm.id, model).length; i < CHALLENGER_N; i++) wave.push({ arm, sample: i });
+
+	if (!wave.length) {
+		log("challenger slice already fully submitted for this model — nothing to do.");
+
+		return EXIT_OK;
+	}
+	if (explore && !exploreDone) log(`explore first: the task arms need ${model}'s OWN map. Re-run this command after \`bench collect\`.`);
+
+	let submitted = 0;
+	for (const w of wave) {
+		const result = await dispatchFn({ ...dispatchOptionsFor(w.arm, undefined, model) });
+		if (!result.ok) {
+			log(`✗ ${w.arm.id} [${w.sample + 1}]: ${result.error}`);
+			continue;
+		}
+		submitted++;
+		manifest = recordSubmissions(manifest, [
+			{
+				armId: w.arm.id,
+				jobId: result.jobId,
+				host: result.host.name,
+				submittedAt: new Date().toISOString(),
+				state: result.queued ? "queued" : "running",
+				collected: false,
+				model,
+				...(w.arm.env ? { env: w.arm.env } : {}),
+			},
+		]);
+		writeManifest(manifest, outRoot);
+		log(`✓ ${w.arm.id} [${w.sample + 1}/${explore && !exploreDone ? 1 : CHALLENGER_N}] -> ${result.jobId} on ${result.host.name}${result.queued ? " (queued)" : ""}`);
+	}
+	log(`\nsubmitted ${submitted}. Then: ./run bench collect && ./run bench judge --cross`);
+
+	return submitted ? EXIT_OK : EXIT_REFUSED;
+}
+
 export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<number> {
 	const log = opts.log ?? console.log;
 	const outRoot = opts.outRoot ?? outDir();
@@ -338,8 +402,9 @@ async function defaultCompile(): Promise<CompileFn> {
 const USAGE = `usage: ./run bench plan
        ./run bench phase <1|2|3|4|5> [--model <id>] [--go] [--force]
        ./run bench collect
-       ./run bench judge
+       ./run bench judge [--cross]
        ./run bench truecost [--since <RFC3339>] [--bucket 1m|1h|1d]
+       ./run bench challenger --model <id> [--primary <id>] [--go]
 
 plan     print the resolved matrix — every arm, flags, n, phase. No side effects.
 phase    dispatch that phase's runs to the fleet queue. WITHOUT --go: preview and exit 2.
@@ -367,7 +432,20 @@ truecost reconciles the report's ESTIMATE against Anthropic's own accounting: to
          without one. Definitive per-run DOLLARS do not exist: cost is daily and
          workspace-level. Per-run TOKENS do, if each Mac has its own API key (the per-Mac
          lease means one run at a time, so a (key, minute) belongs to exactly one run).
-judge    grades collected runs with the offline adversarial judge (pinned to
+challenger
+         the head-to-head. OpenAI is the default and runs the full matrix; this dispatches
+         the CHALLENGER against only what that pass found to win — the winning arm plus a
+         DIVERGENCE arm (the hardest config measured), because testing a challenger solely at
+         its opponent's optimum bakes in that optimum. n=6 per arm, concentrated rather than
+         spread. Needs phase 2 collected for the primary; refuses otherwise rather than
+         guessing a winner. Grounded arms get the challenger's OWN explore first — each model
+         grounds itself. Compare the result on STEPS and ACTIONS, never tokens: Claude 4.7+
+         tokenises ~30% higher for identical text.
+judge    grades collected runs with the offline adversarial judge. --cross adds a SECOND
+         grader (CROSS_JUDGE_MODEL, default claude-fable-5) writing .judge.cross.json beside
+         the first — use it on the head-to-head, where the pinned judge shares lineage with
+         the primary contestant. Agreement makes a verdict solid; disagreement is the finding.
+         Base judge is pinned to
          azure/gpt-5.6-sol; JUDGE_MODEL overrides); idempotent — skips runs already
          judged. Run after runs land, before reading the report's Judge section.`;
 
@@ -394,6 +472,35 @@ async function main(argv: string[]): Promise<number> {
 		}
 
 		return runPhase(phase as Phase, { go: argv.includes("--go"), force: argv.includes("--force"), ...(model ? { model } : {}) });
+	}
+	if (cmd === "challenger") {
+		const mi = argv.indexOf("--model");
+		const model = mi >= 0 ? argv[mi + 1] : undefined;
+		if (!model || model.startsWith("--")) {
+			console.error("challenger needs --model <id> (the challenger, e.g. claude-fable-5)");
+
+			return EXIT_REFUSED;
+		}
+		const pi = argv.indexOf("--primary");
+		const primary = pi >= 0 && argv[pi + 1] && !argv[pi + 1].startsWith("--") ? argv[pi + 1] : "azure/gpt-5.6-sol";
+		const manifest = readManifest(utcDate(), outDir());
+		const plan = planChallenger(manifest, primary);
+		if (!plan) {
+			console.error(`REFUSED: no collected phase-2 runs for the primary model (${primary}), so there is no winner to challenge.`);
+			console.error("Run the primary pass first: ./run bench phase 2 --go, wait, ./run bench collect.");
+
+			return EXIT_REFUSED;
+		}
+		for (const n of plan.notes) console.log(n);
+		const explore = challengerNeedsExplore(plan);
+		if (explore) console.log(`self-grounding first: ${explore.id} (the challenger cannot inherit the primary's appmap)`);
+		if (!argv.includes("--go")) {
+			console.log(`\npreview only — ${plan.arms.length} arms x n=${CHALLENGER_N}${explore ? " + 1 explore" : ""}. Add --go to dispatch.`);
+
+			return EXIT_NEEDS_GO;
+		}
+
+		return runChallenger(plan, explore, model, { log: console.log });
 	}
 	if (cmd === "truecost") {
 		const adminKey = process.env.ANTHROPIC_ADMIN_KEY;
@@ -433,8 +540,9 @@ async function main(argv: string[]): Promise<number> {
 		return EXIT_OK;
 	}
 	if (cmd === "judge") {
+		const cross = argv.includes("--cross");
 		const { judgeBench } = await import("./judge.js");
-		const outcome = await judgeBench();
+		const outcome = await judgeBench({ cross });
 		console.log(`judged ${outcome.judged.length}, skipped ${outcome.skipped.length}, failed ${outcome.failed.length}`);
 		for (const f of outcome.failed) console.log(`  ✗ ${f.jobId}: ${f.error}`);
 
