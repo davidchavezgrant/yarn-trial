@@ -160,6 +160,8 @@ export const CHROME = String.raw`<meta charset="utf-8">
      rather than being clipped to the row width. */
   .fdetail, .freason { font-size:11.5px; color:var(--dim); word-break:break-word; }
   .freason { color:#e0a97e; }
+  #viewerbar { display:flex; gap:10px; align-items:center; margin-bottom:12px; }
+  #viewerbar span { color:var(--dim); font-size:12.5px; }
   .fqueue { display:flex; gap:6px; align-items:center; font-size:11.5px; color:var(--dim); padding-left:8px; }
   .fqueue span { flex:1; }
   #creds { font-size:12px; color:var(--dim); }
@@ -196,6 +198,11 @@ export const CHROME = String.raw`<meta charset="utf-8">
     <div id="busyhint" class="hint" style="display:none"></div>
   </div>
   <div class="col mid">
+    <div id="viewerbar" style="display:none">
+      <button class="mini" id="viewerback">← Back to task</button>
+      <span id="viewertitle"></span>
+    </div>
+    <div id="taskform">
     <div id="urlrow" style="display:none">
       <label for="url">Website to drive</label>
       <input id="url" placeholder="https://www.notion.so" autocomplete="off" spellcheck="false">
@@ -212,7 +219,7 @@ export const CHROME = String.raw`<meta charset="utf-8">
       <label title="Render the humanized cursor over the recording when the run finishes"><input type="checkbox" id="human" checked> Render cursor</label>
     </div>
     <button class="stop" id="stop" style="display:none">Stop run</button>
-    <div id="attach"></div>
+    </div>
     <div id="unready"></div>
     <div id="log" style="margin-top:16px"><span class="empty">Output appears here.</span></div>
   </div>
@@ -225,7 +232,7 @@ export const CHROME = String.raw`<meta charset="utf-8">
         <!-- The badge keeps a folded panel honest: a busy Mac stays visible without the fold
              having to be open. Credentials is a SIBLING fold — nesting it in here meant
              finding your API key required knowing it lived "inside the fleet". -->
-        <summary>Remote Macs <span id="fleetsum" class="badge r" style="display:none"></span> <button id="fleetrefresh" class="mini" title="Probe every Mac now">↻</button></summary>
+        <summary>Remote Macs <span id="fleetsum" class="badge r" style="display:none"></span></summary>
         <!-- The first fleet probe is three ssh round trips and can take a few seconds on a cold
              start; "probing…" alone gave no sign it was still going. -->
         <div id="fleet"><span class="empty"><span class="spin"></span> probing…</span></div>
@@ -238,12 +245,35 @@ export const CHROME = String.raw`<meta charset="utf-8">
       <div class="panehead"><label>Jobs</label></div>
       <div id="jobs"></div>
     </div>
-    <div class="panehead"><label>Recorded runs</label><button id="refresh" class="mini" title="Rescan out/runs">↻</button></div>
+    <div class="panehead"><label>Recorded runs</label></div>
     <div id="runs"><span class="empty">No recordings yet — tick “Record video”.</span></div>
   </div>
 </main>`;
 
 export const APP_JS = String.raw`let apps = [], sel = null;
+
+// Log-viewer mode: the middle pane shows ONE thing at a time — the task form, or a log the
+// operator opened by clicking a job/run. Viewer mode hides the whole form (prompt, options,
+// Stop) rather than squeezing a dialog above it; Back restores the form and the selected
+// app's own pane. \`viewing\` names what fills the pane so paints know not to fight it.
+let viewing = null; // { title } | null
+
+function enterViewer(title, owner) {
+  viewing = { title, owner };
+  el('taskform').style.display = 'none';
+  el('viewerbar').style.display = 'flex';
+  el('viewertitle').textContent = title;
+  el('log').innerHTML = '';
+  pinned = true;
+}
+
+function exitViewer() {
+  viewing = null;
+  el('viewerbar').style.display = 'none';
+  el('taskform').style.display = '';
+  renderLog(sel);
+  check();
+}
 
 // Live runs, host -> app. The HOST is the unit of contention (one run per Mac — LIMITATIONS
 // §6 — but different Macs do not contend), so busy checks key on it; the app names the pane
@@ -259,7 +289,7 @@ let host = 'local';
 // Re-attach candidates from the last fleet probe, and the ones this window has said no to —
 // without that set the banner would reappear every ten seconds for the whole 40 minutes of
 // someone else's grounding pass.
-let offers = [], fleetRows = {}, dismissed = new Set(), probing = false;
+let offers = [], fleetRows = {}, probing = false;
 // Outcome of the last sign-in click, kept outside the row markup because the fleet list is
 // rebuilt every fifteen seconds and a message rendered into a row would vanish before it was
 // read. 'paints' counts repaints so the message can also retire: without that it outlived its
@@ -786,8 +816,10 @@ function line(text, owner) {
     if (buf.length > LOG_LINES_KEPT) buf.splice(0, buf.length - LOG_LINES_KEPT);
   }
   // Paint only if the line belongs to what is on screen. Output for a background run is
-  // still captured; it appears when you select that app again.
-  if (!owner || owner === sel) appendLine(text);
+  // still captured; it appears when you select that app again. In viewer mode the pane
+  // belongs to the opened job — attach() routes its stream through the owner named at open
+  // time, so ONLY that owner paints, and the task form's own run buffers silently.
+  if (viewing ? owner === viewing.owner : (!owner || owner === sel)) appendLine(text);
   saveSoon();
 }
 
@@ -802,7 +834,7 @@ bus.onStarted((d) => {
   if (stateFor(d.app).task.trim() === d.task) stateFor(d.app).task = '';
   running[d.host] = d.app;
   runMeta[d.host] = Date.now();
-  check(); renderAttach(); paintStatus(); renderJobs();
+  check(); paintStatus(); renderJobs();
   // The previous refusal is answered by trying again, whatever the outcome of the retry.
   unready = null; unreadyGen++; renderUnready();
   // A new run replaces that app's terminal — unless the same app is still live on ANOTHER
@@ -829,7 +861,7 @@ if (bus.onHost) bus.onHost((d) => {
   if (running['auto'] === d.app) delete running['auto'];
   running[d.host] = d.app;
   if (runMeta['auto'] !== undefined) { runMeta[d.host] = runMeta['auto']; delete runMeta['auto']; }
-  check(); renderAttach(); paintStatus(); renderJobs();
+  check(); paintStatus(); renderJobs();
 });
 bus.onDone((d) => {
   // Tagged BEFORE the map entry goes: computed after, a shared buffer's finish line would
@@ -839,7 +871,7 @@ bus.onDone((d) => {
   // key onStarted/onHost left in the map.
   delete running[d.host];
   delete runMeta[d.host];
-  check(); renderAttach(); paintStatus(); renderJobs();
+  check(); paintStatus(); renderJobs();
   // Exit 3 is "needs a sign-in" — an expected, recoverable pause, not a failure, and the
   // sign-in window is about to open itself. Painting it as an error taught people to read
   // a routine first-run-on-a-Mac as something breaking.
@@ -942,20 +974,30 @@ function renderJobs() {
       '<span class="s-busy">●</span><span>' + esc(running[h]) + ' @ ' + esc(h === 'local' ? 'this Mac' : h) + '</span>' +
       '<span class="jmeta">' + (since ? fmtDur(Date.now() - since) : 'running') + '</span></div>');
   }
+  // Fleet jobs this window is not following carry attach data: clicking one opens its log
+  // in the middle pane (bus.attach streams from byte zero). This replaced the offer dialog
+  // that used to sit above the log — the rows ARE the offers.
   for (const name of Object.keys(fleetRows)) {
     const r = fleetRows[name];
     // Ours are already listed above under the same host key; this row is other operators'.
     // No ownership badge: the detail already leads with the operator's name, which says
     // whose run it is more precisely than "theirs" ever did.
     if (r.state !== 'busy' || running[name]) continue;
-    rows.push('<div class="job"><span class="s-busy">●</span><span>' + esc(name) + ' — ' + esc(r.detail || 'busy') + '</span></div>');
+    const attach = r.jobId ? ' data-host="' + esc(name) + '" data-job="' + esc(r.jobId) + '" data-app-name="' + esc(r.label ? r.label.split(' · ')[1] || '' : '') + '" title="Open this run\'s log"' : '';
+    // label + live age over the probe's frozen detail string: this repaints every second,
+    // and a count that only moves on the 15s fleet poll reads as stuck.
+    const what = r.label ? r.label + (r.sinceMs ? ' · ' + fmtDur(Date.now() - r.sinceMs) : '') : (r.detail || 'busy');
+    rows.push('<div class="job"' + attach + '><span class="s-busy">●</span><span>' + esc(name) + ' — ' + esc(what) + '</span></div>');
   }
   // Each Mac's queue, in drain order, directly under the running rows it waits behind. The
   // fleet panel is where these are managed (cancel lives there); this list is the at-a-glance
-  // answer to "what is scheduled where", so a row is one line: host, what, how long waiting.
+  // answer to "what is scheduled where". Clicking a queued row opens its log too — the far
+  // side's stream waits through the queued state and starts at the job's first line.
   for (const name of Object.keys(fleetRows)) {
     for (const q of fleetRows[name].queue || []) {
-      rows.push('<div class="job queued"><span class="s-queued">◌</span><span>' + esc(name) + ' — ' + esc(q.detail || q.jobId) + '</span>' +
+      const qwhat = q.label ? q.label + (q.queuedMs ? ' · waiting ' + fmtDur(Date.now() - q.queuedMs) : '') : (q.detail || q.jobId);
+      rows.push('<div class="job queued" data-host="' + esc(name) + '" data-job="' + esc(q.jobId) + '" title="Open this job\'s log (streams once it starts)">' +
+        '<span class="s-queued">◌</span><span>' + esc(name) + ' — ' + esc(qwhat) + '</span>' +
         '<span class="jmeta">queued</span></div>');
     }
   }
@@ -966,8 +1008,45 @@ function renderJobs() {
   el('jobswrap').style.display = rows.length ? 'block' : 'none';
   el('jobs').innerHTML = rows.join('');
   for (const row of el('jobs').children) {
-    if (row.dataset && row.dataset.app !== undefined) row.onclick = () => selectApp(decodeURIComponent(row.dataset.app));
+    if (!row.dataset) continue;
+    if (row.dataset.job !== undefined) row.onclick = () => openJobLog(row.dataset.host, row.dataset.job, row.dataset.appName || '');
+    else if (row.dataset.app !== undefined) row.onclick = () => selectApp(decodeURIComponent(row.dataset.app));
   }
+}
+
+/**
+ * Open a finished run's log in the middle pane — the gallery card's click. One fetch, no
+ * stream: the run is over and its log is a file.
+ */
+async function openRunLog(r) {
+  enterViewer(r.id, null);
+  let res;
+  try {
+    res = await bus.loadRunLog(r.id);
+  } catch (e) {
+    res = { ok: false, error: errText(e) };
+  }
+  if (!res || !res.ok) { appendLine('✗ ' + ((res && res.error) || 'could not read the log')); return; }
+  for (const t of String(res.text).split('\n')) appendLine(t);
+}
+
+/**
+ * Open a fleet job's log in the middle pane. bus.attach streams the log from byte zero into
+ * the app's line events; viewer mode routes them onto the visible pane. Dismiss is gone with
+ * the offer dialog — Back is the dismissal, and it costs nothing to click a row again.
+ */
+async function openJobLog(host, jobId, appName) {
+  // The attach stream's lines arrive owned by the app name the host was given; naming the
+  // same owner here is what routes them onto the visible pane and nowhere else.
+  const owner = appName || jobId;
+  enterViewer(jobId + ' @ ' + host, owner);
+  let err;
+  try {
+    err = await bus.attach(host, jobId, owner);
+  } catch (e) {
+    err = errText(e);
+  }
+  if (err) appendLine('✗ ' + err);
 }
 
 function renderFleet() {
@@ -1041,34 +1120,9 @@ function renderFleet() {
   const waiting = view.rows.reduce((n, r) => n + (r.queue ? r.queue.length : 0), 0);
   el('fleetsum').style.display = busy || waiting ? 'inline-block' : 'none';
   el('fleetsum').textContent = (busy ? busy + ' busy' : '') + (busy && waiting ? ' · ' : '') + (waiting ? waiting + ' queued' : '');
-  renderAttach();
 }
 
-/**
- * Offer to follow a run that is already going.
- *
- * This is what makes closing the window survivable: the job is a detached process on the
- * remote and its log is a file there, so the only thing a restart ever lost was the id — and
- * the busy fleet row carries it. Only jobs on hosts this shell already follows are hidden —
- * an operator mid-run on mac1 can still follow mac2, since each run's lines land in its own
- * app's pane now. (An 'auto' submit hides nothing until it resolves; following its own job
- * in that window is refused by the shell's per-host busy check, not by this filter.)
- */
-function renderAttach() {
-  const box = el('attach');
-  const live = offers.filter(o => !dismissed.has(o.jobId) && !running[o.host]);
-  box.style.display = live.length ? 'block' : 'none';
-  box.innerHTML = live.map(o => {
-    const row = fleetRows[o.host];
-    // A queued offer describes ITSELF (operator · app), never the row — the row's detail is
-    // the run in front of it, and labelling the wait with someone else's run invites a
-    // misdirected Follow.
-    const what = o.queued ? ((o.operator || '?') + ' · ' + (o.app || o.jobId) + ' — queued') : ((row && row.detail) || o.app || o.jobId);
-    return '<div class="offer"><span>' + esc(o.host) + ' — ' + esc(what) + '</span>' +
-      '<button class="mini" data-follow="' + esc(o.jobId) + '" data-host="' + esc(o.host) + '" data-app="' + esc(o.app || '') + '">Open log</button>' +
-      '<button class="mini" data-dismiss="' + esc(o.jobId) + '">Dismiss</button></div>';
-  }).join('');
-}
+
 
 /**
  * Offer the way out of a run that refused to start.
@@ -1267,6 +1321,7 @@ async function loadRuns(force) {
         // the label is allowed to go stale between repaints.
         (when ? '<span title="' + esc(new Date(r.startedAt).toLocaleString()) + '">' + esc(when) + '</span>' : '') +
       '</div>' +
+      '<button class="mini" data-play="1" title="Play the recording inline">▶ Play</button> ' +
       '<button class="mini" data-reveal="1" title="Show the video file in Finder">Reveal in Finder</button>' +
       // A card with a humanized render offers it in the player (see attach); one whose source
       // artifacts are actually on this Mac offers to make it. A card with neither shows
@@ -1328,20 +1383,24 @@ async function loadRuns(force) {
     // The best take on screen: reveal the humanized render when one exists, else the raw
     // capture — the same precedence the player uses.
     if (sf) sf.onclick = () => { if (bus.reveal) bus.reveal(r.humanized || r.video); };
-    card.onclick = (e) => {
-      if (e.target.tagName === 'VIDEO') return;   // clicking the player is not a toggle
-      // Buttons inside the card (Render, Humanized/Raw) act on the run, not on whether the
-      // card is open — their clicks bubble here and must not close the player under them.
-      if (e.target.closest && e.target.closest('button')) return;
+    // ▶ toggles the inline player (the card click used to; it opens the log now).
+    const pb = card.querySelector('button[data-play]');
+    if (pb) pb.onclick = () => {
       const existing = card.querySelector('video');
       if (existing) {
         existing.remove();
-        // The toggle exists only to steer the player; it leaves with it.
         const t = card.querySelector('.vtoggle');
         if (t) t.remove();
         return;
       }
       attach(card, r, true);
+    };
+    card.onclick = (e) => {
+      if (e.target.tagName === 'VIDEO') return;   // clicking the player is not the card
+      // Buttons inside the card (Play, Render, Humanized/Raw) act on the run — their clicks
+      // bubble here and must not also flip the pane.
+      if (e.target.closest && e.target.closest('button')) return;
+      openRunLog(r);
     };
   }
 }
@@ -1436,7 +1495,6 @@ el('stop').onclick = async () => {
   }
   if (err) line('✗ stop failed: ' + err);
 };
-el('refresh').onclick = () => loadRuns(true);
 el('ground').onclick = () => dispatchOnce('ground', () => bus.ground(sel, host, selUrl()));
 // loadApps too: the list is per-host, so switching machines must re-ask rather than leave the
 // previous Mac's inventory on screen looking like this one's.
@@ -1570,21 +1628,6 @@ el('unready').onclick = (e) => {
   const b = e.target.closest ? e.target.closest('button[data-fix]') : null;
   if (b) runUnreadyFix();
 };
-// Delegated: the offer list is rebuilt on every probe, so per-button handlers would be
-// re-bound fifteen times a minute for the life of a grounding pass.
-el('attach').onclick = async (e) => {
-  const b = e.target.closest ? e.target.closest('button') : null;
-  if (!b) return;
-  if (b.dataset.dismiss) { dismissed.add(b.dataset.dismiss); renderAttach(); return; }
-  if (!b.dataset.follow) return;
-  let err;
-  try {
-    err = await bus.attach(b.dataset.host, b.dataset.follow, b.dataset.app);
-  } catch (e) {
-    err = errText(e);
-  }
-  if (err) line('✗ ' + err);
-};
 
 // Recordings also arrive from headless ./run invocations and other sessions, so the
 // gallery cannot rely on the in-UI done event alone. Cheap poll: loadRuns() only
@@ -1595,6 +1638,8 @@ setInterval(renderJobs, 1000);
 // Last chance to persist: a pending saveSoon() would die with the window. saveState is
 // send-not-invoke precisely so it survives being called here.
 window.addEventListener('beforeunload', flush);
+
+el('viewerback').onclick = exitViewer;
 
 // Passive: this fires on every wheel tick mid-scroll and must never be able to block one.
 el('log').addEventListener('scroll', notePin, { passive: true });

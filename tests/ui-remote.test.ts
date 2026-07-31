@@ -258,10 +258,14 @@ test("describeFleetRow__RendersTheQueue__When__JobsAreWaiting", () => {
 	);
 
 	assert.deepEqual(view.queue, [
-		{ jobId: "j-2", detail: "sam · explore Yarn · waiting 3m 04s" },
-		// No queuedAt (an older runner): still rendered, without a made-up age.
-		{ jobId: "j-3", detail: "eve · task Yarn · waiting" },
+		{ jobId: "j-2", label: "sam · explore Yarn", detail: "sam · explore Yarn · waiting 3m 04s", queuedMs: Date.parse("2026-07-31T11:56:56Z") },
+		// No queuedAt (an older runner): still rendered, without a made-up age or a queuedMs
+		// for the live ticker to misread.
+		{ jobId: "j-3", label: "eve · task Yarn", detail: "eve · task Yarn · waiting" },
 	]);
+	// The busy row itself carries the live-count pair too.
+	assert.equal(view.label, "david · Yarn");
+	assert.equal(view.sinceMs, Date.parse("2026-07-31T12:00:00Z") - 60_000);
 });
 
 test("describeFleetRow__OmitsTheQueue__When__NobodyIsWaiting", () => {

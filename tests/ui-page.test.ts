@@ -71,7 +71,8 @@ const el = (): FakeEl => ({
 
 const IDS = [
 	"q", "apps", "url", "urlrow", "urlhint", "task", "warn", "go", "ground", "stop", "human", "cancelsignin",
-	"record", "host", "log", "runs", "refresh", "status", "attach", "fleet", "busyhint", "fleetsum", "examples", "jobs", "jobswrap",
+	"record", "host", "log", "runs", "status", "fleet", "busyhint", "fleetsum", "examples", "jobs", "jobswrap",
+	"viewerbar", "viewerback", "viewertitle", "taskform",
 	"creds", "key", "savekey",
 ];
 
@@ -102,7 +103,10 @@ interface Harness {
 	running: Record<string, string>;
 	/** Re-attach offers, write-only: the fleet poll normally fills these. */
 	offers: { host: string; jobId: string; app?: string }[];
-	renderAttach(): void;
+	renderJobs(): void;
+	enterViewer(title: string, owner?: string | null): void;
+	exitViewer(): void;
+	openJobLog(host: string, jobId: string, appName: string): Promise<void>;
 	paneRunHost(): string | null;
 	/** The callbacks the page registered on the bus, so tests can fire host events at it. */
 	events: {
@@ -197,7 +201,7 @@ function mount(busOverrides: Record<string, unknown> = {}): Harness {
 			get pinned(){return pinned}, set pinned(v){pinned=v},
 			get running(){return running}, set offers(v){offers=v},
 			check, syncUrlRow, selUrl, isBrowser, appendLine, line, errText, dropStaleSelection, selectApp, notePin,
-			render, agoLabel, renderAttach, paneRunHost, stateFor, loadRuns, loadFleet };`,
+			render, agoLabel, renderJobs, paneRunHost, stateFor, loadRuns, loadFleet, enterViewer, exitViewer, openJobLog };`,
 	);
 	const noTimer = () => 0;
 	const api = fn({ __bus: bus, addEventListener() {} }, document, noTimer, noTimer) as Harness;
@@ -1037,20 +1041,19 @@ test("check__ShowsStopOnlyForTheSelectedPane__When__ItsRunIsLive", () => {
 	assert.equal(ui.nodes.stop.style.display, "none");
 });
 
-test("renderAttach__StillOffersOtherHostsJobs__When__ThisShellIsMidRun", () => {
-	// A run of our own used to hide every offer; now each run has its own pane, so only hosts
-	// this shell is already following are excluded.
-	const ui = mount();
-	ui.events.started!({ app: "Yarn", task: "t", host: "mac1" });
-	ui.offers = [
-		{ host: "mac1", jobId: "j-ours", app: "Yarn" },
-		{ host: "mac2", jobId: "j-theirs", app: "Notion Calendar" },
+test("renderJobs__MakesFleetRowsClickable__When__TheyCarryAJobId", async () => {
+	// The attach-offer dialog is gone: the jobs rows ARE the offers. A fleet row with a job id
+	// opens that job's log on click; rows without one (older runner) stay inert.
+	const rows = [
+		{ name: "mac2", state: "busy", detail: "aman · Yarn · 2m", label: "aman · Yarn", jobId: "j-theirs" },
+		{ name: "mac3", state: "busy", detail: "eve · Yarn · 1m" },
 	];
-	ui.renderAttach();
-
-	assert.equal(ui.nodes.attach.style.display, "block");
-	assert.ok(ui.nodes.attach.innerHTML.includes("j-theirs"), "another host's job must stay followable");
-	assert.ok(!ui.nodes.attach.innerHTML.includes("j-ours"), "offered to follow a host this shell already follows");
+	const ui = mount({ loadFleet: async () => ({ rows, offers: [] }) });
+	await settle();
+	await ui.loadFleet();
+	const html = ui.nodes.jobs.innerHTML;
+	assert.ok(html.includes('data-job="j-theirs"'), "a row with a job id is attachable");
+	assert.ok(html.includes("mac3 — eve · Yarn"), "a row without one still renders");
 });
 
 test("onHost__RekeysTheRun__When__AutoResolvesToAMac", () => {
@@ -1171,4 +1174,40 @@ test("appendLine__StillCapsTheDom__When__NoAnimationFrameEverFires", () => {
 	} finally {
 		delete (globalThis as { requestAnimationFrame?: unknown }).requestAnimationFrame;
 	}
+});
+
+test("enterViewer__HidesTheTaskForm__When__ALogIsOpened", () => {
+	const ui = mount();
+	ui.enterViewer("j-1 @ mac2", "Yarn");
+	assert.equal(ui.nodes.taskform.style.display, "none");
+	assert.equal(ui.nodes.viewerbar.style.display, "flex");
+	assert.equal(ui.nodes.viewertitle.textContent, "j-1 @ mac2");
+
+	ui.exitViewer();
+	assert.equal(ui.nodes.taskform.style.display, "");
+	assert.equal(ui.nodes.viewerbar.style.display, "none");
+});
+
+test("line__PaintsOnlyTheViewedOwner__When__ViewerModeIsOpen", () => {
+	// The pane belongs to the opened job; the selection's own lines buffer silently and are
+	// back on screen the moment the viewer closes.
+	const ui = mount();
+	ui.apps = [{ name: "Notes" }];
+	ui.sel = "Notes";
+	ui.enterViewer("j-1 @ mac2", "Yarn");
+	ui.line("from the viewed job", "Yarn");
+	ui.line("from the selection", "Notes");
+	const painted = ui.nodes.log.children.map((c) => c.textContent);
+	assert.ok(painted.includes("from the viewed job"));
+	assert.ok(!painted.includes("from the selection"), "selection lines must not bleed into the viewer");
+	assert.ok(ui.stateFor("Notes").log.includes("from the selection"), "buffered, not dropped");
+});
+
+test("openJobLog__AttachesUnderTheViewer__When__AJobRowIsClicked", async () => {
+	const attached: unknown[][] = [];
+	const ui = mount({ attach: async (host: string, jobId: string, app?: string) => { attached.push([host, jobId, app]); return undefined; } });
+	await ui.openJobLog("mac2", "j-9", "Yarn");
+	assert.deepEqual(attached, [["mac2", "j-9", "Yarn"]]);
+	assert.equal(ui.nodes.viewertitle.textContent, "j-9 @ mac2");
+	assert.equal(ui.nodes.taskform.style.display, "none");
 });

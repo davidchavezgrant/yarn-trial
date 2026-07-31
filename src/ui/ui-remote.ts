@@ -214,6 +214,10 @@ export interface FleetQueueView {
 	jobId: string;
 	/** `sam · explore Yarn · waiting 3m 04s`, ready for a row. */
 	detail: string;
+	/** `sam · explore Yarn` — the wait-free half, for renderers that tick the wait live. */
+	label: string;
+	/** Epoch ms the job joined the queue, so a 1s repaint can age the wait between polls. */
+	queuedMs?: number;
 }
 
 export interface FleetRowView {
@@ -223,6 +227,10 @@ export interface FleetRowView {
 	detail: string;
 	/** Jobs waiting behind the current run, oldest first, each with a cancellable id. */
 	queue?: FleetQueueView[];
+	/** Who/what, without the elapsed tail — the live-count renderers pair it with sinceMs. */
+	label?: string;
+	/** Epoch ms the current run started (now − elapsedSec at probe time), for live ageing. */
+	sinceMs?: number;
 	/** Why the row is degraded. The column this whole panel exists for. */
 	reason?: string;
 	/** Present only when the grants were actually reported; `false` is a hard warning. */
@@ -246,22 +254,19 @@ export interface FleetRowView {
  * entirely a function of that duration.
  */
 export function describeFleetRow(row: FleetRow, now: () => number = Date.now): FleetRowView {
-	const detail =
-		row.state === "busy"
-			? [row.operator ?? "?", row.app ?? "?", formatElapsed(row.elapsedSec ?? 0)].join(" · ")
-			: "";
+	const label = row.state === "busy" ? [row.operator ?? "?", row.app ?? "?"].join(" · ") : "";
+	const detail = row.state === "busy" ? `${label} · ${formatElapsed(row.elapsedSec ?? 0)}` : "";
 	// The wait is computed from queuedAt rather than reported by the runner, because the
 	// runner's status is a snapshot and a queue entry's age keeps growing between polls.
 	const queue = (row.queue ?? []).map((q) => {
 		const since = q.queuedAt ? Date.parse(q.queuedAt) : Number.NaN;
+		const label = [q.operator ?? "?", `${q.kind ?? "task"} ${q.app ?? "?"}`].join(" · ");
 
 		return {
 			jobId: q.jobId,
-			detail: [
-				q.operator ?? "?",
-				`${q.kind ?? "task"} ${q.app ?? "?"}`,
-				Number.isFinite(since) ? `waiting ${formatElapsed(Math.max(0, (now() - since) / 1000))}` : "waiting",
-			].join(" · "),
+			label,
+			detail: `${label} · ${Number.isFinite(since) ? `waiting ${formatElapsed(Math.max(0, (now() - since) / 1000))}` : "waiting"}`,
+			...(Number.isFinite(since) ? { queuedMs: since } : {}),
 		};
 	});
 
@@ -269,6 +274,8 @@ export function describeFleetRow(row: FleetRow, now: () => number = Date.now): F
 		name: row.name,
 		state: row.state,
 		detail,
+		...(label ? { label } : {}),
+		...(row.state === "busy" && row.elapsedSec !== undefined ? { sinceMs: now() - row.elapsedSec * 1000 } : {}),
 		...(queue.length ? { queue } : {}),
 		...(row.reason ? { reason: row.reason } : {}),
 		...(typeof row.tccOk === "boolean" ? { tccOk: row.tccOk } : {}),
