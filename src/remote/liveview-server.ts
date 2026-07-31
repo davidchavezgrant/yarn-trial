@@ -195,6 +195,9 @@ export function startLiveViewServer(opts: ServerOptions = {}): Promise<RunningSe
 			clearInterval(lifeTimer);
 			if (opts.onExpire) opts.onExpire(verdict);
 			else {
+				// Same reason the home close logs: the job log must say which of the three exits
+				// this was. "idle" here means the viewer tab closed and did not come back.
+				console.log(`liveview exiting: ${verdict}`);
 				server.close();
 				process.exit(0);
 			}
@@ -310,7 +313,13 @@ async function bridge(socket: Duplex, opts: ServerOptions): Promise<void> {
 		// second is a live capture-and-inject channel onto someone's signed-in account. The
 		// viewer gets the event first (the send above) and a moment to paint its farewell before
 		// the socket goes; teardown is idempotent, so a viewer that closes first is not a race.
-		if (ev.ev === "home") setTimeout(teardown, HOME_LINGER_MS);
+		if (ev.ev === "home") {
+			// Logged because the job log is the only place anyone can later ask WHY a session
+			// ended: auto-close, the idle timer after a closed tab, and max-lifetime all end the
+			// same way, and the first live run of this could not be told apart from the second.
+			console.log(`sign-in detected (${ev.detail}) — closing the session`);
+			setTimeout(teardown, HOME_LINGER_MS);
+		}
 	});
 
 	socket.on("data", (chunk: Buffer) => {
