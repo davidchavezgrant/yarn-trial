@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { failedProvider, isTransientApiError, mergeGraph, providerRouting, recoverLeakedGraph, retryTransient } from "../src/core/harness.js";
+import { failedProvider, isTransientApiError, mergeGraph, outputEffort, providerRouting, recoverLeakedGraph, retryTransient } from "../src/core/harness.js";
 import type { AppMapEdge, AppMapNode } from "../src/types.js";
 
 // --- transient-error retry. A 12h unattended pass died two minutes in on one mid-stream
@@ -162,4 +162,32 @@ test("recoverLeakedGraph__FeedsMergeGraph__When__PayloadIsRecovered", () => {
 	);
 	assert.equal(mergeGraph(nodes, edges, out), 1);
 	assert.equal(nodes.get("settings/theme")?.settingKey, "theme");
+});
+
+// --- reasoning effort. Highest by default (set by David, 2026-07-31): latency between actions
+// is a non-issue for the deliverable, so effort buys reliability; speed comes from :nitro.
+
+test("outputEffort__RequestsMax__When__NothingOverrides", () => {
+	delete process.env.AGENT_EFFORT;
+	assert.deepEqual(outputEffort(), { output_config: { effort: "max" } });
+});
+
+test("outputEffort__PassesTheLevelThrough__When__AGENT_EFFORTIsSet", () => {
+	process.env.AGENT_EFFORT = "low";
+	try {
+		assert.deepEqual(outputEffort(), { output_config: { effort: "low" } });
+	} finally {
+		delete process.env.AGENT_EFFORT;
+	}
+});
+
+test("outputEffort__SendsNothing__When__EffortIsOff", () => {
+	// `off` must omit the field entirely — an explicit null is not "the model's default"
+	// on every provider, and the spread at the call sites relies on {} adding no key.
+	process.env.AGENT_EFFORT = "off";
+	try {
+		assert.deepEqual(outputEffort(), {});
+	} finally {
+		delete process.env.AGENT_EFFORT;
+	}
 });

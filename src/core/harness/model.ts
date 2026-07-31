@@ -15,12 +15,34 @@ import type { AppMapEdge, AppMapNode } from "../../types.js";
  */
 export function makeClient(): { client: Anthropic; model: string } {
 	const openrouter = process.env.OPENROUTER_API_KEY;
-	const model = process.env.AGENT_MODEL ?? (openrouter ? "openai/gpt-5.6-sol" : "claude-opus-5");
+	// :nitro is OpenRouter's throughput-first routing (fastest provider hosting the model,
+	// premium pricing) — a model-id suffix, not a different model. Composes with
+	// providerRouting(): nitro sets the sort, the ignore list still excludes watched failures.
+	const model = process.env.AGENT_MODEL ?? (openrouter ? "openai/gpt-5.6-sol:nitro" : "claude-opus-5");
 	const client = openrouter
 		? new Anthropic({ baseURL: "https://openrouter.ai/api", authToken: openrouter })
 		: new Anthropic();
 
 	return { client, model };
+}
+
+/**
+ * Reasoning-effort tuning, spread into every model request the way providerRouting() is.
+ *
+ * Highest by default (set by David, 2026-07-31): per Jasper, inter-action latency is a
+ * non-issue — Yarn's pipeline eats the thinking gaps — so effort costs throughput and tokens,
+ * not demo quality, and reliability is the prototype's whole frontier. Speed comes from
+ * :nitro routing (see makeClient), not from thinking less.
+ *
+ * `output_config.effort` is the Anthropic-format field; OpenRouter maps it onto the routed
+ * model's native reasoning knob (verified against GET /models: gpt-5.6-sol lists
+ * supported_efforts [max, xhigh, high, medium, low, none]). AGENT_EFFORT overrides per run —
+ * any of those levels, or `off` to omit the field entirely and take the model's default.
+ */
+export function outputEffort(): Record<string, unknown> {
+	const effort = process.env.AGENT_EFFORT ?? "max";
+
+	return effort === "off" ? {} : { output_config: { effort } };
 }
 
 /**

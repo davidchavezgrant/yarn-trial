@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { providerRouting, retryTransient } from "../harness.js";
+import { outputEffort, providerRouting, retryTransient } from "../harness.js";
 import { writeArtifacts } from "./artifacts.js";
 import { type FinishInput, noteProvider, type Pass, type StopReason } from "./state.js";
 
@@ -20,6 +20,7 @@ export const streamCall = (p: Pass, client: Anthropic, model: string, extra: Rec
 					tools: p.tools,
 					...extra,
 					messages: p.messages,
+					...outputEffort(),
 					...providerRouting(p.badProviders),
 				})
 				.finalMessage(),

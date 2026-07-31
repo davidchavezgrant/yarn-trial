@@ -18,6 +18,7 @@ import {
 	observe,
 	onInterrupt,
 	OUT,
+	outputEffort,
 	providerRouting,
 	resetToHome,
 	runKey,
@@ -387,6 +388,7 @@ export async function main(): Promise<void> {
 					tools,
 					cache_control: { type: "ephemeral" },
 					messages,
+					...outputEffort(),
 					...providerRouting(badProviders),
 				});
 			} catch (err) {
