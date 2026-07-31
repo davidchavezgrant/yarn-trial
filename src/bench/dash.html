@@ -509,7 +509,8 @@ function detailRowHtml(a, p, key) {
 
 function detailBody(d) {
 	const noteBits = [d.note, d.graphSource ? `map: ${d.graphSource}` : ""].filter(Boolean).join(" · ");
-	const note = noteBits ? `<div class="d-note">${esc(noteBits)}</div>` : "";
+	const btn = d.graph ? `<button class="btnv" data-viewtree="${esc(d.jobId)}">view full tree ⤢</button> ` : "";
+	const note = btn || noteBits ? `<div class="d-note">${btn}${esc(noteBits)}</div>` : "";
 	const steps = d.steps.length
 		? `<ol>` + d.steps.map((s) =>
 			`<li${s.reasoning ? ` data-tip="${esc(s.reasoning)}"` : ""}><span class="${s.verified ? "ok-v" : "bad-v"}">${s.verified ? "✓" : "✗"}</span> ${esc(s.label)} <span class="meta">${esc((s.surface || "").split("/").pop() || "")}</span></li>`).join("") + `</ol>`
@@ -796,6 +797,8 @@ function render() {
 // Row expansion + run selection, delegated once — the board's innerHTML is replaced on
 // every push, so handlers must live on the container, not the rows.
 $("board").addEventListener("click", (ev) => {
+	const vt = ev.target.closest("[data-viewtree]");
+	if (vt) { openTree(vt.dataset.viewtree); return; }
 	const job = ev.target.closest("[data-job][data-row]");
 	if (job) {
 		const { row, job: id } = job.dataset;
@@ -813,6 +816,9 @@ $("board").addEventListener("click", (ev) => {
 		render();
 	}
 });
+
+$("tm-close").addEventListener("click", () => $("treeModal").classList.remove("on"));
+document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") $("treeModal").classList.remove("on"); });
 
 const es = new EventSource("/events");
 es.onmessage = (ev) => { state = JSON.parse(ev.data); receivedAt = Date.now(); $("conn").classList.add("ok"); render(); };

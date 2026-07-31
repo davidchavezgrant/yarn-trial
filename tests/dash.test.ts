@@ -223,3 +223,27 @@ test("BuildDetail__WalksRunThroughLiveMap__When__NoArchiveExists", () => {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+test("BuildDetail__AggregatesHeatAcrossCollectedRuns__When__RunsShareTheGraph", () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dash-heat-"));
+	try {
+		fs.mkdirSync(path.join(dir, "docs", "appmaps"), { recursive: true });
+		fs.mkdirSync(path.join(dir, "out", "runs"), { recursive: true });
+		fs.writeFileSync(path.join(dir, "docs", "appmaps", "yarn.json"), JSON.stringify(GRAPH));
+		const walk = { steps: [rawStep(0, "Brand Kit"), rawStep(1, "Screen Clips"), rawStep(2, "Cursor Style")] };
+		fs.writeFileSync(path.join(dir, "out", "runs", "job-h1.json"), JSON.stringify(walk));
+		fs.writeFileSync(path.join(dir, "out", "runs", "job-h2.json"), JSON.stringify(walk));
+		const m = manifest(
+			entry({ jobId: "job-h1", state: "done", collected: true }),
+			entry({ jobId: "job-h2", state: "done", collected: true }),
+		);
+		const d = buildDetail("job-h1", m, { dataDir: dir, benchRoot: path.join(dir, "bench") });
+		// Both runs walked root→brand-kit→screen-clips and hit the brand cursor control.
+		assert.equal(d.heat?.runs, 2);
+		assert.equal(d.heat?.surfaces["brand-kit"], 2);
+		assert.equal(d.heat?.surfaces["brand-kit/screen-clips"], 2);
+		assert.equal(d.heat?.controls["brand-kit/screen-clips/cursor-style"], 2);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
