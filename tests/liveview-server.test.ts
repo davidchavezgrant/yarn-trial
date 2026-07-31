@@ -7,7 +7,7 @@ import {
 	startLiveViewServer,
 	type LifecycleState,
 } from "../src/remote/liveview-server.js";
-import { viewerHtml } from "../src/remote/liveview-viewer.js";
+import { VIEWER_DISMISS_TITLE, viewerHtml } from "../src/remote/liveview-viewer.js";
 
 // The detached-server self-termination clock. Pure, so tested with explicit clocks — no sockets,
 // no real timers. Guards two failures: a server nobody opens listening forever (max-lifetime), and
@@ -131,7 +131,7 @@ test("viewerHtml__StartsWithTheCanvasHidden__When__Rendered", () => {
 	// crop lands, and revealing an empty canvas in the meantime is the flash we are removing.
 	assert.match(html, /<canvas id="c" class="settling"/);
 	assert.match(html, /id="settle" class="on"/);
-	assert.match(html, /painted = true; setSettling\(false\)/);
+	assert.match(html, /painted = true;\s+setSettling\(false\)/);
 });
 
 test("viewerHtml__PaintsTheShellBackground__When__TheCropIsNarrowerThanThePane", () => {
@@ -153,4 +153,30 @@ test("viewerHtml__AnnouncesTheSignIn__When__TheHomeEventArrives", () => {
 
 	assert.match(html, /ev === 'home'/);
 	assert.match(html, /signed in/);
+});
+
+// ---- the viewer is a natural overlay: no chrome, one dismiss control -----------------------
+// Set by David 2026-07-31: the panel around the streamed window (title bar, status line,
+// keyboard-hint strip, border) read as "something we dumped on top" inside the shell. The
+// stream now floats bare on the shell-matched background; everything the bar used to say
+// arrives as transient toasts, and the one persistent control is a dismiss button.
+
+test("viewerHtml__CarriesNoChromeBar__When__Rendered", () => {
+	const html = viewerHtml("t".repeat(16));
+	assert.doesNotMatch(html, /id="bar"/);
+});
+
+test("viewerHtml__CarriesADismissControl__When__Rendered", () => {
+	const html = viewerHtml("t".repeat(16));
+	assert.match(html, /id="close"/);
+	// Dismiss must actually END the session, not just hide pixels: the ws close opcode is what
+	// makes the server tear the engine down immediately.
+	assert.match(html, /ws\.close\(\)/);
+});
+
+test("viewerHtml__SignalsTheShellThroughTheTitle__When__Dismissed", () => {
+	// The embedded WebContentsView has no IPC; the title is the one channel the host can watch
+	// without a preload. The sentinel must appear in the page verbatim.
+	const html = viewerHtml("t".repeat(16));
+	assert.ok(html.includes(VIEWER_DISMISS_TITLE), "the dismiss sentinel is not in the page");
 });

@@ -5,6 +5,7 @@ import { Readable } from "node:stream";
 import { defaultOperator, loadHosts, resolveHost, type HostEntry } from "../src/remote/control/hosts.js";
 import { lastFrame, runnerArgv, runSsh, tunnelArgv } from "../src/remote/control/ssh.js";
 import { SigninPortal, viewerBounds } from "../src/ui/ui-signin.js";
+import { VIEWER_DISMISS_TITLE } from "../src/remote/liveview-viewer.js";
 import { HumanizeController, listApps, listRecordedRuns, parseByteRange, readUiState, resolveVideo, RunController, writeUiState, type RunHandlers, type RunOptions } from "../src/ui/ui-core.js";
 import { outDir } from "../src/paths.js";
 import { page } from "../src/ui/ui-page.js";
@@ -176,14 +177,23 @@ const portal = new SigninPortal({
 			load();
 
 			let closedCb: (() => void) | undefined;
+			const close = (): void => {
+				owner.removeListener("resize", layout);
+				if (!owner.isDestroyed()) owner.contentView.removeChildView(view);
+				view.webContents.close();
+				closedCb?.();
+			};
+			// The viewer's own ✕. The page has no IPC on principle (it streams a machine a
+			// human is typing a password into), so its dismiss reaches us through the one
+			// channel a bare page controls: document.title. closedCb routes into
+			// SigninPortal.close(), which stops the engine and kills the tunnel — the same
+			// teardown as the header's cancel control.
+			view.webContents.on("page-title-updated", (_e, title) => {
+				if (title === VIEWER_DISMISS_TITLE) close();
+			});
 
 			return {
-				close: () => {
-					owner.removeListener("resize", layout);
-					if (!owner.isDestroyed()) owner.contentView.removeChildView(view);
-					view.webContents.close();
-					closedCb?.();
-				},
+				close,
 				onClosed: (cb) => {
 					closedCb = cb;
 				},

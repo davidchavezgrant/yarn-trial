@@ -7,8 +7,22 @@
 //
 // What it does: connects the WebSocket, paints incoming JPEG frames onto a <canvas>, and reports
 // pointer/keyboard events back AS FRACTIONS of the rendered image (never pixels — see liveview.ts
-// for why). It shows a status line driven by the engine's typed events, so a missing Screen
-// Recording grant reads as an instruction rather than a black rectangle.
+// for why).
+//
+// The page is a NATURAL OVERLAY, not a panel (set by David 2026-07-31: the bordered card with a
+// title bar, status line and hint strip read as "something we dumped on top" inside the shell).
+// The only painted things are the stream itself — floating with a shadow on the shell-matched
+// background — a dismiss button hanging off its corner, and a transient toast that carries what
+// the status bar used to: errors with remedies, "signed in — closing", window hops. Live and
+// healthy shows NOTHING but the window.
+
+/**
+ * What the page sets `document.title` to when the operator dismisses it. The embedded
+ * WebContentsView deliberately gets no preload and no IPC (it streams a machine a human is
+ * typing a password into), so the title is the one channel the shell can watch — see
+ * electron/main.ts, which retires the panel and tears the session down when this appears.
+ */
+export const VIEWER_DISMISS_TITLE = "liveview:dismiss";
 
 export function viewerHtml(token: string): string {
 	return `<!doctype html>
@@ -23,65 +37,83 @@ export function viewerHtml(token: string): string {
      around a crop that does not share the pane's aspect ratio is unavoidable — a 768x258 login
      form in a tall pane HAS empty space above and below it. Pure black read as broken video
      (reported 2026-07-31 as "those black bars"); the shell's own surface colour reads as the
-     app's background, so the same pixels stop looking like a fault. */
+     app's background, so the same pixels stop looking like a fault. With no border and no bar,
+     that colour match is the whole trick: the page has no visible edge of its own, so the
+     stream reads as a window floating on the shell. */
   html, body { margin: 0; height: 100%; background: #16181d; color: #ddd; font: 13px/1.5 -apple-system, system-ui, sans-serif; }
-  /* A bordered panel, because the host no longer gives this the whole window: it floats over
-     the shell, and without an edge a dark panel on a dark shell has no boundary at all. The
-     radius cannot round the WebContentsView itself (it is a native layer with square corners),
-     so the border is what draws the line. */
-  #wrap { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; border: 1px solid #2c313c; }
-  #bar { padding: 6px 12px; background: #1c1c1e; border-bottom: 1px solid #333; display: flex; gap: 12px; align-items: center; }
-  #bar b { color: #fff; font-weight: 600; }
-  #status { color: #9a9; }
-  #status.err { color: #f6a; }
-  /* 6px, not 10: the host now sizes this view to the card rather than to the whole window, so
-     the padding is a hairline around the stream instead of a margin inside a large empty pane. */
-  #stage { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 6px; box-sizing: border-box; position: relative; }
+  #stage { height: 100%; display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; }
   /* The LOCAL cursor stays — it is the operator's only pointer feedback, since the remote one
      is no longer composited into the stream (cfg.showsCursor = false). 'default' rather than
      'crosshair': this is a login form to click and type in, not a canvas to aim at, and an
      arrow is what every other window on their screen shows.
      No background on the canvas itself: an unpainted canvas should show the stage through it,
-     not a black rectangle sized to the last frame. */
-  canvas { max-width: 100%; max-height: 100%; cursor: default; border-radius: 6px; box-shadow: 0 2px 24px #0006; transition: opacity .18s ease; }
+     not a black rectangle sized to the last frame. The shadow is deep on purpose — with the
+     panel chrome gone it is the only thing saying "this floats". */
+  canvas { max-width: 100%; max-height: 100%; cursor: default; border-radius: 6px; box-shadow: 0 8px 40px #000a, 0 2px 12px #0008; transition: opacity .18s ease; }
   /* Hidden, not absent: keeping it laid out means the first painted frame does not reflow. */
   canvas.settling { opacity: 0; }
+  /* Anchored to the STREAM's corner by script (placeClose), not the page's: the dismiss belongs
+     to the floating window, and in a letterboxed pane the page corner can be nowhere near it.
+     Top-RIGHT because the remote window's own traffic lights are top-left — ours must never
+     sit over the button that closes the remote app. */
+  #close { position: absolute; top: 0; right: 0; width: 26px; height: 26px; border-radius: 50%; border: 1px solid #ffffff22; background: #000a; color: #cfd3da; font: 15px/24px -apple-system, system-ui, sans-serif; text-align: center; cursor: pointer; padding: 0; }
+  #close:hover { background: #000d; color: #fff; border-color: #ffffff44; }
+  /* One pill for everything the old status bar said, floating over the stream's lower edge.
+     pointer-events: none — a message must never eat a click aimed at the window behind it. */
+  #toast { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); max-width: 82%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: #000b; border: 1px solid #ffffff1a; border-radius: 999px; padding: 5px 14px; color: #c8cdd6; opacity: 0; transition: opacity .25s ease; pointer-events: none; }
+  #toast.show { opacity: 1; }
+  #toast.err { color: #ff9bbd; border-color: #ff9bbd44; }
   #settle { position: absolute; display: none; flex-direction: column; align-items: center; gap: 10px; color: #8b93a1; }
   #settle.on { display: flex; }
   #spin { width: 22px; height: 22px; border: 2px solid #333a45; border-top-color: #7aa2f7; border-radius: 50%; animation: spin .8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  kbd { background:#333; border-radius:3px; padding:0 4px; }
 </style>
 </head>
 <body>
-<div id="wrap">
-  <div id="bar">
-    <b id="title">Connecting…</b>
-    <span id="status">opening the window stream</span>
-    <span style="margin-left:auto;color:#666">click the window to focus it, then type your login · <kbd>Esc</kbd> stays in the app · <kbd>⌘]</kbd> next page</span>
-  </div>
-  <div id="stage">
-    <canvas id="c" class="settling" width="800" height="600"></canvas>
-    <!-- Spinner only, no caption. "framing the sign-in window…" explained a wait the operator
-         has no decision to make about, and the status line in the bar already carries the
-         state for anyone who wants it. A bare spinner reads as "working" without asking to
-         be read. -->
-    <div id="settle" class="on"><div id="spin"></div></div>
-  </div>
+<div id="stage">
+  <canvas id="c" class="settling" width="800" height="600"></canvas>
+  <!-- Spinner only, no caption. "framing the sign-in window…" explained a wait the operator
+       has no decision to make about. A bare spinner reads as "working" without asking to
+       be read. -->
+  <div id="settle" class="on"><div id="spin"></div></div>
+  <button id="close" title="End this sign-in session" aria-label="End this sign-in session">&#10005;</button>
+  <div id="toast"></div>
 </div>
 <script>
 (() => {
   const token = ${JSON.stringify(token)};
+  const DISMISS_TITLE = ${JSON.stringify(VIEWER_DISMISS_TITLE)};
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d');
-  const statusEl = document.getElementById('status');
-  const titleEl = document.getElementById('title');
+  const toastEl = document.getElementById('toast');
+  const closeEl = document.getElementById('close');
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(proto + '://' + location.host + '/?t=' + token);
   ws.binaryType = 'arraybuffer';
 
   let imgW = 800, imgH = 600;         // last known rendered image size (canvas pixels)
-  const setStatus = (t, err) => { statusEl.textContent = t; statusEl.className = err ? 'err' : ''; };
+
+  // The one voice the page has. Transient by default (the old status bar was a permanent
+  // fixture saying "live", which is exactly the chrome this page no longer has); sticky is for
+  // states the operator must not miss looking away — errors, disconnection, the sign-in landing.
+  let toastTimer;
+  const toast = (msg, opts) => {
+    const o = opts || {};
+    toastEl.textContent = msg;
+    toastEl.className = 'show' + (o.err ? ' err' : '');
+    clearTimeout(toastTimer);
+    if (!o.sticky) toastTimer = setTimeout(() => { toastEl.className = toastEl.className.replace('show', ''); }, 4000);
+  };
+
+  // The dismiss hangs just off the stream's top-right corner, clamped inside the page. Placed
+  // by measurement because the canvas is centred and CSS-scaled — its box moves with every
+  // resize and every crop change.
+  const placeClose = () => {
+    const r = canvas.getBoundingClientRect();
+    closeEl.style.top = Math.max(6, r.top - 13) + 'px';
+    closeEl.style.right = Math.max(6, (window.innerWidth - r.right) - 13) + 'px';
+  };
+  window.addEventListener('resize', placeClose);
 
   // The canvas stays hidden until the first frame ARRIVES, independent of the engine's own
   // settling flag. Two different waits look the same to the operator — "no frame yet" and
@@ -95,9 +127,23 @@ export function viewerHtml(token: string): string {
     settleEl.classList.toggle('on', on);
   };
 
-  ws.onopen = () => setStatus('connected — waiting for the first frame');
-  ws.onclose = () => setStatus('disconnected', true);
-  ws.onerror = () => setStatus('connection error', true);
+  // Set on the ✕ so the socket dying reads as "you ended this", not as a fault.
+  let dismissed = false;
+  const dismiss = () => {
+    if (dismissed) return;
+    dismissed = true;
+    // Order matters: the title first (the shell acts on it and removes this view — anything
+    // after may never run there), then the socket (the server tears the engine down on the
+    // close frame), then the tab-case fallbacks.
+    document.title = DISMISS_TITLE;
+    try { ws.close(); } catch {}
+    toast('session ended — you can close this tab', { sticky: true });
+    window.close();
+  };
+  closeEl.addEventListener('click', dismiss);
+
+  ws.onclose = () => { if (!dismissed) toast('disconnected', { err: true, sticky: true }); };
+  ws.onerror = () => { if (!dismissed) toast('connection error', { err: true, sticky: true }); };
 
   ws.onmessage = (e) => {
     if (typeof e.data === 'string') { handleEvent(JSON.parse(e.data)); return; }
@@ -106,29 +152,38 @@ export function viewerHtml(token: string): string {
     createImageBitmap(blob).then((bmp) => {
       if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
         canvas.width = bmp.width; canvas.height = bmp.height;
+        placeClose();
       }
       imgW = bmp.width; imgH = bmp.height;
       ctx.drawImage(bmp, 0, 0);
       bmp.close();
-      if (!painted) { painted = true; setSettling(false); setStatus('live'); }
+      if (!painted) {
+        painted = true;
+        setSettling(false);
+        placeClose();
+        // The old hint strip, said once and gone: by the second frame of their second
+        // sign-in nobody needs it on screen permanently.
+        toast('click the window to focus it, then type your login · Esc stays in the app · ⌘] next page');
+      }
     });
   };
 
   function handleEvent(ev) {
     if (ev.ev === 'window') {
-      titleEl.textContent = (ev.app || 'window') + (ev.title ? ' — ' + ev.title : '');
       // The engine's flag only ever RE-arms the wait (a handoff to a new browser window starts
       // settling again). It cannot clear it — only a painted frame does, above: the engine
       // says frames are allowed a moment before one actually arrives, and revealing an empty
       // canvas in that gap is the flash this whole mechanism exists to remove.
-      if (ev.settling) { painted = false; setSettling(true); setStatus('framing'); }
-      else if (painted) setStatus('live');
+      if (ev.settling) { painted = false; setSettling(true); }
+      // A hop mid-flow is worth a breath of context — the title bar that used to carry it
+      // permanently is gone.
+      else if (painted && ev.title) toast(ev.title);
     }
-    else if (ev.ev === 'auto') { setStatus('pressed \u201c' + ev.pressed + '\u201d for you'); }
+    else if (ev.ev === 'auto') { toast('pressed “' + ev.pressed + '” for you'); }
     // The sign-in landed and the server is about to close this. Say so plainly: a stream that
     // simply stops looks like a crash, and the teammate is left wondering whether it took.
-    else if (ev.ev === 'home') { setStatus('\u2713 signed in \u2014 closing'); }
-    else if (ev.ev === 'error') { setStatus(ev.remedy || ev.detail || ev.kind, true); }
+    else if (ev.ev === 'home') { dismissed = true; toast('✓ signed in — closing', { sticky: true }); }
+    else if (ev.ev === 'error') { toast(ev.remedy || ev.detail || ev.kind, { err: true, sticky: true }); }
   }
 
   const send = (obj) => { if (ws.readyState === 1) ws.send(JSON.stringify(obj)); };
