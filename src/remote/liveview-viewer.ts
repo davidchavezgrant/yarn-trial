@@ -25,12 +25,18 @@ export function viewerHtml(token: string): string {
      (reported 2026-07-31 as "those black bars"); the shell's own surface colour reads as the
      app's background, so the same pixels stop looking like a fault. */
   html, body { margin: 0; height: 100%; background: #16181d; color: #ddd; font: 13px/1.5 -apple-system, system-ui, sans-serif; }
-  #wrap { display: flex; flex-direction: column; height: 100%; }
+  /* A bordered panel, because the host no longer gives this the whole window: it floats over
+     the shell, and without an edge a dark panel on a dark shell has no boundary at all. The
+     radius cannot round the WebContentsView itself (it is a native layer with square corners),
+     so the border is what draws the line. */
+  #wrap { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; border: 1px solid #2c313c; }
   #bar { padding: 6px 12px; background: #1c1c1e; border-bottom: 1px solid #333; display: flex; gap: 12px; align-items: center; }
   #bar b { color: #fff; font-weight: 600; }
   #status { color: #9a9; }
   #status.err { color: #f6a; }
-  #stage { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 10px; box-sizing: border-box; position: relative; }
+  /* 6px, not 10: the host now sizes this view to the card rather than to the whole window, so
+     the padding is a hairline around the stream instead of a margin inside a large empty pane. */
+  #stage { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 6px; box-sizing: border-box; position: relative; }
   /* The LOCAL cursor stays — it is the operator's only pointer feedback, since the remote one
      is no longer composited into the stream (cfg.showsCursor = false). 'default' rather than
      'crosshair': this is a login form to click and type in, not a canvas to aim at, and an

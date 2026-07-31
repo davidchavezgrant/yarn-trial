@@ -4,8 +4,9 @@ import fs from "node:fs";
 import { Readable } from "node:stream";
 import { defaultOperator, loadHosts, resolveHost, type HostEntry } from "../src/remote/control/hosts.js";
 import { lastFrame, runnerArgv, runSsh, tunnelArgv } from "../src/remote/control/ssh.js";
-import { SigninPortal } from "../src/ui/ui-signin.js";
+import { SigninPortal, viewerBounds } from "../src/ui/ui-signin.js";
 import { HumanizeController, listApps, listRecordedRuns, parseByteRange, readUiState, resolveVideo, RunController, writeUiState, type RunHandlers, type RunOptions } from "../src/ui/ui-core.js";
+import { outDir } from "../src/paths.js";
 import { page } from "../src/ui/ui-page.js";
 import { describeCredentials, provisionFromBundle } from "../src/remote/control/team.js";
 import {
@@ -139,10 +140,11 @@ const portal = new SigninPortal({
 			// Measured, not assumed: a hardcoded offset drifted the first time a header control
 			// changed its height, leaving the view overlapping the cancel button it depends on.
 			let headerPx = 52;
+			// A bounded, centred panel rather than the whole window below the header — see
+			// viewerBounds, where the arithmetic lives so it can be tested without a window.
 			const layout = (): void => {
 				if (owner.isDestroyed()) return;
-				const b = owner.getContentBounds();
-				view.setBounds({ x: 0, y: headerPx, width: b.width, height: Math.max(0, b.height - headerPx) });
+				view.setBounds(viewerBounds(owner.getContentBounds(), headerPx));
 			};
 			void owner.webContents
 				.executeJavaScript(`(document.querySelector("header") || { offsetHeight: 51 }).offsetHeight`)
@@ -228,6 +230,7 @@ window.__bus = {
   // people go looking for the file they are about to send.
   reveal: (rel) => ipcRenderer.invoke('reveal', rel),
   loadRuns: () => ipcRenderer.invoke('runs'),
+  loadRunLog: (id) => ipcRenderer.invoke('runlog', id),
   // Encode per SEGMENT: encodeURIComponent on the whole path turns every "/" into %2F,
   // leaving a standard-scheme URL with no path to route, so the request never reaches the
   // handler at all (symptom: a black video stuck at 0:00 and no protocol log line).
@@ -410,6 +413,31 @@ ipcMain.handle("reveal", (_event, rel: unknown) => {
 
 /** Gallery entries, tagged with the Mac each one was pulled from. Local runs carry no tag. */
 ipcMain.handle("runs", () => annotateRuns(listRecordedRuns()));
+
+// A finished run's log text, for the viewer pane. Preference order: the job log (dispatched
+// runs — the child's whole stdout) then the run log's own step lines (local runs, which have
+// no job directory). Read per open, never cached: the file is small and the run is over.
+ipcMain.handle("runlog", (_event, id: unknown) => {
+	const stamp = String(id ?? "");
+	if (!/^[A-Za-z0-9._-]+$/.test(stamp)) return { ok: false, error: "bad run id" };
+	const jobLog = `${outDir()}/jobs/${stamp}/log.txt`;
+	if (fs.existsSync(jobLog)) return { ok: true, text: fs.readFileSync(jobLog, "utf8") };
+	const runLog = `${outDir()}/runs/${stamp}.json`;
+	if (!fs.existsSync(runLog)) return { ok: false, error: `no log for ${stamp}` };
+	try {
+		const d = JSON.parse(fs.readFileSync(runLog, "utf8"));
+		const steps = Array.isArray(d.steps) ? d.steps : [];
+		const lines = [
+			`${d.task ?? ""} — ${d.app ?? ""} (${d.backend ?? "?"}, ${d.elapsedSec ?? "?"}s, ${d.success ? "success" : "failed"})`,
+			...steps.map((s: any) => `[${s.index}] ${s.action?.name ?? "?"} ${s.targetName ? `"${s.targetName}"` : ""} -> ${s.verified ? "✓" : "✗"} ${s.verificationNote ?? ""}`),
+			d.summary ? `\n${d.summary}` : "",
+		];
+
+		return { ok: true, text: lines.filter(Boolean).join("\n") };
+	} catch (e) {
+		return { ok: false, error: (e as Error).message };
+	}
+});
 
 /**
  * Render a human cursor over a recorded run. NOT gated on alreadyBusy(): no driver session is

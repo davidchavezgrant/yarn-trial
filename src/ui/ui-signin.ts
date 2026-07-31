@@ -74,6 +74,42 @@ export type PortalOutcome =
 /** How long the local tunnel end gets to come up before the attempt is abandoned. */
 const TUNNEL_READY_MS = 10_000;
 
+/**
+ * Where the embedded viewer sits inside the shell window.
+ *
+ * A PANEL, not a takeover. It used to be full width over the whole height below the header, so a
+ * cropped login card — 840x402 points — sat marooned in a field several times its size and the
+ * shell vanished for the duration ("the live view panel is just too big", 2026-07-31). Bounded
+ * and centred instead, so the sign-in reads as something happening inside the app.
+ *
+ * Pure, and here rather than in the Electron closure that calls it, so the arithmetic is
+ * testable without a window: the failure mode of getting it wrong is a panel that overflows a
+ * small window or floats in a huge one, and neither shows up in a typecheck.
+ */
+export const VIEWER_MAX_W = 1100;
+export const VIEWER_MAX_H = 780;
+/** Never eat the whole window: the margin is what keeps the shell visible around the panel. */
+const VIEWER_INSET = 0.88;
+/** Above centre. The eye reads a dialog as belonging to the header above it; a true centre floats. */
+const VIEWER_TOP_BIAS = 0.4;
+
+export function viewerBounds(
+	content: { width: number; height: number },
+	headerPx: number,
+): { x: number; y: number; width: number; height: number } {
+	const availW = Math.max(0, content.width);
+	const availH = Math.max(0, content.height - headerPx);
+	const width = Math.min(VIEWER_MAX_W, Math.round(availW * VIEWER_INSET));
+	const height = Math.min(VIEWER_MAX_H, Math.round(availH * VIEWER_INSET));
+
+	return {
+		x: Math.max(0, Math.round((availW - width) / 2)),
+		y: headerPx + Math.max(0, Math.round((availH - height) * VIEWER_TOP_BIAS)),
+		width,
+		height,
+	};
+}
+
 /** Ceiling when the runner's reply omits its own. Matches the engine's 20-minute lifetime. */
 const DEFAULT_LIFETIME_MS = 20 * 60_000;
 

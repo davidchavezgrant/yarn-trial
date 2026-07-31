@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { HostEntry } from "../src/remote/control/hosts.js";
-import { SigninPortal, type PortalDeps } from "../src/ui/ui-signin.js";
+import { SigninPortal, viewerBounds, VIEWER_MAX_H, VIEWER_MAX_W, type PortalDeps } from "../src/ui/ui-signin.js";
 
 /**
  * The sign-in portal's lifecycle, entirely on injected deps: no ssh, no runner, no window.
@@ -235,5 +235,37 @@ test("open__FallsBack__When__TheReplyLacksPortOrToken", async () => {
 		const { d } = deps({ requestLiveview: async () => frame });
 		const out = await new SigninPortal(d).open(host("mac1"), "Yarn", "op");
 		assert.equal(out.kind, "fallback", `${JSON.stringify(frame)} must fall back`);
+	}
+});
+
+test("viewerBounds__StaysAPanel__When__TheWindowIsLarge", () => {
+	// The bug: the viewer was the full width and the whole height below the header, so a cropped
+	// 840x402 login card floated in a field several times its size and the shell disappeared
+	// behind it ("the live view panel is just too big", 2026-07-31).
+	const b = viewerBounds({ width: 2560, height: 1440 }, 52);
+
+	assert.equal(b.width, VIEWER_MAX_W, "capped, not proportional, once the window is roomy");
+	assert.equal(b.height, VIEWER_MAX_H);
+	// The shell has to remain visible around it, which is the whole point of a panel.
+	assert.ok(b.x > 0 && b.width < 2560, "left/right margin");
+	assert.ok(b.y > 52 && b.y + b.height < 1440, "top/bottom margin below the header");
+});
+
+test("viewerBounds__ShrinksToFit__When__TheWindowIsSmall", () => {
+	// A cap alone would overflow a small window; the inset is what keeps it inside one.
+	const b = viewerBounds({ width: 900, height: 600 }, 52);
+
+	assert.ok(b.width < 900, "narrower than the window");
+	assert.ok(b.y + b.height <= 600, `must not overflow the bottom (got ${b.y + b.height})`);
+	assert.ok(b.x >= 0 && b.y >= 52, "never above the header or off the left edge");
+});
+
+test("viewerBounds__StaysOnScreen__When__TheWindowIsAbsurdlyShort", () => {
+	// Degenerate geometry — a window dragged to nothing, or measured mid-resize — must not
+	// produce a negative origin or a negative size. Electron accepts both and draws nonsense.
+	for (const h of [0, 40, 52, 53]) {
+		const b = viewerBounds({ width: 300, height: h }, 52);
+		assert.ok(b.width >= 0 && b.height >= 0, `no negative size at height ${h}`);
+		assert.ok(b.x >= 0 && b.y >= 0, `no negative origin at height ${h}`);
 	}
 });
