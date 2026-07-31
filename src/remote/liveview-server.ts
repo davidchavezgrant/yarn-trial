@@ -28,6 +28,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { networkInterfaces } from "node:os";
 import type { Duplex } from "node:stream";
+import { envNum } from "../env.js";
 import { type EngineEvent, type EngineHandle, remedyFor, spawnEngine } from "./liveview.js";
 import { type DecodedFrame, encodeFrame, handshakeResponse, type Opcode, WsDecoder } from "./liveview-ws.js";
 import { viewerHtml } from "./liveview-viewer.js";
@@ -260,7 +261,7 @@ const MAX_QUEUED_SEND_BYTES = 1.5 * 1024 * 1024;
  * a crash, and they will ask whether the sign-in took. Short enough that a signed-in account is
  * not left on an injectable channel while nobody is watching.
  */
-const HOME_LINGER_MS = 2_500;
+const HOME_LINGER_MS = envNum("LIVEVIEW_HOME_LINGER_MS", 2_500);
 
 /**
  * Wire one WebSocket to one engine instance. Async because the CDP engine connects before it

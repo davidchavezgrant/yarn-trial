@@ -371,7 +371,7 @@ export function titleFor(raw: string, max = 80): string {
 
 /** How often to ask the app's own page whether the sign-in has landed. Cheap (one innerText
  *  read), and a second of lag on a flow that took minutes is not worth polling harder for. */
-const HOME_POLL_MS = 1_000;
+const HOME_POLL_MS = envNum("LIVEVIEW_HOME_POLL_MS", 1_000);
 
 /** page.title() evaluates in the page; a hung renderer must not stall a hop announcement. */
 const TITLE_TIMEOUT_MS = 1_500;
