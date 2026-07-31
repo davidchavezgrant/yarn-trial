@@ -1,0 +1,597 @@
+import Anthropic from "@anthropic-ai/sdk";
+import { boundaryDescription, classifyBoundary } from "../../backends/boundary.js";
+import type { CdpBackend } from "../../backends/cdp.js";
+import type { DomBackend } from "../../backends/dom.js";
+import type { Driver } from "../driver.js";
+import {
+	actionTarget,
+	externalityTarget,
+	frontierCredit,
+	frontierDismiss,
+	frontierIngest,
+	frontierMatches,
+	frontierRemaining,
+	frontierSummary,
+	gatedId,
+	isVagueSurface,
+	observationBlocks,
+	type ObservationBundle,
+	recoverLeakedGraph,
+	reversibleTarget,
+	settleMsFor,
+	TargetNotObservableError,
+	toActionRequest,
+	type WindowRef,
+} from "../harness.js";
+import { appendMutation, detectMutation } from "../journal.js";
+import type { Overlay } from "../overlay.js";
+import type { AppMapEdge, AppMapNode } from "../../types.js";
+import { checkpoint, hm, writeArtifacts } from "./artifacts.js";
+import { CHAPTER_OBSERVATIONS, DESCENT_ON, DISMISS_CAP, GUARD_ON, MAX_ACTIONS, SETTLE_MS } from "./config.js";
+import { requestFinish, streamCall } from "./model.js";
+import { accumulatedGraph, type FinishInput, merge, type Pass } from "./state.js";
+
+/**
+ * Resolve a query-addressed action to the handle it operated, in the observation the model
+ * saw. Both backends resolve `query` internally (dom.resolveRef / CdpBackend.resolveRef)
+ * with this same case-insensitive containment test and refuse ambiguity, so an act that
+ * succeeded matched exactly one candidate there; demanding uniqueness HERE means a miss
+ * (say, the backend matched a non-interactive row) credits nothing rather than guessing.
+ */
+const uniqueQueryHandle = (query: string, obs: ObservationBundle): string | number | undefined => {
+	const q = query.toLowerCase();
+	const hits = obs.interactive.filter((e) => e.name.toLowerCase().includes(q) || e.value.toLowerCase().includes(q));
+
+	return hits.length === 1 ? hits[0].handle : undefined;
+};
+
+export type LoopDeps = {
+	p: Pass;
+	client: Anthropic;
+	model: string;
+	overlay: Overlay;
+	interrupted: () => boolean;
+	driver: Driver | undefined;
+	cdp: CdpBackend | undefined;
+	dom: DomBackend | undefined;
+	win: WindowRef | undefined;
+	doObserve: (name: string) => Promise<ObservationBundle>;
+};
+
+export async function runExploreLoop({ p, client, model, overlay, interrupted, driver, cdp, dom, win, doObserve }: LoopDeps): Promise<void> {
+	let blindStreak = 0;
+	// Same handoff as the loop below: the banner starts visible and only a setDriving(false)
+	// takes it down, so the opening observation has to be the thing that lowers it — else it
+	// sits red through the first (long) model call with the machine idle.
+	overlay.setDriving(true);
+	let obs: ObservationBundle;
+	try {
+		obs = await doObserve("explore-step-0");
+	} finally {
+		overlay.setDriving(false);
+	}
+	frontierIngest(p.ledger, obs);
+	p.messages.push({
+		role: "user",
+		content: [
+			{
+				type: "text",
+				text:
+					`Explore "${p.app}". There is no step budget and no time limit: this run ends when the frontier of un-operated controls is empty. ` +
+					"If a surface takes minutes to respond — some apps embed an agent of their own — wait for it rather than moving on.\n\n" +
+					`${frontierSummary(p.ledger)}\n\nInitial observation follows.`,
+			},
+			...observationBlocks(obs, p.vision),
+		],
+	});
+
+	/**
+	 * Consecutive finish attempts refused for a non-empty frontier. The refusal is
+	 * evidence rather than badgering — it hands back the actual list — so unlike the
+	 * one-shot self-audit it replaced it can repeat. But a model that keeps calling
+	 * finish and never acts would otherwise spin until the action backstop burning
+	 * tokens, so after three the concession is taken and recorded as the stop reason.
+	 */
+	let finishRefusals = 0;
+	let obsThisChapter = 1;
+
+	/**
+	 * Chapter boundary: throw the transcript away and start a fresh context.
+	 *
+	 * Context, not step count, was the real ceiling — each observation is ~7k tokens and
+	 * they all accumulate, so a 25-action pass was already ~175k. A sliding window would not
+	 * survive a long run either: the assistant turns and tool results keep piling up over
+	 * ~2000 actions, and pruning per turn would invalidate the prompt cache every single turn.
+	 *
+	 * A full reset is bounded no matter how long the pass runs. It is only safe because the
+	 * durable memory now lives outside the transcript — findings and the accumulated graph,
+	 * both already on disk — so what is discarded is reasoning, not knowledge. The frontier
+	 * goes in the seed as well, which means the reset cannot lose track of where the pass
+	 * still has to go.
+	 *
+	 * Both the normal action path and the descent path call this after pushing their one
+	 * tool_result, so a descent-heavy stretch is bounded the same way an action-heavy one is.
+	 * Returns the next `obsThisChapter` for the caller to store.
+	 */
+	const maybeChapterReset = (obsCount: number, obs: ObservationBundle): number => {
+		if (obsCount + 1 < CHAPTER_OBSERVATIONS) return obsCount + 1;
+		p.chapters++;
+		checkpoint(p);
+		const nodeList = [...p.graphNodes.values()].slice(0, 300).map((n) => `${n.id} (${n.kind})`).join(", ");
+		const noteList = p.findings.slice(-120).map((f) => `- ${f}`).join("\n");
+		console.log(`  --- chapter ${p.chapters}: context reset (${p.findings.length} findings, ${p.graphNodes.size} nodes carried forward) ---`);
+		p.messages.length = 0;
+		p.messages.push({
+			role: "user",
+			content: [
+				{
+					type: "text",
+					text:
+						`You are exploring "${p.app}" and have been going for ${hm(Date.now() - p.startedAt)} over ${p.actions} actions. ` +
+						`This is chapter ${p.chapters}: the earlier transcript has been cleared to bound context. Nothing else has changed — the app is where you left it, and everything below is what you recorded.\n\n` +
+						`# Findings so far (${p.findings.length}${p.findings.length > 120 ? ", most recent 120 shown" : ""})\n${noteList}\n\n` +
+						`# Graph so far (${p.graphNodes.size} nodes, ${p.graphEdges.size} edges)\n${nodeList || "(none recorded yet — start recording nodes as you go)"}\n\n` +
+						`# ${frontierSummary(p.ledger)}\n\n` +
+						"There is no time limit on this pass — take as long as a surface needs. Current observation follows.",
+				},
+				...observationBlocks(obs, p.vision),
+			],
+		});
+
+		return 1;
+	};
+
+	for (;;) {
+		// Same shape as the ceiling below: a stopped pass still asks for the map it has,
+		// because forty minutes of exploration are worth more written down than discarded.
+		if (interrupted()) {
+			console.log(`\nstopped after ${p.actions} actions — asking for the map now`);
+			await requestFinish(p, client, model, "The run was stopped. Call finish NOW with the map you have.", "interrupted", true);
+
+			return;
+		}
+
+		if (p.actions >= MAX_ACTIONS) {
+			console.log(`\naction ceiling (${MAX_ACTIONS}) reached — asking for the map now`);
+			await requestFinish(p, client, model, `The action ceiling of ${MAX_ACTIONS} has been reached. Call finish NOW with the map you have.`, "action-ceiling", false);
+
+			return;
+		}
+
+		const response = await streamCall(p, client, model, { cache_control: { type: "ephemeral" } });
+
+		if (response.stop_reason === "refusal") throw new Error("model refused");
+
+		const toolUse = response.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
+		p.messages.push({ role: "assistant", content: response.content });
+
+		if (!toolUse) {
+			p.messages.push({ role: "user", content: "Call exactly one tool (act, record, dismiss, or finish)." });
+			continue;
+		}
+
+		if (toolUse.name === "finish") {
+			const rest = frontierRemaining(p.ledger);
+			if (rest.length > 0 && ++finishRefusals <= 3) {
+				console.log(`  finish refused (${finishRefusals}/3): ${rest.length} control(s) still un-operated`);
+				p.messages.push({
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: toolUse.id,
+							content:
+								`Not yet — the frontier is not empty, and there is no time limit on this pass.\n\n${frontierSummary(p.ledger)}\n\n` +
+								"Operate the ones that could open a surface you have not mapped. Dismiss the ones that are content rather than navigation, or that you must not touch — with a reason. " +
+								"Then finish will be accepted.",
+						},
+					],
+				});
+				continue;
+			}
+			writeArtifacts(p, toolUse.input as FinishInput, rest.length > 0 ? "frontier-conceded" : "frontier-empty");
+
+			return;
+		}
+
+		if (toolUse.name === "record") {
+			const input = toolUse.input as { finding: string; nodes?: AppMapNode[]; edges?: AppMapEdge[] };
+			// The model sometimes writes its nodes/edges INTO the finding string as literal
+			// tool-call markup. Recover them before storing, or the graph silently stalls
+			// while the prose keeps growing. See recoverLeakedGraph().
+			const leaked = recoverLeakedGraph(input.finding);
+			p.findings.push(leaked.cleaned);
+			const merged =
+				merge(p, input) + (leaked.nodes.length || leaked.edges.length ? merge(p, leaked) : 0);
+			const salvaged = leaked.nodes.length + leaked.edges.length;
+			console.log(
+				`  note: ${leaked.cleaned}${merged ? ` (+${merged} graph${salvaged ? `, ${salvaged} recovered` : ""})` : ""}`,
+			);
+			// Every record, not every Nth: the write is a few KB of local JSON, and batching
+			// it only buys the chance to lose the nine findings since the last flush.
+			checkpoint(p);
+			p.messages.push({
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: toolUse.id,
+						content: `recorded (${p.findings.length} findings, graph now ${p.graphNodes.size} nodes / ${p.graphEdges.size} edges)`,
+					},
+				],
+			});
+			continue;
+		}
+
+		if (toolUse.name === "dismiss") {
+			const input = toolUse.input as { names?: string[]; surface?: string; reason: string };
+			let text: string;
+			try {
+				// A sweep this wide is one sentence of justification standing in for a hundred
+				// separate decisions, and it is how a pass reaches "frontier-empty" cheaply.
+				// Refused only when the surface is vague: a genuinely repetitive named panel
+				// (80 identical list rows) is exactly what bulk dismissal is for.
+				const matches = frontierMatches(p.ledger, input);
+				if (matches.length > DISMISS_CAP && isVagueSurface(input.surface)) {
+					const surfaces = [...new Set(matches.map((e) => e.surface || "<top level>"))].slice(0, 12);
+					console.log(`  dismiss REFUSED: ${matches.length} controls across ${surfaces.length} surface(s), no specific surface named`);
+					p.messages.push({
+						role: "user",
+						content: [
+							{
+								type: "tool_result",
+								tool_use_id: toolUse.id,
+								is_error: true,
+								content:
+									`Refused: that would dismiss ${matches.length} controls at once (cap ${DISMISS_CAP}) without naming a specific surface. ` +
+									"Nothing was dismissed. These are not one decision — dismiss them in groups you can each give a real reason for, " +
+									`naming the surface, or open the surface and operate them. Surfaces in that match: ${surfaces.join(", ")}.`,
+							},
+						],
+					});
+					continue;
+				}
+				const gone = frontierDismiss(p.ledger, input);
+				const rest = frontierRemaining(p.ledger);
+				// A silent zero match reads as "done" and the model moves on leaving the
+				// entries in place; worse, it retries the same call with cosmetic variants.
+				// Naming the surfaces that DO exist turns a wasted turn into a correction.
+				text = gone.length
+					? `dismissed ${gone.length} control(s). ${rest.length} remain.`
+					: `matched NOTHING — nothing was dismissed and ${rest.length} still remain. ` +
+						`Surfaces currently on the frontier: ${[...new Set(rest.map((e) => (e.surface ? `"${e.surface}"` : "<top level>")))].slice(0, 20).join(", ")}. ` +
+						"Copy a name exactly as the frontier listing prints it.";
+				console.log(`  dismiss ${gone.length}${input.surface !== undefined ? ` in "${input.surface}"` : ""}: ${input.reason}`);
+				finishRefusals = 0;
+			} catch (err) {
+				text = `dismiss failed: ${err instanceof Error ? err.message : String(err)}`;
+			}
+			p.messages.push({ role: "user", content: [{ type: "tool_result", tool_use_id: toolUse.id, content: text }] });
+			continue;
+		}
+
+		if (toolUse.name === "claim") {
+			const c = toolUse.input as { name: string; note?: string };
+			p.claimed.push({ kind: "created", name: c.name, note: c.note, step: p.actions });
+			// Persist as a resource mutation NOW, not at finish: this is the crash-recovery
+			// the task agent lacks. A descent that dies after creating scratch but before
+			// finishing still leaves a journal entry `npm run cleanup` can report.
+			appendMutation(p.journalPath, { kind: "resource", control: c.name, surface: "", resource: c.name, step: p.actions });
+			console.log(`    claim: "${c.name}"${c.note ? ` — ${c.note}` : ""}`);
+			p.messages.push({
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: toolUse.id,
+						content:
+							`Claimed "${c.name}". It is recorded and will be reported at the end of the pass; ` +
+							"it is NOT deleted automatically. Use it as the throwaway target for descent, not the user's own content.",
+					},
+				],
+			});
+			continue;
+		}
+
+		// Read-only page search: costs a turn but not an action, like record.
+		if (toolUse.name === "find") {
+			const q = (toolUse.input as { query: string }).query;
+			let text: string;
+			try {
+				const hits = await (cdp ?? dom!).find(q);
+				text = hits.length
+					? `find("${q}") matched ${hits.length}:\n` +
+						hits
+							.slice(0, 40)
+							.map((r) => `[${r.ref}] ${r.role} "${(r.name ?? "").slice(0, 80)}" (${r.actions.join(",") || "no actions"}) ${r.visibility}`)
+							.join("\n")
+					: `find("${q}") matched nothing. Try a shorter or differently-worded string.`;
+			} catch (err) {
+				text = `find("${q}") failed: ${err instanceof Error ? err.message.slice(0, 200) : String(err)}`;
+			}
+			p.findCalls++;
+			console.log(`  find "${q}" -> ${text.split("\n")[0]}`);
+			p.messages.push({ role: "user", content: [{ type: "tool_result", tool_use_id: toolUse.id, content: text }] });
+			continue;
+		}
+
+		const input = toolUse.input as { reasoning?: string; action: any };
+		const web = p.target.kind === "web";
+
+		// Unattended-safety pre-flight, now two gates with opposite answers (see
+		// externalityTarget/reversibleTarget). Opting out is its OWN switch
+		// (EXPLORE_GUARD=off): this used to ride on `guidance`, so steering the pass
+		// silently disarmed the guard.
+		//
+		// EXTERNALITY — commits off the machine. Refused always, descent or not: one-way is
+		// one-way, and reading the boundary would mean crossing it.
+		const external = GUARD_ON ? externalityTarget(input.action, obs, web) : undefined;
+		if (external) {
+			p.refusals++;
+			const node = actionTarget(input.action, obs);
+			p.gated.push({ id: gatedId(node, external), tierReached: 0, boundary: "not opened — off-machine", stoppedBecause: "externality:label", scratchUsed: false });
+			console.log(`  REFUSED (externality): "${external}" commits off-machine and is never opened`);
+			p.messages.push({
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: toolUse.id,
+						is_error: true,
+						content:
+							`Refused by the harness: "${external}" commits something OFF the machine (send/publish/share/purchase/account) and is one-way. ` +
+							"The action did not run and will not, on any setting. Record what the control appears to do and dismiss it.",
+					},
+				],
+			});
+			continue;
+		}
+
+		// REVERSIBLE — mutates local state that can be put back, or merely opens a local
+		// flow behind a scary label. Refused by default; under EXPLORE_DESCENT it is pressed
+		// ONCE to read the boundary and then Escaped without committing.
+		const reversible = GUARD_ON ? reversibleTarget(input.action, obs, web) : undefined;
+		let descending = false;
+		if (reversible) {
+			if (!DESCENT_ON) {
+				p.refusals++;
+				const node = actionTarget(input.action, obs);
+				p.gated.push({ id: gatedId(node, reversible), tierReached: 0, boundary: "not opened — descent off", stoppedBecause: "descent:off", scratchUsed: false });
+				console.log(`  REFUSED (reversible, descent off): "${reversible}"`);
+				p.messages.push({
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: toolUse.id,
+							is_error: true,
+							content:
+								`Refused by the harness: "${reversible}" reads destructive and guarded descent is off for this pass. ` +
+								"The action did not run. Record what the control appears to do and dismiss it, or reach the surface another way.",
+						},
+					],
+				});
+				continue;
+			}
+			descending = true;
+			console.log(`  DESCENT: "${reversible}" is reversible-labelled — pressing once to read the boundary, then Escaping`);
+		}
+
+		p.actions++;
+		finishRefusals = 0;
+		console.log(`[${p.actions}] ${input.reasoning ?? ""}`);
+		console.log(`    ${input.action.name} ${JSON.stringify({ ...input.action, name: undefined })}`);
+
+		// The observation the model was looking at when it chose this action. Credit,
+		// mutation detection and boundary classification are all only meaningful against it,
+		// and `obs` is reassigned to the post-action snapshot below.
+		const preObs = obs;
+
+		let resultText: string;
+		let isError = false;
+		// The handle the DOM backend resolved a `query` to. frontierCredit reads only
+		// element_index/ref/coordinates, so a query-addressed action credits nothing
+		// unless the resolution is carried back to it (see the credit below).
+		let resolvedRef: string | undefined;
+		// Banner up only while the pointer is ours. Exploration is as intrusive as a task
+		// run, and just as thinking-dominated, so it gets the same treatment: visible for
+		// the act/settle/re-observe window, hidden for the model call between.
+		overlay.setDriving(true);
+		try {
+			try {
+				if (cdp) {
+					// Acts directly — no driver dispatch. assertSupported inside act() rejects
+					// unknown verbs before anything executes, same contract as toActionRequest.
+					resultText = (await cdp.act(input.action)).slice(0, 400);
+				} else {
+					const request = dom ? await dom.toRequest(input.action) : toActionRequest(input.action, win!);
+					// dom.toRequest resolves `query` to a concrete ref and puts it on the
+					// request; keep it so the credit below names the element actually operated.
+					if (dom && request?.kind === "tool" && typeof request.args.ref === "string") resolvedRef = request.args.ref;
+					resultText = request
+						? (await driver!.act(request)).text.slice(0, 400)
+						: "waited (no driver action)";
+				}
+			} catch (err) {
+				resultText = `ACTION FAILED: ${err instanceof Error ? err.message : String(err)}`;
+				isError = true;
+			}
+
+			const settleMs = settleMsFor(input.action, SETTLE_MS);
+			if (settleMs > SETTLE_MS) console.log(`    waiting ${Math.round(settleMs / 1000)}s before re-observing`);
+			await new Promise((r) => setTimeout(r, settleMs));
+			obs = await doObserve(`explore-step-${p.actions}`);
+		} finally {
+			// finally, not a trailing call: a throw from doObserve (a collapsed AX tree is
+			// routine here) would otherwise strand the banner up for the rest of the pass.
+			overlay.setDriving(false);
+		}
+
+		// Credit AFTER the act, against the PRE-act observation. The keys are only
+		// meaningful against what the model saw — which needs the `preObs` binding held
+		// above, not the ordering — and an action that threw (stale handle, driver
+		// refusal) never operated its control: crediting it would retire a frontier entry
+		// unvisited, and the stamp's headline `controls: N actuated` would overstate
+		// coverage. Failure always arrives here as a throw (Driver.act and CdpBackend.act
+		// both throw; the "ACTION FAILED:" string is built from the catch), so !isError is
+		// the whole gate. A query-addressed action carries no handle of its own: attach
+		// the ref the backend resolved (DOM), or the query's unique match in preObs (the
+		// CDP backend resolves internally and returns only prose) — a non-unique match
+		// credits nothing, which under-counts rather than guessing.
+		let credited: string[] = [];
+		if (!isError) {
+			let creditAction = input.action;
+			if (creditAction?.query !== undefined && creditAction.ref === undefined && creditAction.element_index === undefined) {
+				const ref = resolvedRef ?? uniqueQueryHandle(String(creditAction.query), preObs);
+				if (ref !== undefined) creditAction = { ...creditAction, ref };
+			}
+			credited = frontierCredit(p.ledger, creditAction, preObs);
+		}
+
+		if (obs.appContent === 0) {
+			// AX tree collapsed (e.g. a modal/other window took over). Acting now means
+			// acting blind — stop rather than let the model flail against a menu bar.
+			if (++blindStreak >= 3)
+				throw new TargetNotObservableError(p.app, "no addressable elements for 3 consecutive observations");
+		} else blindStreak = 0;
+
+		// Descent: the model pressed a reversible-labelled control ONLY so the harness could
+		// read what it gates. The model never gets to press anything inside the modal — the
+		// harness classifies the boundary, sends Escape ITSELF, and confirms it closed. The
+		// read-and-Escape invariant is what makes descent safe even when the two-phase
+		// assumption is wrong: Escape commits nothing, so the worst case is an inert press.
+		if (descending) {
+			// `reversible` is non-undefined here — `descending` is only set when it matched —
+			// but the compiler can't see across the intervening actuation, so pin it.
+			const gateLabel = reversible as string;
+			const node = actionTarget(input.action, preObs);
+			const boundary = classifyBoundary(preObs, obs);
+			const desc = boundaryDescription(boundary);
+			overlay.setDriving(true);
+			try {
+				const escAction = { name: "press_key", key: "escape", delivery_mode: "foreground" };
+				if (cdp) {
+					await cdp.act(escAction);
+				} else {
+					const esc = dom ? await dom.toRequest(escAction) : toActionRequest(escAction, win!);
+					if (esc) await driver!.act(esc);
+				}
+				await new Promise((r) => setTimeout(r, SETTLE_MS));
+				obs = await doObserve(`explore-step-${p.actions}-escape`);
+			} finally {
+				overlay.setDriving(false);
+			}
+
+			let stoppedBecause: string;
+			let dirty = false;
+			if (boundary.kind === "no-modal") {
+				// The two-phase assumption was WRONG here: no modal, so the press may have
+				// committed. detectMutation reads the truth from the value diff, not the
+				// model's account. Graph passed undefined — a boundary read does not need
+				// scope attribution, and cleanup restores by (control, surface).
+				const mutation = detectMutation(input.action, preObs, obs, undefined, p.actions);
+				if (mutation) {
+					appendMutation(p.journalPath, mutation);
+					dirty = true;
+					stoppedBecause = "descent:no-modal-committed";
+					console.log(`    descent MISS: no modal, "${mutation.control}" changed ${JSON.stringify(mutation.before)} -> ${JSON.stringify(mutation.after)} — journaled for cleanup`);
+				} else {
+					stoppedBecause = "descent:no-modal-inert";
+					console.log("    descent: no modal appeared and nothing changed — the press was inert");
+				}
+			} else if (boundary.kind === "oauth-window") {
+				stoppedBecause = "externality:oauth-window";
+				console.log(`    descent: OAuth surface (${desc}) — read and backed out`);
+			} else {
+				stoppedBecause = `descent:read-and-escape:${boundary.kind}`;
+				console.log(`    descent: ${desc} — read and Escaped`);
+			}
+
+			p.gated.push({
+				id: gatedId(node, gateLabel),
+				tierReached: boundary.kind === "no-modal" ? 0 : 1,
+				boundary: desc,
+				stoppedBecause,
+				scratchUsed: p.claimed.length > 0,
+			});
+			checkpoint(p);
+
+			frontierIngest(p.ledger, obs);
+			const rest = frontierRemaining(p.ledger);
+			const guidance =
+				boundary.kind === "no-modal"
+					? dirty
+						? "No confirmation dialog appeared and a value changed — the harness journaled it for cleanup. Do NOT press this control again."
+						: "No confirmation dialog appeared and nothing changed. It may commit on a later step or need scratch content to act on — record it and move on."
+					: "The harness pressed Escape to close it WITHOUT committing, and the boundary is recorded. Do NOT press the control again — record anything else it revealed and move on.";
+			p.messages.push({
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						tool_use_id: toolUse.id,
+						content: [
+							{
+								type: "text",
+								text:
+									`Descent on "${reversible}": ${desc}\n${guidance}` +
+									(rest.length === 0 ? "\n\nTHE FRONTIER IS EMPTY — call finish." : `\n\n${frontierSummary(p.ledger)}`) +
+									"\n\nNew observation follows.",
+							},
+							...observationBlocks(obs, p.vision),
+						],
+					},
+				],
+			});
+			// One tool_result pushed, exactly like a normal action, so it counts toward the
+			// chapter budget the same way — otherwise a descent-heavy stretch grows context
+			// without ever triggering the reset that bounds it.
+			obsThisChapter = maybeChapterReset(obsThisChapter, obs);
+			continue;
+		}
+
+		// Journal what this action CHANGED, from the value diff rather than the model's
+		// account — the same detection the task agent runs. Exploration is supposed to be
+		// non-mutating, but a toggle it flips while mapping is a real change the pass must
+		// be able to hand to teardown; without this, only descent's mutations were tracked
+		// and an ordinary setting the pass nudged would be left changed. Only when descent
+		// is on: a plain refuse-everything pass never runs teardown, so journaling would be
+		// write-only. Graph passed so scope/settingKey attach when resolvable.
+		if (DESCENT_ON && !isError) {
+			const mutation = detectMutation(input.action, preObs, obs, accumulatedGraph(p), p.actions);
+			if (mutation) {
+				appendMutation(p.journalPath, mutation);
+				console.log(`    journaled: "${mutation.control}"${mutation.surface ? ` in ${mutation.surface}` : ""} ${JSON.stringify(mutation.before ?? "")} -> ${JSON.stringify(mutation.after ?? "")}`);
+			}
+		}
+
+		const before = p.ledger.seen.size;
+		frontierIngest(p.ledger, obs);
+		const rest = frontierRemaining(p.ledger);
+		const discovered = p.ledger.seen.size - before;
+		console.log(
+			`    -> ${credited.length} credited, ${discovered > 0 ? `+${discovered} new, ` : ""}${rest.length} on frontier, ${hm(Date.now() - p.startedAt)} elapsed`,
+		);
+
+		const frontierNote =
+			rest.length === 0
+				? "\n\nTHE FRONTIER IS EMPTY — every interactive control seen so far has been operated or dismissed. Call finish now, unless you know of a surface you have not opened."
+				: `\n\n${frontierSummary(p.ledger)}`;
+		p.messages.push({
+			role: "user",
+			content: [
+				{
+					type: "tool_result",
+					tool_use_id: toolUse.id,
+					is_error: isError,
+					content: [
+						{ type: "text", text: `Driver result: ${resultText}${frontierNote}\n\nNew observation follows.` },
+						...observationBlocks(obs, p.vision),
+					],
+				},
+			],
+		});
+
+		obsThisChapter = maybeChapterReset(obsThisChapter, obs);
+	}
+}
