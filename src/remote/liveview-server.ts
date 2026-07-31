@@ -252,6 +252,14 @@ export function startLiveViewServer(opts: ServerOptions = {}): Promise<RunningSe
 const MAX_QUEUED_SEND_BYTES = 1.5 * 1024 * 1024;
 
 /**
+ * How long the viewer keeps streaming after the app reports itself signed in. Long enough for
+ * the teammate to SEE that it worked — a stream that vanishes the instant they finish reads as
+ * a crash, and they will ask whether the sign-in took. Short enough that a signed-in account is
+ * not left on an injectable channel while nobody is watching.
+ */
+const HOME_LINGER_MS = 2_500;
+
+/**
  * Wire one WebSocket to one engine instance. Async because the CDP engine connects before it
  * can stream; bytes the viewer sends meanwhile sit in the socket's readable buffer until the
  * 'data' listener attaches below, so nothing is lost to the await.
@@ -296,6 +304,13 @@ async function bridge(socket: Duplex, opts: ServerOptions): Promise<void> {
 		// Events go to the viewer as JSON text so it can show status / remedy an error.
 		const withRemedy = ev.ev === "error" ? { ...ev, remedy: remedyFor(ev) } : ev;
 		send(Buffer.from(JSON.stringify(withRemedy)), "text");
+
+		// The sign-in landed: say so, then stop. Set by David 2026-07-31 — with authentication
+		// confirmed programmatically there is nothing left for a human to watch, and every extra
+		// second is a live capture-and-inject channel onto someone's signed-in account. The
+		// viewer gets the event first (the send above) and a moment to paint its farewell before
+		// the socket goes; teardown is idempotent, so a viewer that closes first is not a race.
+		if (ev.ev === "home") setTimeout(teardown, HOME_LINGER_MS);
 	});
 
 	socket.on("data", (chunk: Buffer) => {

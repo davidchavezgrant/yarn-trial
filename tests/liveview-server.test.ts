@@ -141,3 +141,16 @@ test("viewerHtml__PaintsTheShellBackground__When__TheCropIsNarrowerThanThePane",
 	assert.match(html, /background: #16181d/);
 	assert.doesNotMatch(html, /canvas \{[^}]*background: #000/);
 });
+
+// ---- the sign-in ending closes the session ------------------------------------------------
+
+test("viewerHtml__AnnouncesTheSignIn__When__TheHomeEventArrives", () => {
+	// Set by David 2026-07-31: with authentication confirmed programmatically, nobody needs to
+	// keep watching a remote copy of their app, so the server closes the session. The viewer has
+	// to SAY that — a stream that simply stops reads as a crash, and the teammate is left
+	// wondering whether the sign-in took.
+	const html = viewerHtml("t".repeat(16));
+
+	assert.match(html, /ev === 'home'/);
+	assert.match(html, /signed in/);
+});

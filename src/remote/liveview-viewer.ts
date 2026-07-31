@@ -125,6 +125,9 @@ export function viewerHtml(token: string): string {
       else if (painted) setStatus('live');
     }
     else if (ev.ev === 'auto') { setStatus('pressed \u201c' + ev.pressed + '\u201d for you'); }
+    // The sign-in landed and the server is about to close this. Say so plainly: a stream that
+    // simply stops looks like a crash, and the teammate is left wondering whether it took.
+    else if (ev.ev === 'home') { setStatus('\u2713 signed in \u2014 closing'); }
     else if (ev.ev === 'error') { setStatus(ev.remedy || ev.detail || ev.kind, true); }
   }
 

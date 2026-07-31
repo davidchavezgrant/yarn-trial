@@ -53,6 +53,21 @@ export interface WindowEvent {
 	settling?: boolean;
 }
 
+/**
+ * The target app reached its signed-in home screen — the sign-in is DONE.
+ *
+ * Set by David 2026-07-31, after a run where the sign-in had succeeded and the viewer sat on a
+ * spent OAuth redirect page: once we can confirm authentication programmatically, nobody needs
+ * to keep watching a remote copy of their app. The session should end at that moment rather
+ * than burn its 20-minute clock, which also retires a whole bug class — "which page does the
+ * viewer show after the flow finishes" stops being a question when there is no after.
+ */
+export interface HomeEvent {
+	ev: "home";
+	/** What was seen, for the viewer's farewell line ("home control 'Library' is on screen"). */
+	detail: string;
+}
+
 /** The engine pressed the external-protocol confirmation ("Open Yarn.app") itself. */
 export interface AutoEvent {
 	ev: "auto";
@@ -101,7 +116,7 @@ export interface ErrorEvent {
 	detail: string;
 }
 
-export type EngineEvent = WindowEvent | AutoEvent | AxEvent | ScanEvent | BlockedEvent | ErrorEvent;
+export type EngineEvent = WindowEvent | AutoEvent | AxEvent | ScanEvent | BlockedEvent | ErrorEvent | HomeEvent;
 
 /** A command the viewer/server sends to the engine. `x`/`y` are 0..1 fractions of the window. */
 export type EngineCommand =

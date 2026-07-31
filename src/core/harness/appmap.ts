@@ -184,6 +184,19 @@ function findHomeLine(text: string, wanted: string[]): string | undefined {
  * `ready: undefined` means the question cannot be answered (no appmap / no landing surface);
  * the caller keeps its "none" posture rather than refusing an unmapped app.
  */
+/**
+ * The control labels that mean "this app is at its signed-in home screen", for a caller that
+ * has no ObservationBundle to hand `homeVisible`. Empty when the question cannot be answered
+ * (no appmap, no landing surface) — a caller must treat that as "unknown", never "not home".
+ *
+ * Exists for liveview's CDP engine, which watches for the end of a sign-in by reading these
+ * labels out of the page's own DOM. It cannot build an ObservationBundle: that needs a driver
+ * session, and a sign-in stream is already holding the app.
+ */
+export function homeLabels(app: string, graph: AppMap | undefined = loadAppMapGraph(appSlug(app))): string[] {
+	return homeTargets(app, graph).wanted;
+}
+
 export function homeVisible(
 	app: string,
 	obs: ObservationBundle,

@@ -51,6 +51,7 @@
 
 import { type Browser, type CDPSession, chromium, type Page } from "playwright-core";
 import { envNum } from "../env.js";
+import { homeLabels } from "../core/harness/appmap.js";
 import { clampFraction, type EngineCommand, type EngineEvent, type EngineHandle } from "./liveview.js";
 
 /** The slice of Page.screencastFrame metadata input mapping needs: the viewport, CSS px. */
@@ -367,6 +368,10 @@ export function titleFor(raw: string, max = 80): string {
 
 	return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
+
+/** How often to ask the app's own page whether the sign-in has landed. Cheap (one innerText
+ *  read), and a second of lag on a flow that took minutes is not worth polling harder for. */
+const HOME_POLL_MS = 1_000;
 
 /** page.title() evaluates in the page; a hung renderer must not stall a hop announcement. */
 const TITLE_TIMEOUT_MS = 1_500;
@@ -702,10 +707,54 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 	};
 	if (!sameEndpoint(endpoint, browserEndpoint)) void probeSecondary(false);
 
+	/**
+	 * Watch the PRIMARY page for the app's signed-in home screen and announce it.
+	 *
+	 * Set by David 2026-07-31: once authentication is programmatically confirmed, the operator
+	 * has no reason to keep watching a remote copy of their app — end the session there rather
+	 * than run the 20-minute clock down. It also retires the bug class that produced the
+	 * "stuck white screen": there is no after-the-flow page to choose if there is no after.
+	 *
+	 * The labels come from the appmap (the same ones `homeVisible` greps an ObservationBundle
+	 * for) and are matched against the page's own visible text — no driver, no observation, and
+	 * cheap enough to poll. An app with no appmap yields no labels, and then this never fires:
+	 * the session keeps its old behaviour rather than guessing that some page means "done".
+	 *
+	 * Emitted ONCE, as an event. Whether it ends the session is the server's call, not the
+	 * engine's — the engine reports what it sees.
+	 */
+	const armHomeWatch = () => {
+		const labels = appName ? homeLabels(appName) : [];
+		if (!labels.length) return undefined;
+		let fired = false;
+
+		return setInterval(() => {
+			if (closed || fired) return;
+			const active = stack.active;
+			// Primary only: the OAuth provider's pages are not the app, and a label collision
+			// there ("Library" is not a rare word) would end the session mid-sign-in.
+			if (!active || active.origin !== "primary") return;
+			void active.page
+				.evaluate((want: string[]) => {
+					const text = document.body?.innerText ?? "";
+
+					return want.find((w) => text.includes(w));
+				}, labels)
+				.then((hit) => {
+					if (!hit || fired || closed) return;
+					fired = true;
+					emit({ ev: "home", detail: `"${hit}" is on screen — ${appName} is signed in` });
+				})
+				.catch(() => {}); // a navigating page throws; the next tick asks again
+		}, HOME_POLL_MS);
+	};
+	const homeWatch = armHomeWatch();
+
 	const close = () => {
 		if (closed) return;
 		closed = true;
 		if (reprobe) clearTimeout(reprobe);
+		if (homeWatch) clearInterval(homeWatch);
 		void (async () => {
 			// Let an in-flight hop land before tearing down what it installed.
 			await hopQueue.catch(() => {});
