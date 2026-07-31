@@ -672,10 +672,26 @@ export class CdpBackend {
 						// its contenteditable host): a click collapses any selection, and the
 						// documented pre-filled recovery (click the field, cmd+a, type_text)
 						// depends on the selection surviving into the typing.
-						const focused = (await loc
-							.evaluate("el => el === document.activeElement || el.contains(document.activeElement) || (document.activeElement && document.activeElement.contains(el))")
-							.catch(() => false)) as boolean;
-						if (!focused) await this.demoPointer(loc, "click", ref);
+						const FOCUS_CHECK =
+							"el => el === document.activeElement || el.contains(document.activeElement) || (document.activeElement && document.activeElement.contains(el))";
+						const focused = (await loc.evaluate(FOCUS_CHECK).catch(() => false)) as boolean;
+						if (!focused) {
+							await this.demoPointer(loc, "click", ref);
+							// Never type into whatever kept focus. Yarn's agent composer holds
+							// default focus and silently swallowed two runs' narration — the
+							// honest outcome of a click the field refused is a FAILED step
+							// naming the thief, not a paragraph in the wrong box.
+							const took = (await loc.evaluate(FOCUS_CHECK).catch(() => false)) as boolean;
+							if (!took) {
+								const thief = (await this.page
+									.evaluate("() => { const a = document.activeElement; return a ? a.tagName.toLowerCase() + (a.className ? '.' + String(a.className).trim().split(/\\s+/)[0] : '') : 'nothing'; }")
+									.catch(() => "unknown")) as string;
+								throw new Error(
+									`clicked [${ref}] but keyboard focus stayed on <${thief}> — the target refused focus. ` +
+										`Nothing was typed. Click a control that takes the caret, or type_text WITHOUT a ref to type at the current caret deliberately.`,
+								);
+							}
+						}
 					}
 					await this.page.keyboard.type(text, { delay: DEMO_TYPE_DELAY_MS });
 
@@ -736,14 +752,19 @@ export class CdpBackend {
 		// can sit outside the viewport and the mouse events land on nothing. Best-effort:
 		// the row-box fallback below still needs a chance when the node cannot scroll.
 		await loc.scrollIntoViewIfNeeded().catch(() => {});
+		// boundingBox() is null for the nodes rich editors expose — ProseMirror's
+		// placeholder line has a ref and painted pixels but no box playwright will report,
+		// and clicking it is the ONLY way to focus Yarn's script editor (both mac1 runs
+		// burned their budget on this). Fallback order is freshness: playwright's strict
+		// live box, then the DOM's own live answer (getBoundingClientRect ignores
+		// playwright's visibility bookkeeping), then the observation-time snapshot row.
+		// A human clicks what they see; verification downstream catches anything stale.
 		let box = await loc.boundingBox().catch(() => null);
+		if (!box || box.width <= 0 || box.height <= 0)
+			box = (await loc
+				.evaluate("el => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; }")
+				.catch(() => null)) as { x: number; y: number; width: number; height: number } | null;
 		if (!box || box.width <= 0 || box.height <= 0) {
-			// boundingBox() is null for the nodes rich editors expose — ProseMirror's
-			// placeholder line has a ref and painted pixels but no box playwright will
-			// report, and clicking it was the ONLY way to focus Yarn's script editor. The
-			// snapshot row recorded the box the renderer painted ([box=…]); a human clicks
-			// what they see, so click that. Observation-time geometry — verification
-			// downstream catches a layout that moved since.
 			const row = ref ? this.lastRows.find((r) => r.ref === ref) : undefined;
 			if (row && row.w > 0 && row.h > 0) box = { x: row.x, y: row.y, width: row.w, height: row.h };
 		}
