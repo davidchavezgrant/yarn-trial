@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { appmapsDir, dataRoot, outDir } from "./paths.js";
-import { listApps, listRecordedRuns, parseByteRange, pruneUiState, readUiState, RunController, streamPump, writeUiState } from "./ui-core.js";
+import { appBundlePath, listApps, listRecordedRuns, parseByteRange, pruneUiState, readUiState, RunController, streamPump, writeUiState } from "./ui-core.js";
 
 /**
  * Each test gets its own data root rather than writing out/ui-state.json into the checkout.
@@ -211,6 +211,73 @@ test("listApps__ListsNoWebTargets__When__OnlyAppAppmapsExist", () => {
 		fs.writeFileSync(`${appmapsDir()}/yarn.md`, "<!-- provenance: explore -->");
 		assert.equal(listApps().some((a) => a.kind === "web"), false);
 	});
+});
+
+test("listApps__CarriesTheCaptureStamp__When__TheWebGraphIsStamped", () => {
+	// The stamp is the pass's own capturedAt, read out of the graph — never file mtime,
+	// which git restamps on every checkout.
+	inTempRoot(() => {
+		fs.mkdirSync(appmapsDir(), { recursive: true });
+		fs.writeFileSync(`${appmapsDir()}/web-www.notion.so.md`, "<!-- provenance: explore -->");
+		fs.writeFileSync(`${appmapsDir()}/web-www.notion.so.json`, JSON.stringify({ capturedAt: "2026-07-27T10:00:00.000Z" }));
+		const hit = listApps().find((a) => a.name === "www.notion.so");
+		assert.ok(hit, "the grounded site is not in the picker");
+		assert.equal(hit.groundedAt, "2026-07-27T10:00:00.000Z");
+	});
+});
+
+test("listApps__LeavesGroundedAtUnset__When__TheMapIsProseOnly", () => {
+	// Prose-only maps predate the stamp; inventing an age for them would be worse than none.
+	inTempRoot(() => {
+		fs.mkdirSync(appmapsDir(), { recursive: true });
+		fs.writeFileSync(`${appmapsDir()}/web-www.notion.so.md`, "<!-- provenance: explore -->");
+		const hit = listApps().find((a) => a.name === "www.notion.so");
+		assert.ok(hit);
+		assert.equal(hit.groundedAt, undefined);
+	});
+});
+
+test("listApps__StampsTheInstalledApp__When__ItsGraphCarriesCapturedAt", () => {
+	// The app path is exercised with a fixture bundle under $HOME/Applications — one of the
+	// directories listApps really scans — so nothing here depends on what this Mac has
+	// installed.
+	inTempRoot(() => {
+		const home = fs.mkdtempSync(path.join(os.tmpdir(), "home-"));
+		const prevHome = process.env.HOME;
+		try {
+			fs.mkdirSync(path.join(home, "Applications", "Stamp Fixture.app"), { recursive: true });
+			process.env.HOME = home;
+			fs.mkdirSync(appmapsDir(), { recursive: true });
+			fs.writeFileSync(`${appmapsDir()}/stamp-fixture.md`, "<!-- provenance: explore -->");
+			fs.writeFileSync(`${appmapsDir()}/stamp-fixture.json`, JSON.stringify({ capturedAt: "2026-07-27T10:00:00.000Z" }));
+			const hit = listApps().find((a) => a.name === "Stamp Fixture");
+			assert.ok(hit, "the fixture app under $HOME/Applications is not listed");
+			assert.equal(hit.grounded, true);
+			assert.equal(hit.groundedAt, "2026-07-27T10:00:00.000Z");
+		} finally {
+			if (prevHome === undefined) delete process.env.HOME;
+			else process.env.HOME = prevHome;
+			fs.rmSync(home, { recursive: true, force: true });
+		}
+	});
+});
+
+test("appBundlePath__FindsTheBundle__When__TheAppIsInstalled", () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "apps-"));
+	try {
+		fs.mkdirSync(path.join(dir, "Yarn.app"));
+		assert.equal(appBundlePath("Yarn", [dir]), path.join(dir, "Yarn.app"));
+		assert.equal(appBundlePath("Missing", [dir]), undefined);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("appBundlePath__Refuses__When__TheNameCouldWalkOutOfTheDirectory", () => {
+	// The name arrives over IPC; a separator in it is a path, not an app.
+	assert.equal(appBundlePath("../../tmp/Evil", ["/Applications"]), undefined);
+	assert.equal(appBundlePath("Sub\\Dir", ["/Applications"]), undefined);
+	assert.equal(appBundlePath("", ["/Applications"]), undefined);
 });
 
 test("streamPump__ReassemblesTheLine__When__AChunkBoundaryFallsMidLine", () => {

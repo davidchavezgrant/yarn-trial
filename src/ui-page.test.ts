@@ -28,7 +28,10 @@ interface FakeEl {
 	scrollTop: number;
 	dataset: Record<string, string>;
 	onclick?: () => unknown;
-	addEventListener(): void;
+	// Recorded rather than dropped, so a test can fire the handler the script installed —
+	// the Enter-to-run path is a keydown listener and unobservable otherwise.
+	listeners: Record<string, ((e: unknown) => void)[]>;
+	addEventListener(type: string, fn: (e: unknown) => void): void;
 	querySelector(): null;
 	appendChild(c: FakeEl): void;
 	removeChild(c: FakeEl): void;
@@ -49,7 +52,10 @@ const el = (): FakeEl => ({
 	scrollHeight: 0,
 	scrollTop: 0,
 	dataset: {},
-	addEventListener() {},
+	listeners: {},
+	addEventListener(type: string, fn: (e: unknown) => void) {
+		(this.listeners[type] ??= []).push(fn);
+	},
 	querySelector: () => null,
 	appendChild(c: FakeEl) {
 		this.children.push(c);
@@ -80,8 +86,13 @@ interface Harness {
 	dropStaleSelection(): void;
 	selectApp(name: string, url?: string): void;
 	notePin(): void;
+	render(): void;
+	agoLabel(iso: string): string;
+	stateFor(app: string): { task: string; log: string[]; url?: string };
 	pinned: boolean;
 	host: string;
+	/** Fire the host's `started` echo, as captured off bus.onStarted at mount. */
+	fireStarted(d: { app: string; task: string }): void;
 }
 
 /**
@@ -89,12 +100,17 @@ interface Harness {
  *
  * The trailing `</script>` is stripped because APP_JS is emitted INTO a script tag — it is
  * markup, not code, and `new Function` rightly refuses it.
+ *
+ * `busOverrides` swaps individual bus methods so a test can stub the host side — a `run`
+ * that records its options, an `appIcon` that rejects — without re-declaring the whole bus.
  */
-function mount(): Harness {
+function mount(busOverrides: Record<string, unknown> = {}): Harness {
 	const nodes: Record<string, FakeEl> = {};
 	for (const id of IDS) nodes[id] = el();
+	let started: (d: { app: string; task: string }) => void = () => {};
 	const bus = {
 		loadApps: async () => [],
+		appIcon: async () => "",
 		loadRuns: async () => [],
 		loadState: async () => ({ byApp: {} }),
 		saveState() {},
@@ -103,7 +119,9 @@ function mount(): Harness {
 		loadCreds: async () => ({ present: false, path: "", modelKey: false }),
 		loadHostPref: async () => ({ host: "local" }),
 		saveHostPref() {},
-		onStarted() {},
+		onStarted(cb: (d: { app: string; task: string }) => void) {
+			started = cb;
+		},
 		onLine() {},
 		onDone() {},
 		videoUrl: (r: string) => r,
@@ -112,6 +130,7 @@ function mount(): Harness {
 		stop() {},
 		attach: async () => undefined,
 		saveKey: async () => ({ ok: true }),
+		...busOverrides,
 	};
 	const document = {
 		getElementById: (id: string) => nodes[id] ?? el(),
@@ -131,14 +150,27 @@ function mount(): Harness {
 		`${APP_JS.replace(/<\/script>\s*$/, "")}
 		return { get sel(){return sel}, set sel(v){sel=v}, set apps(v){apps=v}, get host(){return host}, set host(v){host=v},
 			get pinned(){return pinned}, set pinned(v){pinned=v},
-			check, syncUrlRow, selUrl, isBrowser, appendLine, line, errText, dropStaleSelection, selectApp, notePin };`,
+			check, syncUrlRow, selUrl, isBrowser, appendLine, line, errText, dropStaleSelection, selectApp, notePin,
+			render, agoLabel, stateFor };`,
 	);
 	const noTimer = () => 0;
 	const api = fn({ __bus: bus, addEventListener() {} }, document, noTimer, noTimer) as Harness;
 	api.nodes = nodes;
+	api.fireStarted = (d) => started(d);
 
 	return api;
 }
+
+/** A keydown as the script's listener receives it, with `preventDefault` observable. */
+function keydown(node: FakeEl, key: string, shiftKey: boolean): { prevented: boolean } {
+	const out = { prevented: false };
+	for (const fn of node.listeners.keydown ?? []) fn({ key, shiftKey, preventDefault: () => { out.prevented = true; } });
+
+	return out;
+}
+
+/** Settle the microtask queue, so a lazy fetch's .then handlers have run. */
+const settle = (): Promise<void> => new Promise((r) => setImmediate(r));
 
 test("APP_JS__Parses__When__EmittedIntoThePage", () => {
 	// The renderer is not typechecked, so this is the only thing standing between a stray
@@ -358,6 +390,202 @@ test("notePin__ReArmsThePin__When__ScrolledBackNearTheBottom", () => {
 	// A pinned pane follows: the paint writes scrollTop to the (fake) full height.
 	ui.appendLine("[8] click");
 	assert.equal(log.scrollTop, log.scrollHeight);
+});
+
+test("CHROME__PutsRunAndGroundInTheLeftColumn__When__Rendered", () => {
+	// The pair acts on the selection, so it lives under the list where the selection is made.
+	// Placement is only checkable through source order: both must appear before the middle
+	// column opens, and Stop must stay after it, beside the log of the run it interrupts.
+	const mid = CHROME.indexOf('class="col mid"');
+	assert.ok(mid > 0, "the middle column marker is gone");
+	assert.ok(CHROME.indexOf('id="go"') < mid, "Run is not in the left column");
+	assert.ok(CHROME.indexOf('id="ground"') < mid, "Ground is not in the left column");
+	assert.ok(CHROME.indexOf('id="stop"') > mid, "Stop left the middle column");
+});
+
+test("TaskKeydown__DispatchesTheRun__When__PlainEnterAndRunIsEnabled", async () => {
+	const calls: { app: string; task: string }[] = [];
+	const ui = mount({
+		run: async (opts: { app: string; task: string }) => {
+			calls.push(opts);
+
+			return undefined;
+		},
+	});
+	// Let the boot chain (restore → loadApps) finish first: it repopulates `apps` from the
+	// bus, and arranging state before it lands would be arranging state it overwrites.
+	await settle();
+	ui.apps = [{ name: "Yarn" }];
+	ui.sel = "Yarn";
+	ui.nodes.task.value = "show me how to change the cursor type";
+	ui.check();
+	const { prevented } = keydown(ui.nodes.task, "Enter", false);
+	await settle();
+	assert.equal(prevented, true, "plain Enter must not also insert a newline");
+	assert.equal(calls.length, 1);
+	assert.equal(calls[0].app, "Yarn");
+	assert.equal(calls[0].task, "show me how to change the cursor type");
+});
+
+test("TaskKeydown__InsertsTheNewline__When__ShiftIsHeld", async () => {
+	const calls: unknown[] = [];
+	const ui = mount({
+		run: async (opts: unknown) => {
+			calls.push(opts);
+
+			return undefined;
+		},
+	});
+	await settle();
+	ui.apps = [{ name: "Yarn" }];
+	ui.sel = "Yarn";
+	ui.nodes.task.value = "first line";
+	ui.check();
+	const { prevented } = keydown(ui.nodes.task, "Enter", true);
+	await settle();
+	assert.equal(prevented, false, "Shift+Enter must keep its default newline");
+	assert.equal(calls.length, 0);
+});
+
+test("TaskKeydown__DispatchesNothing__When__RunWouldBeDisabled", async () => {
+	const calls: unknown[] = [];
+	const ui = mount({
+		run: async (opts: unknown) => {
+			calls.push(opts);
+
+			return undefined;
+		},
+	});
+	await settle();
+	// No selection: check() leaves the button disabled, so Enter must be inert.
+	ui.nodes.task.value = "a task with no app selected";
+	ui.check();
+	keydown(ui.nodes.task, "Enter", false);
+	await settle();
+	assert.equal(calls.length, 0);
+});
+
+test("OnStarted__ClearsThePrompt__When__TheSubmittedTaskStarts", () => {
+	const ui = mount();
+	ui.apps = [{ name: "Yarn" }];
+	ui.sel = "Yarn";
+	ui.stateFor("Yarn").task = "show me how to change the cursor type";
+	ui.nodes.task.value = "show me how to change the cursor type";
+	ui.fireStarted({ app: "Yarn", task: "show me how to change the cursor type" });
+	assert.equal(ui.nodes.task.value, "", "the accepted submit must consume the textarea");
+	assert.equal(ui.stateFor("Yarn").task, "", "the saved task must not reappear on restore");
+});
+
+test("OnStarted__KeepsThePrompt__When__AGroundingPassEchoesItsSyntheticTask", () => {
+	// Ground echoes 'started' with a task the operator never typed; it must not eat a prompt
+	// that is typed but not yet run. Same for attach's "following <job>".
+	const ui = mount();
+	ui.apps = [{ name: "Yarn" }];
+	ui.sel = "Yarn";
+	ui.stateFor("Yarn").task = "a task typed but not yet run";
+	ui.nodes.task.value = "a task typed but not yet run";
+	ui.fireStarted({ app: "Yarn", task: "grounding pass — exploring Yarn" });
+	assert.equal(ui.nodes.task.value, "a task typed but not yet run");
+	assert.equal(ui.stateFor("Yarn").task, "a task typed but not yet run");
+});
+
+test("Go__KeepsThePrompt__When__TheDispatchAnswersAnError", async () => {
+	// An error string comes back without a 'started' echo, so the box must keep its text —
+	// the operator fixes the task, they do not retype it.
+	const ui = mount({ run: async () => "a run is already in progress" });
+	await settle();
+	ui.apps = [{ name: "Yarn" }];
+	ui.sel = "Yarn";
+	ui.nodes.task.value = "show me how to change the cursor type";
+	ui.check();
+	await ui.nodes.go.onclick!();
+	assert.equal(ui.nodes.task.value, "show me how to change the cursor type");
+});
+
+test("agoLabel__PicksTheReadableUnit__When__StampsAgeAcrossTheScale", () => {
+	const ui = mount();
+	assert.equal(ui.agoLabel(new Date().toISOString()), "just now");
+	assert.equal(ui.agoLabel(new Date(Date.now() - 20 * 60_000).toISOString()), "20m ago");
+	assert.equal(ui.agoLabel(new Date(Date.now() - 5 * 3_600_000).toISOString()), "5h ago");
+	assert.equal(ui.agoLabel(new Date(Date.now() - 3 * 86_400_000).toISOString()), "3d ago");
+	assert.equal(ui.agoLabel("not a date"), "", "an unparseable stamp must render as nothing");
+});
+
+test("render__ShowsHowOldTheGroundingIs__When__TheEntryCarriesAStamp", () => {
+	const ui = mount();
+	const stamp = new Date(Date.now() - 3 * 86_400_000).toISOString();
+	ui.apps = [{ name: "Yarn", grounded: true, groundedAt: stamp }];
+	ui.render();
+	assert.match(ui.nodes.apps.innerHTML, /grounded 3d ago/);
+	// The full date survives in the tooltip for when the day itself matters.
+	assert.ok(ui.nodes.apps.innerHTML.includes(`title="grounded ${stamp}"`));
+});
+
+test("render__KeepsThePlainBadge__When__TheMapIsProseOnly", () => {
+	// Prose-only maps predate capturedAt; a made-up age would be worse than none.
+	const ui = mount();
+	ui.apps = [{ name: "Yarn", grounded: true }];
+	ui.render();
+	assert.match(ui.nodes.apps.innerHTML, />grounded</);
+	assert.ok(!ui.nodes.apps.innerHTML.includes("ago"));
+	assert.ok(!ui.nodes.apps.innerHTML.includes("title="));
+});
+
+test("render__RequestsIconsLazily__When__LocalAppsPaint", async () => {
+	const asked: string[] = [];
+	const ui = mount({
+		appIcon: async (name: string) => {
+			asked.push(name);
+
+			return "data:image/png;base64,AAA";
+		},
+	});
+	await settle();
+	ui.apps = [{ name: "Yarn" }, { name: "www.notion.so", kind: "web", url: "https://www.notion.so" }];
+	ui.render();
+	await settle();
+	// Web entries have no bundle to ask about; the local app is asked exactly once even
+	// though the resolved icon triggers a repaint (which re-enters requestIcons).
+	assert.deepEqual(asked, ["Yarn"]);
+	assert.ok(ui.nodes.apps.innerHTML.includes('img class="appicon"'), "the resolved icon did not paint");
+});
+
+test("render__SkipsIcons__When__TheListIsAnotherMacs", async () => {
+	const asked: string[] = [];
+	const ui = mount({
+		appIcon: async (name: string) => {
+			asked.push(name);
+
+			return "";
+		},
+	});
+	await settle();
+	ui.host = "mac1";
+	ui.apps = [{ name: "Yarn" }];
+	ui.render();
+	await settle();
+	assert.deepEqual(asked, [], "a remote list must not be asked about this Mac's bundles");
+	assert.ok(!ui.nodes.apps.innerHTML.includes("appicon"));
+});
+
+test("render__SurvivesTheLookup__When__TheIconIpcRejects", async () => {
+	// A missing icon must never break the list — the name still paints, nothing rejects
+	// unhandled, and the failure caches so the next repaint does not re-ask.
+	let asks = 0;
+	const ui = mount({
+		appIcon: async () => {
+			asks++;
+			throw new Error("no icon for you");
+		},
+	});
+	await settle();
+	ui.apps = [{ name: "Yarn" }];
+	assert.doesNotThrow(() => ui.render());
+	await settle();
+	assert.match(ui.nodes.apps.innerHTML, /Yarn/);
+	ui.render();
+	await settle();
+	assert.equal(asks, 1, "a failed lookup must cache as 'none', not retry per paint");
 });
 
 test("appendLine__StillCapsTheDom__When__NoAnimationFrameEverFires", () => {

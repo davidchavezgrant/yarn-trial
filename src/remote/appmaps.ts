@@ -83,7 +83,13 @@ export function readAppmaps(dir: string): Map<string, MapVersion> {
 	return out;
 }
 
-function readCapturedAt(file: string): string | undefined {
+/**
+ * `capturedAt` out of one appmap graph, or undefined when the file is absent, mid-write, or
+ * unstamped. Exported because the shell's app list shows the stamp too (`listApps` in
+ * ui-core.ts): one reader means "what counts as stamped" cannot drift between the sync's
+ * comparisons and what the operator is looking at.
+ */
+export function readCapturedAt(file: string): string | undefined {
 	try {
 		const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as { capturedAt?: unknown };
 

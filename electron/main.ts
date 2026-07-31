@@ -1,7 +1,7 @@
 import { app, BrowserWindow, desktopCapturer, ipcMain, net, protocol, shell, systemPreferences } from "electron";
 import fs from "node:fs";
 import { Readable } from "node:stream";
-import { listApps, listRecordedRuns, parseByteRange, readUiState, resolveVideo, RunController, writeUiState, type RunHandlers, type RunOptions } from "../src/ui-core.js";
+import { appBundlePath, listApps, listRecordedRuns, parseByteRange, readUiState, resolveVideo, RunController, writeUiState, type RunHandlers, type RunOptions } from "../src/ui-core.js";
 import { page } from "../src/ui-page.js";
 import { describeCredentials, provisionFromBundle } from "../src/remote/team.js";
 import {
@@ -63,6 +63,7 @@ const { ipcRenderer } = require('electron');
 window.__videoBase = 'agentvideo:///';
 window.__bus = {
   loadApps: (host) => ipcRenderer.invoke('apps', host),
+  appIcon: (name) => ipcRenderer.invoke('appIcon', name),
   loadRuns: () => ipcRenderer.invoke('runs'),
   // Encode per SEGMENT: encodeURIComponent on the whole path turns every "/" into %2F,
   // leaving a standard-scheme URL with no path to route, so the request never reaches the
@@ -188,6 +189,33 @@ function createWindow(): void {
 // Answers for the SELECTED host, not for this Mac. A colo Mac's list comes from its own runner,
 // which enumerates its own /Applications and its own appmaps — see appChoices.
 ipcMain.handle("apps", (_event, host?: string) => appChoices(host, listApps));
+
+/**
+ * A local app's bundle icon as a data URL, "" when there is none to give.
+ *
+ * Cached per name for the life of the process: `getFileIcon` decodes the bundle's .icns on
+ * every call and the list repaints on every keystroke. Failures cache as "" too — a missing
+ * icon must never break the list, and re-statting a known-absent bundle buys nothing. Local
+ * host only by construction: the renderer never asks for a remote list's entries, and a colo
+ * Mac's bundles are not on this disk anyway.
+ */
+const appIcons = new Map<string, string>();
+ipcMain.handle("appIcon", async (_event, name: unknown) => {
+	const key = String(name ?? "");
+	const cached = appIcons.get(key);
+	if (cached !== undefined) return cached;
+
+	let url = "";
+	try {
+		const bundle = appBundlePath(key);
+		if (bundle) url = (await app.getFileIcon(bundle, { size: "small" })).toDataURL();
+	} catch {
+		// No icon is a fine answer; the renderer shows the name alone.
+	}
+	appIcons.set(key, url);
+
+	return url;
+});
 
 /** Gallery entries, tagged with the Mac each one was pulled from. Local runs carry no tag. */
 ipcMain.handle("runs", () => annotateRuns(listRecordedRuns()));

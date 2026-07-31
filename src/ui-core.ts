@@ -4,6 +4,10 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { appSlug, auditTaskPrompt } from "./harness.js";
 import { appmapsDir, dataRoot, outDir, resourcesRoot } from "./paths.js";
+// One capturedAt reader for the whole codebase — the sync's. A second parser here could
+// disagree with it about what counts as stamped. It is a pure local-file read; importing it
+// pulls no ssh behaviour into the local shell, at module load or at call time.
+import { readCapturedAt } from "./remote/appmaps.js";
 import { buildRunArgs, isBrowserApp, type Target, webTarget } from "./target.js";
 
 /**
@@ -20,6 +24,13 @@ export interface AppEntry {
 	name: string;
 	running: boolean;
 	grounded: boolean;
+	/**
+	 * When the grounding pass ran — `capturedAt` out of the appmap graph, verbatim. Never the
+	 * file's mtime: git restamps that on every checkout, so mtime would call a fresh clone
+	 * newer than a pass that finished last week. Absent on prose-only maps, which predate the
+	 * stamp; the list shows the plain badge for those.
+	 */
+	groundedAt?: string;
 	/**
 	 * Absent means an installed Mac app — the only kind that existed before web targets, and
 	 * the reason this is optional rather than required: every reader treats the entry field by
@@ -56,10 +67,42 @@ function groundedWebTargets(): AppEntry[] {
 			.filter((f) => f.startsWith("web-") && f.endsWith(".md"))
 			.map((f) => f.slice("web-".length, -".md".length))
 			.filter((host) => host.length > 0)
-			.map((host) => ({ name: host, running: false, grounded: true, kind: "web" as const, url: `https://${host}` }));
+			.map((host) => {
+				const groundedAt = readCapturedAt(`${appmapsDir()}/web-${host}.json`);
+
+				return { name: host, running: false, grounded: true, kind: "web" as const, url: `https://${host}`, ...(groundedAt ? { groundedAt } : {}) };
+			});
 	} catch {
 		return [];
 	}
+}
+
+/** Directories `listApps` enumerates. Shared with `appBundlePath` so the two cannot drift. */
+function appDirectories(): string[] {
+	return [
+		"/Applications",
+		"/System/Applications",
+		"/System/Applications/Utilities",
+		`${process.env.HOME}/Applications`,
+	];
+}
+
+/**
+ * The .app bundle behind a name from `listApps`, for the shell's icon lookup.
+ *
+ * The name arrives over IPC, so it is screened the way `resolveVideo` screens its path: a
+ * separator in it is a path, not an app, and could walk out of the application directories.
+ * A running-but-not-installed app simply has no bundle here — `undefined`, never a throw,
+ * because a missing icon must cost the list nothing.
+ */
+export function appBundlePath(name: string, dirs: string[] = appDirectories()): string | undefined {
+	if (!name || /[/\\]/.test(name)) return undefined;
+	for (const dir of dirs) {
+		const bundle = `${dir}/${name}.app`;
+		if (fs.existsSync(bundle)) return bundle;
+	}
+
+	return undefined;
 }
 
 /**
@@ -81,23 +124,25 @@ export function listApps(): AppEntry[] {
 	}
 
 	const installed = new Set<string>();
-	for (const dir of [
-		"/Applications",
-		"/System/Applications",
-		"/System/Applications/Utilities",
-		`${process.env.HOME}/Applications`,
-	]) {
+	for (const dir of appDirectories()) {
 		try {
 			for (const f of fs.readdirSync(dir)) if (f.endsWith(".app")) installed.add(f.replace(/\.app$/, ""));
 		} catch {}
 	}
 
-	const apps: AppEntry[] = [...new Set([...installed, ...running])].map((name) => ({
-		name,
-		running: running.has(name),
-		grounded: fs.existsSync(`${appmapsDir()}/${appSlug(name)}.md`),
-		...(isBrowserApp(name) ? { browser: true } : {}),
-	}));
+	const apps: AppEntry[] = [...new Set([...installed, ...running])].map((name) => {
+		const grounded = fs.existsSync(`${appmapsDir()}/${appSlug(name)}.md`);
+		// Only looked for under a map that exists: grounded is the gate, the stamp the detail.
+		const groundedAt = grounded ? readCapturedAt(`${appmapsDir()}/${appSlug(name)}.json`) : undefined;
+
+		return {
+			name,
+			running: running.has(name),
+			grounded,
+			...(groundedAt ? { groundedAt } : {}),
+			...(isBrowserApp(name) ? { browser: true } : {}),
+		};
+	});
 
 	return [...apps, ...groundedWebTargets()].sort((a, b) => {
 		// Grounded first, then running, then alphabetical: likeliest to work at the top.

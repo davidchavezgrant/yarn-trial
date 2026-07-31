@@ -670,6 +670,8 @@ export interface RemoteApp {
 	running: boolean;
 	/** Whether THAT host has a stamped appmap for the app — its checkout, not ours. */
 	grounded: boolean;
+	/** When that host's map was captured (`AppEntry.groundedAt`), when its runner reports one. */
+	groundedAt?: string;
 }
 
 export interface RemoteAppList {
@@ -712,7 +714,13 @@ export async function remoteApps(
 	const apps = Array.isArray(frame.apps)
 		? frame.apps
 				.filter((a: unknown): a is Record<string, unknown> => !!a && typeof a === "object" && typeof (a as any).name === "string")
-				.map((a) => ({ name: String(a.name), running: a.running === true, grounded: a.grounded === true }))
+				.map((a) => ({
+					name: String(a.name),
+					running: a.running === true,
+					grounded: a.grounded === true,
+					// An older runner reports no stamp; anything that is not a string stays behind.
+					...(typeof a.groundedAt === "string" && a.groundedAt ? { groundedAt: a.groundedAt } : {}),
+				}))
 		: [];
 
 	return { host: target.name, ok: true, apps };

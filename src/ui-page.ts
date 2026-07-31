@@ -9,6 +9,12 @@
 export interface UiBus {
 	/** Apps installed on `host` — that Mac's list, not this one's. See appChoices in ui-remote.ts. */
 	loadApps(host: string): Promise<{ apps: unknown[]; host: string; note?: string }>;
+	/**
+	 * A LOCAL app's bundle icon as a data URL, "" when there is none. The renderer only asks
+	 * for the local list — remote Macs' bundles are not on this disk, and web entries have no
+	 * bundle at all — and treats every failure as "no icon", never as a broken list.
+	 */
+	appIcon(name: string): Promise<string>;
 	/** Recorded runs, newest first, each carrying the prompt that produced it. */
 	loadRuns(): Promise<unknown[]>;
 	/** Repo-relative mp4 path -> a URL this shell can play. */
@@ -96,8 +102,11 @@ export const CHROME = String.raw`<meta charset="utf-8">
   input, textarea, button, select { font:inherit; color:var(--fg); background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:8px 10px; width:100%; }
   input:focus, textarea:focus, select:focus { outline:none; border-color:var(--accent); }
   textarea { resize:vertical; min-height:74px; }
-  ul { list-style:none; margin:8px 0 0; padding:0; max-height:calc(100vh - 190px); overflow:auto; }
+  /* 240px, not the old 190px: the Run/Ground pair now sits under the list and needs its row. */
+  ul { list-style:none; margin:8px 0 0; padding:0; max-height:calc(100vh - 240px); overflow:auto; }
   li { padding:7px 10px; border-radius:6px; cursor:pointer; display:flex; align-items:center; gap:8px; }
+  /* Fixed box whether or not the icon has arrived, so rows do not shift when one lands. */
+  .appicon { width:16px; height:16px; flex:0 0 16px; border-radius:3px; display:inline-block; }
   li:hover { background:var(--panel); }
   li.sel { background:#2b3550; }
   .badge { font-size:10px; padding:1px 6px; border-radius:99px; border:1px solid var(--line); color:var(--dim); }
@@ -176,6 +185,12 @@ export const CHROME = String.raw`<meta charset="utf-8">
     <label for="q">Target app</label>
     <input id="q" placeholder="Search apps…" autocomplete="off">
     <ul id="apps"></ul>
+    <!-- Run and Ground live under the list because both act on the selection made there.
+         Stop stays in the middle column, beside the log of the run it interrupts. -->
+    <div class="btnrow">
+      <button class="go" id="go" disabled>Run</button>
+      <button class="ground" id="ground" disabled title="Autonomous exploration pass — writes docs/appmaps/">Ground</button>
+    </div>
   </div>
   <div class="col mid">
     <div id="urlrow" style="display:none">
@@ -193,10 +208,6 @@ export const CHROME = String.raw`<meta charset="utf-8">
     <div class="row">
       <label><input type="checkbox" id="record"> Record video</label>
       <label><input type="checkbox" id="novision"> No screenshots</label>
-    </div>
-    <div class="btnrow">
-      <button class="go" id="go" disabled>Run</button>
-      <button class="ground" id="ground" disabled title="Autonomous exploration pass — writes docs/appmaps/">Ground</button>
     </div>
     <button class="stop" id="stop" style="display:none">Stop run</button>
     <div id="attach"></div>
@@ -450,6 +461,59 @@ function selectApp(name, url) {
   flush();
 }
 
+// "3d ago", not a timestamp: the question the label answers is "is this map stale enough to
+// reground", and the operator was doing that subtraction by hand. The exact stamp survives in
+// the badge's tooltip for when the day itself matters.
+function agoLabel(iso) {
+  const t = Date.parse(iso);
+  if (!isFinite(t)) return '';
+  const s = Math.max(0, Date.now() - t) / 1000;
+  if (s < 90) return 'just now';
+  if (s < 90 * 60) return Math.round(s / 60) + 'm ago';
+  if (s < 36 * 3600) return Math.round(s / 3600) + 'h ago';
+
+  return Math.round(s / 86400) + 'd ago';
+}
+
+// groundedAt is the pass's own capturedAt out of the appmap graph — never file mtime, which
+// git restamps on every checkout. Prose-only maps predate the stamp and keep the plain badge.
+function groundedBadge(a) {
+  if (!a.grounded) return '';
+  const when = a.groundedAt ? agoLabel(a.groundedAt) : '';
+
+  return '<span class="badge g"' + (a.groundedAt ? ' title="grounded ' + esc(a.groundedAt) + '"' : '') +
+    '>grounded' + (when ? ' ' + when : '') + '</span>';
+}
+
+// Bundle icons, local host only. A colo Mac's bundles are not on this disk and shipping icons
+// over ssh is more plumbing than a list nicety earns; a web entry has no bundle at all. Both
+// are skipped in silence.
+const icons = new Map();       // name -> data URL, '' once the host has answered "none"
+const iconPending = new Set(); // in flight, so every repaint does not re-ask
+
+function appIconHtml(a) {
+  if (host !== 'local' || a.kind === 'web') return '';
+  const url = icons.get(a.name);
+
+  // The empty span is a fixed-size placeholder so rows do not shift when the icon lands.
+  return url ? '<img class="appicon" src="' + esc(url) + '" alt="">' : '<span class="appicon"></span>';
+}
+
+// Lazy, after the list paints: the lookup is one IPC per app and the first paint must not
+// wait on sixty of them. Every outcome caches — a failure as "no icon" — so each name is
+// asked about at most once per session and a missing icon can never break the list.
+function requestIcons(entries) {
+  if (host !== 'local' || !bus.appIcon) return;
+  for (const a of entries) {
+    if (a.kind === 'web' || icons.has(a.name) || iconPending.has(a.name)) continue;
+    iconPending.add(a.name);
+    bus.appIcon(a.name).then(
+      (url) => { iconPending.delete(a.name); icons.set(a.name, url || ''); if (url) render(); },
+      () => { iconPending.delete(a.name); icons.set(a.name, ''); },
+    );
+  }
+}
+
 function render() {
   const q = el('q').value.toLowerCase();
   const hits = apps.filter(a => a.name.toLowerCase().includes(q)).slice(0, 60);
@@ -466,13 +530,16 @@ function render() {
     // exists only in this markup — nothing else remembers what was typed once the box changes.
     '<li data-n="' + encodeURIComponent(a.name) + '"' + (a.kind === 'web' && a.url ? ' data-u="' + encodeURIComponent(a.url) + '"' : '') +
     ' class="' + (a.name === sel ? 'sel' : '') + '">' +
+    appIconHtml(a) +
     '<span style="flex:1">' + esc(a.name) + '</span>' +
     (a.kind === 'web' ? '<span class="badge w">web</span>' : '') +
-    (a.grounded ? '<span class="badge g">grounded</span>' : '') +
+    groundedBadge(a) +
     (a.running ? '<span class="badge r">open</span>' : '') + '</li>').join('');
   for (const li of el('apps').children) {
     li.onclick = () => selectApp(decodeURIComponent(li.dataset.n), li.dataset.u ? decodeURIComponent(li.dataset.u) : undefined);
   }
+  // Only what is on screen: names outside the filter are asked about when they first paint.
+  requestIcons(hits);
 }
 
 // Mirror auditTaskPrompt() in the browser so a hinted prompt is explained before the run
@@ -624,6 +691,13 @@ function line(text, owner) {
 
 const bus = window.__bus;   // {onStarted,onLine,onDone,loadApps,loadState,saveState,run,stop}
 bus.onStarted((d) => {
+  // An accepted submit consumes the prompt. Cleared HERE and not at the click, because a
+  // dispatch that fails answers an error string and never echoes 'started' — a refused task
+  // stays in the box to be fixed rather than retyped. Matched against the echoed task so the
+  // synthetic 'started' of a grounding pass or a followed job cannot wipe a prompt that was
+  // typed but never run.
+  if (d.app === sel && el('task').value.trim() === d.task) el('task').value = '';
+  if (stateFor(d.app).task.trim() === d.task) stateFor(d.app).task = '';
   running = true; runningApp = d.app; check(); renderAttach();
   // The previous refusal is answered by trying again, whatever the outcome of the retry.
   unready = null; unreadyGen++; renderUnready();
@@ -907,6 +981,16 @@ for (const ev of ['input', 'change', 'keyup', 'paste']) el('url').addEventListen
 // Run button enabled next to a visible "this will be refused" warning. 'change' catches
 // the stragglers; the server re-checks regardless.
 for (const ev of ['input', 'change', 'keyup', 'paste']) el('task').addEventListener(ev, () => setTimeout(() => { check(); saveSoon(); }, 0));
+// Enter dispatches, like a chat box: the task is one goal sentence and the Run button now
+// lives a column away under the app list. Shift+Enter keeps its newline for the rare
+// multi-line prompt. check() first because the disabled flag is otherwise a keystroke stale
+// — the input listeners above defer through setTimeout.
+el('task').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || e.shiftKey) return;
+  e.preventDefault();
+  check();
+  if (!el('go').disabled) el('go').onclick();
+});
 /**
  * Dispatch exactly once per click.
  *

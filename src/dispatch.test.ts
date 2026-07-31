@@ -8,6 +8,7 @@ import {
 	dispatchNotes,
 	follow,
 	pull,
+	remoteApps,
 	remoteStatus,
 	type RemoteStream,
 	stopRemote,
@@ -544,6 +545,28 @@ test("remoteStatus__ReportsUnknown__When__RunnerIsNotInstalled", async () => {
 	assert.equal(status.state, "unknown");
 	assert.equal(status.reachable, false);
 	assert.match(status.reason ?? "", /command not found/);
+});
+
+test("remoteApps__CarriesTheCaptureStamp__When__TheRunnerReportsOne", async () => {
+	// The runner's `apps` verb answers listApps(), so groundedAt arrives free — but this
+	// client rebuilds every entry field by field, and a field it does not copy is silently
+	// dropped on the way to the renderer. An older runner reports no stamp, and a stamp that
+	// is not a string (half-provisioned Mac, older schema) must stay behind.
+	const { run } = recorder(() =>
+		ok({
+			apps: [
+				{ name: "Yarn", running: true, grounded: true, groundedAt: "2026-07-27T10:00:00.000Z" },
+				{ name: "Notes", running: false, grounded: true },
+				{ name: "Weird", running: false, grounded: true, groundedAt: 42 },
+			],
+		}),
+	);
+	const list = await remoteApps(host("mac1", "10.0.0.1"), { run });
+
+	assert.equal(list.ok, true);
+	assert.equal(list.apps[0].groundedAt, "2026-07-27T10:00:00.000Z");
+	assert.equal(list.apps[1].groundedAt, undefined);
+	assert.equal(list.apps[2].groundedAt, undefined);
 });
 
 // signinRemedy: the second half of the sign-in story. The first half is the `signinNeeded`
