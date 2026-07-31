@@ -1,0 +1,401 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { test } from "node:test";
+import { appmapVariant, isVagueSurface, loadAppMapGraph } from "../src/core/harness.js";
+import {
+	declaredCredit,
+	declaredDismiss,
+	declaredIngest,
+	declaredKey,
+	declaredMatches,
+	declaredRemaining,
+	declaredSummary,
+	newDeclaredLedger,
+} from "../src/core/harness/declared-frontier.js";
+import { loadGrounding } from "../src/core/agent/grounding.js";
+import { coverageNow, provenanceHeader, writeArtifacts } from "../src/core/explore/artifacts.js";
+import { noAxRefusal } from "../src/core/explore/cli.js";
+import { SURVEY_TOOL, VISION_ACT_TOOL } from "../src/core/explore/prompt.js";
+import { newPass } from "../src/core/explore/state.js";
+
+/**
+ * The vision-only exploration variant: the DECLARED frontier (coverage from the model's own
+ * survey/target declarations, because the mechanical frontier's summary would leak the AX
+ * element list to a model meant to see only pixels), the `.vision.*` artifact pair that must
+ * never overwrite the element-grounded map, and the APPMAP_VARIANT consumption switch.
+ */
+
+function withEnv(name: string, value: string | undefined, fn: () => void): void {
+	const prev = process.env[name];
+	try {
+		if (value === undefined) delete process.env[name];
+		else process.env[name] = value;
+		fn();
+	} finally {
+		if (prev === undefined) delete process.env[name];
+		else process.env[name] = prev;
+	}
+}
+
+function inTempRoot(fn: (dir: string) => void): void {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "explore-vision-"));
+	try {
+		withEnv("YARN_RUNNER_DATA", dir, () => fn(dir));
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+// ── declared ledger ──────────────────────────────────────────────────────────────────────
+
+test("declaredIngest__AddsControls__When__SurveyDeclaresThem", () => {
+	const ledger = newDeclaredLedger();
+	const added = declaredIngest(ledger, "Brand Kit", [{ name: "Cursor style" }, { name: "Save", note: "commits" }]);
+	assert.equal(added, 2);
+	assert.deepEqual(declaredRemaining(ledger).map((e) => e.name), ["Cursor style", "Save"]);
+});
+
+test("declaredIngest__IsIdempotent__When__TheSameSurveyRepeats", () => {
+	// The model re-declares freely rather than remembering what it already sent; a repeat must
+	// refresh, not duplicate — and the note from the later sighting wins.
+	const ledger = newDeclaredLedger();
+	declaredIngest(ledger, "Brand Kit", [{ name: "Save" }]);
+	const added = declaredIngest(ledger, "Brand Kit", [{ name: "Save", note: "now with a note" }]);
+	assert.equal(added, 0);
+	assert.equal(ledger.seen.size, 1);
+	assert.equal(declaredRemaining(ledger)[0].note, "now with a note");
+});
+
+test("declaredIngest__DropsTheEntry__When__ItHasNoName", () => {
+	// An unnamed declaration could never be credited or dismissed — it would sit on the
+	// frontier forever, unclearable.
+	const ledger = newDeclaredLedger();
+	const added = declaredIngest(ledger, "Rail", [{ name: "" }, { name: "   " }, {} as { name?: string }, { name: "Real" }]);
+	assert.equal(added, 1);
+	assert.deepEqual(declaredRemaining(ledger).map((e) => e.name), ["Real"]);
+});
+
+test("declaredIngest__CollapsesToTopLevel__When__SurfaceIsAPlaceholderSpelling", () => {
+	// Surface strings round-trip through the model's context; every spelling of "no panel"
+	// must be ONE group, or the summary fragments and dismiss-by-surface stops matching.
+	const ledger = newDeclaredLedger();
+	declaredIngest(ledger, "<top level>", [{ name: "Search" }]);
+	declaredIngest(ledger, "top level", [{ name: "Search" }]);
+	declaredIngest(ledger, "", [{ name: "Search" }]);
+	assert.equal(ledger.seen.size, 1);
+	assert.equal(declaredRemaining(ledger)[0].surface, "");
+});
+
+test("declaredCredit__RemovesFromFrontier__When__ActNamesASurveyedControl", () => {
+	const ledger = newDeclaredLedger();
+	declaredIngest(ledger, "Toolbar", [{ name: "Save" }, { name: "Cancel" }]);
+	const { key, surveyed } = declaredCredit(ledger, { name: "Save", surface: "Toolbar" });
+	assert.equal(surveyed, true);
+	assert.equal(key, declaredKey("Save", "Toolbar"));
+	assert.deepEqual(declaredRemaining(ledger).map((e) => e.name), ["Cancel"]);
+});
+
+test("declaredCredit__IngestsAndCredits__When__TargetWasNeverSurveyed", () => {
+	// Acting on a control is also seeing it: under-declaring cannot hide an OPERATED control
+	// from the map, only an unoperated one.
+	const ledger = newDeclaredLedger();
+	const { surveyed } = declaredCredit(ledger, { name: "Settings", surface: "" });
+	assert.equal(surveyed, false);
+	assert.equal(ledger.seen.size, 1);
+	assert.equal(ledger.operated.size, 1);
+	assert.equal(declaredRemaining(ledger).length, 0);
+});
+
+test("declaredCredit__MatchesCaseInsensitively__When__TheTargetSpellingDiffers", () => {
+	// name|surface keys are normalised the way dismissal matching already is — the strings
+	// round-trip through the model twice (survey, then target).
+	const ledger = newDeclaredLedger();
+	declaredIngest(ledger, "Brand Kit", [{ name: "Cursor Style" }]);
+	declaredCredit(ledger, { name: "cursor style", surface: "brand kit" });
+	assert.equal(declaredRemaining(ledger).length, 0);
+});
+
+test("declaredDismiss__ClearsBySurface__When__NoNamesGiven", () => {
+	const ledger = newDeclaredLedger();
+	declaredIngest(ledger, "Transcript", [{ name: "Row 1" }, { name: "Row 2" }]);
+	declaredIngest(ledger, "Toolbar", [{ name: "Save" }]);
+	const gone = declaredDismiss(ledger, { surface: "Transcript", reason: "content, not navigation" });
+	assert.equal(gone.length, 2);
+	assert.deepEqual(declaredRemaining(ledger).map((e) => e.name), ["Save"]);
+});
+
+test("declaredDismiss__ClearsTopLevel__When__SurfaceIsThePrintedPlaceholder", () => {
+	for (const spelling of ["<top level>", "top level", "&lt;top level&gt;", ""]) {
+		const ledger = newDeclaredLedger();
+		declaredIngest(ledger, "", [{ name: "Search" }]);
+		declaredIngest(ledger, "Toolbar", [{ name: "Save" }]);
+		assert.equal(declaredDismiss(ledger, { surface: spelling, reason: "r" }).length, 1, spelling);
+	}
+});
+
+test("declaredMatches__LeavesTheFrontierIntact__When__SizingASweep", () => {
+	// The dismissal cap sizes a sweep BEFORE committing to it — sizing must not itself dismiss,
+	// or a refused sweep would still have cleared the list. Same contract as frontierMatches.
+	const ledger = newDeclaredLedger();
+	declaredIngest(ledger, "Transcript", [{ name: "Row 1" }, { name: "Row 2" }]);
+	assert.equal(declaredMatches(ledger, { surface: "Transcript" }).length, 2);
+	assert.equal(declaredRemaining(ledger).length, 2);
+});
+
+test("declaredMatches__SizesTheSweepForTheCap__When__AVagueSurfaceWouldClearEverything", () => {
+	// The loop's DISMISS_CAP check is `matches.length > cap && isVagueSurface(surface)`; this
+	// pins the declared half of it — a top-level sweep across many declared controls sizes to
+	// all of them, exactly what the cap exists to refuse, while a named panel sizes to itself.
+	const ledger = newDeclaredLedger();
+	for (let i = 0; i < 25; i++) declaredIngest(ledger, "", [{ name: `Control ${i}` }]);
+	declaredIngest(ledger, "Transcript", [{ name: "Row 1" }, { name: "Row 2" }]);
+	assert.equal(declaredMatches(ledger, { surface: "<top level>" }).length, 25);
+	assert.equal(isVagueSurface("<top level>"), true);
+	assert.equal(declaredMatches(ledger, { surface: "Transcript" }).length, 2);
+	assert.equal(isVagueSurface("Transcript"), false);
+});
+
+test("declaredMatches__Throws__When__NeitherNamesNorSurfaceGiven", () => {
+	// An argument-less dismiss would silently clear the entire frontier and end the run.
+	assert.throws(() => declaredMatches(newDeclaredLedger(), {}), /needs names, a surface, or both/);
+});
+
+test("declaredRemaining__ExcludesDismissed__When__SeenAgainAfterDismissal", () => {
+	// Re-surveying a screen must not resurrect a dismissal, or a control on a surface surveyed
+	// twice can never be got rid of.
+	const ledger = newDeclaredLedger();
+	declaredIngest(ledger, "Transcript", [{ name: "Row 1" }]);
+	declaredDismiss(ledger, { names: ["Row 1"], reason: "content" });
+	declaredIngest(ledger, "Transcript", [{ name: "Row 1" }]);
+	assert.equal(declaredRemaining(ledger).length, 0);
+});
+
+test("declaredSummary__SaysNothingSurveyed__When__TheLedgerIsEmpty", () => {
+	// An empty declared ledger is zero coverage, not full coverage — the summary must demand a
+	// survey rather than read as "frontier empty, call finish".
+	assert.match(declaredSummary(newDeclaredLedger()), /Nothing has been surveyed yet/);
+});
+
+test("declaredSummary__GroupsBySurface__When__ControlsRemain", () => {
+	const ledger = newDeclaredLedger();
+	declaredIngest(ledger, "Brand Kit", [{ name: "Cursor style" }, { name: "Background" }]);
+	declaredIngest(ledger, "", [{ name: "Search" }]);
+	const s = declaredSummary(ledger);
+	assert.match(s, /"Cursor style"/);
+	assert.match(s, /in "Brand Kit" \(2\)/);
+	assert.match(s, /<top level>/);
+});
+
+test("declaredSummary__SaysEmpty__When__EverythingIsOperatedOrDismissed", () => {
+	const ledger = newDeclaredLedger();
+	declaredIngest(ledger, "Toolbar", [{ name: "Save" }]);
+	declaredCredit(ledger, { name: "Save", surface: "Toolbar" });
+	assert.match(declaredSummary(ledger), /declared frontier is empty/);
+});
+
+// ── artifacts: naming and provenance ─────────────────────────────────────────────────────
+
+test("newPass__WritesTheVisionPair__When__PassIsVisionOnly", () => {
+	inTempRoot(() => {
+		const p = newPass({ kind: "app", name: "Yarn" }, "Yarn", "ax", true, undefined, true);
+		assert.match(p.outPath, /\/yarn\.vision\.md$/);
+		assert.match(p.graphPath, /\/yarn\.vision\.json$/);
+	});
+});
+
+test("newPass__WritesThePlainPair__When__PassIsElementGrounded", () => {
+	inTempRoot(() => {
+		const p = newPass({ kind: "app", name: "Yarn" }, "Yarn", "ax", true, undefined);
+		assert.match(p.outPath, /\/yarn\.md$/);
+		assert.match(p.graphPath, /\/yarn\.json$/);
+	});
+});
+
+test("provenanceHeader__StampsExploreVision__When__PassIsVisionOnly", () => {
+	const header = provenanceHeader({
+		app: "Yarn",
+		actions: 3,
+		elapsed: "5m",
+		findings: 2,
+		backend: "ax",
+		findCalls: 0,
+		vision: true,
+		visionOnly: true,
+		stopped: "frontier-empty",
+		seen: 4,
+		actuated: 3,
+		dismissed: 1,
+		surfaces: 2,
+		chapters: 1,
+	});
+	assert.match(header, /^<!-- provenance: explore-vision \|/);
+	assert.match(header, /controls \(DECLARED\): 3 actuated/);
+	// The variant's known weakness must be stated where the numbers are.
+	assert.match(header, /DECLARED — self-reported/);
+});
+
+test("provenanceHeader__StampsExplore__When__PassIsElementGrounded", () => {
+	const header = provenanceHeader({
+		app: "Yarn",
+		actions: 3,
+		elapsed: "5m",
+		findings: 2,
+		backend: "ax",
+		findCalls: 0,
+		vision: true,
+		stopped: "frontier-empty",
+		seen: 4,
+		actuated: 3,
+		dismissed: 1,
+		surfaces: 2,
+		chapters: 1,
+	});
+	assert.match(header, /^<!-- provenance: explore \|/);
+	assert.match(header, /controls: 3 actuated/);
+});
+
+test("coverageNow__CountsTheDeclaredLedger__When__PassIsVisionOnly", () => {
+	inTempRoot(() => {
+		const p = newPass({ kind: "app", name: "Yarn" }, "Yarn", "ax", true, undefined, true);
+		declaredIngest(p.declared, "Toolbar", [{ name: "Save" }, { name: "Cancel" }]);
+		declaredCredit(p.declared, { name: "Save", surface: "Toolbar" });
+		declaredDismiss(p.declared, { names: ["Cancel"], surface: "Toolbar", reason: "r" });
+		const cov = coverageNow(p, "frontier-empty");
+		assert.equal(cov.seen, 2);
+		assert.equal(cov.actuated, 1);
+		assert.equal(cov.dismissed, 1);
+		assert.equal(cov.surfaces, 1);
+	});
+});
+
+test("writeArtifacts__NeverTouchesTheElementGroundedMap__When__PassIsVisionOnly", () => {
+	inTempRoot((dir) => {
+		const appmaps = `${dir}/docs/appmaps`;
+		fs.mkdirSync(appmaps, { recursive: true });
+		const committedProse = "<!-- provenance: explore -->\ncommitted element-grounded map";
+		fs.writeFileSync(`${appmaps}/yarn.md`, committedProse);
+		fs.writeFileSync(`${appmaps}/yarn.json`, JSON.stringify({ app: "Yarn", capturedAt: "2026-07-30T00:00:00.000Z", provenance: "explore", nodes: [], edges: [] }));
+
+		const p = newPass({ kind: "app", name: "Yarn" }, "Yarn", "ax", true, undefined, true);
+		declaredIngest(p.declared, "Toolbar", [{ name: "Save" }]);
+		declaredCredit(p.declared, { name: "Save", surface: "Toolbar" });
+		writeArtifacts(p, { document: "# Yarn map from pixels", nodes: [], edges: [] }, "frontier-empty");
+
+		const visionProse = fs.readFileSync(`${appmaps}/yarn.vision.md`, "utf8");
+		assert.match(visionProse, /^<!-- provenance: explore-vision \|/);
+		assert.match(visionProse, /map from pixels/);
+		const visionGraph = JSON.parse(fs.readFileSync(`${appmaps}/yarn.vision.json`, "utf8"));
+		assert.equal(visionGraph.provenance, "explore-vision");
+		// The committed pair is byte-identical: the whole point of the separate filenames.
+		assert.equal(fs.readFileSync(`${appmaps}/yarn.md`, "utf8"), committedProse);
+	});
+});
+
+// ── consumption: APPMAP_VARIANT ──────────────────────────────────────────────────────────
+
+test("appmapVariant__ReturnsVisionSuffix__When__EnvSelectsIt", () => {
+	withEnv("APPMAP_VARIANT", "vision", () => assert.equal(appmapVariant(), ".vision"));
+	withEnv("APPMAP_VARIANT", undefined, () => assert.equal(appmapVariant(), ""));
+});
+
+test("loadGrounding__LoadsTheVisionMap__When__AppmapVariantIsVision", () => {
+	inTempRoot((dir) => {
+		const appmaps = `${dir}/docs/appmaps`;
+		fs.mkdirSync(appmaps, { recursive: true });
+		fs.writeFileSync(`${appmaps}/yarn.md`, "<!-- provenance: explore | app: Yarn -->\nelement map");
+		fs.writeFileSync(`${appmaps}/yarn.vision.md`, "<!-- provenance: explore-vision | app: Yarn -->\nvision map");
+		withEnv("APPMAP_VARIANT", "vision", () => {
+			const g = loadGrounding("yarn");
+			assert.equal(g.provenance, "explore-vision");
+			assert.match(g.path ?? "", /yarn\.vision\.md$/);
+			assert.match(g.notes ?? "", /vision map/);
+		});
+	});
+});
+
+test("loadGrounding__LoadsTheElementMap__When__NoVariantIsSelected", () => {
+	inTempRoot((dir) => {
+		const appmaps = `${dir}/docs/appmaps`;
+		fs.mkdirSync(appmaps, { recursive: true });
+		fs.writeFileSync(`${appmaps}/yarn.md`, "<!-- provenance: explore | app: Yarn -->\nelement map");
+		fs.writeFileSync(`${appmaps}/yarn.vision.md`, "<!-- provenance: explore-vision | app: Yarn -->\nvision map");
+		withEnv("APPMAP_VARIANT", undefined, () => {
+			const g = loadGrounding("yarn");
+			assert.equal(g.provenance, "explore");
+			assert.match(g.notes ?? "", /element map/);
+		});
+	});
+});
+
+test("loadGrounding__ReportsNone__When__TheVariantMapIsAbsent", () => {
+	// No silent fallback to the element-grounded map: that would leak its knowledge into a
+	// vision-grounded benchmark arm and the run log would say so incorrectly.
+	inTempRoot((dir) => {
+		const appmaps = `${dir}/docs/appmaps`;
+		fs.mkdirSync(appmaps, { recursive: true });
+		fs.writeFileSync(`${appmaps}/yarn.md`, "<!-- provenance: explore | app: Yarn -->\nelement map");
+		withEnv("APPMAP_VARIANT", "vision", () => {
+			assert.equal(loadGrounding("yarn").provenance, "none");
+		});
+	});
+});
+
+test("loadAppMapGraph__LoadsTheVisionGraph__When__AppmapVariantIsVision", () => {
+	inTempRoot((dir) => {
+		const appmaps = `${dir}/docs/appmaps`;
+		fs.mkdirSync(appmaps, { recursive: true });
+		fs.writeFileSync(`${appmaps}/yarn.json`, JSON.stringify({ app: "Yarn", capturedAt: "x", provenance: "explore", nodes: [], edges: [] }));
+		fs.writeFileSync(`${appmaps}/yarn.vision.json`, JSON.stringify({ app: "Yarn", capturedAt: "x", provenance: "explore-vision", nodes: [], edges: [] }));
+		withEnv("APPMAP_VARIANT", "vision", () => assert.equal(loadAppMapGraph("yarn")?.provenance, "explore-vision"));
+		withEnv("APPMAP_VARIANT", undefined, () => assert.equal(loadAppMapGraph("yarn")?.provenance, "explore"));
+	});
+});
+
+test("loadAppMapGraph__ReturnsUndefined__When__TheVisionGraphIsAbsent", () => {
+	// Same no-fallback rule as the prose: a vision arm with no vision graph runs graphless.
+	inTempRoot((dir) => {
+		const appmaps = `${dir}/docs/appmaps`;
+		fs.mkdirSync(appmaps, { recursive: true });
+		fs.writeFileSync(`${appmaps}/yarn.json`, JSON.stringify({ app: "Yarn", capturedAt: "x", provenance: "explore", nodes: [], edges: [] }));
+		withEnv("APPMAP_VARIANT", "vision", () => assert.equal(loadAppMapGraph("yarn"), undefined));
+	});
+});
+
+// ── CLI refusals ─────────────────────────────────────────────────────────────────────────
+
+test("noAxRefusal__Refuses__When__NoAxIsCombinedWithNoVision", () => {
+	assert.match(noAxRefusal(true, false, "ax") ?? "", /window title and nothing else/);
+});
+
+test("noAxRefusal__Refuses__When__BackendIsNotAx", () => {
+	// A non-ax backend's observations ARE ref lists — there is no element channel to drop.
+	assert.match(noAxRefusal(true, true, "cdp") ?? "", /only applies to the ax backend/);
+});
+
+test("noAxRefusal__Allows__When__NoAxRunsOnAxWithVision", () => {
+	assert.equal(noAxRefusal(true, true, "ax"), undefined);
+});
+
+test("noAxRefusal__Allows__When__NoAxIsOff", () => {
+	assert.equal(noAxRefusal(false, false, "cdp"), undefined);
+});
+
+// ── tools ────────────────────────────────────────────────────────────────────────────────
+
+test("VISION_ACT_TOOL__CarriesATargetProperty__When__SchemaIsRead", () => {
+	// The declared target is the only way an action reaches the frontier on this pass. It is
+	// enforced at runtime for operating verbs only — schema-required would force the model to
+	// fabricate a target for `wait`, false coverage the declared frontier must not count.
+	const schema = VISION_ACT_TOOL.input_schema as { required: string[]; properties: Record<string, unknown> };
+	assert.ok(schema.properties.target);
+	assert.equal(schema.required.includes("target"), false);
+	// Derived from ACT_TOOL, so the action vocabulary cannot drift between the arms.
+	assert.ok(schema.required.includes("action"));
+});
+
+test("SURVEY_TOOL__RequiresSurfaceAndControls__When__SchemaIsRead", () => {
+	const schema = SURVEY_TOOL.input_schema as { required: string[] };
+	assert.deepEqual([...schema.required].sort(), ["controls", "surface"]);
+});
