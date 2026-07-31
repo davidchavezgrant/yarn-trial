@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
+import { parseArgs } from "node:util";
 import { CdpBackend } from "../backends/cdp.js";
 import { Driver } from "./driver.js";
 import { envNum } from "../env.js";
+import { readJsonOr } from "../fsutil.js";
 import {
 	appSlug,
 	ensureObservable,
@@ -140,16 +142,19 @@ export function stampArtifacts(names: string[], stamp: string): string[] {
 }
 
 async function main(): Promise<void> {
-	const argv = process.argv.slice(2);
-	const dryRun = argv.includes("--dry-run");
-	const vision = !argv.includes("--no-vision");
-	const appIdx = argv.indexOf("--app");
-	const appOverride = appIdx >= 0 ? argv[appIdx + 1] : undefined;
-	const urlIdx = argv.indexOf("--url");
-	const url = urlIdx >= 0 ? argv[urlIdx + 1] : undefined;
-	const stamp = argv.find(
-		(a, i) => !a.startsWith("--") && (appIdx < 0 || i !== appIdx + 1) && (urlIdx < 0 || i !== urlIdx + 1),
-	);
+	// Loose parseArgs, matching what the hand-rolled parser accepted: unknown flags are
+	// ignored rather than fatal, and the option values are kept out of the positionals.
+	const { values, positionals } = parseArgs({
+		args: process.argv.slice(2),
+		options: { app: { type: "string" }, url: { type: "string" }, "dry-run": { type: "boolean" }, "no-vision": { type: "boolean" } },
+		strict: false,
+		allowPositionals: true,
+	});
+	const dryRun = values["dry-run"] === true;
+	const vision = values["no-vision"] !== true;
+	const appOverride = typeof values.app === "string" ? values.app : undefined;
+	const url = typeof values.url === "string" ? values.url : undefined;
+	const stamp = positionals[0];
 	if (!stamp) {
 		console.error('usage: npm run cleanup -- <stamp> [--app "App Name"] [--url <https://…>] [--dry-run] [--no-vision]');
 		console.error("  stamp identifies a run, e.g. 2026-07-30T03-00-00-yarn");
@@ -189,13 +194,9 @@ async function main(): Promise<void> {
 	const unrestorable = plan.filter((p) => p.disposition === "unrestorable").length;
 	const resources = plan.filter((p) => p.disposition === "resource").length;
 
-	let runLogApp: string | undefined;
-	try {
-		runLogApp = JSON.parse(fs.readFileSync(`${OUT}/runs/${stamp}.json`, "utf8")).app;
-	} catch {
-		// The run log is absent exactly when this CLI is most needed — a run killed before it
-		// could write one. --app covers it; the stamp suffix covers the common case.
-	}
+	// The run log is absent exactly when this CLI is most needed — a run killed before it
+	// could write one. --app covers it; the stamp suffix covers the common case.
+	const runLogApp: string | undefined = readJsonOr<any>(`${OUT}/runs/${stamp}.json`, undefined)?.app;
 	const app = appForStamp(stamp, runLogApp, appOverride);
 
 	console.log(`=== cleanup: ${stamp} (${app}) ===`);

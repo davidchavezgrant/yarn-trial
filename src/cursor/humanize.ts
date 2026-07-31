@@ -14,6 +14,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { parseArgs } from "node:util";
 import type { MotionConstants, MotionSegmentLibrary } from "./motion-types.js";
 import { renderTrack } from "./render.js";
 import { buildTrack, readTrajectory, type RunLogStep, type TrajectoryTurn } from "./track.js";
@@ -98,9 +99,16 @@ print(json.dumps(out))
 }
 
 function main(): void {
-	const argv = process.argv.slice(2);
-	const stamp = argv.find((a) => !a.startsWith("--"));
-	const wantVideo = !argv.includes("--no-video");
+	// Loose parseArgs, matching what the hand-rolled parser accepted: unknown flags are
+	// ignored rather than fatal.
+	const { values, positionals } = parseArgs({
+		args: process.argv.slice(2),
+		options: { "no-video": { type: "boolean" } },
+		strict: false,
+		allowPositionals: true,
+	});
+	const stamp = positionals[0];
+	const wantVideo = values["no-video"] !== true;
 	if (!stamp) {
 		console.error("usage: npm run humanize -- <run-stamp> [--no-video]");
 		process.exit(1);

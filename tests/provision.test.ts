@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { type HostEntry, type Inventory, HOSTS_SCHEMA } from "../src/fleet/remote/hosts.js";
+import type { HostEntry } from "../src/fleet/remote/hosts.js";
 import {
 	type DoctorRow,
 	type ProvisionOptions,
@@ -14,13 +14,13 @@ import {
 	provisionFleet,
 	provisionHost,
 	restartFleet,
-	rshCommand,
 	rsyncArgv,
 	stageProvisioningFiles,
 	LAUNCH_LABEL,
 	REMOTE_CHECKOUT,
 } from "../src/fleet/remote/provision.js";
-import type { SshResult } from "../src/fleet/remote/ssh.js";
+import { rsyncShell, type SshResult } from "../src/fleet/remote/ssh.js";
+import { host, inTempDir, inventory, ok } from "./fixtures.js";
 
 /**
  * Remote provisioning and the remote doctor. Offline by construction: both the ssh call and
@@ -29,30 +29,6 @@ import type { SshResult } from "../src/fleet/remote/ssh.js";
  * the first would reconfigure a machine three people share, and the last two belong to the
  * operator.
  */
-
-const PIN = "SHA256:724od0jL8u9KOWHaFi+t710VcSUmsFnN79hdOcoOI2c";
-
-function host(name: string, addr = "10.0.0.1", hostKey: string | null = PIN): HostEntry {
-	return { name, ssh: { host: addr, port: 22, user: "administrator" }, vnc: { host: addr, port: 5900 }, hostKey };
-}
-
-function inventory(...hosts: HostEntry[]): Inventory {
-	return { schema: HOSTS_SCHEMA, hosts };
-}
-
-function ok(stdout = ""): SshResult {
-	return { code: 0, stdout, stderr: "" };
-}
-
-/** Awaits the body: a synchronous `finally` would remove the directory mid-test. */
-async function inTempDir<T>(fn: (dir: string) => T | Promise<T>): Promise<T> {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "yarn-source-"));
-	try {
-		return await fn(dir);
-	} finally {
-		fs.rmSync(dir, { recursive: true, force: true });
-	}
-}
 
 interface Recorder {
 	opts: ProvisionOptions;
@@ -111,7 +87,7 @@ function stepNames(result: ProvisionResult): string[] {
 }
 
 test("provisionHost__CompletesEveryStep__When__TheHostAnswers", async () => {
-	await inTempDir(async (source) => {
+	await inTempDir("yarn-source-", async (source) => {
 		const rec = fleetDouble(source);
 		const result = await provisionHost(host("mac1"), rec.opts);
 
@@ -129,7 +105,7 @@ test("provisionHost__CompletesEveryStep__When__TheHostAnswers", async () => {
 });
 
 test("provisionHost__SendsOnlyFixedTokens__When__ProvisioningAHost", async () => {
-	await inTempDir(async (source) => {
+	await inTempDir("yarn-source-", async (source) => {
 		const rec = fleetDouble(source);
 		await provisionHost(host("mac1"), rec.opts);
 
@@ -149,7 +125,7 @@ test("provisionHost__SendsOnlyFixedTokens__When__ProvisioningAHost", async () =>
 });
 
 test("provisionHost__RefusesHost__When__HostKeyIsNotPinned", async () => {
-	await inTempDir(async (source) => {
+	await inTempDir("yarn-source-", async (source) => {
 		const rec = fleetDouble(source);
 		const result = await provisionHost(host("new", "10.0.0.9", null), rec.opts);
 
@@ -163,7 +139,7 @@ test("provisionHost__RefusesHost__When__HostKeyIsNotPinned", async () => {
 });
 
 test("provisionHost__StopsAtTheFailedStep__When__TheSyncFails", async () => {
-	await inTempDir(async (source) => {
+	await inTempDir("yarn-source-", async (source) => {
 		const rec = fleetDouble(source);
 		rec.opts.rsync = async (argv) => {
 			rec.rsync.push(argv);
@@ -182,7 +158,7 @@ test("provisionHost__StopsAtTheFailedStep__When__TheSyncFails", async () => {
 });
 
 test("provisionHost__FailsRunnerctl__When__TheShimIsNotOnTheNonInteractivePath", async () => {
-	await inTempDir(async (source) => {
+	await inTempDir("yarn-source-", async (source) => {
 		// The failure every host answers with today. `ssh host cmd` runs a non-interactive shell
 		// whose PATH is /etc/paths, so installing into ~/.local/bin without the PATH line
 		// produces a shim that exists and cannot be found.
@@ -199,7 +175,7 @@ test("provisionHost__FailsRunnerctl__When__TheShimIsNotOnTheNonInteractivePath",
 });
 
 test("provisionHost__ReportsNotReady__When__TheRunnerNeverAnswers", async () => {
-	await inTempDir(async (source) => {
+	await inTempDir("yarn-source-", async (source) => {
 		// Exit 3 is runnerctl's own "cannot reach the runner": the shim is installed and found,
 		// the socket behind it is not up. That must NOT read as a missing shim.
 		const rec = fleetDouble(source, (argv) =>
@@ -217,7 +193,7 @@ test("provisionHost__ReportsNotReady__When__TheRunnerNeverAnswers", async () => 
 });
 
 test("provisionHost__RemovesTheStagingDirectory__When__TheSyncFinishes", async () => {
-	await inTempDir(async (source) => {
+	await inTempDir("yarn-source-", async (source) => {
 		const rec = fleetDouble(source);
 		await provisionHost(host("mac1"), rec.opts);
 
@@ -228,7 +204,7 @@ test("provisionHost__RemovesTheStagingDirectory__When__TheSyncFinishes", async (
 });
 
 test("provisionHost__ShipsAnExecutableElectronServeAgent__When__StagingThePayload", async () => {
-	await inTempDir(async (source) => {
+	await inTempDir("yarn-source-", async (source) => {
 		const rec = fleetDouble(source);
 		await provisionHost(host("mac1"), rec.opts);
 
@@ -285,7 +261,7 @@ test("provisionHost__ShipsAnExecutableElectronServeAgent__When__StagingThePayloa
 });
 
 test("stageProvisioningFiles__WritesTheWholePayload__When__GivenAnEmptyDirectory", async () => {
-	await inTempDir((dir) => {
+	await inTempDir("yarn-source-", (dir) => {
 		const names = stageProvisioningFiles(dir);
 		assert.deepEqual(names.sort(), ["com.yarn.runner.plist.in", "install-launchagent.sh", "install-runnerctl.sh", "runnerctl", "yarn-runner-serve"]);
 		// Idempotent: a second provision reuses the same names, and writeFileSync's mode does
@@ -297,7 +273,7 @@ test("stageProvisioningFiles__WritesTheWholePayload__When__GivenAnEmptyDirectory
 });
 
 test("stageProvisioningFiles__CarriesTheModelKeyAsA0600File__When__ProvisionerHasOne", async () => {
-	await inTempDir((dir) => {
+	await inTempDir("yarn-source-", (dir) => {
 		// Absent is the ordinary case and not an error: a teammate with no key can still stand a
 		// host up and supply one later from the credentials panel.
 		assert.equal(stageProvisioningFiles(dir).includes("env"), false);
@@ -352,11 +328,11 @@ test("rsyncArgv__Throws__When__TheDestinationCouldBeShellInput", () => {
 	assert.throws(() => rsyncArgv(host("mac1", "$(hostname)"), "/tmp/src", REMOTE_CHECKOUT), /shell input/);
 });
 
-test("rshCommand__ReusesThePinnedSshTransport__When__BuiltForAHost", () => {
+test("rsyncShell__ReusesThePinnedSshTransport__When__BuiltForAHost", () => {
 	const prev = process.env.YARN_RUNNER_HOME;
 	delete process.env.YARN_RUNNER_HOME; // exercise the real defaults, not a test override
 	try {
-		const rsh = rshCommand(host("mac1"));
+		const rsh = rsyncShell(host("mac1"));
 		// Restating these options for rsync is how a second copy drifts into not checking the
 		// host key; they are taken off the front of the real argv instead.
 		assert.match(rsh, /^ssh /);
@@ -374,13 +350,13 @@ test("rshCommand__ReusesThePinnedSshTransport__When__BuiltForAHost", () => {
 	}
 });
 
-test("rshCommand__Throws__When__AnSshOptionContainsWhitespace", () => {
+test("rsyncShell__Throws__When__AnSshOptionContainsWhitespace", () => {
 	// rsync splits --rsh on whitespace itself and honours no quoting, so this would silently
 	// become two arguments and connect somewhere else — or nowhere.
 	const prev = process.env.YARN_RUNNER_HOME;
 	process.env.YARN_RUNNER_HOME = "/tmp/yarn runner home";
 	try {
-		assert.throws(() => rshCommand(host("mac1")), /whitespace/);
+		assert.throws(() => rsyncShell(host("mac1")), /whitespace/);
 	} finally {
 		if (prev === undefined) delete process.env.YARN_RUNNER_HOME;
 		else process.env.YARN_RUNNER_HOME = prev;
@@ -388,7 +364,7 @@ test("rshCommand__Throws__When__AnSshOptionContainsWhitespace", () => {
 });
 
 test("provisionFleet__IsolatesFailure__When__OneHostIsUnreachable", async () => {
-	await inTempDir(async (source) => {
+	await inTempDir("yarn-source-", async (source) => {
 		const rec = fleetDouble(source);
 		const results = await provisionFleet(inventory(host("mac1", "10.0.0.1"), host("mac2", "10.0.0.2"), host("mac3", "10.0.0.3", null)), {
 			...rec.opts,

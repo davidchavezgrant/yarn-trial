@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { type HostEntry, type Inventory, HOSTS_SCHEMA } from "../src/fleet/remote/hosts.js";
+import type { HostEntry } from "../src/fleet/remote/hosts.js";
 import {
 	type AppSource,
 	type InstallOptions,
@@ -25,6 +25,7 @@ import {
 } from "../src/fleet/remote/install.js";
 import { REMOTE_CHECKOUT } from "../src/fleet/remote/provision.js";
 import type { SshResult } from "../src/fleet/remote/ssh.js";
+import { host, inTempDir, inventory, ok } from "./fixtures.js";
 
 /**
  * Getting an app onto a fleet Mac. Offline by construction: the ssh call and the rsync call are
@@ -38,32 +39,8 @@ import type { SshResult } from "../src/fleet/remote/ssh.js";
  * on a headless colo Mac costs a support call.
  */
 
-const PIN = "SHA256:724od0jL8u9KOWHaFi+t710VcSUmsFnN79hdOcoOI2c";
-
 /** A name with a space is the NORMAL case; the quote and the semicolon are the adversarial part. */
 const HOSTILE_NAME = 'Notion "Calendar"; rm -rf $HOME';
-
-function host(name: string, addr = "10.0.0.1", hostKey: string | null = PIN): HostEntry {
-	return { name, ssh: { host: addr, port: 22, user: "administrator" }, vnc: { host: addr, port: 5900 }, hostKey };
-}
-
-function inventory(...hosts: HostEntry[]): Inventory {
-	return { schema: HOSTS_SCHEMA, hosts };
-}
-
-function ok(stdout = ""): SshResult {
-	return { code: 0, stdout, stderr: "" };
-}
-
-/** Awaits the body: a synchronous `finally` would remove the directory mid-test. */
-async function inTempDir<T>(fn: (dir: string) => T | Promise<T>): Promise<T> {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "yarn-install-test-"));
-	try {
-		return await fn(dir);
-	} finally {
-		fs.rmSync(dir, { recursive: true, force: true });
-	}
-}
 
 /** What a fleet Mac's `find` prints back. Paths only — the probe reads nothing else. */
 function findOutput(...bundles: string[]): string {
@@ -488,7 +465,7 @@ test("payloadRsyncArgv__OmitsTheTrailingSlash__When__ThePayloadIsAFile", () => {
 });
 
 test("installApp__UploadsTheArchiveWithoutFetching__When__TheSourceIsALocalPath", async () => {
-	await inTempDir(async (dir) => {
+	await inTempDir("yarn-install-test-", async (dir) => {
 		const local = path.join(dir, "Notion Calendar.dmg");
 		fs.writeFileSync(local, "disk image");
 		const rec = fleetDouble("Notion Calendar");
@@ -510,7 +487,7 @@ test("payloadRsyncArgv__Throws__When__TheDestinationCouldBeShellInput", () => {
 });
 
 test("stageInstallFiles__Throws__When__TheAppNameCouldEscapeTheRequestFile", async () => {
-	await inTempDir((dir) => {
+	await inTempDir("yarn-install-test-", (dir) => {
 		// The request file is line-oriented and the name is used as a path component on the far
 		// side. Both break on these, and no real bundle has either.
 		assert.throws(() => stageInstallFiles(dir, { app: "Two\nLines", kind: "dmg", url: "https://e.test/a.dmg" }, "/Applications"), /newline/);
@@ -582,7 +559,7 @@ exit 0`,
 }
 
 test("installScript__DetachesTheImage__When__TheCopyFails", async () => {
-	await inTempDir(async (dir) => {
+	await inTempDir("yarn-install-test-", async (dir) => {
 		const box = sandbox(dir, { app: "Fake App", kind: "dmg", url: "https://example.test/a.dmg" });
 		fs.writeFileSync(path.join(box.stage, "payload.dmg"), "not really a disk image");
 
@@ -597,7 +574,7 @@ test("installScript__DetachesTheImage__When__TheCopyFails", async () => {
 });
 
 test("installScript__InstallsTheBundleAndDetaches__When__TheImageMounts", async () => {
-	await inTempDir(async (dir) => {
+	await inTempDir("yarn-install-test-", async (dir) => {
 		const box = sandbox(dir, { app: "Fake App", kind: "dmg", url: "https://example.test/a.dmg" });
 		fs.writeFileSync(path.join(box.stage, "payload.dmg"), "not really a disk image");
 
@@ -614,7 +591,7 @@ test("installScript__InstallsTheBundleAndDetaches__When__TheImageMounts", async 
 });
 
 test("installScript__NamesTheBundleFromTheRequest__When__TheNameCarriesASpaceAndAQuote", async () => {
-	await inTempDir(async (dir) => {
+	await inTempDir("yarn-install-test-", async (dir) => {
 		// The end-to-end round trip. An rsync destination is shell input on the remote side, so a
 		// bundle uploaded from a local path arrives under a fixed stem and can only be named
 		// after the app once it is already there — by a script reading a quoted variable.
@@ -632,7 +609,7 @@ test("installScript__NamesTheBundleFromTheRequest__When__TheNameCarriesASpaceAnd
 });
 
 test("installScript__Refuses__When__ThePayloadHoldsMoreThanOneBundle", async () => {
-	await inTempDir(async (dir) => {
+	await inTempDir("yarn-install-test-", async (dir) => {
 		// A dmg routinely carries an uninstaller or a helper beside the app. Picking the first
 		// would install whichever one sorts earliest, and it would verify as absent minutes later.
 		const box = sandbox(dir, { app: "Something Else", kind: "app", path: "/tmp/whatever.app" });
@@ -647,7 +624,7 @@ test("installScript__Refuses__When__ThePayloadHoldsMoreThanOneBundle", async () 
 });
 
 test("fetchScript__Refuses__When__TheRequestCarriesANonHttpsUrl", async () => {
-	await inTempDir(async (dir) => {
+	await inTempDir("yarn-install-test-", async (dir) => {
 		const box = sandbox(dir, { app: "Fake App", kind: "dmg", url: "https://example.test/a.dmg" });
 		// Hand-written, because stageInstallFiles will not produce one. This copy of the check is
 		// the only one running on the machine that actually makes the request.
@@ -662,7 +639,7 @@ test("fetchScript__Refuses__When__TheRequestCarriesANonHttpsUrl", async () => {
 });
 
 test("fetchScript__Fails__When__TheDownloadIsEmpty", async () => {
-	await inTempDir(async (dir) => {
+	await inTempDir("yarn-install-test-", async (dir) => {
 		const box = sandbox(dir, { app: "Fake App", kind: "dmg", url: "https://example.test/a.dmg" });
 
 		// A login wall answers 200 and curl exits 0. Zero bytes does not prove the file is an

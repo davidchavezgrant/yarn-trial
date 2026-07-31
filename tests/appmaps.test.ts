@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { beats, type MapVersion, planTransfers, readAppmaps, type Source, summarise, syncAppmaps } from "../src/fleet/remote/appmaps.js";
-import { type HostEntry, HOSTS_SCHEMA, type Inventory } from "../src/fleet/remote/hosts.js";
 import type { SshResult, SshRunner } from "../src/fleet/remote/ssh.js";
+import { host, inventory } from "./fixtures.js";
 
 /**
  * Appmap sharing, offline. Every ssh and every rsync is injected and every directory is a temp
@@ -17,16 +17,6 @@ import type { SshResult, SshRunner } from "../src/fleet/remote/ssh.js";
  * newer map being silently replaced by an older one, which nobody notices until an agent runs
  * against stale knowledge.
  */
-
-const PIN = "SHA256:724od0jL8u9KOWHaFi+t710VcSUmsFnN79hdOcoOI2c";
-
-function host(name: string, addr: string): HostEntry {
-	return { name, ssh: { host: addr, port: 22, user: "administrator" }, vnc: { host: addr, port: 5900 }, hostKey: PIN };
-}
-
-function inventory(...hosts: HostEntry[]): Inventory {
-	return { schema: HOSTS_SCHEMA, hosts };
-}
 
 function tmp(): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), "appmaps-test-"));

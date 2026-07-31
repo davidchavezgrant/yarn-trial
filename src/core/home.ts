@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
+import { parseArgs } from "node:util";
 import { appSlug, checkHome, loadAppMapGraph, makeClient, providerRouting, retryTransient, rootSurface } from "./harness.js";
 import { appmapsDir } from "../paths.js";
 import type { AppMap, AppMapHome } from "../types.js";
@@ -111,8 +112,15 @@ be reset to a known start state without re-exploring the app (~40 min). Requires
 docs/appmaps/<app>.json; refuses to overwrite an existing home unless --force.`;
 
 async function main(): Promise<void> {
-	const argv = process.argv.slice(2);
-	const app = argv.find((a) => !a.startsWith("--"));
+	// Loose parseArgs, matching what the hand-rolled parser accepted: unknown flags are
+	// ignored rather than fatal.
+	const { values, positionals } = parseArgs({
+		args: process.argv.slice(2),
+		options: { force: { type: "boolean" } },
+		strict: false,
+		allowPositionals: true,
+	});
+	const app = positionals[0];
 	if (!app) {
 		console.error(USAGE);
 		process.exit(2);
@@ -124,7 +132,7 @@ async function main(): Promise<void> {
 		console.error(`no graph at ${path} — this needs a full pass: npm run explore -- "${app}"`);
 		process.exit(1);
 	}
-	if (graph.home && !argv.includes("--force")) {
+	if (graph.home && values.force !== true) {
 		console.log(`"${app}" already declares a home (${graph.home.control} → ${graph.home.surface}, source: ${graph.home.source ?? "explore"})`);
 		console.log("pass --force to replace it");
 

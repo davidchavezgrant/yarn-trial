@@ -1,11 +1,12 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { parseArgs } from "node:util";
+import { attempt, type Attempt } from "./attempt.js";
 import { type HostEntry, type Inventory, loadHosts, resolveHost } from "./hosts.js";
-import { REMOTE_CHECKOUT, rshCommand } from "./provision.js";
-import { firstLine, type RsyncRunner, runRsync, runSsh, rsyncDestination, SPAWN_FAILED_EXIT, type SshResult, type SshRunner, TIMEOUT_EXIT } from "./ssh.js";
+import { REMOTE_CHECKOUT } from "./provision.js";
+import { firstLine, type RsyncRunner, runRsync, runSsh, rsyncDestination, rsyncShell, type SshResult, type SshRunner } from "./ssh.js";
 
 /**
  * Getting a target app onto a fleet Mac before a run needs it, and asking whether it is
@@ -459,7 +460,7 @@ export function payloadRsyncArgv(host: HostEntry, source: string, remoteDest: st
 		// a payload directory this module owns and recreates, so a stale bundle from a previous
 		// install would otherwise be what the installer finds.
 		...(dir ? ["--delete"] : []),
-		"--rsh", rshCommand(host),
+		"--rsh", rsyncShell(host),
 		dir ? `${source.replace(/\/+$/, "")}/` : source,
 		dir ? `${destination}/` : destination,
 	];
@@ -792,44 +793,6 @@ PART=""
 printf 'installed=%s\\n' "$DEST/$BASE"
 `;
 
-interface Attempt {
-	ok: boolean;
-	/** One line, ready for a table cell. */
-	detail: string;
-	stdout: string;
-	code?: number;
-}
-
-/**
- * Run one remote thing and reduce it to pass/fail plus a line. Catches as well as checking the
- * exit code: an injected runner, or an ssh that cannot be spawned at all, throws rather than
- * resolving, and a step must degrade rather than unwind the pass.
- */
-async function attempt(fn: () => Promise<SshResult>): Promise<Attempt> {
-	let result: SshResult;
-	try {
-		result = await fn();
-	} catch (e) {
-		return { ok: false, detail: (e as Error).message, stdout: "" };
-	}
-
-	if (result.code === 0) return { ok: true, detail: firstLine(result.stdout), stdout: result.stdout, code: 0 };
-
-	return {
-		ok: false,
-		detail: firstLine(result.stderr) || firstLine(result.stdout) || describeExit(result.code),
-		stdout: result.stdout,
-		code: result.code,
-	};
-}
-
-function describeExit(code: number): string {
-	if (code === TIMEOUT_EXIT) return "timed out";
-	if (code === SPAWN_FAILED_EXIT) return "could not be started";
-
-	return `exited ${code}`;
-}
-
 const USAGE = `usage: tsx src/fleet/remote/install.ts "<App Name>" <https://… | /path/to/App.{app,dmg,zip}> [--host <name>] [--force]
        tsx src/fleet/remote/install.ts "<App Name>" --check [--host <name>]
 
@@ -839,20 +802,23 @@ const USAGE = `usage: tsx src/fleet/remote/install.ts "<App Name>" <https://… 
 
 /** \`./run install "Notion Calendar" https://…\` — the fleet as a table of what is where. */
 async function main(): Promise<void> {
-	const argv = process.argv.slice(2);
-	const at = argv.indexOf("--host");
-	const only = at >= 0 ? argv[at + 1] : undefined;
-	if (at >= 0 && !only) {
+	// Loose parseArgs, matching what the hand-rolled parser accepted: unknown flags are
+	// ignored rather than fatal, and `--host`'s value is kept out of the positionals — the
+	// arithmetic that used to guard against `--host` swallowing the app name.
+	const { values, positionals } = parseArgs({
+		args: process.argv.slice(2),
+		options: { host: { type: "string" }, check: { type: "boolean" }, force: { type: "boolean" } },
+		strict: false,
+		allowPositionals: true,
+	});
+	const only = typeof values.host === "string" && values.host ? values.host : undefined;
+	if ("host" in values && !only) {
 		console.error(`--host needs a host name\n${USAGE}`);
 		process.exit(2);
 	}
 
-	// `at + 1` is the host name, which is a value and not a positional. Guarded, because with no
-	// --host at all `at` is -1 and the arithmetic would otherwise swallow the app name.
-	const hostValueAt = at >= 0 ? at + 1 : -1;
-	const positional = argv.filter((a, i) => !a.startsWith("--") && i !== hostValueAt);
-	const [app, spec] = positional;
-	const check = argv.includes("--check");
+	const [app, spec] = positionals;
+	const check = values.check === true;
 	if (!app || (!spec && !check)) {
 		console.error(USAGE);
 		process.exit(2);
@@ -882,7 +848,7 @@ async function main(): Promise<void> {
 	}
 
 	console.log(`installing ${source.app} on ${inv.hosts.length} host(s) from ${source.url ?? source.path}`);
-	const rows = await installFleet(inv, source, { force: argv.includes("--force") });
+	const rows = await installFleet(inv, source, { force: values.force === true });
 	for (const row of rows) {
 		// Every step, always: a pass that stopped at `deliver` and one that stopped at `verify`
 		// are the same word in a status column and completely different problems.

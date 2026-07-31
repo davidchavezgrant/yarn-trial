@@ -5,8 +5,9 @@ import path from "node:path";
 import { test } from "node:test";
 import type { DispatchOptions, DispatchResult, FollowOptions, FollowResult, PullResult, StopResult } from "../src/fleet/remote/dispatch.js";
 import type { FleetRow } from "../src/fleet/remote/fleet.js";
-import { type HostEntry, HOSTS_SCHEMA, type Inventory } from "../src/fleet/remote/hosts.js";
+import { HOSTS_SCHEMA, type Inventory } from "../src/fleet/remote/hosts.js";
 import { setModelKey } from "../src/fleet/remote/team.js";
+import { host } from "./fixtures.js";
 import {
 	annotateRuns,
 	appChoices,
@@ -35,12 +36,6 @@ import {
  * injected function and every filesystem write goes to a temp root — the three Macs are live,
  * and a stray submit from a test run takes one out of the fleet for as long as the run lasts.
  */
-
-const PIN = "SHA256:724od0jL8u9KOWHaFi+t710VcSUmsFnN79hdOcoOI2c";
-
-function host(name: string, addr: string): HostEntry {
-	return { name, ssh: { host: addr, port: 22, user: "administrator" }, vnc: { host: addr, port: 5900 }, hostKey: PIN };
-}
 
 const FLEET: Inventory = { schema: HOSTS_SCHEMA, hosts: [host("mac1", "10.0.0.1"), host("mac2", "10.0.0.2")] };
 

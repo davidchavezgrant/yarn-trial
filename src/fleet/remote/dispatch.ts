@@ -1,4 +1,4 @@
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -9,7 +9,7 @@ import type { JobArtifacts, JobKind, JobRecord } from "../runner/jobs.js";
 import { autoSync, type SyncOptions } from "./appmaps.js";
 import { type FleetRow, type FleetState, fleetStatus, pickIdleHost } from "./fleet.js";
 import { defaultOperator, type HostEntry, type Inventory, loadHosts, resolveHost } from "./hosts.js";
-import { assertSafeRemotePath, DEFAULT_SSH_TIMEOUT_MS, lastFrame, remoteDataRoot, runnerArgv, runnerHome, runSsh, rsyncShell, SPAWN_FAILED_EXIT, type SshResult, type SshRunner, sshArgv } from "./ssh.js";
+import { assertSafeRemotePath, DEFAULT_SSH_TIMEOUT_MS, firstLine, lastFrame, remoteDataRoot, runnerArgv, runnerHome, runSsh, runTransport, rsyncShell, SPAWN_FAILED_EXIT, type SshResult, type SshRunner, sshArgv } from "./ssh.js";
 
 /**
  * The local half of a dispatched run: submit it to a Mac in the fleet, watch it, bring the
@@ -504,7 +504,9 @@ export interface PullResult {
 export async function pull(host: HostEntry | string, jobId: string, opts: PullOptions = {}): Promise<PullResult> {
 	const target = toHost(host, opts.inventory);
 	const run = opts.run ?? runSsh;
-	const rsync = opts.rsync ?? runCommand;
+	// ssh.ts's transport mapping, not a local copy: a pull killed on its timeout reports 124,
+	// the same vocabulary every other transport call here speaks.
+	const rsync: CommandRunner = opts.rsync ?? ((file, argv, o) => runTransport(file, argv, o.timeoutMs));
 	const localRoot = opts.dest ?? dataRoot();
 	if (!SAFE_ID.test(jobId)) throw new Error(`unsafe job id ${JSON.stringify(jobId)}`);
 
@@ -569,7 +571,8 @@ function sourcesFor(job: JobRecord): Source[] {
 	const out: Source[] = [{ key: "job", rel: `out/jobs/${job.id}`, dir: true }];
 	if (a.runLog) out.push({ key: "runLog", rel: a.runLog, dir: false });
 	if (a.checkpoint) out.push({ key: "checkpoint", rel: a.checkpoint, dir: false });
-	if (a.recording) out.push({ key: "recording", rel: posixDirname(a.recording), dir: true });
+	// `recording` is minted as `out/recording/<id>/window.mp4` (jobs.ts), so dirname is safe.
+	if (a.recording) out.push({ key: "recording", rel: path.posix.dirname(a.recording), dir: true });
 	if (a.appmap) {
 		out.push({ key: "appmap", rel: a.appmap, dir: false });
 		// The graph half of the appmap is written by the same pass but is absent from
@@ -682,27 +685,6 @@ export async function remoteApps(
 
 function toHost(host: HostEntry | string, inv?: Inventory): HostEntry {
 	return typeof host === "string" ? resolveHost(host, inv ?? loadHosts()) : host;
-}
-
-function firstLine(s: string): string {
-	return s.split("\n").map((l) => l.trim()).find((l) => l.length > 0) ?? "";
-}
-
-function posixDirname(p: string): string {
-	const at = p.lastIndexOf("/");
-
-	return at <= 0 ? p : p.slice(0, at);
-}
-
-/** Who to blame in the busy message on the next operator's refused submit. */
-function runCommand(file: string, argv: string[], opts: { timeoutMs: number }): Promise<SshResult> {
-	return new Promise((resolve) => {
-		execFile(file, argv, { timeout: opts.timeoutMs, maxBuffer: 8 << 20, encoding: "utf8" }, (err, stdout, stderr) => {
-			const e = err as (Error & { code?: number | string }) | null;
-			const code = typeof e?.code === "number" ? e.code : e ? SPAWN_FAILED_EXIT : 0;
-			resolve({ code, stdout: stdout ?? "", stderr: (stderr ?? "") || (code === SPAWN_FAILED_EXIT ? String(e) : "") });
-		});
-	});
 }
 
 const USAGE = `usage: dispatch <host|auto> "<task>" "<App>" [--record] [--no-vision]

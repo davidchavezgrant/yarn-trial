@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { type HostEntry, HOSTS_SCHEMA, type Inventory } from "../src/fleet/remote/hosts.js";
 import { clearAppAuth, deleteRemoteApp } from "../src/fleet/remote/manage.js";
 import { decodeSpec, type SshResult, type SshRunner } from "../src/fleet/remote/ssh.js";
+import { host } from "./fixtures.js";
 
 /**
  * The laptop half of remote app/auth management, offline by construction: every ssh call is an
@@ -10,12 +11,6 @@ import { decodeSpec, type SshResult, type SshRunner } from "../src/fleet/remote/
  * are the wire ones — nothing variable ever lands on an argv position, and a refusal comes
  * back as an answer rather than as an exception a caller might swallow.
  */
-
-const PIN = "SHA256:724od0jL8u9KOWHaFi+t710VcSUmsFnN79hdOcoOI2c";
-
-function host(name = "mac1", addr = "10.0.0.1"): HostEntry {
-	return { name, ssh: { host: addr, port: 22, user: "administrator" }, vnc: { host: addr, port: 5900 }, hostKey: PIN };
-}
 
 const FLEET: Inventory = { schema: HOSTS_SCHEMA, hosts: [host("mac1", "10.0.0.1"), host("mac2", "10.0.0.2")] };
 

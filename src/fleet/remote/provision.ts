@@ -1,11 +1,11 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { resourcesRoot } from "../../paths.js";
+import { attempt, type Attempt } from "./attempt.js";
 import { type HostEntry, type Inventory, loadHosts, resolveHost } from "./hosts.js";
-import { firstLine, runnerArgv, type RsyncRunner, runRsync, runSsh, rsyncDestination, SPAWN_FAILED_EXIT, type SshResult, sshArgv, type SshRunner, TIMEOUT_EXIT } from "./ssh.js";
+import { firstLine, runnerArgv, type RsyncRunner, runRsync, runSsh, rsyncDestination, rsyncShell, SPAWN_FAILED_EXIT, type SshRunner, TIMEOUT_EXIT } from "./ssh.js";
 import { checkModelKey, CREDENTIALS_FILENAME } from "./team.js";
 
 /**
@@ -371,22 +371,6 @@ export function doctorProblems(report: RemoteDoctor): string[] {
 }
 
 /**
- * The `ssh …` word rsync needs for `--rsh`, taken off the front of the real argv rather than
- * restated. A second copy of these options would drift, and the copy that drifts is the one
- * that stops pinning the host key.
- */
-export function rshCommand(host: HostEntry): string {
-	// sshArgv puts `user@host` last when there is no remote command; the rest is transport.
-	const transport = sshArgv(host, []).slice(0, -1);
-	// rsync splits this string on whitespace itself and honours no quoting, so a path with a
-	// space in it silently becomes two arguments. Refuse rather than ship that to three Macs.
-	const spaced = transport.find((opt) => /\s/.test(opt));
-	if (spaced) throw new Error(`ssh option ${JSON.stringify(spaced)} contains whitespace — rsync's --rsh cannot carry it (point YARN_RUNNER_HOME at a path without spaces)`);
-
-	return ["ssh", ...transport].join(" ");
-}
-
-/**
  * Deliberately no `--delete`. The remote checkout is also the runner's data root: `out/` holds
  * the job registry and the logs of runs that may be in flight, and a sync that deletes is one
  * typo in the exclude list away from taking them with it.
@@ -403,7 +387,10 @@ export function rsyncArgv(host: HostEntry, source: string, remoteDir: string): s
 		"--compress",
 		"--partial",
 		...SYNC_EXCLUDES.flatMap((pattern) => ["--exclude", pattern]),
-		"--rsh", rshCommand(host),
+		// ssh.ts's rsyncShell, taken off the front of the real ssh argv rather than restated: a
+		// second copy of these options would drift, and the copy that drifts is the one that
+		// stops pinning the host key.
+		"--rsh", rsyncShell(host),
 		`${source.replace(/\/+$/, "")}/`,
 		`${destination}/`,
 	];
@@ -703,37 +690,6 @@ launchctl kickstart "gui/$U/$LABEL" 2>/dev/null || true
 # have quietly replaced the launchagent path in every provision summary.
 echo "launchagent=$PLIST modelKey=$KEY"
 `;
-
-interface Attempt {
-	ok: boolean;
-	/** One line, ready for a table cell. */
-	detail: string;
-	stdout: string;
-	code?: number;
-}
-
-/**
- * Run one remote thing and reduce it to pass/fail plus a line. Catches as well as checking the
- * exit code: an injected runner, or an ssh that cannot be spawned at all, throws rather than
- * resolving, and a provisioning pass must degrade the step and not unwind.
- */
-async function attempt(fn: () => Promise<SshResult>): Promise<Attempt> {
-	let result: SshResult;
-	try {
-		result = await fn();
-	} catch (e) {
-		return { ok: false, detail: (e as Error).message, stdout: "" };
-	}
-
-	if (result.code === 0) return { ok: true, detail: firstLine(result.stdout), stdout: result.stdout, code: 0 };
-
-	return {
-		ok: false,
-		detail: firstLine(result.stderr) || firstLine(result.stdout) || `exited ${result.code}`,
-		stdout: result.stdout,
-		code: result.code,
-	};
-}
 
 /**
  * Poll until the socket answers. Separate from loading the agent because the two fail for

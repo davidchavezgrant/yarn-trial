@@ -4,6 +4,7 @@ import { test } from "node:test";
 import type { HostEntry } from "../src/fleet/remote/hosts.js";
 import { explainCloseFailure, forgetScreenShareLogin, launchCommand, planSignin, vncUrl, waitForHome } from "../src/fleet/remote/signin.js";
 import type { SshResult } from "../src/fleet/remote/ssh.js";
+import { ok, PIN } from "./fixtures.js";
 
 /**
  * Screen-sharing to a Mac so a human can sign an app in.
@@ -15,17 +16,12 @@ import type { SshResult } from "../src/fleet/remote/ssh.js";
  * encoding exists to prevent.
  */
 
-const PIN = "SHA256:724od0jL8u9KOWHaFi+t710VcSUmsFnN79hdOcoOI2c";
-
 /** A space is the NORMAL case ("Notion Calendar"); the rest is the adversarial part. */
 const HOSTILE_NAME = 'Notion "Calendar"; touch $HOME/pwned';
 
+/** Local rather than fixtures': the vnc port varies here, which no other suite needs. */
 function host(name = "mac1", addr = "10.0.0.1", vncPort = 5900): HostEntry {
 	return { name, ssh: { host: addr, port: 22, user: "administrator" }, vnc: { host: addr, port: vncPort }, hostKey: PIN };
-}
-
-function ok(stdout = ""): SshResult {
-	return { code: 0, stdout, stderr: "" };
 }
 
 /**

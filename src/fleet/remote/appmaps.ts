@@ -3,8 +3,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { appmapsDir, outDir } from "../../paths.js";
 
+import { readJsonOr } from "../../fsutil.js";
 import { type HostEntry, type Inventory, loadHosts } from "./hosts.js";
-import { assertSafeRemotePath, remoteDataRoot, type RsyncRunner, runRsync, runSsh, rsyncShell, type SshRunner } from "./ssh.js";
+import { assertSafeRemotePath, firstLine, remoteDataRoot, type RsyncRunner, runRsync, runSsh, rsyncShell, type SshRunner } from "./ssh.js";
 
 /**
  * Make a grounding pass done on one Mac count on all of them.
@@ -90,13 +91,9 @@ export function readAppmaps(dir: string): Map<string, MapVersion> {
  * comparisons and what the operator is looking at.
  */
 export function readCapturedAt(file: string): string | undefined {
-	try {
-		const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as { capturedAt?: unknown };
+	const parsed = readJsonOr<{ capturedAt?: unknown } | undefined>(file, undefined);
 
-		return typeof parsed.capturedAt === "string" && parsed.capturedAt ? parsed.capturedAt : undefined;
-	} catch {
-		return undefined;
-	}
+	return typeof parsed?.capturedAt === "string" && parsed.capturedAt ? parsed.capturedAt : undefined;
 }
 
 /**
@@ -301,10 +298,6 @@ export async function syncAppmaps(opts: SyncOptions = {}): Promise<SyncResult> {
 /** rsync says 23 with an ENOENT when the source path is simply not there. */
 function isMissingSource(stderr: string): boolean {
 	return /No such file or directory/i.test(stderr);
-}
-
-function firstLine(s: string): string {
-	return (s || "").split("\n").map((l) => l.trim()).find(Boolean) ?? "";
 }
 
 function inventoryHosts(inv?: Inventory): HostEntry[] {

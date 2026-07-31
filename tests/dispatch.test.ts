@@ -15,8 +15,9 @@ import {
 	signinRemedy,
 } from "../src/fleet/remote/dispatch.js";
 import type { SshRunner } from "../src/fleet/remote/ssh.js";
-import { type HostEntry, HOSTS_SCHEMA, type Inventory } from "../src/fleet/remote/hosts.js";
+import type { HostEntry } from "../src/fleet/remote/hosts.js";
 import { decodeSpec, type SshResult } from "../src/fleet/remote/ssh.js";
+import { host, inventory, tempDir } from "./fixtures.js";
 
 /**
  * The dispatch client, offline by construction: every ssh call, every rsync and every log
@@ -24,16 +25,6 @@ import { decodeSpec, type SshResult } from "../src/fleet/remote/ssh.js";
  * here may contact a real Mac — three of them are live, one operator's stray test submit
  * takes a machine out of the fleet for however long the run lasts.
  */
-
-const PIN = "SHA256:724od0jL8u9KOWHaFi+t710VcSUmsFnN79hdOcoOI2c";
-
-function host(name: string, addr: string): HostEntry {
-	return { name, ssh: { host: addr, port: 22, user: "administrator" }, vnc: { host: addr, port: 5900 }, hostKey: PIN };
-}
-
-function inventory(...hosts: HostEntry[]): Inventory {
-	return { schema: HOSTS_SCHEMA, hosts };
-}
 
 const FLEET = inventory(host("mac1", "10.0.0.1"), host("mac2", "10.0.0.2"), host("mac3", "10.0.0.3"));
 
@@ -358,10 +349,6 @@ test("follow__SurvivesLoginBanner__When__HostPrintsNonJsonFirst", async () => {
 	assert.equal(result.done, true);
 });
 
-function tempDir(): string {
-	return fs.mkdtempSync(path.join(os.tmpdir(), "yarn-dispatch-"));
-}
-
 function jobFrame(over: Record<string, unknown> = {}): SshResult {
 	return ok({
 		job: {
@@ -387,7 +374,7 @@ test("pull__WritesUnderTheSameKey__When__JobProducedArtifacts", async () => {
 	// The job id IS the artifact key, on both machines. A pull that renamed anything would
 	// break the correlation between out/runs/<id>.json, out/recording/<id>/ and out/jobs/<id>/
 	// that every other tool in the repo relies on.
-	const dest = tempDir();
+	const dest = tempDir("yarn-dispatch-");
 	try {
 		const run: SshRunner = async (_h, argv) => (subcommand(argv) === "job" ? jobFrame() : ok({ dataRoot: "/Users/administrator/yarn-trial" }));
 		const invocations: string[][] = [];
@@ -434,7 +421,7 @@ test("pull__FetchesBothAppmapHalves__When__JobWasAGroundingPass", async () => {
 	// and that is what scopeWarnings() reads. Leaving it on the colo Mac lands an appmap whose
 	// scope-collision warnings are silently off — the failure that lets an agent change a
 	// per-document override instead of the brand default.
-	const dest = tempDir();
+	const dest = tempDir("yarn-dispatch-");
 	try {
 		const run: SshRunner = async (_h, argv) =>
 			subcommand(argv) === "job"
@@ -466,7 +453,7 @@ test("pull__Refuses__When__RemotePathIsNotShellSafe", async () => {
 	// rsync hands the remote path to a login shell, and unlike everything else here it cannot
 	// be base64'd — the path is the protocol. So an unexpected data root is refused rather
 	// than quoted.
-	const dest = tempDir();
+	const dest = tempDir("yarn-dispatch-");
 	try {
 		const run: SshRunner = async (_h, argv) => (subcommand(argv) === "job" ? jobFrame() : ok({ dataRoot: "/Users/administrator/$(id)/yarn trial" }));
 		let ran = false;
@@ -484,7 +471,7 @@ test("pull__Refuses__When__RemotePathIsNotShellSafe", async () => {
 test("pull__Refuses__When__SshOptionsCannotSurviveRsyncArgSplitting", async () => {
 	// rsync splits -e on whitespace and does no unquoting, so a runner home with a space in it
 	// silently becomes two arguments and ssh is handed a key path that does not exist.
-	const dest = tempDir();
+	const dest = tempDir("yarn-dispatch-");
 	const prev = process.env.YARN_RUNNER_HOME;
 	process.env.YARN_RUNNER_HOME = path.join(dest, "runner home");
 	try {
@@ -499,7 +486,7 @@ test("pull__Refuses__When__SshOptionsCannotSurviveRsyncArgSplitting", async () =
 });
 
 test("pull__ReportsFailure__When__RsyncCannotReachTheHost", async () => {
-	const dest = tempDir();
+	const dest = tempDir("yarn-dispatch-");
 	try {
 		const run: SshRunner = async (_h, argv) => (subcommand(argv) === "job" ? jobFrame() : ok({ dataRoot: "/Users/administrator/yarn-trial" }));
 		const result = await pull(host("mac1", "10.0.0.1"), "2026-07-30T12-00-00-yarn", {

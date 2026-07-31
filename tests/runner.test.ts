@@ -22,6 +22,7 @@ import { childEnv, isPackaged, PACKAGED_ENV, resolveRunCommand, spawnDetached } 
 import { parseArgs } from "../src/fleet/runner/ctl.js";
 import { staleGrants, startRunner } from "../src/fleet/runner/serve.js";
 import { resourcesRoot } from "../src/paths.js";
+import { tempDir, withTemp, withTempAsync } from "./fixtures.js";
 
 /**
  * Spread into every `startRunner` below. The real profile swap quits the target app and moves
@@ -55,30 +56,6 @@ const noSwap = {
  * 2048, the printable ceiling is 99998), so nothing can be occupying it.
  */
 const DEAD_PID = 4_194_303;
-
-function tempDir(prefix: string): string {
-	// Short prefix: a Unix socket path is capped near 104 bytes and os.tmpdir() already
-	// spends ~49 of them on macOS.
-	return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-}
-
-function withTemp(prefix: string, fn: (dir: string) => void): void {
-	const dir = tempDir(prefix);
-	try {
-		fn(dir);
-	} finally {
-		fs.rmSync(dir, { recursive: true, force: true });
-	}
-}
-
-async function withTempAsync(prefix: string, fn: (dir: string) => Promise<void>): Promise<void> {
-	const dir = tempDir(prefix);
-	try {
-		await fn(dir);
-	} finally {
-		fs.rmSync(dir, { recursive: true, force: true });
-	}
-}
 
 function lease(over: Partial<Lease> = {}): Lease {
 	return {
@@ -839,6 +816,89 @@ test("liveview__StartsTheServerAndReturnsPortAndToken__When__TheHostIsFree", asy
 			assert.equal(res.url, `http://127.0.0.1:${res.port}/?t=${res.token}`);
 			// The server was actually spawned (as a child of the runner, which holds the grants).
 			assert.equal(spawner.calls.length, 1);
+		} finally {
+			await runner.close();
+		}
+	});
+});
+
+test("liveview__PreemptsTheStaleServer__When__ThePortIsHeld", async () => {
+	// Last request wins: the operator asking NOW is at a keyboard, and the old engine is a
+	// capture-capable process nobody is watching. Refusing (the old behavior) stranded the
+	// fixed port for up to the 20-minute lifetime with no way to start over.
+	await withTempAsync("yr-serve-", async (dir) => {
+		const spawner = mkdirSpawner();
+		let freed = 0;
+		const runner = await startRunner(dir, {
+			...noSwap,
+			...noOpen,
+			log: () => {},
+			spawn: spawner.spawn,
+			portInUse: async () => true,
+			freeLiveviewPort: async () => {
+				freed++;
+
+				return true;
+			},
+		});
+		try {
+			const [res] = await request(runner.socketPath, "liveview", { app: "Yarn", operator: "dave" });
+			assert.equal(res.ok, true, String(res.error ?? ""));
+			assert.equal(freed, 1, "the stale server must be preempted, not tolerated");
+			assert.equal(spawner.calls.length, 1, "a fresh engine must be spawned after the preemption");
+		} finally {
+			await runner.close();
+		}
+	});
+});
+
+test("liveview__RefusesWithoutSpawning__When__TheStaleServerWillNotDie", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const spawner = mkdirSpawner();
+		const runner = await startRunner(dir, {
+			...noSwap,
+			...noOpen,
+			log: () => {},
+			spawn: spawner.spawn,
+			portInUse: async () => true,
+			freeLiveviewPort: async () => false,
+		});
+		try {
+			const [res] = await request(runner.socketPath, "liveview", { app: "Yarn", operator: "dave" });
+			assert.equal(res.ok, false);
+			assert.match(String(res.error), /could not free the liveview port/);
+			assert.equal(spawner.calls.length, 0, "no second engine may be spawned onto a held port");
+		} finally {
+			await runner.close();
+		}
+	});
+});
+
+test("liveviewStop__ReportsTheOutcome__When__CalledInEveryPortState", async () => {
+	// The "operator backed out" half: the GUI portal fires this the moment its window closes,
+	// so the port frees NOW rather than after the engine's own idle or lifetime exits.
+	await withTempAsync("yr-serve-", async (dir) => {
+		let inUse = false;
+		let freeAnswer = true;
+		const runner = await startRunner(dir, {
+			...noSwap,
+			...noOpen,
+			log: () => {},
+			portInUse: async () => inUse,
+			freeLiveviewPort: async () => freeAnswer,
+		});
+		try {
+			const [idle] = await request(runner.socketPath, "liveview-stop", {});
+			assert.deepEqual([idle.ok, idle.stopped], [true, false], "no server running is a success, not an error");
+
+			inUse = true;
+			const [stopped] = await request(runner.socketPath, "liveview-stop", {});
+			assert.deepEqual([stopped.ok, stopped.stopped], [true, true]);
+
+			freeAnswer = false;
+			const [stuck] = await request(runner.socketPath, "liveview-stop", {});
+			assert.equal(stuck.ok, false);
+			assert.match(String(stuck.error), /did not exit/);
 		} finally {
 			await runner.close();
 		}

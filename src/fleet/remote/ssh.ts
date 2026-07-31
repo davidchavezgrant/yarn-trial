@@ -155,7 +155,7 @@ export function runRsync(argv: string[], opts: { timeoutMs: number }): Promise<S
  * non-numeric `code` means the binary never started at all — a third outcome that must not
  * collapse into either of the first two.
  */
-function runTransport(bin: string, argv: string[], timeoutMs: number): Promise<SshResult> {
+export function runTransport(bin: string, argv: string[], timeoutMs: number): Promise<SshResult> {
 	return new Promise((resolve) => {
 		execFile(bin, argv, { timeout: timeoutMs, maxBuffer: 8 << 20, encoding: "utf8" }, (err, stdout, stderr) => {
 			const e = err as (Error & { code?: number | string; killed?: boolean }) | null;

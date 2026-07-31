@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { parseArgs } from "node:util";
 import { defaultOperator as currentOperator, type HostEntry, loadHosts, resolveHost } from "./hosts.js";
 import { firstLine, lastFrame, runnerArgv, runSsh, type SshResult, type SshRunner } from "./ssh.js";
 
@@ -393,9 +394,15 @@ With an app named, this watches that Mac and closes the screen share by itself o
 reaches the same home state a run would require — so finishing the sign-in is the only step.`;
 
 async function main(): Promise<void> {
-	const argv = process.argv.slice(2);
-	const positional = argv.filter((a) => !a.startsWith("--"));
-	const [name, app] = positional;
+	// Loose parseArgs, matching what the hand-rolled parser accepted: unknown flags are
+	// ignored rather than fatal.
+	const { values, positionals } = parseArgs({
+		args: process.argv.slice(2),
+		options: { print: { type: "boolean" }, "no-wait": { type: "boolean" } },
+		strict: false,
+		allowPositionals: true,
+	});
+	const [name, app] = positionals;
 	if (!name) {
 		console.error(USAGE);
 		process.exit(2);
@@ -406,7 +413,7 @@ async function main(): Promise<void> {
 	if (plan.profile) console.log(plan.profile);
 	if (plan.launch) console.log(`${plan.launch.ok ? "" : "COULD NOT OPEN "}${plan.launch.app} on ${host.name} — ${plan.launch.detail}`);
 
-	if (argv.includes("--print")) {
+	if (values.print === true) {
 		console.log(plan.url);
 
 		return;
@@ -424,7 +431,7 @@ async function main(): Promise<void> {
 
 	// Nothing to watch for without an app: "signed in" has no machine-checkable meaning when the
 	// operator just wanted a screen, and a wait that can only time out is worse than no wait.
-	if (!app || argv.includes("--no-wait")) {
+	if (!app || values["no-wait"] === true) {
 		console.log(`
 Then, on that Mac: sign the app in as you normally would. When its normal home screen is up,
 leave it there and disconnect — the app keeps the session. Re-run your task afterwards; the
