@@ -6,6 +6,7 @@ import {
 	FollowStack,
 	fractionToCss,
 	type FrameMeta,
+	isIdlePage,
 	keyEventParams,
 	mouseEventParams,
 	sameEndpoint,
@@ -346,6 +347,38 @@ test("FollowStack__DropsOnlyPrimaryPages__When__PrimaryOriginNamed", () => {
 	s.dropOrigin("primary");
 	assert.deepEqual(s.active, { page: "oauth", origin: "browser" });
 	assert.equal(s.size, 1);
+});
+
+// ---- idle pages rank below live ones, so an empty tab cannot take the stream -------------
+
+test("FollowStack__KeepsTheLivePageActive__When__AnIdleTabArrivesLater", () => {
+	// mac3, 2026-07-31, a regression from the adoption fix: the lazily-attached OAuth Chrome
+	// contributed its New Tab, which arrived AFTER Yarn's login page and won newest-wins. The
+	// operator opened the viewer onto an empty tab with the sign-in hidden behind it.
+	const s = new FollowStack<string>();
+	s.push("yarn-login", "primary");
+	s.push("chrome-newtab", "browser", true);
+
+	assert.equal(s.active?.page, "yarn-login");
+});
+
+test("FollowStack__StillReachesTheIdlePage__When__Cycled", () => {
+	// Ranked, not filtered: a flow can legitimately sit on about:blank mid-redirect, so the
+	// operator must still be able to get there.
+	const s = new FollowStack<string>();
+	s.push("yarn-login", "primary");
+	s.push("chrome-newtab", "browser", true);
+	s.cycle();
+
+	assert.equal(s.active?.page, "chrome-newtab");
+});
+
+test("isIdlePage__NamesOnlyLandingSurfaces__When__GivenBrowserUrls", () => {
+	for (const u of ["", "about:blank", "chrome://newtab/", "chrome://new-tab-page/"]) assert.equal(isIdlePage(u), true, u);
+	// The interstitial that blocked the mac3 sign-in is a chrome:// page and must NEVER be
+	// ranked idle — treating the whole scheme as idle would hide the pages that matter most.
+	for (const u of ["chrome://managed-user-profile-notice/", "https://accounts.google.com/", "https://y-prod-react.onrender.com/login"])
+		assert.equal(isIdlePage(u), false, u);
 });
 
 // ---- cycle: the operator's override for a newest-wins pick that landed wrong -------------

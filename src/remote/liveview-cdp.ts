@@ -288,9 +288,20 @@ export class FollowStack<T> {
 		return this.entries.length;
 	}
 
-	push(page: T, origin: FollowOrigin): void {
+	/**
+	 * `idle` marks a page nothing is happening on — Chrome's New Tab, about:blank. It goes in
+	 * BELOW everything live rather than on top, because newest-wins otherwise hands the stream
+	 * to whatever the browser happened to have open. Measured on mac3, 2026-07-31: adopting
+	 * pre-existing pages (the fix for the interstitial being unreachable) meant the lazily
+	 * attached OAuth Chrome contributed its New Tab, which arrived after Yarn's login page and
+	 * won — the operator opened the viewer onto an empty tab while the sign-in sat behind it.
+	 * Ranked, not filtered: an idle page is still reachable with cmd+], because a flow can
+	 * legitimately land on about:blank mid-redirect.
+	 */
+	push(page: T, origin: FollowOrigin, idle = false): void {
 		this.entries = this.entries.filter((e) => e.page !== page);
-		this.entries.push({ page, origin });
+		if (idle) this.entries.unshift({ page, origin });
+		else this.entries.push({ page, origin });
 	}
 
 	/** A page closed: the active one pops back to the most recent still-open page, a
@@ -316,6 +327,17 @@ export class FollowStack<T> {
 		const first = this.entries.shift();
 		if (first) this.entries.push(first);
 	}
+}
+
+/**
+ * A page with nothing on it: the browser's landing surfaces, not the flow. Deliberately a tiny
+ * list of exact matches — `chrome://` in general must NOT be here, because the pages that
+ * matter most (the managed-profile interstitial, permission prompts) live there too.
+ */
+export function isIdlePage(url: string): boolean {
+	const u = url.trim();
+
+	return u === "" || u === "about:blank" || u === "chrome://newtab/" || u === "chrome://new-tab-page/" || u === "edge://newtab/";
 }
 
 /** How long the endpoint gets to answer /json/version. The target is already running (the
@@ -549,7 +571,7 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 			stack.dropClosed(page);
 			sync();
 		});
-		stack.push(page, origin);
+		stack.push(page, origin, isIdlePage(page.url()));
 		sync();
 	};
 
