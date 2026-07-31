@@ -146,6 +146,11 @@ export interface ProvisionOptions {
 	 * which is exactly what a pre-dispatch sync wants.
 	 */
 	syncOnly?: boolean;
+	/**
+	 * Bounce the runner even if it is mid-run. Off by default, because doing so destroys the
+	 * observability of whatever is in flight — see `busyGuard` below.
+	 */
+	force?: boolean;
 }
 
 /**
@@ -220,6 +225,23 @@ export async function provisionHost(host: HostEntry, opts: ProvisionOptions = {}
 	if (probe.code === 127 || /command not found|: not found/i.test(probe.detail))
 		return fail("runnerctl", `installed but not on the non-interactive PATH: ${probe.detail}`);
 	steps.push({ step: "runnerctl", ok: true, detail: firstLine(shim.stdout) || "installed" });
+
+	// BUSY GUARD. install-launchagent.sh boots the agent out before bootstrapping, so this step
+	// restarts the runner — and a restart mid-run costs the in-flight job its OBSERVABILITY,
+	// not its life. The child survives (it is detached and gets reparented) and finishes its
+	// work, but the new runner was never its parent: no SIGCHLD, no exit status, so the
+	// periodic reap can only see that the pid vanished and records `orphaned` with a null
+	// exit code. That is how a completed 118-action explore — frontier-empty, 196-node map
+	// written — came to be filed as orphaned on 2026-07-31.
+	//
+	// Skipped, not failed: the sync above already landed, which is the part a busy host can
+	// safely take. The row stays ok so the pass continues; the detail says what is owed.
+	const busy = await attempt(() => run(host, runnerArgv("status"), { timeoutMs }));
+	if (!opts.force && busy.ok && /"state"\s*:\s*"busy"/.test(busy.stdout)) {
+		steps.push({ step: "launchagent", ok: true, detail: "SKIPPED — runner is busy; restarting it would orphan the in-flight job. Re-provision when idle, or pass force." });
+
+		return { host: host.name, ok: true, steps };
+	}
 
 	const agent = await attempt(() => run(host, ["sh", `${REMOTE_CHECKOUT}/${STAGE_DIR}/install-launchagent.sh`], { timeoutMs }));
 	if (!agent.ok) return fail("launchagent", agent.detail);

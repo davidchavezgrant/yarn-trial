@@ -879,3 +879,53 @@ test("provisionHost__ShipsCodeWithoutTouchingTheRunner__When__SyncOnly", async (
 		assert.ok(!/install-launchagent/.test(flat), "syncOnly must never run the LaunchAgent installer");
 	});
 });
+
+test("provisionHost__RefusesToBounceABusyRunner__When__AJobIsInFlight", async () => {
+	// install-launchagent.sh does `launchctl bootout` DIRECTLY, reaching around the runner's
+	// own restart guard (serve.ts refuses `restart` while a job holds the lease). So the
+	// self-protection never fires on this path, and a provision fired to sync code costs the
+	// in-flight job its observability: the child survives and finishes, but the new runner
+	// was never its parent, so no exit status is readable and the reap files it `orphaned`
+	// with a null exit code. A completed 118-action explore was recorded that way on
+	// 2026-07-31.
+	await inTempDir("yarn-source-", async (source) => {
+		const rec = fleetDouble(source);
+		const inner = rec.opts.run!;
+		const busyOpts = {
+			...rec.opts,
+			run: async (h: any, argv: string[], o: any) =>
+				argv[0] === "runnerctl" && argv[1] === "status"
+					? ({ code: 0, stdout: `${JSON.stringify({ ok: true, state: "busy", jobId: "explore-in-flight" })}\n`, stderr: "" } as any)
+					: inner(h, argv, o),
+		};
+		const res = await provisionHost(host("mac1"), busyOpts);
+
+		// The pass still SUCCEEDS — the sync is the part a busy host can safely take, and
+		// failing here would leave an operator thinking the host is broken.
+		assert.equal(res.ok, true, JSON.stringify(res.steps));
+		assert.deepEqual(stepNames(res), ["reach", "sync", "runnerctl", "launchagent"]);
+		assert.match(res.steps.at(-1)!.detail ?? "", /SKIPPED/);
+		// The installer that boots the agent out must never have run.
+		const flat = rec.remote.map((c) => c.join(" ")).join(" | ");
+		assert.ok(!/install-launchagent/.test(flat), "a busy runner must not be bounced");
+	});
+});
+
+test("provisionHost__BouncesTheRunnerAnyway__When__ForceIsPassed", async () => {
+	// The escape hatch has to exist: a wedged runner holding a lease it will never release
+	// can only be fixed by going around it.
+	await inTempDir("yarn-source-", async (source) => {
+		const rec = fleetDouble(source);
+		const inner = rec.opts.run!;
+		const res = await provisionHost(host("mac1"), {
+			...rec.opts,
+			force: true,
+			run: async (h: any, argv: string[], o: any) =>
+				argv[0] === "runnerctl" && argv[1] === "status"
+					? ({ code: 0, stdout: `${JSON.stringify({ ok: true, state: "busy" })}\n`, stderr: "" } as any)
+					: inner(h, argv, o),
+		});
+
+		assert.ok(rec.remote.map((c) => c.join(" ")).join(" | ").includes("install-launchagent"), "force must bounce it");
+	});
+});
