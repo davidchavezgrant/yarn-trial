@@ -853,6 +853,9 @@ async function main(argv: string[]): Promise<number> {
 			app: argv[2] ?? "Yarn",
 			record: argv.includes("--record"),
 			noVision: argv.includes("--no-vision"),
+			// The curated-recipe grounding tier (docs/recipes/<app>.md), same knob the bench
+			// arms use — app method knowledge belongs there, never in the task prompt.
+			useRecipe: argv.includes("--use-recipe"),
 		};
 
 	const result = await dispatch(opts);

@@ -103,5 +103,15 @@ Settings…**.
   Either way, distrust the driver's delivery counter ("delivered N of M character(s)") — it
   reported 0 delivered while every character landed (2026-07-31). The harness treats it as
   advisory and verifies from the fresh observation instead.
+- **CDP backend (the app-target default): how to focus the script editor** (learned over
+  three fleet runs, 2026-07-31). The script editor is ProseMirror; its inner nodes are the
+  only addressable refs. To put the caret in it, `type_text` with the ref of the
+  "Type script or # for new scene" placeholder row (or `click` it first) — the harness
+  clicks painted-but-boxless rows by their rendered geometry and VERIFIES focus took before
+  typing a single character. **Never type at the caret (ref-less `type_text`) unless you
+  just confirmed where focus is: the agent composer at the bottom ("Ask, edit, or make
+  something…") holds default focus and silently swallows stray keystrokes** — two runs
+  typed their narration into it. Tab-traversal toward the editor does NOT reach it (it
+  reaches the comment composer on the canvas instead).
 - Creating a draft via "New draft" opens the editor immediately with the title "Untitled";
   the sidebar entry updates after the title field is committed (click away / switch tabs).
