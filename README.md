@@ -95,6 +95,14 @@ it) and two web targets are committed, so you can skip `explore` for those. Run 
 in `out/runs/<stamp>-<app>.json`. If a run is killed before it can tidy up,
 `npm run cleanup -- <stamp>` replays its mutation journal and puts the app back.
 
+A completed run can be re-graded by an independent adversarial judge — it reads the
+trajectory, the step frames, and the appmap's scope rubric, and is the check that catches
+"right value, wrong scope" runs the in-run verification passes:
+
+```sh
+npm run judge -- <stamp>              # -> out/runs/<stamp>.judge.json (advisory)
+```
+
 Once a run succeeds, freeze it and repeat it for free:
 
 ```sh

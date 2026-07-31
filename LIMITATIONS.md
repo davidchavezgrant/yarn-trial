@@ -282,8 +282,15 @@ chrome — that the haystack flattens away.
 - `visualJudge()` at `done` catches the wrong-scope case — **but only when given the agent's
   claim**. Handed the bare task string it *passed* a known-wrong-scope frame, reasoning that
   an instructional task only asks to locate the control.
-- Neither is a proof. A task that never names a scope has no ground truth to check against;
-  the honest output is a stated choice, not a verified one.
+- The offline run judge (`npm run judge -- <stamp>`, `src/core/judge.ts`) catches it
+  after the fact: an adversarial model call over the full trajectory with the appmap's
+  scope ambiguities as rubric, grading against the TASK rather than the claim (its first
+  prompt draft graded the claim and passed a run that honestly described its wrong scope
+  — the mirror image of the visualJudge lesson above). Validated on all known wrong-scope
+  runs; the bench runs it fleet-wide and reports self-report-vs-judge disagreements.
+- None is an in-run proof. A task that never names a scope has no ground truth to check
+  against; the honest output is a stated choice, not a verified one — and the offline
+  judge's verdict is itself a model opinion, post-hoc and advisory.
 
 **Generalizes to**: any app with global defaults plus per-document overrides — editors,
 IDEs, design tools, browsers.

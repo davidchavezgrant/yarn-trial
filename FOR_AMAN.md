@@ -282,6 +282,21 @@ loophole exists.
     budget ran out mid-reasoning (stop_reason max_tokens, only a thinking block, zero
     text) — on exactly the hardest frames — and an absent advisory printed identically
     to a passing one. Budget generously and print "no verdict" explicitly.
+- **Offline run judge** (post-hoc: `npm run judge -- <stamp>`, `src/core/judge.ts`): one
+  adversarial model call over the COMPLETED run — full trajectory, step frames, and the
+  appmap's scope ambiguities as an answer-key rubric — writing independent TRAJECTORY and
+  VISUAL verdicts with per-step citations to `<stamp>.judge.json`. Built because the
+  in-run layers all read the agent's own observation channel and can pass together on a
+  wrong run (see next section); the offline judge failed every known wrong-scope run
+  from the trajectory alone. Two rules mirroring the visual judge's:
+  - **The claim disambiguates; the TASK is the standard.** The first prompt draft judged
+    the claim and PASSED a wrong-scope run that honestly described its wrong scope.
+  - **Frame provenance is structural, not perceptual.** Only per-run `-steps/` screenshot
+    paths are trusted; the old shared `out/agent-step-N.png` paths get overwritten by
+    later runs and look perfectly plausible while being someone else's pixels.
+  The bench runs it fleet-wide (`./run bench judge`, model pinned for cross-arm
+  comparability) and its report lists self-report-vs-judge disagreements — the
+  wrong-scope findings, and the queue for human spot-checks.
 - Channels are recorded per step (`verifiedByChannel` in the run log) so a
   pixel-verified run can never be quoted as text-verified.
 
@@ -304,6 +319,12 @@ NOT hardcode a preference (we tried "prefer broadest" — wrong the moment a tas
 "for just this project"; verified the agent picks correctly from task context both
 ways). Group the warnings by surface pair, not per setting: 10 settings sharing one pair
 of panels was 10.8k chars listed separately vs 1.9k grouped.
+
+Detection, as opposed to mitigation: the offline run judge (above) convicts these runs
+after the fact from trajectory alone — the surfaces entered and the commit affordance
+used (a draft dialog's "Done" vs the brand page's "Save Changes") discriminate the
+scopes even when every in-run check passed. That structural evidence is invisible to
+`verify()` by design: it greps values, not provenance.
 
 ### Perception and rendering die separately
 
@@ -713,6 +734,7 @@ The full constraint list is LIMITATIONS §12; the architecture-shaping subset:
 | Explore: frontier, dismissal, salvage, descent, home | `src/core/explore.ts` |
 | Journal/teardown/cleanup | `src/core/journal.ts`, `src/core/teardown.ts`, `src/core/cleanup.ts` |
 | Recipe replay: format, compiler, resolution, engine, rescue | `src/core/recipe.ts`, `src/core/replay.ts`, `src/core/recipe-cli.ts` |
+| Offline run judge + bench integration | `src/core/judge.ts`, `src/bench/judge.ts` (report's `## Judge` section) |
 | Humanize: track building, motion fitting, rendering | `src/cursor/humanize.ts`, `src/cursor/track.ts`, `src/cursor/render.ts`, `scripts/fit-motion.py` |
 | Fleet: ssh, lease, jobs, profiles, provision | `src/remote/control/`, `src/remote/runner/` |
 | Everything that constrains the agent, with severity | `LIMITATIONS.md` |

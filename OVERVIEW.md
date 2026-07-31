@@ -18,15 +18,16 @@ Agent loop (GPT-5.6 Sol via OpenRouter; Opus 5 on a bare Anthropic key)   src/co
   act:     via the actuator backend
   verify:  re-observe, check expectation, feed verdict back
   ▼
-Actuator seam (Observation/ActionRequest) — three backends:
-  --backend ax   (default)  src/core/driver.ts → @trycua/cua-driver → AX actions, pid input
-  --backend dom             cua's browser_* tools over CDP
-  --backend cdp             src/backends/cdp.ts → playwright-core, NO cua in the loop
+Actuator seam (Observation/ActionRequest) — two backends:
+  --backend cdp  (default)  src/backends/cdp.ts → playwright-core, NO cua in the loop
+  --backend ax              src/backends/ax.ts → @trycua/cua-driver → AX actions;
+                            primary for native Mac apps, automatic fallback when an
+                            Electron target's debug port never comes up
 ```
 
 Design decisions and their reasoning live in `docs/architecture.md`.
 
-- **Verification is first-class**, in three layers of decreasing authority:
+- **Verification is first-class**, in four layers of decreasing authority:
   1. *Text* (per step, deterministic, gates the run) — the expectation must be checkable
      and *discriminating*, i.e. satisfied only after the action. An act call with nothing
      checkable is rejected without being executed.
@@ -34,10 +35,16 @@ Design decisions and their reasoning live in `docs/architecture.md`.
      the last observation, because canvas content is invisible to AX.
   3. *Visual judge* (once, at `done`, advisory) — a separate model call sees the task, the
      agent's claim, and the final frame. `VISUAL_JUDGE=block` makes a FAIL reject success.
+  4. *Offline run judge* (post-hoc, advisory) — `npm run judge -- <stamp>` re-grades a
+     completed run in one adversarial model call: full step trajectory + step frames (when
+     per-run) + the appmap's scope ambiguities as rubric. Grades against the TASK, not the
+     claim, so a run that accurately reports doing the wrong thing still fails. Writes
+     `out/runs/<stamp>.judge.json`; never touches the run log.
 
   Every step is logged to `out/runs/<stamp>-<app>.json` (action, expectation, verdict,
   pixel delta, screenshot). Known gap: text checks prove *a* control holds the value, not
-  that it is the *intended* one — see LIMITATIONS §8.
+  that it is the *intended* one — see LIMITATIONS §8; layer 4 exists to catch exactly that
+  class after the fact (validated on the known wrong-scope runs).
 - **The run puts the app back.** Every mutation is journaled as it is detected (a diff of
   control values across observations — never the model's own account), and after the
   recording is assembled, teardown replays the journal in reverse with harness-written
@@ -165,7 +172,9 @@ individual interactions (hard-coded to Notion Calendar).
 - **Verification cannot tell which control it verified.** Yarn exposes 10 settings (on
   the current map) at both a brand-wide and a per-project scope; every ungrounded run
   changed the wrong one while passing its checks. Mitigated by appmap scope warnings and
-  the visual judge, not solved (LIMITATIONS §8).
+  the visual judge, and detectable after the fact by the offline run judge (which flagged
+  every known wrong-scope run from the trajectory alone) — not solved in-run
+  (LIMITATIONS §8).
 - Target app must be on the active macOS Space. Off-Space, Chromium suspends the
   whole app while every driver call still reports success (LIMITATIONS §1).
 - Electron's AX tree goes intermittently dark under focus churn; the agent falls

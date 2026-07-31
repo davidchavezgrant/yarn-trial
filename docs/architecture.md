@@ -31,7 +31,7 @@ Electron targets broadly enough to retire the ax path there.
 ## 2. Observe → act → verify loop, with verification as a gate
 
 The agent loop (`src/core/agent.ts`) forces the model to declare an expectation before every
-action, then greps a fresh observation for it. Three layers, deliberately different in
+action, then greps a fresh observation for it. Four layers, deliberately different in
 cost and authority:
 
 1. **Text check** (per step, deterministic, authoritative) — `verify()` greps AX
@@ -45,10 +45,23 @@ cost and authority:
    Non-obvious: the judge must get the claim, not just the task — given only a vague
    task it passed a known-wrong-scope frame. `VISUAL_JUDGE=block` upgrades FAIL to a
    rejection.
+4. **Offline run judge** (post-hoc, advisory — `src/core/judge.ts`, `npm run judge --
+   <stamp>`) — one adversarial model call over the whole run AFTER it completes: the
+   step trajectory, the step frames (only per-run `-steps/` paths; the old shared
+   screenshot paths are overwritten by later runs and judged untrustworthy), and the
+   appmap's scope ambiguities as an answer-key rubric. Grades TRAJECTORY and VISUAL as
+   independent channels with per-step citations, into `<stamp>.judge.json` — the run log
+   is never touched. The inverse of layer 3's claim lesson applies: the claim pins down
+   what was done, but the TASK is the standard — the first prompt draft graded the claim
+   and passed a wrong-scope run that honestly described its wrong scope. Validated: it
+   fails every known wrong-scope run from the trajectory alone, runs the harness passed
+   unanimously. The bench runs it fleet-wide (`./run bench judge`, judge model pinned so
+   verdicts stay comparable across agent-model arms).
 
 Why layered rather than one strong check: text is cheap and authoritative but blind to
 pixels; vision sees pixels but is a model opinion. Cheap-deterministic gates, expensive-
-probabilistic advises.
+probabilistic advises. The offline judge is the only layer OUTSIDE the loop it grades —
+the in-run layers all share the agent's observation channel and can fail together.
 
 ## 3. Measurement rule: goal-only prompts, enforced in code
 

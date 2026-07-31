@@ -114,3 +114,14 @@ Wall-clock ≈ 4–5 hours after sign-ins; the explore passes dominate and run i
 `docs/research/2026-07-31-backend-grounding-recipe-benchmarks.md` (vault-symlinked):
 tables per axis, timing breakdowns, raw run-log stamps for re-analysis, and a "for Aman"
 section — which backend to build on, what grounding buys, whether replay is fleet-ready.
+
+**Judge step (added 2026-07-31, after this plan was written).** Between runs landing and
+reading the report: `./run bench judge` re-grades every terminal task/replay run with the
+offline adversarial judge (`src/core/judge.ts`) — judge model pinned to
+`openai/gpt-5.6-sol` so verdicts are comparable across agent-model arms. Idempotent
+(`.judge.json` freezes each verdict; re-runs only judge newly landed runs). The report
+gains a `## Judge` section: per-arm trajectory/visual rollups and a Disagreements list
+(self-reported `success` vs judge verdict). This exists because self-reported success
+provably passes wrong-scope runs — the exact confound the grounded-vs-ungrounded
+comparison would otherwise flatten. Workflow: dispatch → `bench judge` → `bench collect`
+→ read report. Disagreement rows are the wrong-scope findings AND the human-review queue.
