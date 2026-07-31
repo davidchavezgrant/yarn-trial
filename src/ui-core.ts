@@ -328,6 +328,13 @@ export interface RunOptions {
 export interface RunHandlers {
 	onLine(line: string): void;
 	onDone(code: number | null, elapsedSec: number): void;
+	/**
+	 * The dispatch resolved `auto` (or an alias) to a concrete machine. Optional because only
+	 * the remote controller ever learns something here — a local run's host is `local` before
+	 * it starts. The shell uses this to move the run's bookkeeping onto the real host name, so
+	 * a second run can be dispatched to `auto` while this one is still going.
+	 */
+	onHost?(host: string): void;
 }
 
 /**

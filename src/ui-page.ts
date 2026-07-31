@@ -28,11 +28,13 @@ export interface UiBus {
 	ground(app: string, host: string, url?: string): Promise<string | undefined>;
 	run(opts: { app: string; task: string; record: boolean; noVision: boolean; host: string; url?: string }): Promise<string | undefined>;
 	/**
-	 * Ends the run wherever it is. Closing the window only detaches; a remote job survives that.
-	 * Resolves to an error string when the stop could not be delivered — a failed stop rendered
-	 * as nothing is an operator watching a run they believe they ended.
+	 * Ends the run on the named machine (`local` for this one). Named because several runs can
+	 * be live at once — one per host — and a bare stop would have to guess. Closing the window
+	 * only detaches; a remote job survives that. Resolves to an error string when the stop
+	 * could not be delivered — a failed stop rendered as nothing is an operator watching a run
+	 * they believe they ended.
 	 */
-	stop(): Promise<string | undefined>;
+	stop(host: string): Promise<string | undefined>;
 	/** Selector contents: always `local`, plus `auto` and the inventory when a fleet is configured. */
 	loadHosts(): Promise<{ hosts: string[]; error?: string }>;
 	/** One probe of every host. Never rejects — a dead fleet is an `error` string or degraded rows. */
@@ -70,8 +72,16 @@ export interface UiBus {
 	loadState(): Promise<{ lastApp?: string; byApp: Record<string, { task: string; log: string[]; url?: string }> }>;
 	/** Fire-and-forget so it can also run from `beforeunload`, where a round trip would not finish. */
 	saveState(state: { lastApp?: string; byApp: Record<string, { task: string; log: string[]; url?: string }> }): void;
-	onStarted(cb: (d: { app: string; task: string }) => void): void;
-	onLine(cb: (line: string) => void): void;
+	/** `host` is the host the run was SUBMITTED under — `auto` until onHost resolves it. */
+	onStarted(cb: (d: { app: string; task: string; host: string }) => void): void;
+	/**
+	 * Every line names its owner. With one run per HOST, two runs can be live at once, and a
+	 * bare string cannot say whose terminal it belongs to — the page files each line into
+	 * `stateFor(app).log`, so misattribution here splices one run's transcript into another's.
+	 */
+	onLine(cb: (d: { text: string; app: string; host: string }) => void): void;
+	/** Dispatch resolved `auto` (or an alias) to a machine; the run's bookkeeping moves to it. */
+	onHost(cb: (d: { app: string; host: string }) => void): void;
 	/**
 	 * `app` and `host` ride along because the run's outcome is where a remedy has to be offered,
 	 * and by then the controller has already let go of the run. `host` is the RESOLVED machine —
@@ -225,7 +235,15 @@ export const CHROME = String.raw`<meta charset="utf-8">
   </div>
 </main>`;
 
-export const APP_JS = String.raw`let apps = [], sel = null, running = false;
+export const APP_JS = String.raw`let apps = [], sel = null;
+
+// Live runs, host -> app. The HOST is the unit of contention (one run per Mac — LIMITATIONS
+// §6 — but different Macs do not contend), so busy checks key on it; the app names the pane
+// the run's output fills. Log buffers stay keyed by APP NAME (stateFor), which means two runs
+// of the SAME app on different hosts would interleave in one buffer — an accepted limitation:
+// the common case is different apps, and re-keying every pane by app@host would ripple through
+// selection, persistence and the gallery for a case the far side's lease makes rare.
+let running = {};
 
 // Where the next Run/Ground goes. 'local' is the original in-process RunController and is the
 // value on a machine with no hosts.json, so the local-only shell never takes a fleet branch.
@@ -263,11 +281,21 @@ const esc = (s) => String(s == null ? '' : s).replace(/[<>&"]/g, (c) => ({ '<': 
 // not — and "✗ undefined" in the log reads like something the agent printed.
 const errText = (e) => (e && e.message) || (e ? String(e) : 'unknown error');
 
-// Log lines belong to the app whose run produced them, not to whatever happens to be
-// selected when they arrive: switching targets mid-run must not splice this run's output
-// into another app's terminal.
-let runningApp = null;
 let uiState = { byApp: {} };
+
+/** The host whose run owns the selected pane, or null. First match wins when the same app is
+ * live on two hosts — those runs already share one log buffer (see the note on 'running'),
+ * so the pane cannot tell them apart either. */
+function paneRunHost() {
+  for (const h of Object.keys(running)) if (running[h] === sel) return h;
+  return null;
+}
+
+/** Header text: every live run, not just one — 'running: Yarn @ mac1, Notion Calendar @ local'. */
+function paintStatus() {
+  const live = Object.keys(running).map((h) => running[h] + ' @ ' + h);
+  el('status').textContent = live.length ? 'running: ' + live.join(', ') : 'idle';
+}
 
 const el = (id) => document.getElementById(id);
 
@@ -429,7 +457,7 @@ function dropStaleSelection() {
   if (typedUrl() && new URL(typedUrl()).host === sel) return;
   if (selUrl()) return;
   // A run in flight owns the pane and its own app name; resolve the mismatch when it ends.
-  if (running) return;
+  if (paneRunHost()) return;
   const gone = sel;
   sel = null;
   renderLog(null);
@@ -561,13 +589,20 @@ function check() {
   // A browser with no URL is not a runnable target: it would open on whatever page it
   // happened to be showing, which is nobody's intent and not reproducible.
   const needsUrl = syncUrlRow();
-  el('go').disabled = running || !sel || !t || !!w || needsUrl;
+  // Busy is PER HOST: a run on mac1 must not block a dispatch to mac2 or to this Mac — the
+  // contention is one driver per machine, not one run per window. A busy host elsewhere is
+  // the far side's lease to refuse; this only gates what this shell can already see.
+  const hostBusy = !!running[host];
+  el('go').disabled = hostBusy || !sel || !t || !!w || needsUrl;
   const site = selUrl();
   el('go').textContent = sel
     ? 'Run on ' + (site ? new URL(site).host : sel) + (host === 'local' ? '' : ' @ ' + host)
     : 'Run';
   // Grounding needs only a target — it explores the app, it does not perform a task.
-  el('ground').disabled = running || !sel || needsUrl;
+  el('ground').disabled = hostBusy || !sel || needsUrl;
+  // Stop follows the SELECTION: it ends the run whose output fills the pane on screen, so it
+  // only shows when that pane has one. Other runs are stopped by selecting their app first.
+  el('stop').style.display = paneRunHost() ? 'block' : 'none';
   // Keyed on the SITE when there is one: whether Chrome has an appmap says nothing about
   // whether notion.so does. A site never explored has no entry, so the button correctly
   // reads "Ground" — that is the first pass on it.
@@ -673,11 +708,11 @@ function renderLog(app) {
   for (const t of lines) appendLine(t);
 }
 
-// 'owner' names whose terminal the text belongs to; the default is the run in flight, then
-// the selection. Callers reporting about the SELECTION (the app-list note, say) must pass it
-// explicitly, or their line lands in whatever app happens to be mid-run at the moment.
+// 'owner' names whose terminal the text belongs to; the default is the selection, because
+// every RUN line now arrives from the bus already carrying its app — with runs live on two
+// hosts at once there is no single "the run in flight" to default to any more.
 function line(text, owner) {
-  owner = owner !== undefined ? owner : (runningApp || sel);
+  owner = owner !== undefined ? owner : sel;
   if (owner) {
     const buf = stateFor(owner).log;
     buf.push(text);
@@ -689,7 +724,7 @@ function line(text, owner) {
   saveSoon();
 }
 
-const bus = window.__bus;   // {onStarted,onLine,onDone,loadApps,loadState,saveState,run,stop}
+const bus = window.__bus;   // {onStarted,onLine,onHost,onDone,loadApps,loadState,saveState,run,stop}
 bus.onStarted((d) => {
   // An accepted submit consumes the prompt. Cleared HERE and not at the click, because a
   // dispatch that fails answers an error string and never echoes 'started' — a refused task
@@ -698,29 +733,37 @@ bus.onStarted((d) => {
   // typed but never run.
   if (d.app === sel && el('task').value.trim() === d.task) el('task').value = '';
   if (stateFor(d.app).task.trim() === d.task) stateFor(d.app).task = '';
-  running = true; runningApp = d.app; check(); renderAttach();
+  running[d.host] = d.app;
+  check(); renderAttach(); paintStatus();
   // The previous refusal is answered by trying again, whatever the outcome of the retry.
   unready = null; unreadyGen++; renderUnready();
-  el('stop').style.display = 'block';
-  el('status').textContent = 'running: ' + d.app;
   // A new run replaces that app's terminal rather than appending to the last one.
   stateFor(d.app).log = [];
   if (d.app === sel) { el('log').innerHTML = ''; foldEl = null; foldCount = 0; }
-  line('▶ ' + d.task + '  —  ' + d.app);
+  line('▶ ' + d.task + '  —  ' + d.app + (d.host === 'local' ? '' : ' @ ' + d.host), d.app);
 });
-bus.onLine((t) => line(t));
+// The owner arrives WITH the line. Guessing it from a module variable was fine with one run;
+// with one per host it would splice concurrent transcripts together.
+bus.onLine((d) => line(d.text, d.app));
+// 'auto' resolved to a machine: move the run's entry so the header, the busy check and the
+// Stop button all name the Mac it actually occupies. At most one submit can sit unresolved
+// under 'auto' at a time — the host-side busy check refuses a second while the first is.
+if (bus.onHost) bus.onHost((d) => {
+  if (running['auto'] === d.app) delete running['auto'];
+  running[d.host] = d.app;
+  check(); renderAttach(); paintStatus();
+});
 bus.onDone((d) => {
-  running = false; check(); renderAttach();
-  el('stop').style.display = 'none';
-  el('status').textContent = 'idle';
-  // Before clearing runningApp: this line belongs to the run's terminal, not the selection's.
-  line((d.code === 0 ? '■ finished' : '■ exited with code ' + d.code) + ' after ' + d.elapsed + 's');
+  // d.host is the run's CURRENT name — resolved, if onHost ever fired — so this is the same
+  // key onStarted/onHost left in the map.
+  delete running[d.host];
+  check(); renderAttach(); paintStatus();
+  line((d.code === 0 ? '■ finished' : '■ exited with code ' + d.code) + ' after ' + d.elapsed + 's', d.app);
   // 3 is the agent's "not at home, reason unknown" — the one exit code with a remedy a person
   // can act on from here. Everything else is a run that ran.
   unready = d.code === 3 ? { app: d.app, host: d.host, msg: null } : null;
   unreadyGen++;
   renderUnready();
-  runningApp = null;
   flush();
   loadApps();
   loadRuns();
@@ -815,12 +858,14 @@ async function loadFleet() {
  *
  * This is what makes closing the window survivable: the job is a detached process on the
  * remote and its log is a file there, so the only thing a restart ever lost was the id — and
- * the busy fleet row carries it. Hidden while this window is already driving something,
- * because the host can only follow one stream into one log pane.
+ * the busy fleet row carries it. Only jobs on hosts this shell already follows are hidden —
+ * an operator mid-run on mac1 can still follow mac2, since each run's lines land in its own
+ * app's pane now. (An 'auto' submit hides nothing until it resolves; following its own job
+ * in that window is refused by the shell's per-host busy check, not by this filter.)
  */
 function renderAttach() {
   const box = el('attach');
-  const live = running ? [] : offers.filter(o => !dismissed.has(o.jobId));
+  const live = offers.filter(o => !dismissed.has(o.jobId) && !running[o.host]);
   box.style.display = live.length ? 'block' : 'none';
   box.innerHTML = live.map(o => {
     const row = fleetRows[o.host];
@@ -1020,10 +1065,13 @@ el('go').onclick = () => dispatchOnce('go', () =>
   bus.run({ app: sel, task: el('task').value.trim(), record: el('record').checked, noVision: el('novision').checked, host: host, url: selUrl() }));
 // A stop that could not be delivered must land in the pane: silence here is an operator
 // watching a run they believe they ended. The button stays up — the run really is still going.
+// It stops the run owning the SELECTED pane, which is the only run whose output is on screen.
 el('stop').onclick = async () => {
+  const target = paneRunHost();
+  if (!target) return;
   let err;
   try {
-    err = await bus.stop();
+    err = await bus.stop(target);
   } catch (e) {
     err = errText(e);
   }

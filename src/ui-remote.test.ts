@@ -484,6 +484,21 @@ test("start__FlushesTheTail__When__TheStreamIsDeclaredLost", async () => {
 	assert.ok(s.lines.includes("half a final line"), "the pending partial line was dropped on the lost-stream exit");
 });
 
+test("start__ReportsTheResolvedHostThroughOnHost__When__AutoPicksAMac", async () => {
+	// The shell keys its one-run-per-host bookkeeping on this callback: until it fires, the run
+	// sits under `auto`, and only the controller ever learns which machine the dispatch chose.
+	const deps = fakeDeps({ dispatch: async () => accepted("j-9", "mac3") });
+	const s = sink();
+	const resolved: string[] = [];
+	new RemoteRunController(deps).start(
+		{ host: "auto", app: "Yarn", task: "t", kind: "task", record: false, noVision: false },
+		{ ...s.handlers, onHost: (h) => void resolved.push(h) },
+	);
+	await s.done;
+
+	assert.deepEqual(resolved, ["mac3"]);
+});
+
 test("lastRunHost__StillNamesTheMac__When__TheRunHasAlreadyFinished", async () => {
 	// `attached` is cleared before `done` fires, and `done` is exactly when a caller needs the
 	// host: a run that refuses to drive names a machine someone has to go and look at. With
@@ -702,15 +717,74 @@ test("appChoices__EnumeratesLocally__When__TheHostIsLocalOrUnset", async () => {
 	assert.deepEqual((await appChoices("  ", () => LOCAL_APPS, reject as never)).apps, LOCAL_APPS);
 });
 
-test("appChoices__SaysWhichMacItShowed__When__TheHostIsAuto", async () => {
-	// There is no single host to ask under `auto` — the fleet picks one at submit time — so the
-	// list is local and labelled rather than a guess that goes quietly stale.
-	const res = await appChoices("auto", () => LOCAL_APPS, async () => {
-		throw new Error("auto must not pick a host to enumerate");
-	});
+/** The local enumerator as a tripwire: `auto` never runs locally, so it must never be asked. */
+const NO_LOCAL = (): never => {
+	throw new Error("auto must not enumerate this Mac's apps — auto never runs locally");
+};
 
-	assert.deepEqual(res.apps, LOCAL_APPS);
-	assert.match(String(res.note), /auto picks a host at submit time/);
+test("appChoices__OffersTheFleetIntersection__When__TheHostIsAuto", async () => {
+	// A run dispatched to `auto` can land on ANY fleet host, so only an app present on all of
+	// them is safe to offer — and the local list is exactly wrong, because dispatch walks the
+	// inventory and only the inventory. The badges AND together for the same reason: "open" on
+	// one host says nothing about the host the scheduler actually picks.
+	const asked: string[] = [];
+	const res = await appChoices(
+		"auto",
+		NO_LOCAL,
+		async (h) => {
+			const name = typeof h === "string" ? h : h.name;
+			asked.push(name);
+
+			return name === "mac1"
+				? { host: "mac1", ok: true, apps: [{ name: "Yarn", running: true, grounded: true }, { name: "Notion Calendar", running: false, grounded: true }, { name: "Hex Fiend", running: false, grounded: false }] }
+				: { host: "mac2", ok: true, apps: [{ name: "Notion Calendar", running: true, grounded: false }, { name: "Yarn", running: true, grounded: true }] };
+		},
+		() => FLEET,
+	);
+
+	assert.deepEqual(asked.sort(), ["mac1", "mac2"], "auto must ask every fleet host, and nothing else");
+	// Hex Fiend is only on mac1, so it is not offerable; flags survive only when true everywhere.
+	assert.deepEqual(res.apps, [
+		{ name: "Yarn", running: true, grounded: true },
+		{ name: "Notion Calendar", running: false, grounded: false },
+	]);
+	assert.equal(res.host, "auto");
+	assert.match(String(res.note), /every fleet host/);
+});
+
+test("appChoices__NamesTheSilentMac__When__OneFleetHostDoesNotAnswer", async () => {
+	// A rebooting Mac shrinks the fan-out rather than blanking the picker, but the operator has
+	// to be told the list may be wider than shown — and which machine to go look at.
+	const res = await appChoices(
+		"auto",
+		NO_LOCAL,
+		async (h) => {
+			const name = typeof h === "string" ? h : h.name;
+			if (name === "mac2") throw new Error("ssh timed out");
+
+			return { host: name, ok: true, apps: [{ name: "Yarn", running: false, grounded: true }] };
+		},
+		() => FLEET,
+	);
+
+	assert.deepEqual(res.apps.map((a) => a.name), ["Yarn"]);
+	assert.match(String(res.note), /mac2 did not answer/);
+});
+
+test("appChoices__ExplainsTheEmptyList__When__NoFleetHostAnswers", async () => {
+	// Nothing reachable means auto has nowhere to run. An empty list with a note saying so
+	// beats a local fallback whose every entry would be refused at submit time.
+	const res = await appChoices(
+		"auto",
+		NO_LOCAL,
+		async () => {
+			throw new Error("ssh timed out");
+		},
+		() => FLEET,
+	);
+
+	assert.deepEqual(res.apps, []);
+	assert.match(String(res.note), /no fleet host answered.*mac1, mac2.*nowhere to run/);
 });
 
 test("appChoices__ExplainsTheEmptyList__When__TheHostIsUnreachable", async () => {

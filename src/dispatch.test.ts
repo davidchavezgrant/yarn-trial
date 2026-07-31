@@ -200,6 +200,21 @@ test("dispatch__RefusesWithHolderDetails__When__WholeFleetIsBusy", async () => {
 	assert.equal(calls.some((c) => subcommand(c.argv) === "submit"), false, "a submit was sent to a fleet with no idle host");
 });
 
+test("dispatch__RefusesWithoutALocalFallback__When__AutoFindsNoIdleHost", async () => {
+	// `auto` walks the inventory and ONLY the inventory. With zero idle fleet hosts the answer
+	// is a refusal — never a run on the operator's own Mac, which would put an agent loose on
+	// the machine they are sitting at because a colo box happened to be rebooting.
+	const { run, calls } = recorder(() => ({ code: 255, stdout: "", stderr: "ssh: connect to host port 22: Operation timed out\n" }));
+
+	const result = await dispatch({ host: "auto", app: "Yarn", task: "t", inventory: FLEET, run, ...noSync });
+
+	assert.equal(result.ok, false);
+	assert.match(!result.ok ? result.error : "", /no idle host in the fleet/);
+	assert.equal(calls.some((c) => subcommand(c.argv) === "submit"), false, "something was submitted somewhere with no idle host");
+	// Every wire call went to an inventory host; nothing ever addressed this machine.
+	for (const c of calls) assert.ok(FLEET.hosts.some((h) => h.name === c.host), `${c.host} is not in the inventory`);
+});
+
 test("dispatch__StopsTrying__When__SubmitOutcomeIsUnknown", async () => {
 	// A submit that timed out may have started a run we can no longer see. Falling through to
 	// the next Mac would then have two agents driving two machines with one of them invisible,

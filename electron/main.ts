@@ -54,7 +54,14 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 const runs = new RunController();
-const remote = new RemoteRunController();
+/**
+ * One live remote follow per HOST, keyed by the host the run was submitted under (`auto`
+ * included). The moment dispatch resolves `auto` — or an alias — to a real machine, the
+ * run's own `onHost` handler re-keys the entry, so lookups by either name land on it and a
+ * second `auto` submit is free to go while this one runs. Entries are removed on `done` by
+ * identity, never by key alone: keys can move under a controller mid-run.
+ */
+const remotes = new Map<string, RemoteRunController>();
 let win: BrowserWindow | undefined;
 
 /** Injected before the shared app script; implements the `window.__bus` contract. */
@@ -71,7 +78,9 @@ window.__bus = {
   videoUrl: (rel) => window.__videoBase + rel.split('/').map(encodeURIComponent).join('/'),
   run: (opts) => ipcRenderer.invoke('run', opts),
   ground: (app, host, url) => ipcRenderer.invoke('ground', { app, host, url }),
-  stop: () => ipcRenderer.invoke('stop'),
+  // Stop names the machine whose run should end — with runs live on several hosts at once,
+  // a bare stop would have to guess which one the operator meant.
+  stop: (host) => ipcRenderer.invoke('stop', host),
   // Fleet. Every one of these answers something on a "no hosts.json" machine rather than
   // throwing, so the local-only shell needs no branch of its own.
   loadHosts: () => ipcRenderer.invoke('hosts'),
@@ -88,7 +97,10 @@ window.__bus = {
   // survive long enough to await a reply. The message is queued before teardown.
   saveState: (s) => ipcRenderer.send('state:save', s),
   onStarted: (cb) => ipcRenderer.on('started', (_e, d) => cb(d)),
-  onLine: (cb) => ipcRenderer.on('line', (_e, t) => cb(t)),
+  // Lines carry {text, app, host}: with two live runs, bare text cannot say whose terminal
+  // it belongs to, and the page would file it under whatever happened to be running first.
+  onLine: (cb) => ipcRenderer.on('line', (_e, d) => cb(d)),
+  onHost: (cb) => ipcRenderer.on('host', (_e, d) => cb(d)),
   onDone: (cb) => ipcRenderer.on('done', (_e, d) => cb(d)),
 };
 `;
@@ -180,8 +192,8 @@ function createWindow(): void {
 		runs.stop();
 		// detach, not stop: a local run dies with the window because its child is ours, but a
 		// remote job is a detached process on another Mac and closing a viewer must not kill it.
-		// The fleet row keeps its id, so the next launch can offer to follow it again.
-		remote.detach();
+		// The fleet rows keep their ids, so the next launch can offer to follow them again.
+		for (const controller of remotes.values()) controller.detach();
 		win = undefined;
 	});
 }
@@ -278,20 +290,11 @@ function registerVideoProtocol(): void {
 }
 
 /**
- * What the in-flight run is against, so `done` can name a remedy that points somewhere.
- *
- * Set at dispatch and deliberately NOT cleared afterwards: the page needs it precisely when the
- * run is over. The host is re-read from the controller rather than taken from here, because
- * `auto` is not a machine and only the controller learns which one it picked.
- */
-let dispatched: { app: string; remote: boolean } | undefined;
-
-/**
  * Deliver to the renderer if there still is one.
  *
  * `win` alone is not the test. Closing the window tears the webContents down before the
  * `closed` event clears `win`, and both shutdown paths emit MORE lines inside that gap: a
- * local child answers SIGINT with its exit output, and `remote.detach()` prints its own
+ * local child answers SIGINT with its exit output, and a detached remote follow prints its own
  * farewell. `send` on a destroyed webContents throws, and that throw is in the main process —
  * so closing the window mid-run could take the app down instead of the window.
  */
@@ -300,28 +303,67 @@ function toRenderer(channel: string, payload: unknown): void {
 	win.webContents.send(channel, payload);
 }
 
-const handlers: RunHandlers = {
-	onLine: (line) => toRenderer("line", line),
-	onDone: (code, elapsed) =>
-		toRenderer("done", {
-			code,
-			elapsed,
-			app: dispatched?.app ?? "",
-			host: dispatched?.remote ? (remote.lastRunHost ?? "") : "local",
-		}),
-};
+/**
+ * Event plumbing for ONE run, with its ownership baked in.
+ *
+ * Every event names {app, host}: two live runs into one window are only readable because each
+ * line says whose terminal it belongs to, and the page files them into per-app buffers on that
+ * name. A single shared handlers object plus a `dispatched` variable — the old shape — cannot
+ * do this, because the second dispatch overwrote the first run's identity.
+ *
+ * `current` starts as the submitted host and follows `onHost` to the resolved one, so `done`
+ * still names the real machine after the controller has let go of the run — that is when the
+ * page's unready panel needs somewhere to send a person.
+ */
+function handlersFor(app: string, submittedHost: string, controller?: RemoteRunController): RunHandlers {
+	let current = submittedHost;
+
+	return {
+		onLine: (line) => toRenderer("line", { text: line, app, host: current }),
+		onHost: (resolved) => {
+			if (resolved === current) return;
+			// Re-key so busyOn/stop find this run under the name the rest of the UI now uses,
+			// and the `auto` slot frees up for the next submit. Identity-checked, and never
+			// clobbering: if the resolved slot is somehow taken (a race the far side's lease
+			// makes near-impossible), the run stays reachable under its old key and by the
+			// attached-host scan in remoteOn().
+			if (controller && remotes.get(current) === controller && !remotes.has(resolved)) {
+				remotes.delete(current);
+				remotes.set(resolved, controller);
+			}
+			current = resolved;
+			toRenderer("host", { app, host: resolved });
+		},
+		onDone: (code, elapsed) => {
+			// By identity across the whole map — the key may have moved under this controller.
+			if (controller) for (const [key, c] of remotes) if (c === controller) remotes.delete(key);
+			toRenderer("done", { code, elapsed, app, host: current });
+		},
+	};
+}
+
+/** The live controller for a host, under its submitted key or the machine it resolved to. */
+function remoteOn(host: string): RemoteRunController | undefined {
+	const direct = remotes.get(host);
+	if (direct?.busy) return direct;
+	for (const c of remotes.values()) if (c.busy && c.attached?.host === host) return c;
+
+	return undefined;
+}
 
 /**
- * One run at a time in this shell, local or remote.
+ * One run per HOST in this shell — not one per shell.
  *
- * Not because two are technically impossible — a local run and a run on a colo Mac are on
- * different machines and do not contend — but because the window has one log pane, one status
- * line and one Stop button. Two streams into one pane is a transcript nobody can read, and a
- * Stop button whose target is ambiguous is worse than no Stop button.
+ * The real constraint is the machine: a second driver session on one Mac shuts down the shared
+ * daemon and kills the run already in flight (LIMITATIONS §6). Runs on DIFFERENT Macs do not
+ * contend, so a local run and a mac2 run, or runs on two colo Macs, coexist freely. This check
+ * only covers what THIS shell has in flight; the far side's job lease enforces the same rule
+ * fleet-wide across all operators, and its refusal is the backstop when two shells collide.
  */
-function alreadyBusy(): string | undefined {
-	if (runs.active) return "a run is already in progress on this Mac";
-	if (remote.busy) return `already following ${remote.attached?.jobId ?? "a remote run"} on ${remote.attached?.host} — stop or detach it first`;
+function busyOn(host: string): string | undefined {
+	if (host === "local") return runs.active ? "a run is already in progress on this Mac" : undefined;
+	const c = remoteOn(host);
+	if (c) return `already following ${c.attached?.jobId ?? "a remote run"} on ${c.attached?.host ?? host} — stop or detach it first`;
 
 	return undefined;
 }
@@ -330,29 +372,48 @@ function alreadyBusy(): string | undefined {
 type ShellRunOptions = RunOptions & { host?: string };
 
 ipcMain.handle("run", (_event, opts: ShellRunOptions) => {
-	const busy = alreadyBusy();
+	const target = isRemoteHost(opts.host) ? String(opts.host).trim() : "local";
+	const busy = busyOn(target);
 	if (busy) return busy;
 
 	// The task text is handed to whichever controller runs it and read by neither: the audit
 	// lives in agent.ts, on the machine that will execute the run (CLAUDE.md, "Measurement rule").
-	dispatched = { app: opts.app, remote: isRemoteHost(opts.host) };
-	const err = isRemoteHost(opts.host)
-		? remote.start({ host: opts.host as string, app: opts.app, task: opts.task, kind: "task", record: opts.record, noVision: opts.noVision, ...(opts.url ? { url: opts.url } : {}) }, handlers)
-		: runs.start(opts, handlers);
-	if (!err) toRenderer("started", { app: opts.app, task: opts.task });
+	let err: string | undefined;
+	if (target === "local") {
+		err = runs.start(opts, handlersFor(opts.app, "local"));
+	} else {
+		const controller = new RemoteRunController();
+		remotes.set(target, controller);
+		err = controller.start(
+			{ host: target, app: opts.app, task: opts.task, kind: "task", record: opts.record, noVision: opts.noVision, ...(opts.url ? { url: opts.url } : {}) },
+			handlersFor(opts.app, target, controller),
+		);
+		// A synchronous refusal never reaches onDone, so the map entry is ours to take back.
+		if (err) remotes.delete(target);
+	}
+	if (!err) toRenderer("started", { app: opts.app, task: opts.task, host: target });
 
 	return err;
 });
 
 ipcMain.handle("ground", (_event, { app, host, url }: { app: string; host?: string; url?: string }) => {
-	const busy = alreadyBusy();
+	const target = isRemoteHost(host) ? String(host).trim() : "local";
+	const busy = busyOn(target);
 	if (busy) return busy;
 
-	dispatched = { app, remote: isRemoteHost(host) };
-	const err = isRemoteHost(host)
-		? remote.start({ host: host as string, app, task: "", kind: "explore", record: false, noVision: false, ...(url ? { url } : {}) }, handlers)
-		: runs.explore(app, handlers, url);
-	if (!err) toRenderer("started", { app, task: `grounding pass — exploring ${app}` });
+	let err: string | undefined;
+	if (target === "local") {
+		err = runs.explore(app, handlersFor(app, "local"), url);
+	} else {
+		const controller = new RemoteRunController();
+		remotes.set(target, controller);
+		err = controller.start(
+			{ host: target, app, task: "", kind: "explore", record: false, noVision: false, ...(url ? { url } : {}) },
+			handlersFor(app, target, controller),
+		);
+		if (err) remotes.delete(target);
+	}
+	if (!err) toRenderer("started", { app, task: `grounding pass — exploring ${app}`, host: target });
 
 	return err;
 });
@@ -362,21 +423,42 @@ ipcMain.handle("ground", (_event, { app, host, url }: { app: string; host?: stri
  *
  * This is what makes closing the window survivable: the job is a detached child on the far
  * side and its log is a file there, so the only thing a restart ever lost was the id — which
- * the busy fleet row carries.
+ * the busy fleet row carries. Refused only when THIS shell already follows that host: a run
+ * of our own elsewhere is no reason not to watch someone else's.
  */
 ipcMain.handle("attach", async (_event, { host, jobId, app }: { host: string; jobId: string; app?: string }) => {
-	const busy = alreadyBusy();
+	const busy = busyOn(host);
 	if (busy) return busy;
 
-	dispatched = { app: app || "", remote: true };
-	const err = remote.attach(host, jobId, handlers);
-	if (!err) toRenderer("started", { app: app || host, task: `following ${jobId} on ${host}` });
+	// The pane the followed lines land in. The host stands in when the fleet row carried no
+	// app name — the page keys buffers by this string, and "" would be a terminal with no tab.
+	const owner = app || host;
+	const controller = new RemoteRunController();
+	remotes.set(host, controller);
+	const err = controller.attach(host, jobId, handlersFor(owner, host, controller));
+	if (err) remotes.delete(host);
+	if (!err) toRenderer("started", { app: owner, task: `following ${jobId} on ${host}`, host });
 
 	return err;
 });
 
-/** Stop means stop the RUN, wherever it is. Detaching without stopping is what a close does. */
-ipcMain.handle("stop", async () => (remote.busy ? remote.stop() : runs.stop()));
+/**
+ * Stop means stop the RUN on the named machine. Detaching without stopping is what a close
+ * does. The host must be named because several runs can be live at once, and a stop that
+ * guessed would end somebody's forty-minute pass on the wrong Mac.
+ */
+ipcMain.handle("stop", async (_event, host?: string) => {
+	const name = String(host ?? "local");
+	if (!isRemoteHost(name)) {
+		runs.stop();
+
+		return undefined;
+	}
+	const c = remoteOn(name);
+	if (!c) return `no run on ${name} to stop`;
+
+	return c.stop();
+});
 
 ipcMain.handle("hosts", () => hostChoices());
 
@@ -389,7 +471,7 @@ ipcMain.handle("fleet", () => fleetView());
  * credential prompt and the keychain entry for it. That is the point: nothing in this process
  * ever sees the operator's password for the machine or their password for the app under test.
  *
- * Not gated on `alreadyBusy()`. Signing in on one Mac while a run follows another is a normal
+ * Not gated on `busyOn()`. Signing in on one Mac while a run follows another is a normal
  * thing to want, and the far side refuses by itself if that Mac in particular is mid-run —
  * which it must, now that the app is brought to the FRONT over there rather than opened behind
  * everything. Only the runner knows whether a recording is in flight, so only the runner decides.

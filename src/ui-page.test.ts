@@ -92,7 +92,22 @@ interface Harness {
 	pinned: boolean;
 	host: string;
 	/** Fire the host's `started` echo, as captured off bus.onStarted at mount. */
-	fireStarted(d: { app: string; task: string }): void;
+	fireStarted(d: { app: string; task: string; host?: string }): void;
+	/** Live runs, host -> app — the page's one-run-per-host bookkeeping. */
+	running: Record<string, string>;
+	/** Re-attach offers, write-only: the fleet poll normally fills these. */
+	offers: { host: string; jobId: string; app?: string }[];
+	renderAttach(): void;
+	paneRunHost(): string | null;
+	/** The callbacks the page registered on the bus, so tests can fire host events at it. */
+	events: {
+		started?: (d: { app: string; task: string; host: string }) => void;
+		line?: (d: { text: string; app: string; host: string }) => void;
+		host?: (d: { app: string; host: string }) => void;
+		done?: (d: { code: number | null; elapsed: number; app: string; host: string }) => void;
+	};
+	/** Hosts the Stop button asked the bus to stop, in click order. */
+	stops: unknown[];
 }
 
 /**
@@ -107,7 +122,11 @@ interface Harness {
 function mount(busOverrides: Record<string, unknown> = {}): Harness {
 	const nodes: Record<string, FakeEl> = {};
 	for (const id of IDS) nodes[id] = el();
-	let started: (d: { app: string; task: string }) => void = () => {};
+	// Bus events are captured, not dropped: the run/stop/status tests below ARE the page's
+	// reaction to started/line/host/done, and firing them through the real registration is the
+	// only way the test exercises the same wiring the shell does.
+	const events: Harness["events"] = {};
+	const stops: unknown[] = [];
 	const bus = {
 		loadApps: async () => [],
 		appIcon: async () => "",
@@ -119,15 +138,26 @@ function mount(busOverrides: Record<string, unknown> = {}): Harness {
 		loadCreds: async () => ({ present: false, path: "", modelKey: false }),
 		loadHostPref: async () => ({ host: "local" }),
 		saveHostPref() {},
-		onStarted(cb: (d: { app: string; task: string }) => void) {
-			started = cb;
+		onStarted(cb: Harness["events"]["started"]) {
+			events.started = cb;
 		},
-		onLine() {},
-		onDone() {},
+		onLine(cb: Harness["events"]["line"]) {
+			events.line = cb;
+		},
+		onHost(cb: Harness["events"]["host"]) {
+			events.host = cb;
+		},
+		onDone(cb: Harness["events"]["done"]) {
+			events.done = cb;
+		},
 		videoUrl: (r: string) => r,
 		run: async () => undefined,
 		ground: async () => undefined,
-		stop() {},
+		stop: async (host: unknown) => {
+			stops.push(host);
+
+			return undefined;
+		},
 		attach: async () => undefined,
 		saveKey: async () => ({ ok: true }),
 		...busOverrides,
@@ -150,13 +180,18 @@ function mount(busOverrides: Record<string, unknown> = {}): Harness {
 		`${APP_JS.replace(/<\/script>\s*$/, "")}
 		return { get sel(){return sel}, set sel(v){sel=v}, set apps(v){apps=v}, get host(){return host}, set host(v){host=v},
 			get pinned(){return pinned}, set pinned(v){pinned=v},
+			get running(){return running}, set offers(v){offers=v},
 			check, syncUrlRow, selUrl, isBrowser, appendLine, line, errText, dropStaleSelection, selectApp, notePin,
-			render, agoLabel, stateFor };`,
+			render, agoLabel, renderAttach, paneRunHost, stateFor };`,
 	);
 	const noTimer = () => 0;
 	const api = fn({ __bus: bus, addEventListener() {} }, document, noTimer, noTimer) as Harness;
 	api.nodes = nodes;
-	api.fireStarted = (d) => started(d);
+	api.events = events;
+	api.stops = stops;
+	// Convenience shim over events.started for the tests written against the single-run bus:
+	// the page now keys everything by host, so an unstated one means the local machine.
+	api.fireStarted = (d) => events.started?.({ host: "local", ...d });
 
 	return api;
 }
@@ -586,6 +621,121 @@ test("render__SurvivesTheLookup__When__TheIconIpcRejects", async () => {
 	ui.render();
 	await settle();
 	assert.equal(asks, 1, "a failed lookup must cache as 'none', not retry per paint");
+});
+
+/**
+ * One run per HOST. The events below arrive tagged {app, host}, and everything the tests
+ * assert — which pane a line lands in, which host Run is gated on, which run Stop ends —
+ * hangs off that ownership riding the wire instead of a single runningApp guess.
+ */
+
+test("onLine__FilesEachRunUnderItsOwnApp__When__TwoRunsAreLive", () => {
+	// The exact failure the {app, host} payload exists to prevent: with bare-text lines the
+	// page filed everything under one "running app", splicing two transcripts together.
+	const ui = mount();
+	ui.sel = "Yarn";
+	ui.events.started!({ app: "Yarn", task: "t1", host: "mac1" });
+	ui.events.started!({ app: "Notion Calendar", task: "t2", host: "local" });
+	ui.events.line!({ text: "[1] yarn step", app: "Yarn", host: "mac1" });
+	ui.events.line!({ text: "[1] notion step", app: "Notion Calendar", host: "local" });
+
+	const painted = ui.nodes.log.children.map((c) => c.textContent);
+	assert.ok(painted.includes("[1] yarn step"), "the selected run's line must paint");
+	assert.ok(!painted.includes("[1] notion step"), "another run's line painted into the selected pane");
+	// Not lost, either: it is waiting in its own app's buffer for when that pane is selected.
+	assert.ok(ui.stateFor("Notion Calendar").log.includes("[1] notion step"));
+});
+
+test("paintStatus__ListsEveryLiveRun__When__TwoHostsAreBusy", () => {
+	const ui = mount();
+	ui.events.started!({ app: "Yarn", task: "t1", host: "mac1" });
+	ui.events.started!({ app: "Notion Calendar", task: "t2", host: "local" });
+	assert.equal(ui.nodes.status.textContent, "running: Yarn @ mac1, Notion Calendar @ local");
+
+	// One finishing must not blank the other from the header — that run is still going.
+	ui.events.done!({ code: 0, elapsed: 12, app: "Yarn", host: "mac1" });
+	assert.equal(ui.nodes.status.textContent, "running: Notion Calendar @ local");
+	ui.events.done!({ code: 0, elapsed: 30, app: "Notion Calendar", host: "local" });
+	assert.equal(ui.nodes.status.textContent, "idle");
+});
+
+test("check__GatesRunOnTheSelectedHostOnly__When__AnotherHostIsBusy", () => {
+	// The contention is one driver per MACHINE (LIMITATIONS §6), not one run per window: a run
+	// on mac1 must block another dispatch to mac1 and nothing else.
+	const ui = mount();
+	ui.apps = [{ name: "Notes" }];
+	ui.sel = "Notes";
+	ui.nodes.task.value = "show me how to make a checklist";
+	ui.events.started!({ app: "Yarn", task: "t", host: "mac1" });
+
+	ui.host = "mac1";
+	ui.check();
+	assert.equal(ui.nodes.go.disabled, true, "the busy host accepted a second run");
+	assert.equal(ui.nodes.ground.disabled, true);
+
+	ui.host = "local";
+	ui.check();
+	assert.equal(ui.nodes.go.disabled, false, "a free host was blocked by a run elsewhere");
+	assert.equal(ui.nodes.ground.disabled, false);
+});
+
+test("stop__NamesTheHostOwningTheSelectedPane__When__TwoRunsAreLive", async () => {
+	const ui = mount();
+	ui.events.started!({ app: "Yarn", task: "t1", host: "mac1" });
+	ui.events.started!({ app: "Notion Calendar", task: "t2", host: "local" });
+
+	ui.sel = "Yarn";
+	await ui.nodes.stop.onclick!();
+	ui.sel = "Notion Calendar";
+	await ui.nodes.stop.onclick!();
+
+	assert.deepEqual(ui.stops, ["mac1", "local"], "Stop did not follow the selected pane's run");
+});
+
+test("check__ShowsStopOnlyForTheSelectedPane__When__ItsRunIsLive", () => {
+	const ui = mount();
+	ui.apps = [{ name: "Yarn" }, { name: "Notes" }];
+	ui.events.started!({ app: "Yarn", task: "t", host: "mac1" });
+
+	ui.sel = "Yarn";
+	ui.check();
+	assert.equal(ui.nodes.stop.style.display, "block");
+
+	// An idle app's pane offers no Stop — the button always ends the run on screen, never a
+	// hidden one.
+	ui.sel = "Notes";
+	ui.check();
+	assert.equal(ui.nodes.stop.style.display, "none");
+});
+
+test("renderAttach__StillOffersOtherHostsJobs__When__ThisShellIsMidRun", () => {
+	// A run of our own used to hide every offer; now each run has its own pane, so only hosts
+	// this shell is already following are excluded.
+	const ui = mount();
+	ui.events.started!({ app: "Yarn", task: "t", host: "mac1" });
+	ui.offers = [
+		{ host: "mac1", jobId: "j-ours", app: "Yarn" },
+		{ host: "mac2", jobId: "j-theirs", app: "Notion Calendar" },
+	];
+	ui.renderAttach();
+
+	assert.equal(ui.nodes.attach.style.display, "block");
+	assert.ok(ui.nodes.attach.innerHTML.includes("j-theirs"), "another host's job must stay followable");
+	assert.ok(!ui.nodes.attach.innerHTML.includes("j-ours"), "offered to follow a host this shell already follows");
+});
+
+test("onHost__RekeysTheRun__When__AutoResolvesToAMac", () => {
+	// A run submitted to `auto` occupies the auto slot only until dispatch answers; from then
+	// on the header, the busy check and Stop must all name the real machine.
+	const ui = mount();
+	ui.events.started!({ app: "Yarn", task: "t", host: "auto" });
+	assert.deepEqual(ui.running, { auto: "Yarn" });
+
+	ui.events.host!({ app: "Yarn", host: "mac2" });
+	assert.deepEqual(ui.running, { mac2: "Yarn" });
+	assert.equal(ui.nodes.status.textContent, "running: Yarn @ mac2");
+	ui.sel = "Yarn";
+	assert.equal(ui.paneRunHost(), "mac2");
 });
 
 test("appendLine__StillCapsTheDom__When__NoAnimationFrameEverFires", () => {

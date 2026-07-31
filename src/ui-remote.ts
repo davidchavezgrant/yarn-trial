@@ -14,6 +14,7 @@ import {
 	type PullResult,
 	pull,
 	type RemoteApp,
+	type RemoteAppList,
 	remoteApps,
 	type StopResult,
 	stopRemote,
@@ -116,17 +117,19 @@ export interface AppChoices {
  * `grounded` badge lies in the same direction, since it is computed against the appmaps of
  * whichever checkout answers.
  *
- * `auto` deliberately gets the local list with a note rather than a guess. There is no single
- * host to ask — the fleet picks one at submit time — and picking one here to enumerate would
- * make the list quietly wrong whenever the scheduler chose differently.
+ * `auto` gets the fleet's intersection, never the local list. A run dispatched to `auto` lands
+ * on a fleet Mac — `dispatch` walks the inventory and only the inventory, so LOCAL is not a
+ * possible destination and this Mac's apps are exactly the wrong thing to offer. See
+ * `autoAppChoices` for why the answer is an intersection.
  */
 export async function appChoices(
 	host: string | undefined,
 	local: () => RemoteApp[],
 	fetchRemote: typeof remoteApps = remoteApps,
+	load: () => Inventory = loadHosts,
 ): Promise<AppChoices> {
 	const name = (host ?? "").trim() || LOCAL_HOST;
-	if (name === AUTO_HOST) return { apps: local(), host: name, note: "showing this Mac's apps — auto picks a host at submit time" };
+	if (name === AUTO_HOST) return autoAppChoices(fetchRemote, load);
 	if (!isRemoteHost(name)) return { apps: local(), host: LOCAL_HOST };
 
 	try {
@@ -139,6 +142,65 @@ export async function appChoices(
 		// says why the list is empty and the rest of the shell keeps working.
 		return { apps: [], host: name, note: `${name}: ${(e as Error).message}` };
 	}
+}
+
+/**
+ * The `auto` list: apps present on EVERY reachable fleet host.
+ *
+ * The scheduler is free to land the run on any idle Mac, so an app installed on two of three
+ * hosts is a coin-flip that fails minutes later as "no window found" whenever the third one
+ * wins the pick. Only the intersection is safe to offer. The same reasoning ANDs the badges:
+ * "open" or "grounded" on one host says nothing about the host the run actually gets.
+ *
+ * Hosts that do not answer shrink the fan-out rather than emptying the list — a rebooting Mac
+ * must not blank the picker — but they are named in the note, because an operator who knows
+ * mac3 was silent also knows the list may be wider than shown. Nothing reachable at all means
+ * `auto` has nowhere to run, and an empty list with a note saying so beats a local list whose
+ * every entry would be refused at submit time.
+ */
+async function autoAppChoices(fetchRemote: typeof remoteApps, load: () => Inventory): Promise<AppChoices> {
+	let hosts: HostEntry[];
+	try {
+		hosts = load().hosts;
+	} catch (e) {
+		return { apps: [], host: AUTO_HOST, note: (e as Error).message };
+	}
+
+	const lists = await Promise.all(
+		hosts.map(async (h): Promise<RemoteAppList> => {
+			try {
+				// The entry, not the name: resolving a name would re-read the inventory that
+				// `load` (an injected dependency, in tests) already answered for.
+				return await fetchRemote(h);
+			} catch (e) {
+				return { host: h.name, ok: false, apps: [], reason: (e as Error).message };
+			}
+		}),
+	);
+	const reachable = lists.filter((l) => l.ok);
+	const silent = lists.filter((l) => !l.ok).map((l) => l.host);
+	if (!reachable.length)
+		return { apps: [], host: AUTO_HOST, note: `no fleet host answered${silent.length ? ` (${silent.join(", ")})` : ""} — auto has nowhere to run` };
+
+	// Intersection by name, in the first answering host's order (each runner already sorts
+	// grounded/running/alphabetical, so re-sorting here would fight that).
+	const [first, ...rest] = reachable;
+	const everywhere = (name: string, flag: (a: RemoteApp) => boolean): boolean => rest.every((l) => l.apps.some((a) => a.name === name && flag(a)));
+	const apps = first.apps
+		.filter((a) => everywhere(a.name, () => true))
+		.map((a) => ({
+			name: a.name,
+			running: a.running && everywhere(a.name, (b) => b.running),
+			grounded: a.grounded && everywhere(a.name, (b) => b.grounded),
+		}));
+
+	return {
+		apps,
+		host: AUTO_HOST,
+		note: silent.length
+			? `apps present on every reachable fleet host — ${silent.join(", ")} did not answer`
+			: "apps present on every fleet host — auto picks one at submit time",
+	};
 }
 
 export function isRemoteHost(host: string | undefined): boolean {
@@ -560,6 +622,10 @@ export class RemoteRunController {
 		this.lastHost = result.host.name;
 		if (this.active) this.active.host = result.host.name;
 		if (this.active) this.active.jobId = result.jobId;
+		// Tell the caller which machine this run actually occupies. The shell keys its
+		// one-run-per-host bookkeeping on this, and until now the only holder of the resolved
+		// name was this controller — after `done` fires, too late to matter.
+		handlers.onHost?.(result.host.name);
 		handlers.onLine(`${result.jobId} on ${result.host.name}`);
 		for (const note of dispatchNotes(result)) handlers.onLine(note);
 		await this.followLoop(result.host.name, result.jobId, handlers, abort, 0);
