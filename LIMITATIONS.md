@@ -47,7 +47,7 @@ populating the tree. (`AXEnhancedUserInterface` returns -25208, unsupported.)
 - Detection: treat `AX windows == 0` or `non-menu elements == 0` as "target not
   observable" and fail fast with that diagnosis rather than letting the model flail
   against a menu-bar-only tree.
-- Recovery attempt (added 2026-07-30): `ensureObservable()` in `src/harness.ts` no longer
+- Recovery attempt (added 2026-07-30): `ensureObservable()` in `src/core/harness.ts` no longer
   fails on the first unobservable probe. It foregrounds the target — driver
   `bring_to_front`, `launch_app` (= `open -a`, which opens a window when the app has none),
   `activate`, and an `AXMinimized = false` pass over every window — waits 2s for Chromium to
@@ -93,7 +93,7 @@ So the run looked healthy on the channel that gates it and was dead on the chann
 produces the deliverable. Both runs burned their whole step budget and assembled an mp4 of
 a still image.
 
-**Detection** (`unpaintedStreak()` in `src/harness.ts`): count trailing steps that verified
+**Detection** (`unpaintedStreak()` in `src/core/harness.ts`): count trailing steps that verified
 nothing *and* moved no pixels. A verified step proves the app is alive and clears the streak,
 and an unknown delta (`--no-vision`, no prior frame) clears it too. Replayed over all 48
 historical run logs it fires on exactly these two, at step 4 instead of 15.
@@ -199,7 +199,7 @@ element labels reports false failures exactly when the environment is hostile.
 - ~10–25s of model thinking between actions (a finished Yarn explore pass measured ~25s
   per action). **Not a concern for Yarn** — their pipeline imperceptibly speeds up demos
   in post — but it is one for any interactive use.
-- Default model is key-conditional (`src/harness.ts`): `openai/gpt-5.6-sol` over an
+- Default model is key-conditional (`src/core/harness.ts`): `openai/gpt-5.6-sol` over an
   OpenRouter key, `claude-opus-5` over a bare Anthropic key; `AGENT_MODEL` overrides.
   OpenRouter caveat: `cache_creation_input_tokens` comes back null for OpenAI models, so
   the `cache_control` blocks the prompts carry are accepted and silently ignored — the
@@ -224,7 +224,7 @@ Yarn exploration was lost this way when a one-off diagnostic script ran alongsid
 **Workarounds**
 - Never run two driver-using scripts at once. Enforced in code now, twice: `./run` refuses
   to start while a run is in flight (`assert_no_run_in_flight`), and each fleet Mac takes a
-  liveness-based lease (`src/runner/lease.ts`) before spawning.
+  liveness-based lease (`src/remote/runner/lease.ts`) before spawning.
 - If ad-hoc diagnostics are needed during a long run, they must share the same session
   rather than opening their own.
 - **This is a cua-path constraint only.** `--backend cdp` opens no driver session at all;
@@ -339,7 +339,7 @@ Two consequences worth stating plainly:
 
 ## 11. DOM enrichment is best-effort and geometry-joined
 
-**QUIRK** · added 2026-07-29 with `src/axdom.ts` + `native/axdom`
+**QUIRK** · added 2026-07-29 with `src/core/axdom.ts` + `native/axdom`
 
 The Swift sidecar recovers `AXDOMIdentifier`/`AXDOMClassList` (and help/description/
 placeholder/URL) that cua-driver's element projection discards, naming 955 of 1044 anonymous
@@ -423,7 +423,7 @@ Pointing a run at a website drives a **driver-owned Chrome profile**, not the op
   `isError` unset, so `Driver.act` does not throw and a caller that only catches exceptions
   walks straight past it. That happened: the run continued and died later at the CDP bind
   reporting `browser_requires_setup`, blaming a step that had apparently succeeded.
-  `refusalOf()` in `src/browser.ts` is the guard, and the lesson generalises to every
+  `refusalOf()` in `src/backends/browser.ts` is the guard, and the lesson generalises to every
   `browser_*` tool.
 - **Consent is per-call, and the gate is a TTY rather than a human.** `browser-approve`
   "interactively mint[s] a five-minute, single-use token" — per run, not per machine. Four
@@ -465,7 +465,7 @@ past 250 controls.
 
 ## 14. The CDP-direct backend trades OS reach for reliability
 
-**CONSTRAINT** · added 2026-07-30 with `src/cdp.ts` (`--backend cdp`)
+**CONSTRAINT** · added 2026-07-30 with `src/backends/cdp.ts` (`--backend cdp`)
 
 The cdp backend deletes four cua liabilities by construction (no 300s TTL, no shared
 daemon, no consent gate, no node budget) and its perception cannot go AX-dark. What it
@@ -502,7 +502,7 @@ gives up:
 
 ## 16. Liveview (window-scoped remote sign-in) inherits every TCC wall, plus its own
 
-**QUIRK** · added 2026-07-30 with `native/liveview.swift` + `src/liveview*.ts`
+**QUIRK** · added 2026-07-30 with `native/liveview.swift` + `src/remote/control/liveview*.ts`
 
 - **Must be spawned by the runner** or it captures nothing — same responsible-process rule
   as §12; an SSH-spawned engine emits `no-screen-recording` every tick with no other error.

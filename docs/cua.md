@@ -24,7 +24,7 @@ Two lifecycle facts that cost us runs before we understood them:
 - **A session has a 300-second ABSOLUTE lifetime from `start_session` — not an idle TTL.**
   A session kept busy with an action every 5s still died at 300.1s. This killed two
   exploration passes at action 15 and looked exactly like a step limit, because it
-  reproduced at the same action every time. `src/driver.ts` re-declares the session every
+  reproduced at the same action every time. `src/core/driver.ts` re-declares the session every
   90s (`start_session` is idempotent and refreshes the clock); verified 130 actions over
   650s. **Any run longer than five minutes needs this heartbeat.**
 - **`shutdown()` kills the shared native driver, not just your session.** A second process
@@ -39,7 +39,7 @@ Tools we actually use: `check_permissions`, `launch_app`, `list_windows`,
 `get_window_state`, `click`/`right_click`/`double_click` (by `element_index`),
 `type_text`, `press_key`, `set_value`, `scroll`, `start_recording`/`stop_recording`.
 
-We wrap all of this in one boundary module (`src/driver.ts`) so nothing else imports
+We wrap all of this in one boundary module (`src/core/driver.ts`) so nothing else imports
 the SDK — the actuator can be swapped without touching the agent loop.
 
 ## Setup & permissions
@@ -64,14 +64,14 @@ the SDK — the actuator can be swapped without touching the agent loop.
   `AXButton ""` — unaddressable. But Chromium's Mac bridge still exposes the source DOM
   node as nonstandard AX attributes (`AXDOMIdentifier`, `AXDOMClassList`, plus `AXHelp`/
   `AXDescription`/`AXPlaceholderValue`/`AXURL`) and the driver simply never reads them.
-  `native/axdom` (Swift, ~120 lines) walks the same tree and `src/axdom.ts` joins the
+  `native/axdom` (Swift, ~120 lines) walks the same tree and `src/core/axdom.ts` joins the
   result on by **frame geometry** — element indices come from two independent walks and
   are not comparable. Measured on Yarn: 955/1044 anonymous nodes named, including 37 of
   64 anonymous *interactive* controls, ~0.5s per observation. Buys nothing on native
   AppKit apps (no DOM) and nothing for canvas content (no DOM node either).
 - **Window picking needs care**: `list_windows` includes placeholder windows (untitled,
   500×500) and tooltips/panels. Filter by `app_name`, require area > ~50k px, prefer
-  titled then largest. (`findWindow` in `src/harness.ts`.)
+  titled then largest. (`findWindow` in `src/core/harness.ts`.)
 - **The window title is a cheap state signal** in Electron apps: Notion Calendar's
   title reflects the current surface ("Settings · …", "Create event · …"). Great for
   verification substrings.
@@ -113,7 +113,7 @@ the SDK — the actuator can be swapped without touching the agent loop.
 - Allow a settle delay after every action before re-observing (we use ~900ms) — EXCEPT
   `wait`, which takes a `seconds` argument (clamped to 10 min) precisely because targets
   that embed their own agent think for minutes, and a flat ~900ms ceiling cost hundreds
-  of turns against the step budget (`settleMsFor()` in `src/harness.ts`).
+  of turns against the step budget (`settleMsFor()` in `src/core/harness.ts`).
 - **`delivery_mode: "foreground"` fronts the app for <1ms at the window-server level and
   restores** — NOT a real AppKit activation. On native AppKit apps the app never becomes
   key/main, so menu items stay DISABLED and menu AXPress silently no-ops (measured on
@@ -134,7 +134,7 @@ the SDK — the actuator can be swapped without touching the agent loop.
 - **Display capture leaks unrelated content** (it happened to us in testing). Our
   workaround: window-scoped recording by polling `get_window_state` screenshots
   (~4fps) and assembling with ffmpeg — physically cannot contain other windows.
-- Window-snapshot bugs to defend against (`assembleVideo` in `src/agent.ts`):
+- Window-snapshot bugs to defend against (`assembleVideo` in `src/core/agent.ts`):
   - ~~Snapshots composite incorrectly for windows on non-retina (1x) displays.~~
     **Retracted 2026-07-29 — not reproducible.** Yarn fullscreen on a 1920×1080 1x panel
     captured cleanly (1568×882, no bands, no offset). The claim had justified moving the
@@ -164,7 +164,7 @@ to what the section below assumes, all learned by calling the tool rather than r
   five-minute single-use token, so this is per run, not per machine. It refuses a pipe — but it
   is checking for a terminal, not for a person, so running it under a pty (`expect`) and
   answering `APPROVE` mints a token `browser_prepare` accepts. `mintApprovalToken()` in
-  `src/browser.ts`. Bounded/unrestricted permission modes and the binary's magic token literal
+  `src/backends/browser.ts`. Bounded/unrestricted permission modes and the binary's magic token literal
   do NOT open this gate — all four measured. See LIMITATIONS §13.
 - **The AX backend needs none of this.** It reads the window, not the DOM, so
   `--backend ax --url <site>` skips prepare entirely — `open -a <browser> <url>` is the whole
@@ -189,7 +189,7 @@ read/act on the **DOM directly**, bypassing the AX layer. Two surfaces:
   `click_element`, `insert_text`, `type_keystrokes`. Explicitly supports "Electron apps
   (via CDP)". Read-only actions work by default; mutations are gated behind
   `CUA_DRIVER_ENABLE_LEGACY_PAGE_MUTATIONS=1`.
-- **Typed `browser_*` family** (preferred; what `src/dom.ts` uses):
+- **Typed `browser_*` family** (preferred; what `src/backends/dom.ts` uses):
   `get_browser_state` binds a native window (pid + window_id) to a CDP target
   ("exact-or-refuse"), then returns snapshots joining accessibility, DOM, layout, and
   viewport state as typed refs. Actions: `browser_click`/`browser_type`/
@@ -260,7 +260,7 @@ read/act on the **DOM directly**, bypassing the AX layer. Two surfaces:
 
 ## CDP-direct backend (`--backend cdp`) — no cua in the loop (2026-07-30)
 
-`src/cdp.ts` attaches playwright-core over `--remote-debugging-port` — for web targets it
+`src/backends/cdp.ts` attaches playwright-core over `--remote-debugging-port` — for web targets it
 launches its own Chrome against a persistent profile; Electron targets need the flag at
 launch. It exists because it deletes four cua liabilities by construction: no 300s session
 TTL, no shared daemon (runs stop killing each other), no consent gate (the profile is ours,
@@ -286,7 +286,7 @@ Its own quirks, measured:
   all element labels/values, feeding PASS/FAIL back. The model may override a failed
   check with visual evidence (e.g. expected "CEST", saw "GMT+2" — correctly declared
   success), but the check catches silent no-ops that would otherwise cascade.
-- **Ground first, then act.** A one-time exploration pass (`src/explore.ts`, safety
+- **Ground first, then act.** A one-time exploration pass (`src/core/explore.ts`, safety
   rules + step budget) writes app notes that eliminate dead ends: on Notion Calendar,
   grounded runs hit 0 dead ends vs 2 (a Settings detour) ungrounded, and found quirks
   manual testing missed.

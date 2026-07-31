@@ -114,7 +114,7 @@ signin` (full screen share) or `./run liveview` (just that window, in your brows
 - **Roughly one run in three aborts** on AX flakiness (empty tree, focus loss, dead
   session). Retries have been clean every time. (LIMITATIONS §10)
 - **Driver sessions die at 300s** from `start_session` — an absolute lifetime, not idle
-  TTL. `src/driver.ts` heartbeats every 90s; anything bypassing it must too.
+  TTL. `src/core/driver.ts` heartbeats every 90s; anything bypassing it must too.
 - **Task prompts must state the goal only.** `auditTaskPrompt()` rejects prompts that
   dictate method; `--hinted` opts in and stamps the run log. Don't bypass it to make a
   run look good.

@@ -12,16 +12,16 @@ and what it's worth.
 ```
 NL task
   ▼
-Agent loop (GPT-5.6 Sol via OpenRouter; Opus 5 on a bare Anthropic key)   src/agent.ts
+Agent loop (GPT-5.6 Sol via OpenRouter; Opus 5 on a bare Anthropic key)   src/core/agent.ts
   observe: AX elements (+ DOM id/class via native/axdom) + window screenshot
   decide:  ONE action + a checkable expectation (tool use)
   act:     via the actuator backend
   verify:  re-observe, check expectation, feed verdict back
   ▼
 Actuator seam (Observation/ActionRequest) — three backends:
-  --backend ax   (default)  src/driver.ts → @trycua/cua-driver → AX actions, pid input
+  --backend ax   (default)  src/core/driver.ts → @trycua/cua-driver → AX actions, pid input
   --backend dom             cua's browser_* tools over CDP
-  --backend cdp             src/cdp.ts → playwright-core, NO cua in the loop
+  --backend cdp             src/backends/cdp.ts → playwright-core, NO cua in the loop
 ```
 
 Design decisions and their reasoning live in `docs/architecture.md`.
@@ -51,7 +51,7 @@ Design decisions and their reasoning live in `docs/architecture.md`.
 - **Grounding** comes in two tiers, kept separate so that measuring one doesn't
   quietly measure the other:
   - `docs/appmaps/<app>.md` — output of the autonomous exploration pass
-    (`src/explore.ts`), stamped with a provenance header. Runs until the frontier of
+    (`src/core/explore.ts`), stamped with a provenance header. Runs until the frontier of
     un-operated controls empties: measured **40 min / 96 actions** on Yarn (2026-07-30).
     The earlier "~5-6 min" figure measured a step-budget truncation, not a finished pass.
     Emits a prose map plus a `<app>.json` graph whose scope metadata drives the ambiguity
@@ -117,15 +117,15 @@ npm run app                          # Electron shell
 
 **The fleet.** Three colo Macs run demos unattended, dispatched from any operator's
 laptop: `./run enroll` / `provision` / `dispatch` / `install` / `signin` / `liveview`
-(`src/remote/`, `src/runner/`). Each Mac runs the Electron shell headless (`--serve`, a
+(`src/remote/control/`, `src/remote/runner/`). Each Mac runs the Electron shell headless (`--serve`, a
 LaunchAgent) because macOS attributes TCC grants to the responsible process — a run
 spawned over SSH perceives nothing, silently (LIMITATIONS §12). One run per Mac,
 enforced by a lease; a human signs each app in once per Mac. The shell's fleet panel
 shows each Mac's state, and the gallery tags recordings with the Mac they came from.
 
-**The shell.** `src/ui-core.ts` holds the local host logic (app list, per-machine run
+**The shell.** `src/ui/ui-core.ts` holds the local host logic (app list, per-machine run
 guard, spawn, hygiene gate, per-app UI state in `out/ui-state.json`),
-`src/ui-remote.ts` the fleet dispatch, and `src/ui-page.ts` the markup + browser script;
+`src/ui/ui-remote.ts` the fleet dispatch, and `src/ui/ui-page.ts` the markup + browser script;
 the page reaches its host only through `window.__bus`, which `electron/main.ts` binds to
 ipcRenderer. Keeping that seam means the host is swappable and the page stays testable
 without Electron. The shell hosts **one run per host** — a local run and runs on two
@@ -173,7 +173,7 @@ Two ways this prototype was caught flattering itself, both now enforced in code 
 than by anyone remembering:
 
 - **Task prompts state the goal only.** Two early takes had the *method* written into
-  the prompt and were reported as autonomous runs. `auditTaskPrompt` (`src/harness.ts`)
+  the prompt and were reported as autonomous runs. `auditTaskPrompt` (`src/core/harness.ts`)
   now refuses a prompt that names driver internals or dictates interaction mechanics;
   `--hinted` opts in and stamps the run log so a dictated run can't be mistaken for an
   honest one later.

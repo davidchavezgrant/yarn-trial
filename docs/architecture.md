@@ -7,13 +7,13 @@ VM), not interactively on a customer's. Full brief: `docs/jasper-email-yarn-tria
 
 ## 1. One actuator seam, three backends
 
-`src/driver.ts` is the only module that imports `@trycua/cua-driver`. Everything else
+`src/core/driver.ts` is the only module that imports `@trycua/cua-driver`. Everything else
 speaks Observation/ActionRequest. The driver is UniFFI bindings over a sealed Rust core —
 we treat it as a peripheral we might swap, not a framework we build inside.
 
 The swap has since happened without a fork: three backends live behind the seam.
 `--backend ax` (default — cua driving the AX tree), `--backend dom` (cua's `browser_*`
-tools over CDP), and `--backend cdp` (`src/cdp.ts`: playwright-core attaching over
+tools over CDP), and `--backend cdp` (`src/backends/cdp.ts`: playwright-core attaching over
 `--remote-debugging-port`, **no cua in the loop at all** — no 300s session TTL, no shared
 daemon, no consent gate, no node budget; those four absences are its reason to exist).
 Explore, teardown, the cleanup CLI and the trajectory feed all run on cdp too.
@@ -23,7 +23,7 @@ Electron targets broadly enough to retire the others there.
 
 ## 2. Observe → act → verify loop, with verification as a gate
 
-The agent loop (`src/agent.ts`) forces the model to declare an expectation before every
+The agent loop (`src/core/agent.ts`) forces the model to declare an expectation before every
 action, then greps a fresh observation for it. Three layers, deliberately different in
 cost and authority:
 
@@ -46,7 +46,7 @@ probabilistic advises.
 ## 3. Measurement rule: goal-only prompts, enforced in code
 
 Task prompts state the GOAL only; method knowledge lives in appmaps (a declared,
-budgeted input). `auditTaskPrompt()` (`src/harness.ts`) rejects hinted prompts;
+budgeted input). `auditTaskPrompt()` (`src/core/harness.ts`) rejects hinted prompts;
 `--hinted` opts in and stamps the run log. This is enforced in code because it was
 violated twice on 2026-07-29 while enforced by memory. Corollary: run logs are written
 only by the harness, never hand-copied; stamped appmaps are never hand-edited (curated
@@ -78,7 +78,7 @@ The driver projects each element to role/label/value/frame, so unlabeled icon bu
 arrive as `AXButton ""` — anonymous. Chromium's Mac AX bridge exposes the source DOM
 node's id/class (`AXDOMIdentifier`/`AXDOMClassList`) plus help/description/placeholder/
 URL; nobody reads them. `native/axdom` (120 lines of Swift, compiled, gitignored) walks
-the same tree, emits those as JSONL keyed by frame geometry, and `src/axdom.ts` joins
+the same tree, emits those as JSONL keyed by frame geometry, and `src/core/axdom.ts` joins
 them onto the driver's elements. Measured on Yarn: 955/1044 anonymous nodes named,
 incl. 37/64 anonymous *interactive* controls.
 
@@ -99,7 +99,7 @@ Why this shape and not something else:
   bare AX view; the run log records why.
 
 **Exit path**: upstream the attribute passthrough into cua-driver, then delete `native/`
-and the frame-join outright. Full rationale in the `src/axdom.ts` header.
+and the frame-join outright. Full rationale in the `src/core/axdom.ts` header.
 
 ## 6. Reliability and feel are decoupled (Jasper, 2026-07-28)
 
@@ -110,7 +110,7 @@ that erases inter-action latency. Consequences we build on:
   per action, target role/rect). On the cdp backend the harness writes the same feed
   itself (`TrajectoryWriter`).
 - We now prove the feed is sufficient by rendering it: `npm run humanize -- <stamp>`
-  (`src/humanize.ts`/`track.ts`/`render.ts`) draws a human-feeling cursor over the
+  (`src/cursor/humanize.ts`/`track.ts`/`render.ts`) draws a human-feeling cursor over the
   recording — motion fitted to Yarn's *post-spring-filter* cursor corpus (fitting raw
   input data was measurably wrong), replayed human segments over synthesis, typing
   synthesized from the raw corpus's inter-key timing. Renders surface in the gallery.
@@ -145,7 +145,7 @@ Hex Fiend failed on activation policy —
 
 ## 9. Web targets are a target KIND, not a specially-named app (2026-07-30)
 
-`Target = {kind:"app",name} | {kind:"web",url,origin}` (`src/target.ts`) replaces the bare
+`Target = {kind:"app",name} | {kind:"web",url,origin}` (`src/core/target.ts`) replaces the bare
 app-name string. Web artifacts key on the origin (`docs/appmaps/web-www.notion.so.md`) while
 `appSlug` keeps its exact prior behaviour for Mac apps, so no existing appmap, run log or job
 id moves. `--url` is value-bearing and consumed by `parseTarget` before positionals are read.
@@ -168,8 +168,8 @@ which is exactly what `verify()` demands.
 ## 10. Cleanup: the run puts the app back (2026-07-30)
 
 A run used to be a one-way mutation; on a fleet, a job that dirties its host poisons
-whatever runs there next. Three mechanical layers (`src/journal.ts`, `src/teardown.ts`,
-`src/cleanup.ts`): a journal that diffs control VALUES across observations (what actually
+whatever runs there next. Three mechanical layers (`src/core/journal.ts`, `src/core/teardown.ts`,
+`src/core/cleanup.ts`): a journal that diffs control VALUES across observations (what actually
 changed, never the model's account; matched by (name, surface), never by handle; appended
 the instant detected, so crashes are recoverable), a teardown that replays it in reverse
 with harness-written checks against the named control's own value (not a haystack grep),
@@ -187,15 +187,15 @@ Load-bearing decisions:
   macOS attributes Accessibility/Screen Recording to the responsible process and children
   inherit them — an SSH-spawned run gets an empty AX tree and a black screenshot with NO
   error. Every run must descend from the grant-holding process (LIMITATIONS §12).
-- **`src/remote/ssh.ts` is the only ssh builder**; variable data crosses as base64 specs,
+- **`src/remote/control/ssh.ts` is the only ssh builder**; variable data crosses as base64 specs,
   never argv text (sshd joins remote args into one login-shell string).
-- **One run per Mac**, enforced by a liveness-based lease (`src/runner/lease.ts`) — cua's
+- **One run per Mac**, enforced by a liveness-based lease (`src/remote/runner/lease.ts`) — cua's
   shared-daemon shutdown makes a second session fatal to the first (LIMITATIONS §6).
 - **Sign-in is human, once per app per Mac** (`./run signin` full-desktop screen share, or
   `./run liveview` window-scoped SCK capture + input injection in a browser tab). No
   credential ever enters the agent loop — every observation and frame reaches the model
   and the recording.
-- **Per-operator profile swap** (`src/runner/profiles.ts`) so shared Macs don't share
+- **Per-operator profile swap** (`src/remote/runner/profiles.ts`) so shared Macs don't share
   sessions; swaps serialize, and the app quits first (Electron rewrites its cookie jar on
   quit).
 - **Paths resolve from the install, not cwd** (`src/paths.ts`, DATA vs RESOURCES roots): a
@@ -205,7 +205,7 @@ Load-bearing decisions:
 ## 12. One shell, Electron, with the page held at arm's length
 
 `./run` launches an Electron app (`electron/main.ts`) that renders markup and script from
-`src/ui-page.ts` against host logic in `src/ui-core.ts`. Electron rather than a native app
+`src/ui/ui-page.ts` against host logic in `src/ui/ui-core.ts`. Electron rather than a native app
 or a browser page: Yarn's product *is* Electron, the driver has first-party support for
 that host, and a signed bundle escapes the ScreenCaptureKit limit that pins recording at
 ~4fps today (`docs/research/2026-07-29-packaging-native-vs-electron.md`). A browser-based
