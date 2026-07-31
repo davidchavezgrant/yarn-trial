@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -103,6 +104,18 @@ function withProfileLock<T>(fn: () => Promise<T>): Promise<T> {
 	return r;
 }
 
+/** Fixed port for the liveview server, so the runner and the operator's `ssh -L` agree without a round trip. */
+const LIVEVIEW_PORT = 7682;
+/**
+ * Hard ceiling on a liveview server's life. The runner spawns it DETACHED — nothing else reaps it
+ * — so a sign-in walked away from must not leave a capture-capable, injectable server listening.
+ * Generous: an SSO round trip with MFA on a phone is minutes, and this is the same 20-minute
+ * budget `signin`'s `waitForHome` allows for exactly that.
+ */
+const LIVEVIEW_MAX_LIFETIME_MS = 20 * 60_000;
+/** After the tab closes, exit unless it reopens within this. A closed tab is "done"; linger briefly. */
+const LIVEVIEW_IDLE_AFTER_CLOSE_MS = 30_000;
+
 /** First non-empty line, for turning a child's noise into one reportable sentence. */
 function firstLineOf(text: string): string {
 	return text.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
@@ -162,6 +175,17 @@ export interface ServeOptions {
 	 * takes the test runner with it, so without this the only reachable branches are the refusals.
 	 */
 	exit?: () => void;
+	/**
+	 * Bring an app to the foreground. Injected for the same reason as `swap`: the real one shells
+	 * out to `open -a`, which launches a real application on the developer machine running the
+	 * suite. Used by `signin` and `liveview`.
+	 */
+	open?: (app: string, opts: { foreground?: boolean }) => Promise<void>;
+	/**
+	 * Whether something is already listening on the liveview port. Injected so the "a login is
+	 * already up" branch is testable without binding a real socket.
+	 */
+	portInUse?: (port: number) => Promise<boolean>;
 	log?: (line: string) => void;
 }
 
@@ -280,6 +304,28 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 	const swapProfileFor =
 		opts.swap ??
 		(async (app: string, operator: string) => swapProfile({ app, operator, bundleId: await resolveBundleId(app) }));
+
+	/** Foreground the app, injectable so the suite does not launch real applications. */
+	const openAppFor = opts.open ?? openApp;
+
+	/**
+	 * Is the liveview port already taken? A connect that succeeds means a server is up; ECONNREFUSED
+	 * means it is free. Injected for tests; the real one makes a one-shot loopback connect.
+	 */
+	const portInUse =
+		opts.portInUse ??
+		((port: number) =>
+			new Promise<boolean>((resolve) => {
+				const probe = net.connect({ host: "127.0.0.1", port });
+				const done = (inUse: boolean) => {
+					probe.destroy();
+					resolve(inUse);
+				};
+				probe.setTimeout(1000);
+				probe.once("connect", () => done(true));
+				probe.once("timeout", () => done(false));
+				probe.once("error", () => done(false));
+			}));
 
 	async function submit(params: Params): Promise<RunnerResponse> {
 		if (params.kind !== undefined && params.kind !== "explore" && params.kind !== "task")
@@ -450,13 +496,122 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		log(`signin: ${describeSwap(swap)}`);
 
 		try {
-			await openApp(app, { foreground: true });
+			await openAppFor(app, { foreground: true });
 		} catch (e) {
 			return { ok: false, error: `could not open ${JSON.stringify(app)}: ${(e as Error).message}`, profile: describeSwap(swap) };
 		}
 		log(`signin: ${app} foregrounded for ${operator}`);
 
 		return { ok: true, app, operator, profile: describeSwap(swap), fresh: swap.fresh };
+	}
+
+	/**
+	 * Bring up a window-scoped live-view sign-in: the same as `signin`, but instead of opening
+	 * full-desktop Screen Sharing, it starts the liveview server (native/liveview capture + input)
+	 * so a teammate drives ONLY the window being signed into, from their own browser over the SSH
+	 * tunnel `runnerctl` is already inside.
+	 *
+	 * WHY THIS IS A RUNNER VERB and not `ssh … ./run liveview` (measured on mac1, 2026-07-30): a
+	 * liveview engine spawned from a bare SSH shell is DENIED screen capture — macOS attributes the
+	 * Screen Recording and Accessibility grants to the responsible process, and an ssh child is not
+	 * it. This process (the Electron runner) holds those grants, and a child it spawns inherits them
+	 * by identity — exactly how the agent's window screenshots and the `axdom` sidecar already work.
+	 * So the server has to be launched from here.
+	 *
+	 * Like `signin`: the lease is CHECKED and not TAKEN (a login is not a run, and taking the lease
+	 * would strand the host if the operator wandered off), and the profile is swapped to the
+	 * requesting operator BEFORE anything is shown, so the sign-in lands in the data that will still
+	 * hold it next week.
+	 *
+	 * The server is spawned DETACHED with a runner-minted token and two self-termination deadlines
+	 * (max-lifetime + idle-after-close), so a walked-away sign-in cannot leave a capture-capable
+	 * server listening. We return the token and port; the operator's tunnel maps localhost:PORT to
+	 * the same port here, so the URL they open is `http://127.0.0.1:PORT/?t=<token>`.
+	 */
+	async function liveview(params: Params): Promise<RunnerResponse> {
+		const app = String(params.app ?? "").trim();
+		const operator = String(params.operator ?? "unknown").trim() || "unknown";
+		if (!app) return { ok: false, error: "app is required" };
+
+		const { holder } = inspect(runnerDir);
+		if (holder)
+			return {
+				ok: false,
+				error: `${holder.lease.operator} is running ${holder.lease.app} here (${holder.heldSec}s) — a login stream would capture over their recording`,
+				busy: true,
+				operator: holder.lease.operator,
+				app: holder.lease.app,
+				kind: holder.lease.kind,
+				jobId: holder.lease.jobId,
+				elapsedSec: holder.heldSec,
+			};
+
+		// Before the swap, not after: a second liveview call while a login is already up must NOT
+		// quit the app to re-swap the profile — that would kill the window the first operator is
+		// signing into. If the port is taken a server is already serving; report that rather than
+		// spawning a second one that will die on EADDRINUSE (observed on the fleet, 2026-07-31).
+		// The token is not recoverable from here (it lives in the running server), so the caller is
+		// told to reuse the existing session or wait for it to lapse.
+		if (await portInUse(LIVEVIEW_PORT))
+			return {
+				ok: false,
+				error: `a liveview server is already running on this Mac (port ${LIVEVIEW_PORT}) — reuse that sign-in, or wait for it to close (it exits on idle or after ${LIVEVIEW_MAX_LIFETIME_MS / 60_000} min)`,
+				alreadyRunning: true,
+				port: LIVEVIEW_PORT,
+			};
+
+		// Under the profile lock like every other swap call site: liveview, like signin, checks
+		// the lease without taking it, so the lock is the only thing keeping a concurrent
+		// submit/signin from interleaving two sets of directory moves — see withProfileLock.
+		let swap: ProfileSwap;
+		try {
+			swap = await withProfileLock(() => swapProfileFor(app, operator));
+		} catch (e) {
+			return { ok: false, error: `could not give ${operator} their own data in ${app}: ${(e as Error).message}` };
+		}
+		log(`liveview: ${describeSwap(swap)}`);
+
+		// Foreground the app so it is the frontmost window the engine will follow when the operator
+		// connects. Same rationale as signin's openApp.
+		try {
+			await openAppFor(app, { foreground: true });
+		} catch (e) {
+			return { ok: false, error: `could not open ${JSON.stringify(app)}: ${(e as Error).message}`, profile: describeSwap(swap) };
+		}
+
+		const token = randomBytes(18).toString("base64url");
+		const cmd = resolveRunCommand("src/liveview-cli.ts");
+		try {
+			spawnRun(
+				{ command: cmd.command, args: [...cmd.args] },
+				{
+					logFile: logPath(`liveview-${operator}`, root),
+					cwd: resourcesRoot(),
+					env: {
+						...childEnv({ runnerDir, stamp: "liveview" }),
+						PORT: String(LIVEVIEW_PORT),
+						LIVEVIEW_TOKEN: token,
+						LIVEVIEW_MAX_LIFETIME_MS: String(LIVEVIEW_MAX_LIFETIME_MS),
+						LIVEVIEW_IDLE_AFTER_CLOSE_MS: String(LIVEVIEW_IDLE_AFTER_CLOSE_MS),
+					},
+				},
+			);
+		} catch (e) {
+			return { ok: false, error: `could not start the liveview server: ${(e as Error).message}`, profile: describeSwap(swap) };
+		}
+		log(`liveview: server started for ${operator} on ${app} (port ${LIVEVIEW_PORT})`);
+
+		return {
+			ok: true,
+			app,
+			operator,
+			profile: describeSwap(swap),
+			fresh: swap.fresh,
+			port: LIVEVIEW_PORT,
+			token,
+			url: `http://127.0.0.1:${LIVEVIEW_PORT}/?t=${token}`,
+			maxLifetimeSec: LIVEVIEW_MAX_LIFETIME_MS / 1000,
+		};
 	}
 
 	/**
@@ -741,6 +896,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			grant,
 			submit: () => submit(params),
 			signin: () => signin(params),
+			liveview: () => liveview(params),
 			ready: () => ready(params),
 		};
 		const async = handlers[String(req.method)];
