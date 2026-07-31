@@ -186,10 +186,13 @@ test("targetVocabulary__UsesAWebSurfaceTaxonomy__When__TargetIsWeb", () => {
 });
 
 test("buildRunArgs__CarriesEveryFlag__When__AllOptionsSet", () => {
-	const args = buildRunArgs(NOTION, { task: "t", record: true, noVision: true, backend: "dom" });
+	// "cdp", not the deleted "dom": buildRunArgs takes `backend?: string` and would happily
+	// pass a value the child CLI now rejects, so a test asserting the old name was checking
+	// that we can build an unrunnable command line.
+	const args = buildRunArgs(NOTION, { task: "t", record: true, noVision: true, backend: "cdp" });
 	assert.ok(args.includes("--record"));
 	assert.ok(args.includes("--no-vision"));
-	assert.equal(args[args.indexOf("--backend") + 1], "dom");
+	assert.equal(args[args.indexOf("--backend") + 1], "cdp");
 });
 
 test("isBrowserApp__Recognises__When__NameIsAKnownBrowser", () => {

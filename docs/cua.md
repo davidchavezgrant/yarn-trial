@@ -182,6 +182,13 @@ to what the section below assumes, all learned by calling the tool rather than r
 
 ## DOM access (browser_* / CDP) — VERIFIED on Notion Calendar, 2026-07-29
 
+> **The `dom` backend this section measured was deleted in `2932147`.** Everything below is
+> still true OF CUA and is kept as the measurement record — the paging arithmetic and the
+> AX-vs-viewport coordinate delta are the reasons we know what cua's browser surface costs.
+> What changed is our conclusion, not the facts: `cdp` reaches the same Chromium over the same
+> protocol without the middleman, so `--backend` is `ax|cdp`. References to `DomBackend.*`
+> below name code that no longer exists. See FOR_AMAN.md §1.
+
 The driver speaks Chrome DevTools Protocol, so for browsers and Electron apps it can
 read/act on the **DOM directly**, bypassing the AX layer. Two surfaces:
 
@@ -189,7 +196,8 @@ read/act on the **DOM directly**, bypassing the AX layer. Two surfaces:
   `click_element`, `insert_text`, `type_keystrokes`. Explicitly supports "Electron apps
   (via CDP)". Read-only actions work by default; mutations are gated behind
   `CUA_DRIVER_ENABLE_LEGACY_PAGE_MUTATIONS=1`.
-- **Typed `browser_*` family** (preferred; what `src/backends/dom.ts` uses):
+- **Typed `browser_*` family** (cua's best browser surface; we drove it from the `dom` backend
+  until that was deleted in `2932147` — see FOR_AMAN.md §1 for why `cdp` dominates it):
   `get_browser_state` binds a native window (pid + window_id) to a CDP target
   ("exact-or-refuse"), then returns snapshots joining accessibility, DOM, layout, and
   viewport state as typed refs. Actions: `browser_click`/`browser_type`/

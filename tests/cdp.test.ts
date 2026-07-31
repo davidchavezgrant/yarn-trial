@@ -114,8 +114,8 @@ test("parseAiSnapshot__TreatsCursorPointerAsInteractive__When__TheRoleIsGeneric"
 });
 
 test("originMatches__RefusesAPrefixSibling__When__TheHostMerelyStartsWithTheOrigin", () => {
-	// startsWith adopted https://x.community for https://x.com — the exact-origin
-	// comparison is the same one pickTab makes in src/backends/dom.ts.
+	// startsWith adopted https://x.community for https://x.com. The same comparison was in the
+	// dom backend's pickTab; that backend is deleted, this is where the rule lives now.
 	assert.equal(originMatches("https://x.community/feed", "https://x.com"), false);
 	assert.equal(originMatches("https://x.com/settings?tab=1", "https://x.com"), true);
 });
