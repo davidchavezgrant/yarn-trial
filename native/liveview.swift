@@ -46,7 +46,8 @@
 //     {"cmd":"key","down":<bool>,"code":<i>,"flags":<i>}     // CGKeyCode + CGEventFlags
 //     {"cmd":"text","s":"..."}             // type a unicode string (for pasted values)
 //     {"cmd":"quit"}
-//     x/y are 0..1 fractions of the tracked window, so the viewer never needs to know pixels.
+//     x/y are 0..1 fractions of the tracked window, so the viewer never needs to know pixels;
+//     the engine clamps them, so out-of-range input cannot reach past the window.
 //
 //   fd 3   (binary frames): each frame is  "F" <uint32 length BE> <jpeg bytes>.
 //   stdout (JSONL events):  {"ev":"window","id":..,"title":..,"app":..,"x":..,"y":..,"w":..,"h":..,"scale":..}
@@ -82,13 +83,13 @@ do {
 
 let errOut = FileHandle.standardError
 let evOut = FileHandle.standardOutput
-// fd 3 is opened by the parent for binary frames. If it is absent (running by hand) fall back
-// to /dev/null so a smoke test does not blow up on a bad write.
-let frameFd: FileHandle = {
-	let fh = FileHandle(fileDescriptor: 3, closeOnDealloc: false)
-	// Probe: writing zero bytes to a closed fd throws on Darwin.
-	return fh
-}()
+// fd 3 is opened by the parent for binary frames. Run by hand there is no fd 3, and the first
+// frame write would kill the process before any typed event could explain why — so probe with
+// fcntl (F_GETFD is side-effect-free; -1/EBADF means nothing is open there) and fall back to
+// the null device: a manual smoke test still gets events on stdout, the frames just go nowhere.
+let frameFd: FileHandle = fcntl(3, F_GETFD) != -1
+	? FileHandle(fileDescriptor: 3, closeOnDealloc: false)
+	: FileHandle.nullDevice
 
 func emitEvent(_ obj: [String: Any]) {
 	guard let data = try? JSONSerialization.data(withJSONObject: obj),
@@ -167,6 +168,21 @@ func windowById(_ id: CGWindowID) -> WindowInfo? {
 	onScreenWindows().first { $0.id == id }
 }
 
+// The backing scale of the display the window actually occupies. NSScreen.main is the KEY
+// window's screen — wrong for a background agent on a multi-display Mac, where the tracked
+// window can sit anywhere. NSScreen frames are bottom-left-origin while CGWindowList/SCK
+// frames are top-left, so flip through the primary display's height before hit-testing.
+func backingScale(for cgFrame: CGRect) -> CGFloat {
+	let fallback = NSScreen.main?.backingScaleFactor ?? 2.0
+	guard let primary = NSScreen.screens.first else { return fallback }
+	let mid = CGPoint(x: cgFrame.midX, y: primary.frame.height - cgFrame.midY)
+	for s in NSScreen.screens where s.frame.contains(mid) {
+		return s.backingScaleFactor
+	}
+
+	return fallback
+}
+
 // ---- JPEG encode ------------------------------------------------------------------------
 
 func encodeJPEG(_ image: CGImage, quality: Float) -> Data? {
@@ -227,7 +243,10 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 			currentWindowId = nil
 			return
 		}
-		if want == currentWindowId { return }
+		if want == currentWindowId {
+			refreshBounds(for: want)
+			return
+		}
 
 		// The 250ms timer fires again while `rebuild` is still awaiting SCShareableContent, and the
 		// guard above cannot catch it yet (currentWindowId only updates at the END of rebuild). Two
@@ -261,7 +280,7 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 
 		let filter = SCContentFilter(desktopIndependentWindow: scWindow)
 		let cfg = SCStreamConfiguration()
-		let scale = NSScreen.main?.backingScaleFactor ?? 2.0
+		let scale = backingScale(for: scWindow.frame)
 		// Cap the encoded width; SCK wants pixel dimensions.
 		let winW = scWindow.frame.width * scale
 		let outW = min(CGFloat(maxWidth), winW)
@@ -292,10 +311,33 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 		])
 	}
 
-	// Map a 0..1 fraction of the tracked window to a global screen point for CGEvent.
+	// The tracked window can move or resize WITHOUT changing identity — an OAuth popup resizing
+	// itself after the page loads, a login sheet recentering — and SCK keeps streaming the right
+	// pixels because the filter follows the window, which makes the stream look fine while
+	// globalPoint is still mapping input against where the window USED to be: clicks land at the
+	// old screen position, possibly in another app. CGWindowList geometry is cheap and needs no
+	// TCC prompt, so re-read it on every retarget tick and tell the viewer when it changed.
+	private func refreshBounds(for id: CGWindowID) {
+		guard let w = windowById(id), w.bounds != currentBounds else { return }
+		currentBounds = w.bounds
+		emitEvent([
+			"ev": "window", "id": Int(id),
+			"title": w.title, "app": w.app,
+			"x": w.bounds.origin.x, "y": w.bounds.origin.y,
+			"w": w.bounds.width, "h": w.bounds.height, "scale": currentScale,
+		])
+	}
+
+	// Map a 0..1 fraction of the tracked window to a global screen point for CGEvent. Clamped
+	// HERE and nowhere else — this is the one point every input path funnels through, whereas
+	// the TS helpers are optional for callers — so an unvalidated x:3 from the wire cannot
+	// click three window-widths into whatever app happens to sit there.
 	func globalPoint(fx: Double, fy: Double) -> CGPoint {
-		CGPoint(x: currentBounds.origin.x + CGFloat(fx) * currentBounds.width,
-		        y: currentBounds.origin.y + CGFloat(fy) * currentBounds.height)
+		let cx = min(max(fx.isFinite ? fx : 0, 0.0), 1.0)
+		let cy = min(max(fy.isFinite ? fy : 0, 0.0), 1.0)
+
+		return CGPoint(x: currentBounds.origin.x + CGFloat(cx) * currentBounds.width,
+		               y: currentBounds.origin.y + CGFloat(cy) * currentBounds.height)
 	}
 
 	// SCStreamOutput
@@ -321,15 +363,27 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 
 final class Injector {
 	private let src = CGEventSource(stateID: .hidSystemState)
+	// Which buttons are held, tracked from our own down/up. macOS apps treat .mouseMoved between
+	// a down and an up as hover, not a drag — drag-select, sliders, and scrollbars only respond
+	// to the *MouseDragged types — and the viewer keeps sending plain moves during a drag, so
+	// the held state here, not the message, decides how a move is posted.
+	private var leftDown = false
+	private var rightDown = false
 
 	func mouse(_ type: String, at p: CGPoint, button: String) {
-		let btn: CGMouseButton = button == "right" ? .right : .left
+		var btn: CGMouseButton = button == "right" ? .right : .left
 		let evType: CGEventType
 		switch type {
-			case "down": evType = btn == .right ? .rightMouseDown : .leftMouseDown
-			case "up": evType = btn == .right ? .rightMouseUp : .leftMouseUp
-			case "move": evType = .mouseMoved
-			default: evType = .mouseMoved
+			case "down":
+				evType = btn == .right ? .rightMouseDown : .leftMouseDown
+				if btn == .right { rightDown = true } else { leftDown = true }
+			case "up":
+				evType = btn == .right ? .rightMouseUp : .leftMouseUp
+				if btn == .right { rightDown = false } else { leftDown = false }
+			default:
+				if leftDown { evType = .leftMouseDragged; btn = .left }
+				else if rightDown { evType = .rightMouseDragged; btn = .right }
+				else { evType = .mouseMoved }
 		}
 		if let e = CGEvent(mouseEventSource: src, mouseType: evType, mouseCursorPosition: p, mouseButton: btn) {
 			e.post(tap: .cghidEventTap)
@@ -381,18 +435,29 @@ func handle(_ obj: [String: Any]) {
 	guard let cmd = obj["cmd"] as? String else { return }
 	switch cmd {
 		case "follow": engine.mode = .follow
-		case "pin": if let id = obj["window"] as? Int { engine.mode = .pinned(CGWindowID(id)) }
+		// Wire-controlled ints must never hit a trapping initializer — one malformed message
+		// ("code":-1) would SIGTRAP the engine mid-login. Values with an exact target range
+		// (window id, keycode) are ignored when out of range, like unknown cmds below; deltas
+		// and flags clamp, because a saturated scroll is harmless where a crash is not.
+		case "pin": if let id = obj["window"] as? Int, let wid = CGWindowID(exactly: id) { engine.mode = .pinned(wid) }
 		case "mouse":
 			let p = engine.globalPoint(fx: obj["x"] as? Double ?? 0, fy: obj["y"] as? Double ?? 0)
 			let type = obj["type"] as? String ?? "move"
 			let button = obj["button"] as? String ?? "left"
 			if type == "click" { injector.click(at: p, button: button) } else { injector.mouse(type, at: p, button: button) }
 		case "scroll":
-			injector.scroll(dy: Int32(obj["dy"] as? Int ?? 0), dx: Int32(obj["dx"] as? Int ?? 0))
+			// Scroll wheels land under wherever the pointer IS — the event carries no position of
+			// its own. The protocol sends x/y precisely so the scroll can be aimed; without the
+			// move first, the wheel turns under the physical cursor, possibly in another app.
+			if let fx = obj["x"] as? Double, let fy = obj["y"] as? Double {
+				injector.mouse("move", at: engine.globalPoint(fx: fx, fy: fy), button: "left")
+			}
+			injector.scroll(dy: Int32(clamping: obj["dy"] as? Int ?? 0), dx: Int32(clamping: obj["dx"] as? Int ?? 0))
 		case "key":
+			guard let code = CGKeyCode(exactly: obj["code"] as? Int ?? 0) else { break }
 			injector.key(down: obj["down"] as? Bool ?? true,
-			             code: CGKeyCode(obj["code"] as? Int ?? 0),
-			             flags: CGEventFlags(rawValue: UInt64(obj["flags"] as? Int ?? 0)))
+			             code: code,
+			             flags: CGEventFlags(rawValue: UInt64(clamping: obj["flags"] as? Int ?? 0)))
 		case "text":
 			if let s = obj["s"] as? String { injector.text(s) }
 		case "quit": exit(0)
