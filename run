@@ -2,47 +2,9 @@
 # One entry point for the demo agent. Everything else in this repo is a script you have to
 # remember the shape of; this is the thing you can hand to someone.
 #
-#   ./run                                   packaged app (Electron) — the deployment target
-#   ./run "show me how to change X"         headless: run a task against the default app
-#   ./run "<task>" "App Name" [--record]    ...against a named app, flags passed through
-#   ./run explore "App Name"                grounding pass -> docs/appmaps/
-#   ./run explore --url https://site.com    ...against a website instead of an installed app
-#   ./run recipe compile <stamp>            freeze a successful run into a replayable recipe
-#   ./run recipe replay <file|stamp>        replay it — zero model calls unless a step breaks
-#   ./run "<task>" --url https://site.com   run a task against a website
-#   ./run browser-login https://site.com    one-time: sign in, so later web runs are logged in
-#   ./run browser-wipe [<mac>|all] [--go]   wipe Chrome profiles on the Macs (accounts, passwords)
-#   ./run session-wipe [<mac>|all] [--go]   sign everyone out of everything on the Macs: close
-#                                           every GUI app, wipe all app + browser session data
-#   ./run doctor                            check permissions, keys, deps before demoing
-#   ./run enroll                            one-time: mint the fleet key, pin host keys,
-#                                           install it on each Mac (prompts for passwords)
-#   ./run enroll --export [file]            bundle that key + the model key for teammates
-#   ./run hosts                             show the fleet and which Macs are free
-#   ./run provision [--host <name>]         push this checkout to the Macs, install the runner
-#   ./run provision --doctor                what each Mac is missing before it can run
-#   ./run provision --restart               bounce runners whose TCC grant landed too late
-#   ./run dispatch auto "<task>" "App"      run on a free Mac, follow it, pull artifacts back
-#   ./run dispatch <mac> explore "App"      grounding pass on a named Mac
-#   ./run dispatch <mac> follow <jobId>     re-attach to a run already in flight
-#   ./run dispatch <mac> pull <jobId>       fetch the artifacts of a finished run
-#   ./run install "App" <https://…|path>    put a target app on the Macs, presence-verified
-#   ./run install "App" --check             is it installed on each Mac, and where
-#   ./run signin <mac> ["App"]              screen-share to a Mac to sign an app in by hand
-#   ./run signout <mac> "App"               sign YOU out of an app on that Mac (deletes your data there)
-#   ./run uninstall <mac> "App"             remove an app from that Mac, plus all parked profiles for it
-#   ./run creds status                      what signed-in sessions the fleet vault holds
-#   ./run creds checkout <mac> "App"        push your stored session onto a box (auto; YARN_VAULT=0 disables)
-#   ./run creds checkin local "App"         seal THIS Mac's signed-in session into the vault (preferred)
-#   ./run creds checkin <mac> "App"         seal a fleet box's session into the vault
-#   ./run creds signout-everywhere "App"    wipe your session for an app across the whole fleet + vault
-#   ./run liveview [<mac>] ["App"]          window-scoped sign-in: drive just one window in a browser
-#   ./run bench plan                        print the benchmark matrix (no side effects)
-#   ./run bench phase <1|2|3|4> --go        submit that phase to the fleet queue (without --go: preview only)
-#   ./run bench collect                     pull finished benchmark runs, compute metrics, rewrite the report
-#   ./run bench judge                       re-grade landed runs with the offline judge (idempotent; before reading the report)
+# The command guide lives in usage() below — `./run help` (or -h/--help) prints it.
 #
-# Teammates run none of that: drop team-credentials.json beside this script (or in
+# Teammates run almost none of it: drop team-credentials.json beside this script (or in
 # ~/.yarn-runner/, or ship it inside the .app) and the first ./run installs the fleet key and
 # the model key for them. Nothing to generate, nothing to send anyone.
 #
@@ -91,6 +53,63 @@ have_key() { [[ -n ${OPENROUTER_API_KEY:-} || -n ${ANTHROPIC_API_KEY:-} ]]; }
 die() {
 	printf '\033[31m%s\033[0m\n' "$1" >&2
 	exit 1
+}
+
+usage() {
+	# Bold only when a human is looking; pipes and logs get plain text. No backticks or
+	# stray $ in the heredoc — it is unquoted so ${b}/${n} expand.
+	local b='' n=''
+	[[ -t 1 ]] && b=$'\033[1m' n=$'\033[0m'
+	cat <<EOF
+${b}./run${n} — one entry point for the demo agent
+
+${b}run${n}
+  ./run                                  packaged app (Electron) — the deployment target
+  ./run "<task>" ["App"] [--record]      headless task run (default app: Yarn; flags pass through)
+  ./run "<task>" --url <https://site>    ...against a website instead of an installed app
+
+${b}ground & replay${n}
+  explore "App" | --url <https://site>   grounding pass -> docs/appmaps/
+  recipe compile <stamp>                 freeze a successful run into a replayable recipe
+  recipe replay <file|stamp>             replay it — zero model calls unless a step breaks
+  appmaps [--sync] [--app <name>]        which Mac holds which grounding; --sync converges the fleet
+
+${b}fleet${n}
+  hosts                                  show the fleet and which Macs are free
+  dispatch auto "<task>" "App"           run on a free Mac, follow it, pull artifacts back
+  dispatch <mac> explore "App"           grounding pass on a named Mac
+  dispatch <mac> follow|pull <jobId>     re-attach to a run in flight / fetch a finished run's artifacts
+  provision [--doctor|--restart]         push this checkout to the Macs / grade them / bounce runners
+  install "App" <https://site|path>      put a target app on the Macs (--check: is it installed, where)
+  uninstall <mac> "App"                  remove an app from that Mac, plus all parked profiles for it
+
+${b}sign-in & sessions${n}
+  signin <mac> ["App"]                   screen-share to a Mac to sign an app in by hand
+  liveview [<mac>] ["App"]               window-scoped sign-in: drive just one window in a browser
+  browser-login <https://site>           one-time local sign-in, so later web runs are logged in
+  creds status|audit                     what signed-in sessions the fleet vault holds
+  creds checkout <mac> "App"             push your stored session onto a box (auto; YARN_VAULT=0 disables)
+  creds checkin <local|mac> "App"        seal a signed-in session into the vault (local preferred)
+  creds signout-everywhere "App"         wipe your session for an app across the whole fleet + vault
+  signout <mac> "App"                    sign YOU out of an app on that Mac (deletes your data there)
+  keychain ...                           Safe Storage equalization for Electron targets (manual, rare)
+  browser-wipe [<mac>|all] [--go]        wipe Chrome profiles on the Macs (accounts, passwords)
+  session-wipe [<mac>|all] [--go]        close every GUI app on the Macs, wipe all session data
+
+${b}bench${n}
+  bench plan                             print the benchmark matrix (no side effects)
+  bench phase <1|2|3|4> --go             submit that phase to the fleet queue (without --go: preview)
+  bench collect                          pull finished runs, compute metrics, rewrite the report
+  bench judge                            re-grade landed runs with the offline judge (idempotent)
+
+${b}setup & health${n}
+  doctor                                 check permissions, keys, deps before demoing
+  enroll [--export [file]]               mint the fleet key, pin host keys, install it on each Mac
+                                         (--export bundles it + the model key for teammates)
+
+Auth: reads .env / ../yarn/.env / ~/.yarn-runner/env if present, else expects
+OPENROUTER_API_KEY or ANTHROPIC_API_KEY already exported.
+EOF
 }
 
 # A run started while another is in flight kills BOTH: the second driver session shuts down
@@ -208,6 +227,15 @@ keychain)
 	exec npx tsx src/remote/keychain-cli.ts "$@"
 	;;
 
+appmaps)
+	# Which Mac holds which grounding; --sync converges the fleet (newest capturedAt wins,
+	# .md and .json travel together). Runs automatically around dispatch and after a
+	# grounding pass — this is the manual handle. No have_key: no model. No
+	# assert_no_run_in_flight: remote rsync only, never a local driver session.
+	shift
+	exec npx tsx src/remote/control/appmaps.ts "$@"
+	;;
+
 bench)
 	# The benchmark orchestrator (src/bench/). Phase-gated: nothing dispatches without an
 	# explicit --go, which orchestrate.ts itself enforces — this case only routes. No
@@ -302,13 +330,18 @@ doctor)
 	;;
 
 -h | --help | help)
-	# Print the header comment, stopping at the first non-comment line rather than a fixed
-	# range, so editing the header cannot leak code into the help text.
-	sed -n '2,${/^#/!q; s/^# \{0,1\}//p;}' "$0"
+	usage
 	;;
 
 *)
-	# Anything else is a task string: ./run "show me how to X" ["App"] [--record ...]
+	# Anything else is a task string: ./run "show me how to X" ["App"] [--record ...].
+	# Task prompts are sentences; a lone word with no spaces is a mistyped subcommand, and
+	# letting it through would start a model-billed agent run with that word as the task.
+	if [[ $cmd != *[[:space:]]* ]]; then
+		printf "./run: '%s' is not a command, and a task prompt is a full sentence.\n" "$cmd" >&2
+		printf 'see: ./run help\n' >&2
+		exit 2
+	fi
 	have_key || die "no API key: export OPENROUTER_API_KEY or ANTHROPIC_API_KEY (or put it in .env)"
 	assert_no_run_in_flight
 	exec npx tsx src/core/agent.ts "$@"
