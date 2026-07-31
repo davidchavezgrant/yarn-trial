@@ -382,20 +382,33 @@ export class CdpBackend {
 				// single one) and let the pure, tested chooser decide which is the app.
 				// viewportSize() is null on attached pages, so the size comes from the page
 				// itself; a page that cannot be measured competes with area 0.
-				const pages = browser.contexts().flatMap((c) => c.pages());
-				const candidates: PageCandidate[] = [];
-				for (const p of pages)
-					candidates.push({
-						url: p.url(),
-						title: await p.title().catch(() => ""),
-						viewport:
-							p.viewportSize()
-							?? ((await p.evaluate("({ width: window.innerWidth, height: window.innerHeight })").catch(() => null)) as PageCandidate["viewport"]),
-					});
-				const idx = pickMainPage(candidates, target.name);
+				//
+				// Polled, not read once: the endpoint answers /json/version BEFORE the app has
+				// created its first BrowserWindow (observed live — a fresh Yarn launch attached
+				// cleanly and listed zero pages), so an early attach must wait for the window,
+				// not report an appless endpoint.
+				const windowDeadline = Date.now() + 15_000;
+				let pages: Page[] = [];
+				let candidates: PageCandidate[] = [];
+				let idx = -1;
+				for (;;) {
+					pages = browser.contexts().flatMap((c) => c.pages());
+					candidates = [];
+					for (const p of pages)
+						candidates.push({
+							url: p.url(),
+							title: await p.title().catch(() => ""),
+							viewport:
+								p.viewportSize()
+								?? ((await p.evaluate("({ width: window.innerWidth, height: window.innerHeight })").catch(() => null)) as PageCandidate["viewport"]),
+						});
+					idx = pickMainPage(candidates, target.name);
+					if (idx >= 0 || Date.now() > windowDeadline) break;
+					await new Promise((r) => setTimeout(r, 250));
+				}
 				if (idx < 0)
 					throw new Error(
-						`attached to ${endpoint} but no page looks like an app window — saw: ${candidates.map((c) => c.url || "(blank)").join(", ") || "(no pages)"}`,
+						`attached to ${endpoint} but no page looked like an app window within 15s — saw: ${candidates.map((c) => c.url || "(blank)").join(", ") || "(no pages)"}`,
 					);
 				page = pages[idx];
 				const attachPort = (() => {

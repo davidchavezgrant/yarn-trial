@@ -1,5 +1,5 @@
 import { auditTaskPrompt, type PromptAudit } from "../harness.js";
-import { parseTarget, type Target, targetLabel, targetSlug } from "../target.js";
+import { electronTarget, parseTarget, type Target, targetLabel, targetSlug } from "../target.js";
 
 export interface CliConfig {
 	record: boolean;
@@ -63,12 +63,17 @@ export function parseCli(argv: string[]): CliConfig {
 	// drove the app named on the command line, grounding it with the wrong appmap and recording
 	// a run log that lies about which map it used. Rebuild the target from the resolved name.
 	if (target.kind === "app") target = { kind: "app", name: app };
-	// A web target has exactly one browser to drive — the Chrome the cdp backend launches
-	// and holds signed in — so an unstated backend resolves there rather than refusing later.
-	if (target.kind === "web" && backendIdx < 0) backendKind = "cdp";
+	// Both target kinds default to cdp (set by David, 2026-07-31; the dom-backend removal
+	// accidentally walked the app half back). Web: the backend's own signed-in Chrome. App
+	// (Electron): the harness (re)launches the app with --remote-debugging-port and drives
+	// the DOM directly — injected input never steals the operator's pointer, keyboard, or
+	// focus. --backend ax opts back into the cua driver (fleet posture, or an app that
+	// strips the flag).
+	if (backendIdx < 0) backendKind = "cdp";
+	if (backendKind === "cdp" && target.kind === "app") target = electronTarget(app);
 	if (!task || !["ax", "cdp"].includes(backendKind)) {
 		console.error('usage: tsx src/core/agent.ts "<task>" ["App Name"] [--record] [--backend ax|cdp] [--no-vision] [--no-ax]');
-		console.error("--backend cdp drives a Chromium target over CDP directly (playwright-core) with NO cua in the loop; web targets get their own Chrome, Electron targets need --remote-debugging-port.");
+		console.error("default backend: cdp for both target kinds — app targets are (re)launched with --remote-debugging-port, hands-off the operator's session. --backend ax opts into the cua driver.");
 		process.exit(1);
 	}
 	if (noAx && backendKind !== "ax") {
