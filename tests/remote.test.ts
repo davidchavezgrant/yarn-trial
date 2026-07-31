@@ -9,7 +9,7 @@ import { type FleetRow, fleetStatus, pickIdleHost } from "../src/fleet/remote/fl
 import { type HostEntry, type Inventory, HOSTS_SCHEMA, importHosts, loadHosts, parseRtsz, resolveHost } from "../src/fleet/remote/hosts.js";
 import { applyCredentials, parseCredentials, TEAM_SCHEMA } from "../src/fleet/remote/team.js";
 import { loadRunnerEnv } from "../src/fleet/runner/spawn.js";
-import { decodeSpec, encodeSpec, keyFingerprint, runnerArgv, sshArgv, writeKnownHosts } from "../src/fleet/remote/ssh.js";
+import { decodeSpec, encodeSpec, keyFingerprint, runnerArgv, sshArgv, tunnelArgv, writeKnownHosts } from "../src/fleet/remote/ssh.js";
 
 /**
  * Fleet inventory, transport and status. Every test here is offline by construction: the SSH
@@ -208,6 +208,27 @@ test("encodeSpec__RoundTripsVerbatim__When__TaskContainsShellMetacharacters", ()
 		}
 	}
 	assert.equal(argv.includes(encoded), true);
+});
+
+test("tunnelArgv__CarriesTheSamePinning__When__ForwardingThePortalPort", () => {
+	// A forwarded viewer stream through an unpinned tunnel would be the one unauthenticated
+	// hop in an otherwise key-checked fleet, so the tunnel shares sshArgv's option block by
+	// construction — this pins the properties that must never drift apart.
+	const argv = tunnelArgv(host("mac1", "10.0.0.1"), 7682);
+
+	assert.equal(argv.includes("StrictHostKeyChecking=yes"), true);
+	assert.equal(argv.includes("IdentitiesOnly=yes"), true);
+	assert.equal(argv.includes("BatchMode=yes"), true);
+	assert.equal(argv.includes("-L"), true);
+	assert.equal(argv.includes("7682:127.0.0.1:7682"), true);
+	assert.equal(argv.includes("-N"), true);
+	// -N means the tunnel IS the job: the destination must be the last entry, with no remote
+	// command after it for sshd to hand a shell.
+	assert.equal(argv.at(-1), "administrator@10.0.0.1");
+});
+
+test("tunnelArgv__Throws__When__ThePortIsNotForwardable", () => {
+	for (const bad of [0, -1, 65536, 1.5, Number.NaN]) assert.throws(() => tunnelArgv(host("mac1", "10.0.0.1"), bad), /forwardable/);
 });
 
 test("runnerArgv__Throws__When__SubcommandIsNotABareToken", () => {

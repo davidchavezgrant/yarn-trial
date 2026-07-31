@@ -70,11 +70,8 @@ export interface SshResult {
 	stderr: string;
 }
 
-/**
- * Build the argv for `ssh`, ready for execFile. Never returns a shell string, and the caller
- * cannot get one: every element is a separate argv entry locally.
- */
-export function sshArgv(host: HostEntry, remoteArgv: string[]): string[] {
+/** The option block every ssh invocation shares — pinning, identity, batch, multiplexing. */
+function sshBaseArgv(host: HostEntry): string[] {
 	return [
 		// -F /dev/null: no ~/.ssh/config. An operator's `Host *` stanza can set
 		// StrictHostKeyChecking, ProxyJump or an IdentityAgent, and the whole point of this
@@ -100,9 +97,29 @@ export function sshArgv(host: HostEntry, remoteArgv: string[]): string[] {
 		"-o", "ControlPersist=60s",
 		"-o", `ConnectTimeout=${CONNECT_TIMEOUT_S}`,
 		"-p", String(host.ssh.port),
-		`${host.ssh.user}@${host.ssh.host}`,
-		...remoteArgv,
 	];
+}
+
+/**
+ * Build the argv for `ssh`, ready for execFile. Never returns a shell string, and the caller
+ * cannot get one: every element is a separate argv entry locally.
+ */
+export function sshArgv(host: HostEntry, remoteArgv: string[]): string[] {
+	return [...sshBaseArgv(host), `${host.ssh.user}@${host.ssh.host}`, ...remoteArgv];
+}
+
+/**
+ * The argv for a local port-forward to the same port on the far side: `-L p:127.0.0.1:p -N`.
+ *
+ * Shares `sshBaseArgv` rather than restating it so the tunnel can never drift into weaker
+ * pinning than the command channel — a forwarded viewer stream through an unpinned tunnel
+ * would be the one unauthenticated hop in an otherwise key-checked fleet. `-N` because the
+ * tunnel is the whole job: there is no remote command, so nothing here can ever be shell text.
+ */
+export function tunnelArgv(host: HostEntry, port: number): string[] {
+	if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error(`not a forwardable port: ${port}`);
+
+	return [...sshBaseArgv(host), "-L", `${port}:127.0.0.1:${port}`, "-N", `${host.ssh.user}@${host.ssh.host}`];
 }
 
 /**

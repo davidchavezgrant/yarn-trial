@@ -686,6 +686,11 @@ bus.onDone((d) => {
   unready = d.code === 3 ? { app: d.app, host: d.host, msg: null } : null;
   unreadyGen++;
   renderUnready();
+  // A remote refusal with a known app goes straight to the sign-in window — the person was
+  // just told the run needs one, and a button that says the same thing again is a step with
+  // no decision in it. Local refusals keep the message only: the app is on this Mac, and
+  // "put it back yourself" has no window to open.
+  if (unready && unready.app && unready.host && unready.host !== 'local') runUnreadyFix();
   flush();
   loadApps();
   loadRuns();
@@ -1154,6 +1159,18 @@ el('fleet').onclick = async (e) => {
   signinBusy = null;
   signinMsg = { ok: r.ok, text: r.message, paints: 0 };
   loadFleet();
+  if (!r.watch) return;
+  // The wait leg, fire-and-forget: it resolves when a person finishes an SSO round trip —
+  // minutes — and closes the sign-in window (the portal, or the screen share) for them.
+  // Without it a portal opened from this button would sit open until its lifetime lapsed.
+  let done;
+  try {
+    done = await bus.signinWait(r.watch.host, r.watch.app);
+  } catch (err) {
+    done = { ok: false, message: errText(err) };
+  }
+  signinMsg = { ok: done.ok, text: done.message, paints: 0 };
+  loadFleet();
 };
 // The overflow menu beside Sign in. Delegated 'change' for the same reason the click handler
 // above is delegated: the rows are rebuilt on every probe. The select resets itself first so
@@ -1199,12 +1216,15 @@ el('fleet').onchange = async (e) => {
     return ask('deleting ' + sel + ' from ' + mac + '…', () => bus.appDelete(mac, sel));
   }
 };
-// Same two-step as the fleet row's Sign in — open the screen share, then wait for the app to
-// reach home and close it — but keyed to the app the refused run was against rather than to
-// whatever happens to be selected in the list on the left.
-el('unready').onclick = async (e) => {
-  const b = e.target.closest ? e.target.closest('button[data-fix]') : null;
-  if (!b || !unready || unready.busy) return;
+/**
+ * The unready remedy, end to end: open the sign-in (the host side opens the liveview portal
+ * window when the runner can spawn one, and falls back to full-desktop screen sharing when it
+ * cannot), then wait for the app to reach home and clear the panel. One function because it
+ * has two callers — the panel's button, and the automatic path in onDone that fires the
+ * moment a remote run refuses for want of a sign-in.
+ */
+async function runUnreadyFix() {
+  if (!unready || unready.busy) return;
   const target = { app: unready.app, host: unready.host };
   // The generation this flow owns. A new run or a newer refusal bumps unreadyGen, and every
   // write below re-checks it first: a signinWait leg resolving minutes later must not
@@ -1238,6 +1258,10 @@ el('unready').onclick = async (e) => {
   if (done.ok) { unready = null; renderUnready(); line('✓ ' + done.message); }
   else show(done.message, false);
   loadFleet();
+}
+el('unready').onclick = (e) => {
+  const b = e.target.closest ? e.target.closest('button[data-fix]') : null;
+  if (b) runUnreadyFix();
 };
 // Delegated: the offer list is rebuilt on every probe, so per-button handlers would be
 // re-bound fifteen times a minute for the life of a grounding pass.

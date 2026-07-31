@@ -1,6 +1,13 @@
 import { app, BrowserWindow, desktopCapturer, ipcMain, net, protocol, shell, systemPreferences } from "electron";
+import { spawn as spawnProcess } from "node:child_process";
 import fs from "node:fs";
+// Electron's `net` (imported above) is an HTTP client with no raw sockets; the tunnel-ready
+// probe below needs a plain TCP connect, which only node's own module provides.
+import nodeNet from "node:net";
 import { Readable } from "node:stream";
+import { defaultOperator, loadHosts, resolveHost, type HostEntry } from "../src/fleet/remote/hosts.js";
+import { lastFrame, runnerArgv, runSsh, tunnelArgv } from "../src/fleet/remote/ssh.js";
+import { SigninPortal } from "../src/ui/ui-signin.js";
 import { appBundlePath, HumanizeController, listApps, listRecordedRuns, parseByteRange, readUiState, resolveVideo, RunController, writeUiState, type RunHandlers, type RunOptions } from "../src/ui/ui-core.js";
 import { page } from "../src/ui/ui-page.js";
 import { describeCredentials, provisionFromBundle } from "../src/fleet/remote/team.js";
@@ -70,6 +77,65 @@ const remotes = new Map<string, RemoteRunController>();
 // with no driver session, so it must stay OUTSIDE the single-run guard and keep working while
 // an agent run is in flight.
 const humanizer = new HumanizeController();
+
+/**
+ * The sign-in portal: the window-scoped liveview login as the GUI's default sign-in path.
+ * The pure lifecycle lives in ui-signin.ts; these deps are the Electron-and-network edges —
+ * asking the runner for an engine, holding the `ssh -L` tunnel, and owning the viewer window.
+ */
+const portal = new SigninPortal({
+	requestLiveview: async (host, app, operator) => {
+		// Generous: the runner quits/swaps/foregrounds the app before it answers.
+		const res = await runSsh(host, runnerArgv("liveview", { app, operator }), { timeoutMs: 60_000 });
+
+		return lastFrame(res.stdout);
+	},
+	spawnTunnel: (host, port) => {
+		// stdio ignored: the tunnel's only output is noise, and an unread pipe would block it.
+		const child = spawnProcess("ssh", tunnelArgv(host, port), { stdio: "ignore" });
+
+		return { kill: () => void child.kill("SIGTERM") };
+	},
+	portReady: (port, deadlineMs) =>
+		new Promise((resolve) => {
+			const startedAt = Date.now();
+			const attempt = (): void => {
+				const probe = nodeNet.connect({ host: "127.0.0.1", port });
+				probe.once("connect", () => {
+					probe.destroy();
+					resolve(true);
+				});
+				probe.once("error", () => {
+					probe.destroy();
+					if (Date.now() - startedAt >= deadlineMs) return resolve(false);
+					setTimeout(attempt, 250);
+				});
+			};
+			attempt();
+		}),
+	openViewer: (url, title) => {
+		const view = new BrowserWindow({
+			width: 1100,
+			height: 800,
+			title,
+			backgroundColor: "#16181d",
+			// The viewer page is ours, but it streams a machine a human is typing a password
+			// into — it gets no node access on principle.
+			webPreferences: { nodeIntegration: false, contextIsolation: true },
+		});
+		void view.loadURL(url);
+
+		return {
+			close: () => {
+				if (!view.isDestroyed()) view.close();
+			},
+			onClosed: (cb) => view.once("closed", cb),
+		};
+	},
+	setTimeout: (fn, ms) => setTimeout(fn, ms),
+	clearTimeout: (t) => clearTimeout(t),
+});
+
 let win: BrowserWindow | undefined;
 
 /** Injected before the shared app script; implements the `window.__bus` contract. */
@@ -504,7 +570,32 @@ ipcMain.handle("fleet", () => fleetView());
  * everything. Only the runner knows whether a recording is in flight, so only the runner decides.
  */
 ipcMain.handle("signin", async (_event, { host, app }: { host: string; app?: string }) => {
-	const view = await beginSignin(String(host ?? ""), app);
+	const name = String(host ?? "").trim();
+	const target = (app ?? "").trim();
+	// Portal first, wherever it CAN work: a concrete remote host and a named app — the
+	// runner's profile swap and the home watch both need one. Local, `auto` and app-less
+	// requests keep the screen-share path, whose own messages already explain those cases.
+	if (isRemoteHost(name) && name.toLowerCase() !== "auto" && target) {
+		let entry: HostEntry | undefined;
+		try {
+			entry = resolveHost(name, loadHosts());
+		} catch {
+			entry = undefined; // an unknown host falls through; beginSignin names it in its refusal
+		}
+		if (entry) {
+			const out = await portal.open(entry, target, defaultOperator());
+			if (out.kind === "open") return { ok: true, message: out.message, watch: out.watch };
+			if (out.kind === "refused") return { ok: false, message: out.message };
+			// kind === "fallback": the runner could not be asked. Screen sharing is the one
+			// path that does not need it, so the request continues there — with the reason
+			// carried into the message, because a silently different window is a mystery.
+			const view = await beginSignin(name, app);
+			if (view.url) await shell.openExternal(view.url);
+
+			return { ...view, message: `${out.reason} — falling back to screen sharing. ${view.message}` };
+		}
+	}
+	const view = await beginSignin(name, app);
 	if (view.url) await shell.openExternal(view.url);
 
 	return view;
@@ -518,9 +609,21 @@ ipcMain.handle("signin", async (_event, { host, app }: { host: string; app?: str
  * panel's button spinning for all of it with the screen share already open and usable in front of
  * them. The renderer fires this after `signin` returns and lets the reply land whenever it lands.
  */
-ipcMain.handle("signin:wait", (_event, { host, app }: { host: string; app: string }) =>
-	completeSignin(String(host ?? ""), String(app ?? "")),
-);
+ipcMain.handle("signin:wait", (_event, { host, app }: { host: string; app: string }) => {
+	const h = String(host ?? "");
+	const a = String(app ?? "");
+	const ours = portal.active;
+	// When the sign-in on screen is the portal's window, the thing to put away once the app
+	// reaches home is that window, not Screen Sharing — the wait logic itself is shared.
+	if (ours && ours.host === h && ours.app === a)
+		return completeSignin(h, a, undefined, undefined, async () =>
+			portal.closeFor(h, a)
+				? { closed: true, detail: "closed the sign-in window" }
+				: { closed: true, detail: "the sign-in window was already closed" },
+		);
+
+	return completeSignin(h, a);
+});
 
 /**
  * Fleet-panel overflow actions. The confirm() dialogs live in the renderer — the destructive
@@ -610,6 +713,10 @@ app.on("window-all-closed", () => {
 	runs.stop();
 	app.quit();
 });
+
+// The tunnel is a child of this process; a quit that leaves it running leaves a live
+// port-forward to a capture-capable server with nothing watching either end.
+app.on("before-quit", () => portal.close());
 
 app.on("activate", () => {
 	if (BrowserWindow.getAllWindows().length === 0) createWindow();

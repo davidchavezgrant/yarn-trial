@@ -165,6 +165,9 @@ function mount(busOverrides: Record<string, unknown> = {}): Harness {
 		},
 		attach: async () => undefined,
 		saveKey: async () => ({ ok: true }),
+		// No watch by default, so a flow that reaches signin stops there unless a test says more.
+		signin: async () => ({ ok: true, message: "" }),
+		signinWait: async () => ({ ok: true, message: "" }),
 		humanize: async () => undefined,
 		humanizeStatus: async () => ({}),
 		...busOverrides,
@@ -664,6 +667,42 @@ test("onStarted__KeepsTheSharedBuffer__When__TheSameAppStartsOnASecondHost", () 
 	ui.events.line!({ text: "[1] first run step", app: "Yarn", host: "mac1" });
 	ui.events.started!({ app: "Yarn", task: "t2", host: "mac2" });
 	assert.ok(ui.stateFor("Yarn").log.some((l) => l.includes("[1] first run step")), "the live run's transcript was wiped");
+});
+
+test("onDone__OpensTheSigninFlowUnasked__When__ARemoteRunRefusesOnReadiness", async () => {
+	// Exit 3 on a fleet Mac means "needs a human sign-in" — the person was just told so, and a
+	// button that says the same thing again is a step with no decision in it. The flow must
+	// fire itself, aimed at the refused run's app and host, not at whatever is selected.
+	const calls: unknown[][] = [];
+	const ui = mount({
+		signin: async (...args: unknown[]) => {
+			calls.push(args);
+
+			return { ok: true, message: "Opened a sign-in window for Yarn on mac1" };
+		},
+	});
+	await settle();
+	ui.sel = "Notion Calendar";
+	ui.events.done!({ code: 3, elapsed: 17, app: "Yarn", host: "mac1" });
+	await settle();
+	assert.deepEqual(calls, [["mac1", "Yarn"]]);
+});
+
+test("onDone__LeavesTheSigninFlowAlone__When__TheRefusalIsLocal", async () => {
+	// Locally there is no window to open — the app is on this Mac and the panel's message is
+	// the whole remedy.
+	const calls: unknown[][] = [];
+	const ui = mount({
+		signin: async (...args: unknown[]) => {
+			calls.push(args);
+
+			return { ok: true, message: "" };
+		},
+	});
+	await settle();
+	ui.events.done!({ code: 3, elapsed: 17, app: "Yarn", host: "local" });
+	await settle();
+	assert.deepEqual(calls, []);
 });
 
 test("onLine__TagsLinesWithTheHost__When__TheSameAppRunsOnTwoHosts", () => {
