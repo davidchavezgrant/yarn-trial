@@ -107,8 +107,11 @@ export function frontierRemaining(ledger: FrontierLedger): InteractiveElement[] 
  * consecutive dismiss calls for "<top level>", "top level" and the HTML-escaped
  * "&lt;top level&gt;", each matching nothing and each costing a turn, while the frontier
  * sat unchanged. Whatever the listing prints must resolve back to the empty surface.
+ *
+ * Exported for the declared frontier (declared-frontier.ts), whose surface strings round-trip
+ * through the model's context the same way and come back in the same spellings.
  */
-const normSurface = (s: string): string =>
+export const normSurface = (s: string): string =>
 	s
 		.trim()
 		.toLowerCase()
