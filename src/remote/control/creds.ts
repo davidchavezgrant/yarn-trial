@@ -283,6 +283,44 @@ export function recordRunOutcome(
 	});
 }
 
+/** agent.ts's readiness refusal exit code — a signed-out app. A wire value, restated here (see dispatch.ts). */
+const READINESS_REFUSED = 3;
+
+/**
+ * The whole check-IN half of a run, best-effort and gated on the vault switch, so BOTH front ends
+ * — the CLI's `attach` and the Electron controller's `collect` — do it identically by calling one
+ * function. Returns log notes for the caller to emit its own way; never throws (a vault hiccup must
+ * not turn a finished run into a failure).
+ *
+ * The rule that makes this safe: a run that refused on readiness (exit 3) signed nothing in, so its
+ * session is NOT checked in — checking it in would overwrite the vault's good bundle with a
+ * signed-out one, the single write that would make the feature lose sessions. Its outcome is still
+ * recorded, which is what teaches a moved bundle to be `bound`. `movedFrom` is read before the
+ * checkin, because the checkin rewrites `lastHost`.
+ */
+export async function checkinAfterRun(
+	args: { host: string; app: string; operator: string; exitCode: number | null | undefined },
+	d: CredDeps = {},
+): Promise<string[]> {
+	if (!vaultEnabled(d.env)) return [];
+	const notes: string[] = [];
+	const signedIn = args.exitCode !== READINESS_REFUSED;
+	try {
+		const movedFrom = sessionPlan({ app: args.app, operator: args.operator }, d).source;
+		if (signedIn) {
+			const ci = await checkinSession({ host: args.host, app: args.app, operator: args.operator, signedIn }, d);
+			if (ci.stored) notes.push(`vault: sealed ${args.operator}'s ${args.app} session from ${args.host} (${ci.bytes ?? 0}B)`);
+		}
+		recordRunOutcome({ host: args.host, app: args.app, operator: args.operator, signedIn, ...(movedFrom ? { movedFrom } : {}) }, d);
+		if (movedFrom && movedFrom !== args.host)
+			notes.push(`vault: ${args.app} session ${signedIn ? "roams — install on any box worked" : "is device-bound — future runs will sign in on the landing box"} (moved ${movedFrom} → ${args.host})`);
+	} catch (e) {
+		notes.push(`vault: checkin skipped — ${(e as Error).message}`);
+	}
+
+	return notes;
+}
+
 /** The box the vault would check this session out FROM, and what the ledger knows about it. */
 export function sessionPlan(args: { app: string; operator?: string }, d: CredDeps = {}): { source?: string; entry?: LedgerEntry } {
 	const vault = d.vaultRoot ?? credRoot();

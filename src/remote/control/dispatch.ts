@@ -8,7 +8,7 @@ import { dataRoot, recipesDir } from "../../paths.js";
 import { EXIT_REFUSED as CTL_REFUSED, EXIT_UNREACHABLE as CTL_UNREACHABLE } from "../runner/ctl.js";
 import type { JobArtifacts, JobKind, JobRecord } from "../runner/jobs.js";
 import { autoSync, autoSyncRecipes, type SyncOptions } from "./appmaps.js";
-import { checkinSession, checkoutSession, recordRunOutcome, runningElsewhere, sessionPlan, vaultEnabled } from "./creds.js";
+import { checkinAfterRun, checkoutSession, runningElsewhere, vaultEnabled } from "./creds.js";
 import { type FleetRow, type FleetState, fleetStatus, pickIdleHost, pickShortestQueue } from "./fleet.js";
 import { defaultOperator, type HostEntry, type Inventory, loadHosts, resolveHost } from "./hosts.js";
 import { assertSafeRemotePath, DEFAULT_SSH_TIMEOUT_MS, firstLine, lastFrame, remoteDataRoot, runnerArgv, runnerHome, runSsh, runTransport, rsyncShell, SPAWN_FAILED_EXIT, type SshResult, type SshRunner, sshArgv, TIMEOUT_EXIT } from "./ssh.js";
@@ -979,29 +979,11 @@ async function attach(host: string, jobId: string, fromByte: number): Promise<nu
 	const remedy = signinRemedy(followed.exitCode, host, result.job?.app);
 	if (remedy) console.error(remedy);
 
-	// The vault's other end (on by default; YARN_VAULT=0 disables). The run just left a session on this box: if it
-	// got past its readiness gate (exit 3 is a signed-out refusal), seal that now-current session
-	// back into the vault so the next run — anywhere — starts from it, and fold the outcome into
-	// the ledger so it LEARNS whether this app's session survived the move. A readiness refusal is
-	// deliberately NOT checked in: overwriting the vault's good bundle with a signed-out one is the
-	// one write that would make the feature lose sessions. `movedFrom` is read before the checkin,
-	// since the checkin rewrites `lastHost`.
-	if (vaultEnabled() && result.job) {
-		const { app, operator } = result.job;
-		const signedIn = followed.exitCode !== READINESS_REFUSED;
-		try {
-			const movedFrom = sessionPlan({ app, operator }).source;
-			if (signedIn) {
-				const ci = await checkinSession({ host, app, operator, signedIn });
-				if (ci.stored) console.error(`vault: sealed ${operator}'s ${app} session from ${host} (${ci.bytes ?? 0}B)`);
-			}
-			recordRunOutcome({ host, app, operator, signedIn, ...(movedFrom ? { movedFrom } : {}) });
-			if (movedFrom && movedFrom !== host)
-				console.error(`vault: ${app} session ${signedIn ? "roams — install on any box worked" : "is device-bound on this app — steering future runs to sign in on the box"} (moved ${movedFrom} → ${host})`);
-		} catch (e) {
-			console.error(`vault: checkin skipped — ${(e as Error).message}`);
-		}
-	}
+	// The vault's other end (on by default; YARN_VAULT=0 disables). Shared with the Electron
+	// controller's `collect` so both front ends check a session in identically — see
+	// `checkinAfterRun`.
+	if (result.job)
+		for (const note of await checkinAfterRun({ host, app: result.job.app, operator: result.job.operator, exitCode: followed.exitCode })) console.error(note);
 	// A grounding pass is only worth its forty minutes once; every other Mac should have it
 	// without anyone remembering to ask. Best-effort by construction — the run already
 	// succeeded, and a sleeping peer must not turn that into a failure.
