@@ -60,6 +60,8 @@ Design decisions and their reasoning live in `docs/architecture.md`.
     bounds bulk dismissal; `EXPLORE_DESCENT=1` opts into harness-guarded descent behind
     destructive-looking controls — LIMITATIONS §15).
   - `docs/recipes/<app>.md` — hand-curated notes, including verified task recipes.
+  - `docs/recipes/<slug>.<hash>.recipe.json` — **compiled replay recipes** (machine
+    output, stamped like appmaps — never hand-edit; re-record instead).
 
   Both are auto-loaded into the agent's prompt and the run log records which was used.
   The split exists because it was violated: task-specific recipes had been hand-added
@@ -81,6 +83,15 @@ Design decisions and their reasoning live in `docs/architecture.md`.
 - **Web targets** are first-class: `--url https://site.com` on both agent and explore,
   with appmaps keyed by origin (`docs/appmaps/web-<host>.*`) and one-time sign-in via
   `./run browser-login <url>` persisting in a named browser profile.
+- **Recipe replay** (`./run recipe compile <stamp>` / `replay <file|stamp>`): a
+  successful run's verified steps freeze into a replayable sequence — volatile element
+  handles stripped, each step re-resolved by (name, surface, role) against a fresh
+  observation and gated by the SAME `verify()` as a live run, with the recorded
+  expectations. **Zero model calls on the happy path**; a broken step gets one bounded
+  model rescue checked against the recipe's own expectation (`--no-rescue` for the
+  unattended fleet default: a drifted app fails honestly). Compilation refuses failed,
+  unverified, pixel-only, and `--hinted` runs. Verified live: a cdp Wikipedia run
+  compiled and replayed 2/2 steps + final goal check with 0 model calls.
 
 ## Running it
 
@@ -112,6 +123,8 @@ npm test                             # unit tests (~900 across harness, fleet, s
 npm run agent -- "show me how to change the cursor type" "Yarn" --record
 npm run humanize -- <stamp>          # human-feeling cursor render for a recorded run
 npm run cleanup -- <stamp>           # replay a killed run's mutation journal
+npm run recipe -- compile <stamp>    # freeze a successful run into a replayable recipe
+npm run recipe -- replay <file>      # replay it — zero model calls unless a step breaks
 npm run app                          # Electron shell
 ```
 
@@ -159,7 +172,8 @@ individual interactions (hard-coded to Notion Calendar).
   back to keyboard navigation, and the pixel/visual layers make the degradation visible
   rather than silently "verified". Still the reliability frontier on the AX path.
 - ~10–25s of model thinking between actions — fine async, wrong for a human watching
-  live. Caching grounded runs as replayable recipes is the obvious next step.
+  live. Recipe replay removes it for repeated tasks (zero model calls on the happy
+  path); the first run of any task still pays it.
 - Recording is ~4fps snapshot-based on the AX path; real 30fps *recording* still wants a
   signed app, though `native/liveview` shows live SCK window streaming works from our own
   runner-spawned code (LIMITATIONS §3, §16).

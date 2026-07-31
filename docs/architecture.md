@@ -136,12 +136,43 @@ mooting intrusiveness. Effort goes to: multi-step task reliability on the real t
 app, and being able to see it happen. Canonical measurement target: **Yarn app**,
 canonical task: **"show me how to change the cursor type"**.
 
-**Deferred, with rationale on file**: recipe compilation (grounding-time thinking →
-replayable deterministic sequences, model as exception handler — justified by cost +
-determinism now that latency is moot); native-AppKit generalization (out of scope per
+**Deferred, with rationale on file**: native-AppKit generalization (out of scope per
 David 2026-07-30 — focus on Electron; two probes ran anyway: Calculator succeeded,
 Hex Fiend failed on activation policy —
-`docs/research/2026-07-30-native-mac-apps-investigation.md`).
+`docs/research/2026-07-30-native-mac-apps-investigation.md`). Recipe compilation was
+deferred here until 2026-07-31; it is now built — §8a.
+
+## 8a. Recipe replay: thinking paid once, checking never skipped (2026-07-31)
+
+`compileRecipe()` (`src/core/recipe.ts`) freezes a SUCCESSFUL run log into a replayable
+sequence; `replayRecipe()` (`src/core/replay.ts`) re-runs it with zero model calls on
+the happy path. The decisions that hold it together:
+
+- **Compile only from verified evidence.** Failed runs, unverified steps, pixel-only
+  steps and `--hinted` runs are refused — a recipe asserts effects, and compiling a
+  hinted run would launder the hint into a clean-looking artifact.
+- **Volatile handles are stripped; identity is (name, surface, role).** Element indices
+  and CDP refs are per-observation walk orders. Each step re-resolves against a fresh
+  observation, narrowing progressively; **ambiguity is an error, never a guess** — two
+  same-named controls are the §4 dual-scope trap with no model watching.
+- **A recipe is not a trusted macro.** Every replayed step is gated by the same
+  `verify()` as a live run (recorded expectation, fresh haystack, discrimination
+  baseline), and the recipe's final evidence is re-checked against a fresh last
+  observation. Replays journal mutations and run teardown like any run.
+- **The model is the exception handler, bounded and harness-checked.** A broken step
+  gets one rescue mini-loop (RECIPE_RESCUE_STEPS, default 3) whose success check is the
+  RECIPE's expectation — teardown's pattern: the model cannot widen a check it did not
+  write. `--no-rescue` is the unattended default posture: a drifted app fails honestly
+  and gets re-recorded.
+- Compiled recipes live in `docs/recipes/*.recipe.json` — machine output, stamped with
+  `compiledFrom` + the source run's grounding tier; the never-hand-edit rule applies.
+
+Verified live 2026-07-31: a cdp Wikipedia run (2/2 text-verified) compiled and replayed
+end-to-end — 2/2 steps, final goal check PASSED, 0 model calls.
+
+**Revisit if**: replay failure rates on real drift show the rescue budget is wrong in
+either direction, or recipes need parameterization (today a recipe replays its recorded
+values verbatim; "search for X" with a different X is a new recording).
 
 ## 9. Web targets are a target KIND, not a specially-named app (2026-07-30)
 

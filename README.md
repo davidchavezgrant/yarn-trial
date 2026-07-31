@@ -95,6 +95,13 @@ it) and two web targets are committed, so you can skip `explore` for those. Run 
 in `out/runs/<stamp>-<app>.json`. If a run is killed before it can tidy up,
 `npm run cleanup -- <stamp>` replays its mutation journal and puts the app back.
 
+Once a run succeeds, freeze it and repeat it for free:
+
+```sh
+./run recipe compile <stamp>        # -> docs/recipes/<slug>.<hash>.recipe.json
+./run recipe replay <file|stamp>    # zero model calls unless the app has drifted
+```
+
 Other entry points: `./run` alone opens the Electron shell; `npm test` runs the unit
 suite; `./run help` lists everything, including the fleet verbs (`enroll`, `hosts`,
 `provision`, `dispatch`, `install`, `signin`, `signout`, `uninstall`, `liveview`) for

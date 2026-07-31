@@ -49,9 +49,10 @@ sample sizes and are deliberately absent. Everything qualitative about grounding
 - **Sign-in needs a human, and that decides the deployment model.** SSO+MFA can't be
   automated and credentials must never reach the model, so sessions live on persistent
   machines, signed in once per app by a person. (§8)
-- **The biggest unbuilt lever is recipe replay:** record a task once, replay it
-  deterministically with the model only as exception handler. Design action records to be
-  replayable from day one. (§9)
+- **Recipe replay is built and proven:** a verified run compiles into a replayable
+  sequence that re-runs with zero model calls, the model invoked only when a step breaks.
+  The live round trip worked first try; the design constraints it imposes on action
+  records (stable descriptors, expectation stored with the action) apply from day one. (§9)
 - **Put every rule in code.** Each rule we kept by convention — prompt hygiene, log
   writing, provenance — was broken within a day; each one moved into code held. (§7)
 
@@ -79,7 +80,7 @@ design. Redesign the actuator choice per target class. Don't build the cua worka
 ### The decision, condensed
 
 We consumed `@trycua/cua-driver` as a sealed binary behind a 184-line boundary
-(`src/driver.ts` — the only file importing it). Full audit in
+(`src/core/driver.ts` — the only file importing it). Full audit in
 `docs/research/2026-07-30-cua-dependency-audit.md`. The punchline: we used 17 of its ~45
 tools, none of its typed SDK (every real call goes through `callTool(name, json)` — it's
 a JSON tool bus for us), and five of our seven documented workarounds were re-adding
@@ -92,7 +93,7 @@ capability the driver has but doesn't expose. For a greenfield build:
 | Native-chrome bits (menus, dialogs, file pickers, OS shortcuts) | Thin Swift sidecar (AX + CGEvent primitives — all probe-verified from unsigned Swift) | CDP's Input domain reaches the renderer only; anything the OS handles never fires |
 | Native Mac apps | cua's actual moat — **but out of scope** (David, 2026-07-30) | Our one native failure (Hex Fiend) was an activation-policy issue: cua's foreground delivery fronts the app at window-server level for <1ms, which never makes it key/main in the NSApp sense, so menu items stay disabled. Calculator worked. If native returns to scope, this is the first problem to solve |
 
-### What CDP-direct deletes, by construction (`src/cdp.ts`, 627 lines, read the header)
+### What CDP-direct deletes, by construction (`src/backends/cdp.ts`, ~630 lines, read the header)
 
 Each of these cost us real debugging time on the cua path:
 
@@ -110,7 +111,7 @@ Each of these cost us real debugging time on the cua path:
 3. **The consent gate.** cua's `browser_prepare` requires a per-call, five-minute,
    single-use approval token minted interactively. We tried four documented escapes; all
    failed. What works: the CLI checks for a TTY, not a person, so we mint the token under
-   `expect` answering "APPROVE" (`mintApprovalToken()` in `src/browser.ts` — the ugliest
+   `expect` answering "APPROVE" (`mintApprovalToken()` in `src/backends/browser.ts` — the ugliest
    code in the repo). The lesson: the gate protects *arbitrary users'* profiles; a
    first-party fleet driving its own disposable profiles inherits a threat model it
    doesn't have. Don't consume someone else's safety gate — CDP on your own Chrome has
@@ -181,7 +182,7 @@ found because a model exploited it — treat the evidence grammar as an adversar
 interface, because under pressure to report success, the model will find whatever
 loophole exists.
 
-### The gate (per step, deterministic — `verify()` in `src/harness.ts:2070`)
+### The gate (per step, deterministic — `verify()` in `src/core/harness.ts`)
 
 - The model must state, WITH the action, substrings that will appear/disappear in the
   next observation's text (window title + all element labels + values). An act call with
@@ -400,7 +401,7 @@ Ordered roughly by how much architecture they dictate.
 9. **Resolve paths from the module's own location, never cwd.** A LaunchAgent and a
    packaged .app both start at `/`; `mkdir -p` succeeds, `/out` gets created at the
    filesystem root, the appmap isn't found, and the run silently degrades to ungrounded.
-   Split writable DATA from read-only RESOURCES (`src/paths.ts`) — packaging separates
+   Split writable DATA from read-only RESOURCES (`src/paths.ts`, unchanged by the reorg) — packaging separates
    them.
 
 ---
@@ -622,13 +623,28 @@ The full constraint list is LIMITATIONS §12; the architecture-shaping subset:
 - **A native (SwiftUI) shell.** Sized twice, rejected twice: Electron is Yarn's actual
   deployment target and the driver ecosystem has first-party Electron support. Only
   revisit if the deliverable becomes signed-app-quality live capture.
-- **Recipe compilation is the biggest UNBUILT lever, deliberately.** Grounding-time
-  thinking → deterministic replay with the model only as exception handler. It's the
-  production cost/throughput story (a hinted run dropped 17 steps → 6; direction solid,
-  number unaudited). CDP makes replay trivial. Design your action records to be
-  replayable from day one: stable selectors (aria-ref/DOM path, not walk-order
-  indices), the expectation stored WITH the action, and the verification harness
-  runnable without a model.
+- **Recipe compilation — now BUILT (`src/core/recipe.ts`, `replay.ts`, `recipe-cli.ts`);
+  copy the design, not just the idea.** Grounding-time thinking → deterministic replay
+  with the model only as exception handler; the live round trip (cdp Wikipedia run →
+  compile → replay) passed with 0 model calls. The load-bearing decisions:
+  - **Compile only from verified evidence.** The compiler refuses failed runs, unverified
+    steps, pixel-only steps, and `--hinted` runs (compiling one launders the hint into a
+    clean-looking recipe). A recipe asserts effects; an unverified step observed none.
+  - **Strip volatile handles, keep stable descriptors.** `element_index`/`ref` are
+    per-observation walk orders; each step re-resolves by (name → surface → role),
+    narrowing progressively, and **ambiguity is an error, never a guess** — two same-named
+    controls are the dual-scope trap again, now with no model watching.
+  - **A recipe is not a trusted macro.** Every replayed step is gated by the same
+    `verify()` as a live run — recorded expectation, fresh haystack, discrimination
+    baseline — and the recipe's final evidence is checked against a fresh last
+    observation. Skipping the checks because "it worked when recorded" is how drift
+    ships broken demos.
+  - **Rescue is bounded and harness-checked.** A broken step gets one mini-loop
+    (default 3 actions) whose success check is the RECIPE's expectation — teardown's
+    trick: the model cannot widen a check it didn't write. Unattended fleet mode runs
+    with rescue off; a drifted app fails honestly and gets re-recorded.
+  - Replays journal mutations and run teardown like any run; waits are dropped at
+    compile (pacing is the replayer's, not one afternoon's slow render).
 
 ---
 
@@ -636,14 +652,15 @@ The full constraint list is LIMITATIONS §12; the architecture-shaping subset:
 
 | What | Where |
 |---|---|
-| Agent loop, evidence gates, done-grading | `src/agent.ts` (~1550 lines; system prompt is the top ~150) |
-| `verify()`, `auditTaskPrompt()`, scope warnings, observe/projection | `src/harness.ts` (~2450 lines) |
-| CDP backend + its rationale | `src/cdp.ts` header |
-| cua boundary (the whole thing) | `src/driver.ts` (196 lines) |
-| Explore: frontier, dismissal, salvage, descent, home | `src/explore.ts` |
-| Journal/teardown/cleanup | `src/journal.ts`, `src/teardown.ts`, `src/cleanup.ts` |
-| Humanize: track building, motion fitting, rendering | `src/humanize.ts`, `src/track.ts`, `src/render.ts`, `scripts/fit-motion.py` |
-| Fleet: ssh, lease, jobs, profiles, provision | `src/remote/`, `src/runner/` |
+| Agent loop, evidence gates, done-grading | `src/core/agent.ts` (~1550 lines; system prompt is the top ~150) |
+| `verify()`, `auditTaskPrompt()`, scope warnings, observe/projection | `src/core/harness.ts` (~2450 lines) |
+| CDP backend + its rationale | `src/backends/cdp.ts` header |
+| cua boundary (the whole thing) | `src/core/driver.ts` (196 lines) |
+| Explore: frontier, dismissal, salvage, descent, home | `src/core/explore.ts` |
+| Journal/teardown/cleanup | `src/core/journal.ts`, `src/core/teardown.ts`, `src/core/cleanup.ts` |
+| Recipe replay: format, compiler, resolution, engine, rescue | `src/core/recipe.ts`, `src/core/replay.ts`, `src/core/recipe-cli.ts` |
+| Humanize: track building, motion fitting, rendering | `src/cursor/humanize.ts`, `src/cursor/track.ts`, `src/cursor/render.ts`, `scripts/fit-motion.py` |
+| Fleet: ssh, lease, jobs, profiles, provision | `src/remote/control/`, `src/remote/runner/` |
 | Everything that constrains the agent, with severity | `LIMITATIONS.md` |
 | Driver quirk catalogue | `docs/cua.md` |
 | The actuator decision, argued | `docs/research/2026-07-30-cua-learnings-for-real-implementation.md` + `...cua-dependency-audit.md` |
