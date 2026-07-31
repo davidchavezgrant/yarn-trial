@@ -93,7 +93,18 @@ import VideoToolbox
 // changes (a static login form costs nothing), and the server drops frames under backpressure,
 // so a slow tunnel spends the surplus rather than queueing it. LIVEVIEW_FPS overrides.
 var fps = Int(ProcessInfo.processInfo.environment["LIVEVIEW_FPS"] ?? "") ?? 30
-var quality: Float = 0.78
+// 0.90, measured rather than picked. On a real cropped Google sign-in card (1680px wide) the
+// JPEG costs 83KB at q0.78, 97KB at q0.85, 100KB at q0.90 and 104KB at q0.95 — the curve is
+// almost flat above 0.85 because a login form is flat colour and text, and JPEG's expensive
+// high-frequency detail barely exists in it. So the last 5% of quality costs 4% more bytes and
+// buys clean glyph edges, which is the one thing the operator is actually reading.
+//
+// Framerate is not the tradeoff here that it would be for video: SCK emits a frame only when
+// the window CHANGES, and a login form is static between keystrokes, so a larger frame costs
+// bytes on the few frames that exist rather than a sustained bitrate. The server still drops
+// frames under backpressure, so a slow tunnel spends fps — the degradation that does not
+// matter for a form — never sharpness.
+var quality: Float = 0.90
 var maxWidth = 1920
 // The sign-in target. Env first (the runner passes LIVEVIEW_APP through the CLI), argv wins.
 // Empty means no constrained mode — plain window streaming, exactly as before.
@@ -661,6 +672,24 @@ func scanForeignWindow(_ root: AXUIElement, appName: String) -> ForeignScan {
 
 // ---- JPEG encode ------------------------------------------------------------------------
 
+/// Scale an image down to `toWidth`, preserving aspect. Returns nil if the context cannot be
+/// made, which the caller treats as "encode what we have" rather than dropping the frame.
+///
+/// `.high` interpolation on purpose: this only runs on frames that are ABOVE the cap, i.e. the
+/// uncropped-window case, and those are the ones where a cheap filter shows as shimmering text.
+/// It costs a few ms on a frame that is already the expensive kind.
+func resized(_ image: CGImage, toWidth: Int) -> CGImage? {
+	let height = Int((Double(image.height) * Double(toWidth) / Double(image.width)).rounded())
+	guard toWidth > 0, height > 0,
+	      let ctx = CGContext(data: nil, width: toWidth, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+	                          space: CGColorSpaceCreateDeviceRGB(),
+	                          bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+	ctx.interpolationQuality = .high
+	ctx.draw(image, in: CGRect(x: 0, y: 0, width: toWidth, height: height))
+
+	return ctx.makeImage()
+}
+
 func encodeJPEG(_ image: CGImage, quality: Float) -> Data? {
 	let data = NSMutableData()
 	guard let dest = CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil) else { return nil }
@@ -801,12 +830,19 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 		let filter = SCContentFilter(desktopIndependentWindow: scWindow)
 		let cfg = SCStreamConfiguration()
 		let scale = backingScale(for: scWindow.frame)
-		// Cap the encoded width; SCK wants pixel dimensions.
-		let winW = scWindow.frame.width * scale
-		let outW = min(CGFloat(maxWidth), winW)
-		let ratio = winW > 0 ? outW / winW : 1
-		cfg.width = Int(winW * ratio)
-		cfg.height = Int(scWindow.frame.height * scale * ratio)
+		// CAPTURE AT NATIVE RESOLUTION. The width cap moved to encode time (see the crop in
+		// didOutputSampleBuffer), and the reason is that this cap used to be spent on the wrong
+		// pixels: it budgeted `maxWidth` across the WHOLE WINDOW while the viewer only ever sees
+		// the crop. Measured 2026-07-31 on a real Google sign-in — a 1200pt window on a 2x
+		// display is 2400px, the 1920 cap downscaled it to 0.80x, and the 840pt login card
+		// arrived 1402px wide instead of its native 1680. Most of the budget went to page
+		// background that gets cropped away, and the text paid for it.
+		//
+		// Capturing native costs SCK nothing extra: it composites the window's own surface,
+		// which already exists at this size. The bytes are decided at JPEG encode, and that is
+		// now downstream of the crop, where the cap can apply to what is actually delivered.
+		cfg.width = Int(scWindow.frame.width * scale)
+		cfg.height = Int(scWindow.frame.height * scale)
 		cfg.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))
 		cfg.queueDepth = 5
 		// The REMOTE cursor is not composited into the stream. The physical pointer on a colo Mac
@@ -1117,6 +1153,14 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 			                  width: c.width * CGFloat(image.width), height: c.height * CGFloat(image.height)).integral
 			if rect.width >= 64, rect.height >= 64, let cropped = image.cropping(to: rect) { image = cropped }
 		}
+		// The cap, applied to what is actually DELIVERED rather than to the window it came from.
+		// A cropped login card is well under it and passes through at full native resolution —
+		// which is the whole point of capturing native above. An uncropped window (the target
+		// app's own, or a browser whose scan failed) is what this still protects against.
+		//
+		// Downscale only, never up: `cropping` hands back real pixels and enlarging them adds
+		// blur and bytes for no detail. Under the cap, the image is encoded untouched.
+		if image.width > maxWidth, let shrunk = resized(image, toWidth: maxWidth) { image = shrunk }
 		guard let jpeg = encodeJPEG(image, quality: quality) else { return }
 		emitFrame(jpeg)
 	}
