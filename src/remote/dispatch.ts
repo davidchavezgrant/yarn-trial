@@ -618,52 +618,6 @@ export async function stopRemote(host: HostEntry | string, jobId?: string, opts:
 	return { ok: false, error: String(frame?.error ?? firstLine(res.stderr) ?? "") || `runnerctl exited ${res.code}` };
 }
 
-export interface RemoteStatus {
-	host: string;
-	reachable: boolean;
-	state: FleetState;
-	/** The run in flight. This, not the table row, is why `remoteStatus` exists — see below. */
-	jobId?: string;
-	operator?: string;
-	app?: string;
-	kind?: string;
-	elapsedSec?: number;
-	tccOk?: boolean;
-	reason?: string;
-}
-
-/**
- * One host's status. Not `fleetStatus` over a one-host inventory, because `FleetRow` is a
- * table row and deliberately carries no job id — and the id of the run in flight is exactly
- * what a caller needs in order to attach to it with `follow` or end it with `stopRemote`.
- */
-export async function remoteStatus(host: HostEntry | string, opts: { inventory?: Inventory; run?: SshRunner; timeoutMs?: number } = {}): Promise<RemoteStatus> {
-	const target = toHost(host, opts.inventory);
-	const run = opts.run ?? runSsh;
-	const res = await run(target, runnerArgv("status"), { timeoutMs: opts.timeoutMs ?? DEFAULT_SSH_TIMEOUT_MS });
-	const frame = lastFrame(res.stdout);
-	if (!frame || frame.ok !== true)
-		return {
-			host: target.name,
-			// Exit 1 is the runner answering "no"; anything else means we never got to it.
-			reachable: res.code === CTL_REFUSED,
-			state: "unknown",
-			reason: String(frame?.error ?? firstLine(res.stderr) ?? "") || `runnerctl exited ${res.code}`,
-		};
-
-	return {
-		host: target.name,
-		reachable: true,
-		state: frame.state === "idle" || frame.state === "busy" ? frame.state : "unknown",
-		...(typeof frame.jobId === "string" ? { jobId: frame.jobId } : {}),
-		...(typeof frame.operator === "string" ? { operator: frame.operator } : {}),
-		...(typeof frame.app === "string" ? { app: frame.app } : {}),
-		...(typeof frame.kind === "string" ? { kind: frame.kind } : {}),
-		...(typeof frame.elapsedSec === "number" ? { elapsedSec: frame.elapsedSec } : {}),
-		...(typeof frame.tccOk === "boolean" ? { tccOk: frame.tccOk } : {}),
-	};
-}
-
 /** One entry of a host's app list. Mirrors `listApps()`, which is what answers on the far side. */
 export interface RemoteApp {
 	name: string;

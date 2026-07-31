@@ -9,7 +9,6 @@ import {
 	follow,
 	pull,
 	remoteApps,
-	remoteStatus,
 	type RemoteStream,
 	stopRemote,
 	type StreamRunner,
@@ -539,27 +538,6 @@ test("stopRemote__ReportsError__When__JobIsUnknown", async () => {
 
 	assert.equal(result.ok, false);
 	assert.equal(result.error, "unknown job j-404");
-});
-
-test("remoteStatus__ReportsRunningJobId__When__HostIsBusy", async () => {
-	// The reason this is not fleetStatus over a one-host inventory: FleetRow is a table row
-	// and carries no job id, and the id is exactly what follow() and stopRemote() need.
-	const { run } = recorder(() => ok({ state: "busy", jobId: "explore-2026-07-30T12-00-00-yarn", operator: "david", app: "Yarn", kind: "explore", elapsedSec: 1_500, tccOk: true }));
-	const status = await remoteStatus(host("mac1", "10.0.0.1"), { run });
-
-	assert.equal(status.state, "busy");
-	assert.equal(status.jobId, "explore-2026-07-30T12-00-00-yarn");
-	assert.equal(status.kind, "explore");
-	assert.equal(status.tccOk, true);
-});
-
-test("remoteStatus__ReportsUnknown__When__RunnerIsNotInstalled", async () => {
-	const { run } = recorder(() => ({ code: 127, stdout: "", stderr: "bash: runnerctl: command not found\n" }));
-	const status = await remoteStatus(host("mac1", "10.0.0.1"), { run });
-
-	assert.equal(status.state, "unknown");
-	assert.equal(status.reachable, false);
-	assert.match(status.reason ?? "", /command not found/);
 });
 
 test("remoteApps__CarriesTheCaptureStamp__When__TheRunnerReportsOne", async () => {

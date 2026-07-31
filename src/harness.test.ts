@@ -50,7 +50,7 @@ import {
 } from "./harness.js";
 import type { InteractiveElement, ObservationBundle } from "./harness.js";
 import type { ActionRequest, AppMap, AppMapEdge, AppMapNode, StepRecord } from "./types.js";
-import { EMPTY, bestClass, descriptorFor, lookup, sidecarStatus } from "./axdom.js";
+import { bestClass, descriptorFor, lookup, sidecarStatus } from "./axdom.js";
 import { overlayEnv, scriptEnvKeys } from "./overlay.js";
 
 // Fixtures are synthetic, describing the CLASS of prompt rather than any specific
@@ -686,10 +686,6 @@ test("descriptorFor__DropsChromiumImagePlaceholder__When__NoRealDescription", ()
 
 test("descriptorFor__ReturnsEmpty__When__NothingUseful", () => {
 	assert.equal(descriptorFor({ x: 0, y: 0, w: 10, h: 10, role: "AXGroup" }), "");
-});
-
-test("lookup__ReturnsEmpty__When__ElementHasNoFrame", () => {
-	assert.equal(lookup(EMPTY, undefined), "");
 });
 
 // --- sidecarStatus(). collect() swallows every one of these so a run can proceed without

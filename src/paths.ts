@@ -104,7 +104,7 @@ export function recipesDir(): string {
 	return `${resourcesRoot()}/docs/recipes`;
 }
 
-/** Compiled sidecars that ship with the code (`native/axdom`, `tools/winrec`). */
+/** Compiled sidecars that ship with the code (`native/axdom`, `native/liveview`). */
 export function nativeDir(): string {
 	return `${resourcesRoot()}/native`;
 }

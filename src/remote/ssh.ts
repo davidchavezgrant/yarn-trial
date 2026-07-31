@@ -210,11 +210,6 @@ export function runnerArgv(subcommand: string, spec?: unknown): string[] {
 	return [RUNNER_BIN, subcommand, "--json", ...(spec === undefined ? [] : ["--spec", encodeSpec(spec)])];
 }
 
-/** Convenience: the pairing of runnerArgv + runSsh that every fleet call actually wants. */
-export function runRunner(host: HostEntry, subcommand: string, spec?: unknown, opts: { timeoutMs?: number } = {}): Promise<SshResult> {
-	return runSsh(host, runnerArgv(subcommand, spec), opts);
-}
-
 /** A source of known_hosts-format lines for a host. Injected so the writer is testable offline. */
 export type KeyScanner = (host: HostEntry) => Promise<string[]>;
 

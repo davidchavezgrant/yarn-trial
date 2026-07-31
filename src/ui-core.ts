@@ -329,7 +329,13 @@ export function readUiState(): UiState {
 	}
 }
 
-/** Coerce untrusted input to the shape, cap scrollback, and drop entries holding nothing. */
+/**
+ * Coerce untrusted input to the shape, cap scrollback, and drop entries holding nothing.
+ *
+ * Rebuilds each entry field by field — so a field the renderer writes but this function
+ * omits looks safe in the page and silently fails to round-trip. When adding a field to
+ * the UI state, it must appear in BOTH the renderer's save shape and here.
+ */
 export function pruneUiState(raw: any): UiState {
 	const byApp: Record<string, AppUiState> = {};
 	for (const [app, v] of Object.entries(raw?.byApp ?? {})) {

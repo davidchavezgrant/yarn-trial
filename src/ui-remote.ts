@@ -54,8 +54,6 @@ import { LineSplitter, type RunHandlers } from "./ui-core.js";
 /** The pseudo-host meaning "this Mac" — `RunController`, exactly as before the fleet existed. */
 export const LOCAL_HOST = "local";
 
-export { AUTO_HOST };
-
 /** Retries before a dropped log stream is reported as lost. The job itself is untouched either way. */
 const FOLLOW_RETRIES = 5;
 

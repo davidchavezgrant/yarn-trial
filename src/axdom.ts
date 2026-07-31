@@ -71,8 +71,6 @@ export interface DomEnrichment {
 	unavailable?: string;
 }
 
-export const EMPTY: DomEnrichment = { byFrame: new Map(), rows: 0, unavailable: "not attempted" };
-
 /**
  * Frame geometry is the only identifier both walks observe: element_index is per-walk
  * ordering and the two walks visit different node sets, so indices are not comparable.
