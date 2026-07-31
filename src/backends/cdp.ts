@@ -660,6 +660,7 @@ export class CdpBackend {
 						return `hover at (${x}, ${y})`;
 					}
 					const plan = demoClickPlan({ x: x - 1, y: y - 1, width: 2, height: 2 }, a.name);
+					if (this.demo) await this.page.evaluate("(() => { const set = new WeakSet(); for (const el of document.querySelectorAll('input, textarea, [contenteditable]')) set.add(el); window.__demoPreClick = set; })()").catch(() => {});
 					if (this.demo) {
 						await this.page.mouse.move(plan.point.x, plan.point.y);
 						await new Promise((r) => setTimeout(r, plan.dwellMs));
@@ -757,8 +758,13 @@ export class CdpBackend {
 										| { desc: string; x: number; y: number; w: number; h: number }
 										| null;
 									const p = (this.lastActuation as { point: { x: number; y: number } } | undefined)?.point;
+									// Pre-existence closes the spawn hole: a comment pin or
+									// text-overlay tool mounts an editable AT the click point,
+									// so geometry alone blesses exactly the wrong element.
+									const preexisting = (await this.page.evaluate("(() => { const s = window.__demoPreClick; return !!(s && document.activeElement && s.has(document.activeElement)); })()").catch(() => false)) as boolean;
 									if (
 										active
+										&& preexisting
 										&& active.desc !== before
 										&& p
 										&& p.x >= active.x - 8
@@ -818,6 +824,14 @@ export class CdpBackend {
 					// probe spawned a canvas overlay. If the caret's field does not contain the
 					// last click, nothing is typed and the error says where the caret really is.
 					if (!(a.ref || a.query) && this.lastClickPoint && caret?.field) {
+						const preexisting = (await this.page.evaluate("(() => { const s = window.__demoPreClick; return !!(s && document.activeElement && s.has(document.activeElement)); })()").catch(() => true)) as boolean;
+						if (!preexisting) {
+							const thief = (await this.page.evaluate(ACTIVE_DESC).catch(() => "unknown")) as string;
+							throw new Error(
+								`the caret is in <${thief}>, an editor that APPEARED FROM your last click (a comment pin or text tool, not the field itself). Nothing was typed. ` +
+									`Dismiss it if unwanted; to type into it deliberately, re-observe and pass its ref.`,
+							);
+						}
 						const f = caret.field;
 						const p = this.lastClickPoint;
 						const PAD = 16;
@@ -845,8 +859,11 @@ export class CdpBackend {
 									await new Promise((r) => setTimeout(r, 200));
 									now = (await this.page.evaluate(ACTIVE_DESC).catch(() => "")) as string;
 								}
-							if (now.startsWith("E:")) holder = now; // arrivals and re-mounts are adopted
-							else
+							// Only the SAME holder continues — a re-mounted editor of the same
+							// class produces an identical desc, so Yarn's mid-typing re-mounts
+							// pass, while focus arriving at a DIFFERENT editable (a spawned
+							// overlay or composer) or nothing aborts with exact progress.
+							if (now !== holder)
 								throw new Error(
 									`typing interrupted after ${typed.length} of ${text.length} characters — focus moved from <${holder}> to <${now}>. ` +
 										`Landed so far: "…${typed.slice(-40)}". Re-observe, put the caret back, and continue with the REMAINING text only.`,
@@ -936,6 +953,10 @@ export class CdpBackend {
 		if (!box || box.width <= 0 || box.height <= 0)
 			throw new Error("target resolved but has no visible box to click — it may have just closed; re-observe");
 		const plan = demoClickPlan(box, verb);
+		// Editables that exist BEFORE this click, so typing can tell a field the click
+		// FOCUSED from an editor the click SPAWNED (comment pins, text-overlay tools —
+		// both mount an editable at the click point and both have eaten narration).
+		await this.page.evaluate("(() => { const set = new WeakSet(); for (const el of document.querySelectorAll('input, textarea, [contenteditable]')) set.add(el); window.__demoPreClick = set; })()").catch(() => {});
 		await this.page.mouse.move(plan.point.x, plan.point.y);
 		await new Promise((r) => setTimeout(r, plan.dwellMs));
 		await this.page.mouse.click(plan.point.x, plan.point.y, { button: plan.button, clickCount: plan.clickCount, delay: plan.pressMs });
