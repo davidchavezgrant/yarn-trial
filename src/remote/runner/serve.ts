@@ -126,6 +126,13 @@ const LIVEVIEW_PORT = 7682;
 const LIVEVIEW_MAX_LIFETIME_MS = 20 * 60_000;
 /** After the tab closes, exit unless it reopens within this. A closed tab is "done"; linger briefly. */
 const LIVEVIEW_IDLE_AFTER_CLOSE_MS = 30_000;
+/**
+ * Frame rate of the login stream. 30 because a sign-in is typed: at 15 the caret and focus
+ * ring step visibly and the whole view reads as laggy. Costs little — ScreenCaptureKit only
+ * emits on actual window change, and the server drops frames under backpressure rather than
+ * queueing them, so a slow tunnel loses the surplus instead of falling behind.
+ */
+const LIVEVIEW_FPS = 30;
 
 
 export interface Permissions {
@@ -789,6 +796,9 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 						// external OAuth browser gets cropped to its page content, Cmd-shortcuts
 						// to its chrome are dropped, and "Open <App>" is pressed hands-free.
 						LIVEVIEW_APP: app,
+						// Frame rate for the login stream. Named here rather than left to the
+						// engine's default so it is tunable per fleet without a rebuild.
+						LIVEVIEW_FPS: String(LIVEVIEW_FPS),
 					},
 				},
 			).pid;

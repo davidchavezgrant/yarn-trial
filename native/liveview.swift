@@ -87,7 +87,12 @@ import VideoToolbox
 // retina window halved every glyph, and q0.6 put JPEG ringing exactly where the characters
 // are. The server already drops frames under backpressure, so a slow tunnel costs fps — the
 // degradation that does not matter for a form — never sharpness.
-var fps = 15
+// 30, not 15. A sign-in is typed and clicked, and at 15fps the caret, the focus ring and the
+// pointer all move in visible steps — the stream reads as laggy even when latency is fine.
+// The cost is bounded on both ends: SCK only produces a frame when the window actually
+// changes (a static login form costs nothing), and the server drops frames under backpressure,
+// so a slow tunnel spends the surplus rather than queueing it. LIVEVIEW_FPS overrides.
+var fps = Int(ProcessInfo.processInfo.environment["LIVEVIEW_FPS"] ?? "") ?? 30
 var quality: Float = 0.78
 var maxWidth = 1920
 // The sign-in target. Env first (the runner passes LIVEVIEW_APP through the CLI), argv wins.
@@ -193,14 +198,45 @@ func onScreenWindows() -> [WindowInfo] {
 // The frontmost *normal* window: layer 0 (kCGNormalWindowLevel), skipping the menu bar,
 // Dock, wallpaper, and the tiny zero-area helper windows apps keep around. CGWindowList
 // returns front-to-back, so the first match is the key window.
+/// Apps a sign-in can legitimately hand off TO. Not a allowlist of vendors — a list of the
+/// browser engines macOS uses to render a web login, plus the system's own auth agent.
+let LOGIN_HOST_APPS: Set<String> = [
+	"google chrome", "google chrome canary", "chromium", "safari", "safari technology preview",
+	"firefox", "microsoft edge", "brave browser", "arc", "orion",
+	// The system web-auth sheet a native app opens instead of a full browser.
+	"safariviewservice", "authenticationservices", "webkit web content",
+]
+
+/// The window to stream.
+///
+/// NOT simply "whatever is frontmost". A sign-in is a two-app flow — the target app and the
+/// browser it hands off to — and everything else that comes forward during it is noise the
+/// operator must not be shown or allowed to drive: System Settings raising "Login Items &
+/// Extensions" when a browser first launches (observed on mac2, 2026-07-31, and it stole the
+/// stream outright), Finder, a notification, another operator's app. Following those is worse
+/// than useless: the crop is then computed against THEIR accessibility tree, so the browser
+/// stays uncropped when focus returns.
+///
+/// So the follow set is: the target app, any browser (the OAuth leg), and — only when the
+/// target is unnamed, i.e. plain local `./run liveview` — anything at all, preserving the
+/// original behavior for the no-target case.
 func frontmostWindow() -> WindowInfo? {
+	var fallback: WindowInfo?
 	for w in onScreenWindows() {
 		if w.layer != 0 { continue }
 		if w.bounds.width < 80 || w.bounds.height < 80 { continue }
 		if w.app == "Window Server" || w.app == "Dock" { continue }
-		return w
+		// No target named: behave exactly as before.
+		if targetApp.isEmpty { return w }
+		let name = normalizedAppName(w.app)
+		if name == normalizedAppName(targetApp) { return w }
+		if LOGIN_HOST_APPS.contains(name) { return w }
+		// Remember the first thing we skipped, so a flow that genuinely moved to some other app
+		// still shows SOMETHING rather than freezing on a stale window forever.
+		if fallback == nil { fallback = w }
 	}
-	return nil
+
+	return fallback
 }
 
 func windowById(_ id: CGWindowID) -> WindowInfo? {
@@ -252,12 +288,31 @@ func axFrame(_ el: AXUIElement) -> CGRect? {
 func axWindowElement(pid: pid_t, matching bounds: CGRect) -> AXUIElement? {
 	let app = AXUIElementCreateApplication(pid)
 	guard let wins = axAttr(app, kAXWindowsAttribute) as? [AXUIElement] else { return nil }
+	// Exact-ish geometry first.
 	for w in wins {
 		if let f = axFrame(w),
 		   abs(f.origin.x - bounds.origin.x) < 4, abs(f.origin.y - bounds.origin.y) < 4,
 		   abs(f.width - bounds.width) < 4, abs(f.height - bounds.height) < 4 { return w }
 	}
-	return wins.first
+	// Then best overlap: a browser mid-animation (the OAuth popup growing into place) reports
+	// AX geometry a frame behind CGWindowList, and a few pixels of drift must not fall through.
+	var best: AXUIElement?
+	var bestOverlap: CGFloat = 0
+	for w in wins {
+		guard let f = axFrame(w) else { continue }
+		let inter = f.intersection(bounds)
+		let overlap = inter.width * inter.height
+		if overlap > bestOverlap {
+			bestOverlap = overlap
+			best = w
+		}
+	}
+	// Require MOST of the window to coincide. `wins.first` used to be the fallback, and that is
+	// how a crop got computed from a completely different window of the same app — an invisible
+	// wrong answer, where nil merely means "no crop this tick" and the next scan retries.
+	if bestOverlap >= 0.6 * bounds.width * bounds.height { return best }
+
+	return nil
 }
 
 struct ForeignScan {

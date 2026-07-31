@@ -328,3 +328,10 @@ test("EventParser__CarriesTheConstrainedFields__When__TheEngineEmitsThem", () =>
 	assert.equal(events[1].ev === "auto" && events[1].pressed, "Open Yarn.app");
 	assert.equal(events[2].ev === "blocked" && events[2].code, 37);
 });
+
+test("engineArgs__LeavesFrameRateToTheEngine__When__UnsetByTheCaller", () => {
+	// The runner passes fps by env (LIVEVIEW_FPS), not argv, so an unset caller must not pin a
+	// rate here — that is what kept the fleet at the old 15fps default with no way to change it.
+	assert.deepEqual(engineArgs({ app: "Yarn" }), ["--app", "Yarn"]);
+	assert.deepEqual(engineArgs({ fps: 30, app: "Yarn" }), ["--fps", "30", "--app", "Yarn"]);
+});

@@ -295,3 +295,28 @@ canvas-rendered login with no AX ink, or a non-English browser for the redirect 
 physical pointer belongs to nobody and injected input moves it independently of where the
 operator is pointing, so it only ever appeared as a second cursor drifting around the frame.
 The operator's own browser cursor (now `default`, not `crosshair`) is the one pointer shown.
+
+## Follow the flow, not the frontmost window (2026-07-31)
+
+Symptom: "I still get the full Chrome window, and this time it switched to Login Items &
+Extensions." The second half explains the first. `frontmostWindow()` accepted ANY layer-0
+window over 80x80, so when macOS raised System Settings — which it does when a browser first
+launches, observed on mac2 — the stream followed it and abandoned the login. The crop was then
+computed against System Settings' accessibility tree, so Chrome stayed uncropped when focus
+returned. One defect, both symptoms.
+
+The follow set is now: the target app, or a browser (LOGIN_HOST_APPS — engines, not vendors,
+plus the system web-auth agent). Anything else is skipped, with the first skipped window kept
+as a fallback so a genuinely different flow still shows something rather than freezing. With no
+target named (plain local `./run liveview`) the old accept-anything behavior is preserved.
+
+Two more, found reading the same path:
+
+- `axWindowElement` fell back to `wins.first` when geometry matching failed, which scans a
+  DIFFERENT window of the same app and computes the crop from its web area — an invisible
+  wrong answer. It now falls back to best-overlap and requires 60% coincidence, else nil:
+  "no crop this tick, retry next scan" is recoverable, a wrong crop is not.
+- Frame rate was pinned at the engine's default of 15 because the runner never passed one.
+  Now 30 (LIVEVIEW_FPS, set by serve.ts). A sign-in is typed, and at 15 the caret and focus
+  ring step visibly. Cost is bounded: SCK emits only on real window change, and the server
+  already drops frames under backpressure, so a slow tunnel spends the surplus.
