@@ -811,8 +811,12 @@ test("submit__SaysNothingAboutSignin__When__TheOperatorAlreadyOwnsTheApp", async
 	});
 });
 
-/** open is injected wherever the liveview/signin verbs run, so the suite never launches a real app. */
-const noOpen = { open: async () => {} };
+/**
+ * open is injected wherever the liveview/signin verbs run, so the suite never launches a real app;
+ * portInUse defaults to "free" so the liveview verb proceeds to spawn (the port-taken branch is
+ * exercised explicitly below).
+ */
+const noOpen = { open: async () => {}, portInUse: async () => false };
 
 /**
  * The liveview verb foregrounds the app under the operator's profile and starts the capture server
@@ -893,6 +897,41 @@ test("liveview__RequiresAnApp__When__NoneGiven", async () => {
 			const [res] = await request(runner.socketPath, "liveview", { operator: "dave" });
 			assert.equal(res.ok, false);
 			assert.match(String(res.error), /app is required/);
+		} finally {
+			await runner.close();
+		}
+	});
+});
+
+/**
+ * A second liveview while one is already serving must not spawn another (it would die on
+ * EADDRINUSE, observed on the fleet) and must not swap the profile (that would quit the app out
+ * from under the in-progress sign-in). It reports the existing server instead — before touching
+ * the swap, so the fake swap/spawn are proven untouched.
+ */
+test("liveview__RefusesWithoutSwappingOrSpawning__When__AServerIsAlreadyUp", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const spawner = mkdirSpawner();
+		let swaps = 0;
+		const runner = await startRunner(dir, {
+			log: () => {},
+			open: async () => {},
+			portInUse: async () => true, // a server is already listening
+			swap: async (app, operator) => {
+				swaps++;
+
+				return { action: "kept", app, operator, stashed: [], restored: [], fresh: false };
+			},
+			spawn: spawner.spawn,
+		});
+		try {
+			const [res] = await request(runner.socketPath, "liveview", { app: "Yarn", operator: "dave" });
+			assert.equal(res.ok, false);
+			assert.equal(res.alreadyRunning, true);
+			assert.match(String(res.error), /already running/);
+			// Neither the profile swap nor a second server may have happened.
+			assert.equal(swaps, 0);
+			assert.equal(spawner.calls.length, 0);
 		} finally {
 			await runner.close();
 		}

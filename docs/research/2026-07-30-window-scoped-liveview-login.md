@@ -189,18 +189,44 @@ one real login — a deploy + restart, not new code.
   the whole fleet would need the consented session-distribution ("session as artifact") spine,
   which is a separate build and gated on the Step-0 transfer-survival measurement.
 
+## Fleet deploy + live verification (2026-07-31)
+
+Deployed to all three Macs via `./run provision` (every step green), restarted each runner onto
+the new `serve.ts`, and built `native/liveview` on each. Then called the `liveview` verb for real:
+
+- **mac1: full capture confirmed.** The runner-spawned engine streamed valid JPEG frames
+  (41,831-byte first frame, `ff d8` magic) — where a bare-SSH-spawned engine got
+  `no-screen-recording`. TCC grant inheritance through the runner works. By timing luck the
+  frontmost window was a **Google "Sign in - Google Accounts"** page (the fresh profile made Yarn
+  open its OAuth flow), so the OAuth-handoff follow was captured live on real hardware — the exact
+  case the design targets, with no per-app detector.
+- **mac2 & mac3: verb works; capture returned zero frames, for a legitimate reason.** CGWindowList
+  showed **zero normal foreground windows** on those two (Yarn running but presenting no window;
+  screens not locked). The engine correctly captures nothing when nothing is frontmost — not a
+  defect. mac1 differed only because Yarn had a live window.
+
+Two findings from the live run:
+1. **Port-in-use guard (fixed).** A second `liveview` while one is already serving used to spawn a
+   second server that died on `EADDRINUSE`. The verb now checks the port first (before the profile
+   swap, so a duplicate call cannot quit the app out from under an in-progress sign-in) and reports
+   the existing server instead. Tested.
+2. Dev-path server trees (`npm → tsx → node`) are harder to reap than packaged; the
+   max-lifetime/idle-exit deadlines cover normal use. Left as-is.
+
+Fleet left clean: davidgrant restored as Yarn owner on all three, throwaway `verify` profiles and
+job logs removed, no stray processes.
+
 ## Next steps to make it real
 
-1. **Deploy + restart the runner on one fleet Mac** (`./run provision`, then
-   `launchctl kickstart -k gui/$(id -u)/com.yarn.runner`) so it loads the new `serve.ts` with the
-   `liveview` verb, and run one real login end-to-end over the `ssh -L` tunnel. This is the one
-   verification the code changes could not do here (restarting a shared Mac's runner is fleet
-   state). Confirm capture + input actuate under the runner and the OAuth handoff is captured.
+1. **One real end-to-end login** on a Mac that has a foreground app window: open the tunnel, sign
+   in through the viewer, confirm input actuates and the session persists. Everything mechanical
+   around this is now proven on the fleet; the remaining unknown is the human keystroke path over
+   the tunnel.
 2. Confirm the native `ASWebAuthenticationSession` case (a native app's "Sign in with Apple/Google"
    sheet) is followed and captured.
 3. If injection latency at 15fps is poor over the tunnel, raise `--fps`/`--quality` or move to a
    delta encoder (out of scope for the POC).
 
-Already built (these notes originally listed them as future work): the `liveview` runner verb, the
-detached-server lifecycle, the CLI fleet flow, the login/recording mutual-exclusion guard, and
-`native/liveview` building on the fleet (macOS 15.5) — all with tests.
+Built and fleet-deployed: the `liveview` runner verb (with port-in-use guard), the detached-server
+lifecycle, the CLI fleet flow, the login/recording mutual-exclusion guard, and `native/liveview`
+on all three Macs (macOS 15.5) — all with tests. Runner-spawned capture verified on mac1.

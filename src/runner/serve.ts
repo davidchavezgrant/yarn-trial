@@ -181,6 +181,11 @@ export interface ServeOptions {
 	 * suite. Used by `signin` and `liveview`.
 	 */
 	open?: (app: string, opts: { foreground?: boolean }) => Promise<void>;
+	/**
+	 * Whether something is already listening on the liveview port. Injected so the "a login is
+	 * already up" branch is testable without binding a real socket.
+	 */
+	portInUse?: (port: number) => Promise<boolean>;
 	log?: (line: string) => void;
 }
 
@@ -302,6 +307,25 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 
 	/** Foreground the app, injectable so the suite does not launch real applications. */
 	const openAppFor = opts.open ?? openApp;
+
+	/**
+	 * Is the liveview port already taken? A connect that succeeds means a server is up; ECONNREFUSED
+	 * means it is free. Injected for tests; the real one makes a one-shot loopback connect.
+	 */
+	const portInUse =
+		opts.portInUse ??
+		((port: number) =>
+			new Promise<boolean>((resolve) => {
+				const probe = net.connect({ host: "127.0.0.1", port });
+				const done = (inUse: boolean) => {
+					probe.destroy();
+					resolve(inUse);
+				};
+				probe.setTimeout(1000);
+				probe.once("connect", () => done(true));
+				probe.once("timeout", () => done(false));
+				probe.once("error", () => done(false));
+			}));
 
 	async function submit(params: Params): Promise<RunnerResponse> {
 		if (params.kind !== undefined && params.kind !== "explore" && params.kind !== "task")
@@ -520,6 +544,20 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 				kind: holder.lease.kind,
 				jobId: holder.lease.jobId,
 				elapsedSec: holder.heldSec,
+			};
+
+		// Before the swap, not after: a second liveview call while a login is already up must NOT
+		// quit the app to re-swap the profile — that would kill the window the first operator is
+		// signing into. If the port is taken a server is already serving; report that rather than
+		// spawning a second one that will die on EADDRINUSE (observed on the fleet, 2026-07-31).
+		// The token is not recoverable from here (it lives in the running server), so the caller is
+		// told to reuse the existing session or wait for it to lapse.
+		if (await portInUse(LIVEVIEW_PORT))
+			return {
+				ok: false,
+				error: `a liveview server is already running on this Mac (port ${LIVEVIEW_PORT}) — reuse that sign-in, or wait for it to close (it exits on idle or after ${LIVEVIEW_MAX_LIFETIME_MS / 60_000} min)`,
+				alreadyRunning: true,
+				port: LIVEVIEW_PORT,
 			};
 
 		let swap: ProfileSwap;
