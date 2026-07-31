@@ -53,6 +53,27 @@ export interface AutoEvent {
 	pressed: string;
 }
 
+/**
+ * Emitted once at startup: whether the engine holds the Accessibility grant. False means the
+ * foreign-browser crop and the "Open <App>" auto-press cannot work — the stream itself still
+ * can, so this is a diagnostic, not an error.
+ */
+export interface AxEvent {
+	ev: "ax";
+	trusted: boolean;
+}
+
+/** Foreign-window scan diagnostic, emitted when the scan's findings change shape. */
+export interface ScanEvent {
+	ev: "scan";
+	/** Which rect the crop came from: the ink union, the whole web area, or nothing. */
+	source: "ink" | "webarea" | "none";
+	leaves: number;
+	/** "WxH" or "nil". */
+	web: string;
+	ink: string;
+}
+
 /** A Cmd-shortcut was dropped by the constrained-browser key guard. */
 export interface BlockedEvent {
 	ev: "blocked";
@@ -67,7 +88,7 @@ export interface ErrorEvent {
 	detail: string;
 }
 
-export type EngineEvent = WindowEvent | AutoEvent | BlockedEvent | ErrorEvent;
+export type EngineEvent = WindowEvent | AutoEvent | AxEvent | ScanEvent | BlockedEvent | ErrorEvent;
 
 /** A command the viewer/server sends to the engine. `x`/`y` are 0..1 fractions of the window. */
 export type EngineCommand =

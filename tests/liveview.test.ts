@@ -329,6 +329,22 @@ test("EventParser__CarriesTheConstrainedFields__When__TheEngineEmitsThem", () =>
 	assert.equal(events[2].ev === "blocked" && events[2].code, 37);
 });
 
+test("EventParser__CarriesTheDiagnosticEvents__When__TheEngineEmitsThem", () => {
+	// `ax` (once at startup) and `scan` (per shape change) are how a no-crop session is
+	// diagnosed from a transcript — the 2026-07-31 crop bug was undebuggable without them.
+	const parser = new EventParser();
+	const events = parser.push(
+		'{"ev":"ax","trusted":false}\n' +
+		'{"ev":"scan","source":"none","leaves":0,"web":"nil","ink":"nil"}\n' +
+		'{"ev":"scan","source":"ink","leaves":19,"web":"1200x953","ink":"800x351"}\n',
+	);
+
+	assert.equal(events.length, 3);
+	assert.equal(events[0].ev === "ax" && events[0].trusted, false);
+	assert.equal(events[1].ev === "scan" && events[1].source, "none");
+	assert.equal(events[2].ev === "scan" && events[2].ink, "800x351");
+});
+
 test("engineArgs__LeavesFrameRateToTheEngine__When__UnsetByTheCaller", () => {
 	// The runner passes fps by env (LIVEVIEW_FPS), not argv, so an unset caller must not pin a
 	// rate here — that is what kept the fleet at the old 15fps default with no way to change it.

@@ -1,6 +1,32 @@
 # Handoff: the sign-in live view still shows the whole Chrome window
 
-**Status**: unsolved after three attempts. Each attempt fixed a real, separately-verified bug —
+**RESOLVED 2026-07-31** — root cause: Chromium builds its web-content AX tree **lazily**, and
+READING the tree is not what wakes it. A fresh Chrome process (which is what a fleet Mac
+launches for every OAuth leg) exposes no `AXWebArea` at all — 37 chrome-only nodes — no matter
+how many times a trusted client walks it. The wake is an app-element attribute WRITE:
+`AXEnhancedUserInterface` (what VoiceOver sets — the one Google Chrome honors) or
+`AXManualAccessibility` (the CEF/Electron equivalent — what axdom relies on; Chrome ignores it).
+Measured A/B on virgin `--user-data-dir` Chromes at accounts.google.com: no wake after 8s of
+reads; no wake after 8s with only `AXManualAccessibility`; web area up 2s after
+`AXEnhancedUserInterface`. Chrome returns `-25208 notImplemented` for the set *and wakes
+anyway* — the write is processed as a client announcement, so the return code must be ignored.
+
+This also resolves the two mysteries below: the crop "worked locally" because a daily-driven
+Chrome has long been woken by some AX client (the wake latches for the process lifetime), and
+axdom "worked on the fleet" because its targets are Electron apps and it already sets
+`AXManualAccessibility` (axdom.swift:39). The leading hypothesis (TCC attribution) was wrong:
+the runner-spawned engine reports `AXIsProcessTrusted=true` and, once the tree is awake, scans
+Chrome fine.
+
+Fix: `wakeBrowserAX()` in `native/liveview.swift` — both attributes, once per pid, on the scan
+queue before the first walk. Plus a startup `{"ev":"ax","trusted":…}` event so trusted-vs-asleep
+is never ambiguous again. Verified live on mac2 (runner-spawned engine, real Google OAuth leg):
+`scan source:none` at t+0, `source:"ink" leaves:23 web:1739x855 ink:1000x474` at t+2s, frame
+snapshot shows the "Choose an account" card with all browser chrome cropped away.
+
+The dead-ends list below is kept for its measurement value.
+
+**Original status**: unsolved after three attempts. Each attempt fixed a real, separately-verified bug —
 none of them was *this* bug. Read "What is already ruled out" before forming a theory; the
 value in this document is mostly the list of dead ends.
 

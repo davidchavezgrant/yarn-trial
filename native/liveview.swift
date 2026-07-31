@@ -268,6 +268,32 @@ func backingScale(for cgFrame: CGRect) -> CGFloat {
 
 let axQueue = DispatchQueue(label: "liveview.ax")
 
+// Chromium builds its web-content AX tree LAZILY: until an assistive client announces itself,
+// the tree is browser-chrome only — no AXWebArea, no page nodes — and READING the tree is not
+// announcing. Measured on a fresh `--user-data-dir` Chrome at accounts.google.com (2026-07-31,
+// AX-trusted probe): 37 chrome-only nodes and zero web areas after repeated full walks; the
+// scan's failing signature exactly. The announcement is an app-element attribute WRITE:
+//   - AXEnhancedUserInterface  — what VoiceOver sets; the one Google Chrome honors (web area
+//     appeared 2s after setting it, and never without it),
+//   - AXManualAccessibility    — the CEF/Electron equivalent (Chrome ignores it; measured no
+//     wake after 8s — but an Electron-based browser in LOGIN_HOST_APPS wants it, and it is
+//     what native/axdom.swift already relies on for Electron targets).
+// Both are set, and the return codes are DELIBERATELY ignored: Chrome answers -25208
+// (notImplemented) and wakes anyway — the write is processed as an announcement before the
+// attribute handler rejects it. Once per pid: the wake latches for the process lifetime.
+// (It is not unset on exit; a short-lived OAuth browser keeping its tree on is negligible.)
+// This is why the crop worked on a dev Mac and never on the fleet: a daily-driven Chrome has
+// long been woken by some AX client, while the fleet launches a virgin Chrome per sign-in.
+var axWokenPids = Set<pid_t>() // axQueue-confined
+
+func wakeBrowserAX(pid: pid_t) {
+	if axWokenPids.contains(pid) { return }
+	axWokenPids.insert(pid)
+	let app = AXUIElementCreateApplication(pid)
+	AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+	AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+}
+
 func axAttr(_ el: AXUIElement, _ name: String) -> CFTypeRef? {
 	var ref: CFTypeRef?
 	guard AXUIElementCopyAttributeValue(el, name as CFString, &ref) == .success else { return nil }
@@ -635,6 +661,11 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 		let app = targetApp
 
 		axQueue.async { [weak self] in
+			// Announce ourselves to the browser before the first walk of its tree, or a fresh
+			// Chrome exposes no web content at all (see wakeBrowserAX). The tree takes ~2s to
+			// materialize after the wake; no need to block for it — this scan simply finds
+			// nothing and the 500ms cadence picks the tree up once it exists.
+			wakeBrowserAX(pid: pid)
 			var scan = ForeignScan()
 			if let winEl = axWindowElement(pid: pid, matching: bounds) {
 				scan = scanForeignWindow(winEl, appName: app)
@@ -833,6 +864,13 @@ final class Injector {
 
 let engine = Engine(fps: fps)
 let injector = Injector()
+// Say up front whether this process holds the Accessibility grant. The foreign-window crop
+// and the "Open <App>" auto-press both need it, and without this line their failure mode is
+// indistinguishable from a browser whose AX tree is merely asleep (see wakeBrowserAX) —
+// exactly the ambiguity that stalled the 2026-07-31 crop investigation. Input injection is
+// NOT gated on this: CGEvent posting has its own (same-named) grant, and a false here should
+// read as "the crop will not work", not "the session is dead".
+emitEvent(["ev": "ax", "trusted": AXIsProcessTrusted()])
 engine.start()
 
 func handle(_ obj: [String: Any]) {
