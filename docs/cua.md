@@ -7,8 +7,10 @@ Raw session notes live in `docs/research/`; app-specific findings in `docs/appma
 
 ## What cua-driver is (as we use it)
 
-A native (UniFFI/Rust) library, embedded in-process via the Node bindings — no daemon,
-no VM. It drives real macOS apps through two channels:
+A native (UniFFI/Rust) library, embedded in-process via the Node bindings — no VM,
+though the native core is SHARED across processes on the machine (see the `shutdown()`
+fact below, which is why we call it "the shared daemon" elsewhere). It drives real macOS
+apps through two channels:
 
 - **Perception**: the Accessibility (AX) tree + screenshots, per-desktop or per-window.
 - **Action**: AX actions (AXPress, AXShowMenu) and pid-targeted CGEvents (keys, clicks),
@@ -77,8 +79,9 @@ the SDK — the actuator can be swapped without touching the agent loop.
   activate/deactivate cycling (which foreground delivery causes — see below) can make
   `get_window_state` return an empty/near-empty element list while the screenshot looks
   fine. It comes back after focus settles. Mitigation: fall back to keyboard nav +
-  screenshot verification; longer-term, try the driver's `browser_*` CDP tools for
-  Electron targets.
+  screenshot verification — or use a CDP path, both of which now exist: `--backend dom`
+  (the driver's `browser_*` tools, below) and `--backend cdp` (playwright-core direct,
+  no cua at all; see "CDP-direct backend" below).
 
 ## Action & delivery modes
 
@@ -107,7 +110,15 @@ the SDK — the actuator can be swapped without touching the agent loop.
 - **Popovers can survive across driver sessions**, and window-scoped Escape doesn't
   always close them. Recovery: escape (foreground) repeatedly, re-snapshot, confirm no
   stray overlay elements remain.
-- Allow a settle delay after every action before re-observing (we use ~900ms).
+- Allow a settle delay after every action before re-observing (we use ~900ms) — EXCEPT
+  `wait`, which takes a `seconds` argument (clamped to 10 min) precisely because targets
+  that embed their own agent think for minutes, and a flat ~900ms ceiling cost hundreds
+  of turns against the step budget (`settleMsFor()` in `src/harness.ts`).
+- **`delivery_mode: "foreground"` fronts the app for <1ms at the window-server level and
+  restores** — NOT a real AppKit activation. On native AppKit apps the app never becomes
+  key/main, so menu items stay DISABLED and menu AXPress silently no-ops (measured on
+  Hex Fiend, 0/15 steps; `docs/research/2026-07-30-native-mac-apps-investigation.md`).
+  Electron apps tolerate this; native ones may not.
 
 ## Recording
 
@@ -154,7 +165,7 @@ to what the section below assumes, all learned by calling the tool rather than r
   is checking for a terminal, not for a person, so running it under a pty (`expect`) and
   answering `APPROVE` mints a token `browser_prepare` accepts. `mintApprovalToken()` in
   `src/browser.ts`. Bounded/unrestricted permission modes and the binary's magic token literal
-  do NOT open this gate — all four measured. See LIMITATIONS §12.
+  do NOT open this gate — all four measured. See LIMITATIONS §13.
 - **The AX backend needs none of this.** It reads the window, not the DOM, so
   `--backend ax --url <site>` skips prepare entirely — `open -a <browser> <url>` is the whole
   acquisition, and the web-area filter keeps browser chrome out of the frontier.
@@ -164,7 +175,7 @@ to what the section below assumes, all learned by calling the tool rather than r
 - **`viewport_x`/`viewport_y`/`pixel_to_css_scale_*` are NOT `get_browser_state` fields.** They
   belong to the `browser_screenshot` and legacy `page` clusters. The AX→viewport coordinate
   conversion for real Chrome therefore has no confirmed source yet, and the window-origin
-  fallback is wrong by the height of the tab strip + omnibox. See LIMITATIONS §12.
+  fallback is wrong by the height of the tab strip + omnibox. See LIMITATIONS §13.
 - **`binding_quality` is a four-value enum** — `exact` / `heuristic` / `embedded_single_page` /
   `native_cdp_window`. Reject only `heuristic`; requiring `exact` would break Electron, which
   is the one DOM target that works today.
@@ -247,6 +258,27 @@ read/act on the **DOM directly**, bypassing the AX layer. Two surfaces:
   for OS-level keys. A "pure DOM" backend is not achievable against this app; a hybrid
   one is, and it is strictly better than either alone.
 
+## CDP-direct backend (`--backend cdp`) — no cua in the loop (2026-07-30)
+
+`src/cdp.ts` attaches playwright-core over `--remote-debugging-port` — for web targets it
+launches its own Chrome against a persistent profile; Electron targets need the flag at
+launch. It exists because it deletes four cua liabilities by construction: no 300s session
+TTL, no shared daemon (runs stop killing each other), no consent gate (the profile is ours,
+there is nothing to protect), no node budget (`ariaSnapshot({mode:"ai"})` returns the whole
+tree). Explore, teardown, the cleanup CLI, and the trajectory feed (`TrajectoryWriter`
+writes the same `turn-NNNNN/action.json` shape the cursor renderer reads) all work on it.
+
+Its own quirks, measured:
+- **Keys go through CDP's Input domain to the RENDERER** — menu-bar shortcuts,
+  browser-chrome shortcuts, and anything the OS handles never fire. The AX path keeps
+  those.
+- **Chrome throttles rendering for backgrounded tabs** and a throttled tab times out every
+  `page.screenshot` — the snapshot channel never notices, the pixel channel loses every
+  frame. `bringToFront` at acquire fixes it.
+- **Hardware encoders refuse odd frame dimensions** (1200×953 crashed libx264); the
+  renderer pads to even.
+- `CDP_PORT` defaults to 9777, deliberately off cua's 9222 so the two backends can coexist.
+
 ## Patterns that work (harness-level)
 
 - **One action per model turn, with a machine-checked expectation.** The harness
@@ -283,10 +315,16 @@ read/act on the **DOM directly**, bypassing the AX layer. Two surfaces:
   behind it: per-step pixel delta (canvas content is invisible to AX, so "nothing
   repainted" is otherwise undetectable) and a visual judge at `done`.
 - ~~Does grounding + the agent loop transfer to a second app unchanged?~~ **Yes** — Yarn,
-  2026-07-29, no harness changes needed. But the honest caveat: both proven apps are
-  Chromium/Electron. What transferred is untested on a native AppKit AX tree.
+  2026-07-29, no harness changes needed; web targets followed 2026-07-30, also unchanged.
+  ~~Untested on a native AppKit AX tree~~ — tested 2026-07-30: Calculator succeeded end to
+  end; Hex Fiend perceived fine and actuated nothing (foreground delivery never makes a
+  native app key/main — see "Action & delivery modes" and
+  `docs/research/2026-07-30-native-mac-apps-investigation.md`). Native is out of scope.
 - **What verification still cannot do**: prove it verified the *right* control. It greps a
   flattened bag of labels and values, so a per-project override and a brand-wide default
-  reading the same value are indistinguishable to it. Yarn has 16 settings in exactly that
-  shape. Appmap scope warnings and the visual judge mitigate; nothing proves it.
-- Is there a driver-native way to get window-scoped *video* (vs our snapshot polling)?
+  reading the same value are indistinguishable to it. Yarn has 10 settings in exactly that
+  shape on the current map. Appmap scope warnings and the visual judge mitigate; nothing
+  proves it.
+- ~~Is there a driver-native way to get window-scoped *video*?~~ Not driver-native, but
+  `native/liveview.swift` proves single-window ScreenCaptureKit capture works from our own
+  (runner-spawned) code — the premise that window video needs the driver is retired.

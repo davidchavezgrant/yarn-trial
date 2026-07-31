@@ -18,7 +18,7 @@ import type { Target } from "./target.js";
  * `browserLogin` and every later run on that host inherits the session.
  *
  * Preparation itself is gated per call, not per host: see `mintApprovalToken` and
- * LIMITATIONS §12. The shape of the whole flow, learned by calling it rather than reading
+ * LIMITATIONS §13. The shape of the whole flow, learned by calling it rather than reading
  * strings: launch a browser → mint a token → prepare THAT pid → find the prepared process's
  * window → navigate. Every step in that chain surprised an earlier version of this file.
  */
@@ -85,7 +85,7 @@ function explain(code: string): string {
 				"under a pty. Reaching this message means the minting failed. Check that `expect` is on " +
 				"PATH and that the driver binary is where CUA_DRIVER_BIN says, then retry; or run the " +
 				"command above by hand. YARN_BROWSER_AUTO_APPROVE=0 disables automatic minting. " +
-				"See LIMITATIONS §12."
+				"See LIMITATIONS §13."
 			);
 		case "browser_binding_ambiguous":
 			return (

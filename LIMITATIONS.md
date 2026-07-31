@@ -152,9 +152,16 @@ element labels reports false failures exactly when the environment is hostile.
   2026-07-29; setting a position on a fullscreen window also demotes it out of fullscreen.
 - Malformed frames are filtered at assembly by majority-vote on frame size plus a
   leading-black-band content check.
-- ScreenCaptureKit live window streams deliver **no frames to an unsigned CLI** on macOS 26
-  in any window state tested (`tools/winrec.swift` documents this). Signed apps — e.g. Yarn
-  itself — are not affected.
+- ~~ScreenCaptureKit delivers no frames to an unsigned CLI on macOS 26.~~ **Narrowed
+  2026-07-30, twice.** One-shot `SCScreenshotManager.captureImage` works from an unsigned
+  `swiftc` binary (measured in the cua dependency audit). And live `SCStream` works from an
+  ad-hoc-signed `swiftc` binary too — `native/liveview` streams real frames — PROVIDED the
+  process descends from the TCC grant holder. The real gate is the responsible-process
+  grant (§12), not code signing. `tools/winrec.swift`'s original zero-frames result was
+  measured from a bare terminal CLI.
+- This whole section describes the AX/DOM recording path. A `--backend cdp` run records the
+  page viewport via `page.screenshot()` — no window staging, no capture pill, no
+  fullscreen/System Events interaction at all.
 
 ---
 
@@ -189,9 +196,19 @@ element labels reports false failures exactly when the environment is hostile.
   canvas/preview content, which has no AX representation at all — never reaches the model
   or the verification haystack. Measured on Yarn: 377 addressable elements, exactly one
   AXImage (a 20x20 icon), while a dozen video thumbnails were rendering on screen.
-- ~10s of model thinking between actions. **Not a concern for Yarn** — their pipeline
-  imperceptibly speeds up demos in post — but it is one for any interactive use.
-- Generalization beyond one app is unproven; the Yarn POC is the first real test.
+- ~10–25s of model thinking between actions (a finished Yarn explore pass measured ~25s
+  per action). **Not a concern for Yarn** — their pipeline imperceptibly speeds up demos
+  in post — but it is one for any interactive use.
+- Default model is key-conditional (`src/harness.ts`): `openai/gpt-5.6-sol` over an
+  OpenRouter key, `claude-opus-5` over a bare Anthropic key; `AGENT_MODEL` overrides.
+  OpenRouter caveat: `cache_creation_input_tokens` comes back null for OpenAI models, so
+  the `cache_control` blocks the prompts carry are accepted and silently ignored — the
+  system prompt is billed in full every turn.
+- ~~Generalization beyond one app is unproven.~~ **Superseded**: Electron (Yarn, Notion
+  Calendar) and web targets (`--url`, own appmaps) run with zero harness changes. Native
+  AppKit: one pass (Calculator), one diagnosed fail (Hex Fiend — foreground delivery never
+  makes the app key/main; `docs/research/2026-07-30-native-mac-apps-investigation.md`),
+  and out of scope per David 2026-07-30. Custom-drawn views remain the open class.
 
 ---
 
@@ -205,12 +222,15 @@ fails mid-action with `tool failed (session_ended): session 'X' has ended` — a
 Yarn exploration was lost this way when a one-off diagnostic script ran alongside it.
 
 **Workarounds**
-- Never run two driver-using scripts at once. Check for a live run first
-  (`pgrep -fl "src/(agent|explore).ts"`).
+- Never run two driver-using scripts at once. Enforced in code now, twice: `./run` refuses
+  to start while a run is in flight (`assert_no_run_in_flight`), and each fleet Mac takes a
+  liveness-based lease (`src/runner/lease.ts`) before spawning.
 - If ad-hoc diagnostics are needed during a long run, they must share the same session
   rather than opening their own.
-- Longer term: `close()` should end the session without shutting the daemon down when
-  other sessions exist, or the harness should acquire a lockfile.
+- **This is a cua-path constraint only.** `--backend cdp` opens no driver session at all;
+  two CdpBackends on different ports do not know about each other. The one-run-per-Mac
+  lease is unconditional today (taken before the backend is known), so the policy holds —
+  but for cdp runs it is a conservative scheduling choice, not physics.
 
 ---
 
@@ -241,11 +261,13 @@ Yarn exploration was lost this way when a one-off diagnostic script ran alongsid
 `verify()` matches substrings against a flattened bag of AX labels and values. It can prove
 that *a* control reads the target value; it cannot prove that control is the *intended* one.
 
-Measured: Yarn exposes **16 Screen Clip settings at two independent scopes** — a brand-wide
-default (Brand Kit ▸ Screen Clips) and a per-project override (Project actions ▸ Screen Clip
-Settings). Writing `Original` to the per-project panel left the brand default reading
-`Pointer-first`: separate stores. All four ungrounded runs of "change the cursor style"
-changed the per-project override while passing verification and reporting truthfully.
+Measured: Yarn exposes **10 settings at two independent scopes** on the current committed
+appmap — mostly Screen Clip brand-wide defaults (Brand Kit ▸ Screen Clips) vs per-project
+overrides (Project actions ▸ Screen Clip Settings); re-measure with `findScopeAmbiguities()`
+after any explore pass rather than quoting this (earlier maps said 14/16/17). Writing
+`Original` to the per-project panel left the brand default reading `Pointer-first`:
+separate stores. All four ungrounded runs of "change the cursor style" changed the
+per-project override while passing verification and reporting truthfully.
 
 The screenshot carries the disambiguating context — breadcrumb, panel title, surrounding
 chrome — that the haystack flattens away.
@@ -302,9 +324,13 @@ Two consequences worth stating plainly:
   likely on an inactive Space"). At least once that was wrong — the window was rendering
   normally on the active Space and the AX tree had simply emptied. Read the frames before
   believing the diagnosis.
+- The `TargetNotObservableError` self-diagnosis is **partly fixed** (2026-07-30):
+  `screenIsLocked()` now distinguishes a locked display from the Space case, and the Space
+  message hedges instead of asserting. Reading the frames is still the ground truth.
 - Retries were clean every time, so this is a throughput and reliability cost, not a
-  capability limit. It is also the single biggest obstacle to unattended operation, and the
-  strongest argument for the CDP backend on Electron targets.
+  capability limit. It is also the single biggest obstacle to unattended operation, and it
+  is why the CDP-direct backend (`--backend cdp` — no AX in the perception path at all)
+  exists.
 
 ---
 
@@ -377,9 +403,11 @@ each of which cost real time to diagnose because none of them reports an error.
 
 ---
 
-## 12. Web targets: `browser_prepare` needs a per-call approval token, minted under a pty
+## 13. Web targets: `browser_prepare` needs a per-call approval token, minted under a pty
 
-**QUIRK** (was BLOCKER) · measured 2026-07-30 against cua-driver 0.12.6 · **resolved**
+**QUIRK** (was BLOCKER) · measured 2026-07-30 against cua-driver 0.12.6 (the standalone
+`/Applications/CuaDriver.app` daemon build; the npm package pins 0.12.5) · **resolved**
+· **moot on `--backend cdp`**, which drives its own Chrome and has no consent gate at all
 
 Pointing a run at a website drives a **driver-owned Chrome profile**, not the operator's.
 `browser_prepare` gates that, and three things about it are only discoverable by calling it:
@@ -429,4 +457,69 @@ grounding pass (prepare → exact bind → navigate → explore → `frontier-em
 appmap halves. A pass against `https://www.notion.so` binds the right tab and maps real
 surfaces — navigating routes, recording login/signup/help-centre structure, frontier growing
 past 250 controls.
+
+---
+
+## 14. The CDP-direct backend trades OS reach for reliability
+
+**CONSTRAINT** · added 2026-07-30 with `src/cdp.ts` (`--backend cdp`)
+
+The cdp backend deletes four cua liabilities by construction (no 300s TTL, no shared
+daemon, no consent gate, no node budget) and its perception cannot go AX-dark. What it
+gives up:
+
+- **Keys go through CDP's Input domain to the RENDERER.** Menu-bar shortcuts,
+  browser-chrome shortcuts, and anything the OS handles never fire. Native OS dialogs
+  (file pickers, permission sheets) are not driveable at all. The AX path keeps those.
+- **Chrome throttles rendering for backgrounded tabs**, and a throttled tab times out
+  every `page.screenshot` — the snapshot channel never notices, the pixel channel loses
+  every frame. `bringToFront` at acquire is the fix and is in place.
+- Electron targets must be launched with `--remote-debugging-port`; a customer app that
+  strips or blocks the flag falls back to the AX path.
+- Recording is the page viewport, not a macOS window — fine as pipeline input, different
+  artifact.
+
+## 15. Exploration coverage is gated, and the gates matter
+
+**CONSTRAINT** · found 2026-07-30 (process + code)
+
+- **"Frontier empty" is reachable by dismissing.** An uncapped pass cleared 104 unrelated
+  controls in one dismissal and declared itself done at 25 actuated of 262 seen.
+  `EXPLORE_DISMISS_CAP` (default 20) refuses a bulk dismissal that names no specific
+  surface. Read `controls: N actuated / M dismissed / K seen` in the stamp, never the stop
+  reason.
+- **Destructive-labelled controls hide whole workflows from the map.** Refused by default,
+  every surface behind Delete/Export/Reset is a permanent hole (350 of 396 Yarn controls at
+  one point). `EXPLORE_DESCENT=1` opts into guarded descent: one press, the HARNESS
+  classifies the surfaced modal and sends Escape itself; the model never acts inside it.
+  Externality verbs (send/publish/purchase/account) are hard-refused always. Details:
+  `docs/research/2026-07-30-mapping-behind-destructive-gates.md`.
+- The destructive-label guard has its own switch (`EXPLORE_GUARD=off`) — it used to ride on
+  the `guidance` flag, so steering a pass silently disarmed it.
+
+## 16. Liveview (window-scoped remote sign-in) inherits every TCC wall, plus its own
+
+**QUIRK** · added 2026-07-30 with `native/liveview.swift` + `src/liveview*.ts`
+
+- **Must be spawned by the runner** or it captures nothing — same responsible-process rule
+  as §12; an SSH-spawned engine emits `no-screen-recording` every tick with no other error.
+- Needs **two grants**: Screen Recording (capture) and Accessibility (input injection).
+- **Zero frames when no window is frontmost** is a legitimate state, not a defect —
+  measured on two fleet Macs with empty consoles. The frontmost-follow needs a real
+  foreground window to follow.
+- Requires `npm run build:native` (which now builds BOTH sidecars — `native/axdom` and
+  `native/liveview`, both gitignored).
+- One server per port; a second `liveview` call reports the existing server rather than
+  spawning a doomed one (checked before the profile swap, so it cannot quit the app out
+  from under an in-progress sign-in).
+
+## 17. Shell concurrency: one run per HOST, with a shared-name caveat
+
+**QUIRK** · relaxed 2026-07-31 (`electron/main.ts`, commit 95a9ad0)
+
+The Electron shell now hosts one run per HOST — a local run and runs on two colo Macs
+coexist; per-machine contention is still §6's lease. Accepted limitation: log buffers are
+keyed by APP NAME, so two concurrent runs of the *same app* on different hosts interleave
+in one terminal buffer. Also note `./run dispatch` is exempt from the local
+run-in-flight guard by design — the far side's lease is the authority.
 

@@ -1,8 +1,9 @@
 # Self-driving demos — product status & open questions
 
-*2026-07-29, updated 2026-07-30. Non-technical. Written for the onsite conversation about
-prototype direction. The 07-30 pass folds in the clean re-measurement that was still running
-when this was first written, and marks Q1 as decided.*
+*2026-07-29, updated 2026-07-31. Non-technical. Written for the onsite conversation about
+prototype direction. The 07-30 pass folded in the clean re-measurement; the 07-31 pass
+updates the run tallies, folds in the fleet (three colo Macs), web targets, the CDP
+backend, automatic cleanup, and the cursor-rendering pipeline.*
 
 ---
 
@@ -14,11 +15,16 @@ keeps going until the task is done — recording video the whole time. It has co
 multi-step work on two different apps, including a 17-step task that created a document,
 wrote content into it, and changed a setting. It recovers from its own mistakes without
 help — including on an app where it was given no notes at all. **The core bet is validated.**
-Across 46 logged runs it completed the task in 45; the one failure ran out of steps rather
-than doing something wrong. What's unproven is breadth: two apps, and both are built on the
-same web technology underneath. The remaining risk is not "does this work" but "does it work
-on an app unlike these two, and how often does it get through a run without the environment
-tripping it."
+Across 77 logged runs it completed the task in 70; of the seven failures, three ran out of
+steps and four aborted because the app became unobservable (aborts used to write no log at
+all — they do now, which is why the failure count grew faster than the failures did). Since
+the last update it has also driven websites end to end (with no changes to the core loop)
+and one native Mac app (Calculator — a second native app failed for a diagnosed,
+fixable-in-principle reason, and native apps are out of scope for now). Runs now execute
+unattended on three dedicated colo Macs, dispatched from a laptop, and every run puts the
+app back the way it found it afterwards. The remaining risk is unchanged in kind: breadth
+beyond web-technology apps, and how often a run gets through without the environment
+tripping it.
 
 ---
 
@@ -41,8 +47,11 @@ and the per-app setup pass now has a defensible number behind it.**
 | Every action is checkable after the fact | **Proven** | Each step logs what was attempted, what was expected, whether it happened, and a screenshot |
 | Every action *was* checked | **Recently true** | The check used to be lenient enough to pass steps that claimed nothing. Fixed; runs before that fix report optimistic pass counts |
 | The per-app setup pass is worth its cost | **Proven** | Clean re-measure, contaminated notes removed: roughly half the steps and half the cost (2–2.5×). More importantly it fixes *which* control gets changed — see item 2 |
-| Works on arbitrary apps | **Not proven** | Two apps, and both are web technology in a Mac wrapper. This is the headline open risk |
-| Works *reliably* — same task, many times | **Partly measured** | 45 of 46 logged runs completed their task. But a run that dies on environment flakiness never writes a log, and roughly one attempt in three does exactly that — so this is a task-completion rate, not an end-to-end success rate |
+| Works on websites, not just Mac apps | **Proven** | `--url` runs completed on Wikipedia with zero changes to the core loop; sites get the same scouting pass and the same cleanup |
+| Runs unattended on dedicated machines | **Proven** | Three colo Macs, dispatched from a laptop; a lease keeps runs from colliding; a human signs each app in once per Mac |
+| The app is put back after a run | **Built, partly proven live** | Every change is journaled as it happens and undone after the recording is saved; verified live on web runs, not yet on a live Yarn run |
+| Works on arbitrary apps | **Not proven** | Both deeply-proven apps are web technology in a Mac wrapper. One native app passed (Calculator), one failed with a diagnosed cause (Hex Fiend); native is out of scope for now. Still the headline open risk |
+| Works *reliably* — same task, many times | **Partly measured** | 70 of 77 logged runs completed their task. Aborted runs now write logs too (they didn't before 07-30, which silently flattered earlier tallies), but the ~1-in-3 abort figure below predates that fix and hasn't been re-measured |
 
 ---
 
@@ -67,8 +76,8 @@ Result: with scouting, roughly **half the steps and half the cost** — 4 steps 
 Yarn task, 5 vs 7–10 on Notion. Useful, but not the important part.
 
 The important part is that **the ungrounded runs were changing the wrong setting.** Yarn
-exposes 16 of its recording settings in two places: a brand-wide default and a per-project
-override that quietly wins for that one project. Asked to change the cursor style, every
+exposes ten of its settings in two places (per the current scouting notes): a brand-wide
+default and a per-project override that quietly wins for that one project. Asked to change the cursor style, every
 single run without scouting notes edited the per-project override — and then correctly
 reported success, because the setting it touched really did now read the new value. The
 scouted runs changed the brand-wide default. Both pass every check we have; only one is
@@ -146,17 +155,29 @@ demo library this is the biggest unresolved product question:
   every run changes their state)?
 - Something in between — their account, restricted to read-only paths?
 
-This drives infrastructure, legal review, and the deny-list above. **Needs Yarn's call.**
+Two pieces of this are now solved technically, which narrows the decision: on shared demo
+machines each operator gets their own copy of an app's signed-in data (so one person's demo
+never shows another's documents), and credentials never pass through the agent at all — a
+human signs in once per app per machine, because every frame the agent sees goes to the
+model and into the video. What remains — whose account a *customer-facing* demo shows — is
+infrastructure and legal review. **Needs Yarn's call.**
 
 ### Q3. What does onboarding a new app actually cost, and who does it?
 
-Today: one scouting pass — **measured at ~5-6 minutes** of machine time (Yarn 4m57s / 23
-actions; Notion Calendar 5m51s / 20 actions), plus a human sanity-check of the notes. That
-is ~0.4% of Jasper's ~24h per-app budget, so cost is not the constraint; trust is. The open
-questions are commercial rather than technical:
+Today: one scouting pass — **measured at ~40 minutes / 96 actions** for a *finished* pass
+on Yarn (the earlier "~5-6 minutes" figure measured a pass cut short by a step budget and
+was retracted; small apps finish much faster), plus a human sanity-check of the notes. That
+is ~2.8% of Jasper's ~24h per-app budget, so cost is still not the constraint; trust is.
+One part of the answer is already fixed: **sign-in needs a human**, once per app per
+machine — SSO with MFA is not automatable in the general case, and we deliberately keep
+credentials away from the agent. The remaining questions are commercial rather than
+technical:
 
-- Is 6 min + review acceptable per app, or does it need to be push-button?
-- Does the scouting pass need a human in the loop for safety, or can it self-certify?
+- Is ~40 min + review acceptable per app, or does it need to be push-button?
+- Does the rest of the scouting pass need a human in the loop for safety, or can it
+  self-certify? (Related knob, already built: the pass refuses to press destructive-looking
+  buttons by default, which leaves the workflows behind them unmapped; a guarded mode can
+  peek behind them safely.)
 - How many apps is the target — ten, hundreds? That decides whether we hand-tune per app or
   build for unattended scale.
 

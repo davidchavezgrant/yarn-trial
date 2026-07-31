@@ -72,7 +72,7 @@ test("BrowserUnavailableError__DiagnosesMintingFailure__When__ConsentIsRefused",
 	assert.match(e.message, /expect/);
 	assert.doesNotMatch(e.message, /Approve it by hand, once per machine/);
 	// Points at the measured table rather than restating it.
-	assert.match(e.message, /LIMITATIONS §12/);
+	assert.match(e.message, /LIMITATIONS §13/);
 });
 
 test("BrowserUnavailableError__StillReadsUsefully__When__CodeIsUnknown", () => {

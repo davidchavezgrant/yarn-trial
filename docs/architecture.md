@@ -5,14 +5,21 @@ when a decision has expired rather than treating it as doctrine. Context: NL tas
 verified UI actions on a Mac app, recorded; runs on Yarn's machines (or a Yarn-controlled
 VM), not interactively on a customer's. Full brief: `docs/jasper-email-yarn-trial-brief.md`.
 
-## 1. One driver boundary
+## 1. One actuator seam, three backends
 
 `src/driver.ts` is the only module that imports `@trycua/cua-driver`. Everything else
 speaks Observation/ActionRequest. The driver is UniFFI bindings over a sealed Rust core —
 we treat it as a peripheral we might swap, not a framework we build inside.
 
-**Revisit if**: we fork the driver (see §4's exit path), at which point the boundary is
-where the fork's new capabilities surface.
+The swap has since happened without a fork: three backends live behind the seam.
+`--backend ax` (default — cua driving the AX tree), `--backend dom` (cua's `browser_*`
+tools over CDP), and `--backend cdp` (`src/cdp.ts`: playwright-core attaching over
+`--remote-debugging-port`, **no cua in the loop at all** — no 300s session TTL, no shared
+daemon, no consent gate, no node budget; those four absences are its reason to exist).
+Explore, teardown, the cleanup CLI and the trajectory feed all run on cdp too.
+
+**Revisit if**: we fork the driver (see §5's exit path), or the cdp backend proves out on
+Electron targets broadly enough to retire the others there.
 
 ## 2. Observe → act → verify loop, with verification as a gate
 
@@ -55,8 +62,12 @@ the model). Measured value (2 samples/condition, all verification holes closed):
 grounded runs use ≈2–2.5× fewer actions/tokens, and — more importantly — grounding buys
 **correctness**: on dual-scope settings (global default vs per-document override) all
 ungrounded runs picked the wrong scope. `findScopeAmbiguities()`/`scopeWarnings()` turn
-the graph into prompt warnings (16 collisions caught on Yarn). Exploration costs ~5–6
-min/app against Jasper's ~24h/app budget.
+the graph into prompt warnings (10 collisions on the current Yarn map — re-measure after
+any pass rather than quoting this). A pass now runs until the frontier of un-operated
+controls empties (no step budget, no time cap; `EXPLORE_DISMISS_CAP` keeps bulk dismissal
+honest), salvages its map from the transcript if the driver dies, and declares the app's
+`home` state for run resets. A finished Yarn pass measured 40 min / 96 actions — ~2.8% of
+Jasper's ~24h/app budget (the old "~5–6 min" figure measured a budget-truncated pass).
 
 **Revisit if**: exploration stops paying for itself on some app class, or recipe
 compilation (below) subsumes it.
@@ -94,9 +105,15 @@ and the frame-join outright. Full rationale in the `src/axdom.ts` header.
 
 Yarn composites a synthetic cursor over recordings in post and has an Auto Time system
 that erases inter-action latency. Consequences we build on:
-- The agent optimizes for **robotic verified correctness**; humanlike motion is Yarn's
+- The agent optimizes for **robotic verified correctness**; humanlike motion is a
   render-time problem, fed by our StepRecords + action.json (click point + ISO timestamp
-  per action) — already the exact data their renderer needs.
+  per action, target role/rect). On the cdp backend the harness writes the same feed
+  itself (`TrajectoryWriter`).
+- We now prove the feed is sufficient by rendering it: `npm run humanize -- <stamp>`
+  (`src/humanize.ts`/`track.ts`/`render.ts`) draws a human-feeling cursor over the
+  recording — motion fitted to Yarn's *post-spring-filter* cursor corpus (fitting raw
+  input data was measurably wrong), replayed human segments over synthesis, typing
+  synthesized from the raw corpus's inter-key timing. Renders surface in the gallery.
 - Model thinking gaps (~10s) are not a UX cost. Latency is off the frontier; of the
   original three caveats (one app, AX flakiness, latency), only the first two are real.
 - Element roles in observations give pointer-type switching for free (AXTextField →
@@ -122,29 +139,70 @@ canonical task: **"show me how to change the cursor type"**.
 **Deferred, with rationale on file**: recipe compilation (grounding-time thinking →
 replayable deterministic sequences, model as exception handler — justified by cost +
 determinism now that latency is moot); native-AppKit generalization (out of scope per
-David 2026-07-30 — focus on Electron).
+David 2026-07-30 — focus on Electron; two probes ran anyway: Calculator succeeded,
+Hex Fiend failed on activation policy —
+`docs/research/2026-07-30-native-mac-apps-investigation.md`).
 
-## 8a. Web targets are a target KIND, not a specially-named app (2026-07-30)
+## 9. Web targets are a target KIND, not a specially-named app (2026-07-30)
 
 `Target = {kind:"app",name} | {kind:"web",url,origin}` (`src/target.ts`) replaces the bare
 app-name string. Web artifacts key on the origin (`docs/appmaps/web-www.notion.so.md`) while
 `appSlug` keeps its exact prior behaviour for Mac apps, so no existing appmap, run log or job
-id moves. `--url` is value-bearing and consumed by `parseTarget` before positionals are read;
-`buildRunArgs` is the single argv builder the shell, the fleet runner and the CLI all share.
+id moves. `--url` is value-bearing and consumed by `parseTarget` before positionals are read.
 
-**Both backends work, and they need different things:**
-- **DOM/CDP** (`--backend dom`, the default for web) — snapshots the page, so browser chrome
-  never enters the frontier. Requires `browser_prepare`, which needs a per-call approval token
-  minted under a pty (`mintApprovalToken`; LIMITATIONS §12).
-- **AX** (`--backend ax`) — reads the window, needs no CDP and no token. Browser chrome is
-  excluded by an `AXWebArea` subtree filter (`observe(..., {webAreaOnly})`), which is the one
-  thing the AX path needs that a Mac app does not.
+**Three backends work on web, and they need different things:**
+- **CDP-direct** (`--backend cdp`) — playwright-core, no cua: launches its own Chrome with a
+  persistent profile (sign-ins survive between runs), `ariaSnapshot` returns the whole tree,
+  no consent token. The strongest path for web targets.
+- **DOM** (`--backend dom`, explore's default for web) — cua's `browser_*` tools; snapshots
+  the page, so browser chrome never enters the frontier. Requires `browser_prepare`, which
+  needs a per-call approval token minted under a pty (`mintApprovalToken`; LIMITATIONS §13).
+- **AX** (`--backend ax`, agent's default for every target — pass `--backend` explicitly for
+  web runs) — reads the window, needs no CDP and no token. Browser chrome is excluded by an
+  `AXWebArea` subtree filter (`observe(..., {webAreaOnly})`).
 
-Verified end to end 2026-07-30 on both backends. What the URL buys beyond reachability: it is
-a verification channel a native app has no equivalent of — navigation changes it, so a route
-check is discriminating by construction, which is exactly what `verify()` demands.
+What the URL buys beyond reachability: it is a verification channel a native app has no
+equivalent of — navigation changes it, so a route check is discriminating by construction,
+which is exactly what `verify()` demands.
 
-## 9. One shell, Electron, with the page held at arm's length
+## 10. Cleanup: the run puts the app back (2026-07-30)
+
+A run used to be a one-way mutation; on a fleet, a job that dirties its host poisons
+whatever runs there next. Three mechanical layers (`src/journal.ts`, `src/teardown.ts`,
+`src/cleanup.ts`): a journal that diffs control VALUES across observations (what actually
+changed, never the model's account; matched by (name, surface), never by handle; appended
+the instant detected, so crashes are recoverable), a teardown that replays it in reverse
+with harness-written checks against the named control's own value (not a haystack grep),
+and a standalone CLI for the SIGKILL case. Ordering is load-bearing: teardown runs AFTER
+the recording is assembled, so the video ends on the changed state. `CLEANUP=advisory`
+(default) | `block` | `off` — task success and app tidiness are different questions.
+Created resources go through the `claim` tool and are reported, not deleted.
+
+## 11. The fleet: TCC shapes everything (2026-07-30)
+
+Three colo Macs (`hosts.json`, pinned by host KEY, not address), driven from operators'
+laptops via `./run` verbs (enroll/provision/dispatch/install/signin/doctor/liveview).
+Load-bearing decisions:
+- **The runner is the Electron app itself** (`--serve`, LaunchAgent in `gui/<uid>`):
+  macOS attributes Accessibility/Screen Recording to the responsible process and children
+  inherit them — an SSH-spawned run gets an empty AX tree and a black screenshot with NO
+  error. Every run must descend from the grant-holding process (LIMITATIONS §12).
+- **`src/remote/ssh.ts` is the only ssh builder**; variable data crosses as base64 specs,
+  never argv text (sshd joins remote args into one login-shell string).
+- **One run per Mac**, enforced by a liveness-based lease (`src/runner/lease.ts`) — cua's
+  shared-daemon shutdown makes a second session fatal to the first (LIMITATIONS §6).
+- **Sign-in is human, once per app per Mac** (`./run signin` full-desktop screen share, or
+  `./run liveview` window-scoped SCK capture + input injection in a browser tab). No
+  credential ever enters the agent loop — every observation and frame reaches the model
+  and the recording.
+- **Per-operator profile swap** (`src/runner/profiles.ts`) so shared Macs don't share
+  sessions; swaps serialize, and the app quits first (Electron rewrites its cookie jar on
+  quit).
+- **Paths resolve from the install, not cwd** (`src/paths.ts`, DATA vs RESOURCES roots): a
+  LaunchAgent and a packaged .app both start at `/`, and everything "works" while writing
+  to `/out` and silently running ungrounded.
+
+## 12. One shell, Electron, with the page held at arm's length
 
 `./run` launches an Electron app (`electron/main.ts`) that renders markup and script from
 `src/ui-page.ts` against host logic in `src/ui-core.ts`. Electron rather than a native app
@@ -164,6 +222,8 @@ opaque origin and no storage. Log lines are attributed to the app that is *runni
 the app currently selected, so switching targets mid-run cannot splice one run's output
 into another app's terminal.
 
-**Revisit if**: we package for distribution (signing/notarization is not done), or the
-shell needs to host more than one concurrent run — today `RunController` refuses a second,
-per LIMITATIONS §6.
+The shell hosts **one run per HOST, not one per shell** (relaxed 2026-07-31): a local run
+and runs on two colo Macs coexist, each behind its own controller; `RunController` still
+refuses a second run on the same machine, per LIMITATIONS §6.
+
+**Revisit if**: we package for distribution (signing/notarization is not done).

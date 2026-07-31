@@ -1726,10 +1726,10 @@ export function scopeWarnings(map: AppMap): string {
 	if (ambiguities.length === 0) return "";
 
 
-	// Group by the SURFACES involved, not per setting. Yarn has 15 settings split across the
+	// Group by the SURFACES involved, not per setting. Yarn has ten settings split across the
 	// same brand-vs-document pair of panels; listing each separately made the warning 10.8k
 	// chars — nearly twice the appmap it is supposed to annotate — by repeating one pair of
-	// routes fifteen times. One entry per surface pair, with the settings it covers.
+	// routes over and over. One entry per surface pair, with the settings it covers.
 	const groups = new Map<string, { nodes: Array<{ id: string; scope: SurfaceScope }>; settings: string[] }>();
 	for (const a of ambiguities) {
 		const surfaceOf = (id: string) =>

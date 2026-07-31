@@ -19,7 +19,7 @@ import type { ActionRequest } from "./types.js";
  * by workaround, four of that document's liabilities:
  *
  * - **No consent gate.** `browser_prepare`'s per-call token (minted under a pty — see
- *   LIMITATIONS §12) protects arbitrary users' profiles. This backend launches its OWN
+ *   LIMITATIONS §13) protects arbitrary users' profiles. This backend launches its OWN
  *   Chrome against its own persistent profile, so there is nothing to protect and no
  *   prompt to answer.
  * - **No session lifetime.** The 300s TTL and its 90s heartbeat are cua session
