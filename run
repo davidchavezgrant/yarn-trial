@@ -7,6 +7,8 @@
 #   ./run "<task>" "App Name" [--record]    ...against a named app, flags passed through
 #   ./run explore "App Name"                grounding pass -> docs/appmaps/
 #   ./run explore --url https://site.com    ...against a website instead of an installed app
+#   ./run recipe compile <stamp>            freeze a successful run into a replayable recipe
+#   ./run recipe replay <file|stamp>        replay it — zero model calls unless a step breaks
 #   ./run "<task>" --url https://site.com   run a task against a website
 #   ./run browser-login https://site.com    one-time: sign in, so later web runs are logged in
 #   ./run doctor                            check permissions, keys, deps before demoing
@@ -82,7 +84,7 @@ die() {
 # A run started while another is in flight kills BOTH: the second driver session shuts down
 # the shared daemon (LIMITATIONS §6). Cheaper to refuse here than to lose a 20-action run.
 assert_no_run_in_flight() {
-	if pgrep -f "tsx src/core/(agent|explore)\.ts" >/dev/null 2>&1; then
+	if pgrep -f "tsx src/core/(agent|explore|recipe-cli)\.ts" >/dev/null 2>&1; then
 		die "a run is already in flight — driver sessions are not concurrent-safe (LIMITATIONS §6).
 Wait for it, or: pkill -f 'tsx src/'"
 	fi
@@ -109,6 +111,16 @@ explore)
 	assert_no_run_in_flight
 	shift
 	exec npx tsx src/core/explore.ts "$@"
+	;;
+
+recipe)
+	# compile needs no key (pure file transform); replay may need one for rescue + teardown,
+	# but --no-rescue with CLEANUP=off is fully offline, so the key check stays soft here.
+	[[ $# -ge 3 || ${2:-} == compile ]] || die 'usage: ./run recipe compile <stamp> | ./run recipe replay <file|stamp> [--url <https://…>] [--no-rescue]'
+	# Replays drive the same single driver session as agent/explore (LIMITATIONS §6).
+	assert_no_run_in_flight
+	shift
+	exec npx tsx src/core/recipe-cli.ts "$@"
 	;;
 
 enroll)

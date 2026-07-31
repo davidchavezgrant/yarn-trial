@@ -1,0 +1,78 @@
+{
+	"version": 1,
+	"task": "search for Fritz Lang and open his article",
+	"app": "www.wikipedia.org",
+	"slug": "www.wikipedia.org",
+	"backend": "cdp",
+	"compiledFrom": "2026-07-31T05-13-12-601-www.wikipedia.org",
+	"compiledAt": "2026-07-31T05:13:40.107Z",
+	"grounding": {
+		"provenance": "none"
+	},
+	"steps": [
+		{
+			"action": {
+				"name": "type_text",
+				"args": {
+					"query": "",
+					"text": "Fritz Lang",
+					"key": "",
+					"url": "",
+					"modifiers": [],
+					"direction": "down",
+					"amount": 0,
+					"seconds": 0
+				}
+			},
+			"target": {
+				"name": "Search Wikipedia",
+				"role": "searchbox"
+			},
+			"expectation": {
+				"description": "The search field should contain the requested query.",
+				"textIncludes": [
+					"Fritz Lang"
+				],
+				"textExcludes": []
+			}
+		},
+		{
+			"action": {
+				"name": "click",
+				"args": {
+					"query": "",
+					"text": "",
+					"key": "",
+					"url": "",
+					"modifiers": [],
+					"direction": "down",
+					"amount": 0,
+					"seconds": 0
+				}
+			},
+			"target": {
+				"name": "Search",
+				"role": "button"
+			},
+			"expectation": {
+				"description": "The browser should navigate from the portal to the Fritz Lang article.",
+				"textIncludes": [
+					"Friedrich Christian Anton Lang"
+				],
+				"textExcludes": [
+					"Top languages"
+				]
+			}
+		}
+	],
+	"finalEvidence": {
+		"description": "The Fritz Lang article is open, confirmed by its biographical text and absence of the portal’s language section.",
+		"textIncludes": [
+			"Friedrich Christian Anton Lang",
+			"December 5, 1890"
+		],
+		"textExcludes": [
+			"Top languages"
+		]
+	}
+}
