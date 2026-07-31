@@ -24,6 +24,7 @@
 #   ./run install "App" <https://…|path>    put a target app on the Macs, presence-verified
 #   ./run install "App" --check             is it installed on each Mac, and where
 #   ./run signin <mac> ["App"]              screen-share to a Mac to sign an app in by hand
+#   ./run liveview [<mac>] ["App"]          window-scoped sign-in: drive just one window in a browser
 #
 # Teammates run none of that: drop team-credentials.json beside this script (or in
 # ~/.yarn-runner/, or ship it inside the .app) and the first ./run installs the fleet key and
@@ -163,6 +164,19 @@ browser-login)
 	assert_no_run_in_flight
 	shift
 	exec npx tsx src/browser-login.ts "$@"
+	;;
+
+liveview)
+	# Window-scoped sign-in: the human drives ONLY the window being signed into, in their own
+	# browser, over an SSH tunnel. The counterpart to `signin` (full-desktop screen share).
+	# Capture needs native/liveview built (npm run build:native). No have_key: no model involved.
+	#
+	# Backstop against a login stream capturing over a demo recording. The CLI itself also checks
+	# the runner lease (loginBlockedByRun) — belt and braces, since a direct dev run may not hold a
+	# lease at all, and pgrep catches that case the lease cannot see.
+	assert_no_run_in_flight
+	shift
+	exec npx tsx src/liveview-cli.ts "$@"
 	;;
 
 doctor)

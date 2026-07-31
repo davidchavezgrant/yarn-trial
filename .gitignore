@@ -9,8 +9,9 @@ tools/winrec
 *.bak
 docs/jasper-email-yarn-trial-brief.md
 
-# Swift sidecar build artifact
+# Swift sidecar build artifacts
 native/axdom
+native/liveview
 tmp/
 dist-electron
 
