@@ -22,6 +22,10 @@
 # ONE-TIME: /Library/Managed Preferences survives reboots, Chrome updates and re-provisions.
 # It does NOT survive a wipe of the Mac, and it is per-machine — a new fleet host needs it.
 # Re-running is harmless (the write is idempotent).
+#
+# WORKS ON macOS 15 ONLY. On 26 that directory belongs to the MDM subsystem: the write
+# succeeds, the bytes land, and Chrome manages nothing from them (see the gate below). Of
+# this fleet that means mac1 today; mac2 and mac3 need real MDM enrolment or the SCK leg.
 set -euo pipefail
 
 host=${1:-}
@@ -40,6 +44,26 @@ print(m[0]['ssh']['user']+'@'+m[0]['ssh']['host'])
 # while the dialog is still armed.
 xml=$(npx tsx scripts/print-allowlist.ts)
 [[ -n $xml ]] || { echo "AUTO_LAUNCH_PROTOCOLS is empty — nothing to install"; exit 1; }
+
+
+# macOS 26 gate. On 15.x a hand-written plist in /Library/Managed Preferences is honoured as
+# forced policy; on 26 that directory belongs to the MDM subsystem and a loose file dropped
+# there manages NOTHING — `sudo defaults write` returns 0, the bytes land, and Chrome ignores
+# them (measured across the fleet 2026-07-31, commit e51ffcc: mac1 on 15.5 honours a
+# byte-identical file that mac2/mac3 on 26.4.1 discard). Refusing beats asking for a password
+# and reporting success for a write that manages nothing.
+major=$(ssh -o ConnectTimeout=15 -i ~/.yarn-runner/id_ed25519 "$addr" 'sw_vers -productVersion' 2>/dev/null | cut -d. -f1)
+if [[ ${major:-0} -ge 26 ]]; then
+	cat >&2 <<EOF
+$host runs macOS $major, where /Library/Managed Preferences belongs to the MDM subsystem.
+A hand-written plist there is silently ignored — the write succeeds and manages nothing.
+
+AutoLaunchProtocolsFromOrigins is mandatory-only, so on this host the only route is real
+MDM enrolment. Until then the "Open <App>?" dialog stays, and a sign-in needs one SCK
+click for that leg (./run liveview $host "<App>" --sck).
+EOF
+	exit 4
+fi
 
 # Refuse early without a terminal. `sudo` on the far side needs a pty to prompt, and ssh -t
 # cannot allocate one when OUR stdin is not a tty — which is the case for anything run from a
