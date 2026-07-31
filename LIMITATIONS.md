@@ -250,7 +250,10 @@ Yarn exploration was lost this way when a one-off diagnostic script ran alongsid
 
 - ~~**Unhandled action names crash the run.**~~ **Fixed 2026-07-29**: `toActionRequest`
   throws a typed `UnsupportedActionError` that the agent loop reports back as a rejected
-  step, so the model self-corrects instead of the run aborting. `wait` is now a real action.
+  step, so the model self-corrects instead of the run aborting. `wait` is now a real action
+  and takes `seconds` (clamped to 10 min) — before the argument existed the longest
+  expressible pause was ~900ms, so waiting out an app that embeds its own agent (§1a) cost
+  hundreds of turns against the step budget.
 
 ---
 

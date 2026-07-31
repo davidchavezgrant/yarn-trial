@@ -184,11 +184,14 @@ technical:
 ### Q4. What reliability bar counts as shippable?
 
 Two different numbers, and the gap between them is the whole answer. Of runs that got
-started, **45 of 46 completed the task**. But roughly **one attempt in three never gets that
-far** — the app's accessibility layer goes dark, focus jumps to another window, the driver
-session dies — and those attempts write no log at all. Retrying has worked every time, so
-today this is a throughput cost rather than a capability limit. It is also the single
-biggest obstacle to running unattended.
+started, **70 of 77 completed the task**. But roughly **one attempt in three never got that
+far** when measured on 07-29 — the app's accessibility layer goes dark, focus jumps to
+another window, the driver session dies. (Aborted attempts now write logs; that figure
+predates the fix and hasn't been re-measured.) Retrying has worked every time, so today
+this is a throughput cost rather than a capability limit. It is also the single biggest
+obstacle to running unattended — and it is specific to the accessibility channel: for
+websites and debug-enabled apps we now have a second driving mode that bypasses that
+channel entirely, whose runs cannot go dark this way.
 
 So someone has to name the bar, and say which number it applies to: is a 1-in-3 retry rate
 acceptable if the demo that comes out is right, or does it need to be right first time? That
@@ -207,17 +210,23 @@ publishable?
 ### Q6. How much human imperfection do we want?
 
 Yarn already re-renders the cursor from real human movement, and there's been talk of
-synthetic typos and pointer-type switching. The agent's data feed supports all of it — click
-points, timestamps, and what kind of control was touched (so a text field can show an I-beam).
-The question is purely taste: how much imperfection reads as authentic before it reads as
-sloppy? **Our side is ready either way; this is a call for whoever owns demo aesthetics.**
+synthetic typos and pointer-type switching. We went past "the data feed supports it" and
+**built the renderer**: a post-pass draws a human-feeling cursor over any recorded run —
+motion replayed from real human mouse recordings (fitted to Yarn's own smoothed cursor
+data), pointer type switching on the control under it, hover highlights, human-like typing
+rhythm. It emits both the finished video and the raw motion track, so Yarn's pipeline can
+consume either. The taste question stands — how much imperfection reads as authentic before
+it reads as sloppy? — but there is now a concrete render to react to instead of a
+hypothetical. **This is a call for whoever owns demo aesthetics.**
 
 ### Q7. Which apps matter first?
 
 "Arbitrary apps" is the ambition, but the prototype should be pointed at the apps customers
 actually ask for demos of. A ranked list of the top five would immediately sharpen the next
-round of work — and would tell us whether the hard cases are browser apps, native Mac apps,
-or Electron apps like Yarn itself.
+round of work. Partial answer since this was first asked: websites now work end to end, and
+Electron apps are the proven core; the hard cases are native Mac apps (one pass, one
+diagnosed fail; currently out of scope) and anything that draws its content instead of
+building it from controls.
 
 ---
 
@@ -225,12 +234,12 @@ or Electron apps like Yarn itself.
 
 | Risk | Severity | Note |
 |---|---|---|
-| Doesn't generalize past two apps | **High** | Biggest unknown. Both proven apps are web technology in a Mac wrapper; a true native Mac app is untested. Nothing so far suggests it won't work, but nothing proves it will |
-| Runs abort on environment flakiness ~1 in 3 | **High** | The task itself succeeds 45 times in 46 once it starts. Getting it started reliably is the gap. Retries are clean, so it's throughput today — but it blocks unattended operation. Q4 |
-| Recordings contain real workspace data | **High** | Product/legal, not technical. Q2 |
-| Demos change the customer's live state | Medium | Follows directly from "perform, don't point at." Needs a deny-list and a reset story |
-| Some app surfaces can't be driven at all | Medium | Yarn's own screen recorder is invisible to our automation. Every app will have a few of these; they need to be found during scouting, not during a demo |
-| Per-app setup doesn't scale | Medium | Fine at ten apps, unclear at hundreds. Q3 |
+| Doesn't generalize past web-technology apps | **High** | Narrowed but standing. Websites now work end to end; one native app passed, one failed with a diagnosed cause, and native is out of scope. Visually-drawn content (canvases, timelines) is the hardest class |
+| Runs abort on environment flakiness ~1 in 3 | **High** | The task itself succeeds 70 times in 77 once it starts. The abort figure is an 07-29 accessibility-channel measurement; the newer debug-port driving mode can't fail this way, but hasn't been measured at volume. Q4 |
+| Recordings contain real workspace data | **High** | Product/legal, not technical. Q2. Narrowed: per-operator data isolation on shared machines is built, and credentials never enter the loop |
+| Demos change the customer's live state | Medium → **Low-Medium** | The reset story is now built: every change is journaled and undone after the recording is saved; killed runs can be tidied afterwards. The irreversible-action carve-out is the deny-list's job and is enforced in the prompt + code |
+| Some app surfaces can't be driven at all | Medium | Yarn's own preview canvas is invisible to accessibility APIs; drags on it work but can't be text-verified. Every app will have a few of these; they need to be found during scouting, not during a demo |
+| Per-app setup doesn't scale | Medium | Fine at ten apps, unclear at hundreds — and a finished pass is ~40 min, not ~6. Q3 |
 | Demos change the wrong setting and still look correct | **High** | Re-measured and confirmed: without scouting notes, every run edited a per-project override instead of the global default, and reported success truthfully. Scouting fixes it; nothing verifies it independently (item 2) |
 | Cost per demo | Low–Medium | Real but small today, and recipes should cut it hard |
 | Latency | **Resolved** | Yarn's post pipeline absorbs it |
@@ -239,16 +248,16 @@ or Electron apps like Yarn itself.
 
 ## What I'd do next, in order
 
-1. **Attack the 1-in-3 abort rate.** Not the task logic — the environment around it: the
-   accessibility layer going dark, focus loss, dead driver sessions. This is now the gap
-   between "the task works" and "we can leave it running." Cheapest high-value work
-   available, and on Yarn's own app there's a shortcut: they control it, so they can force
-   accessibility on or expose a debug port and skip the flaky channel entirely.
-2. **Third app, chosen by Yarn.** Directly attacks the generalization risk. Ideally something
-   unlike the first two — a real native Mac app, or something visually driven, rather than
-   another web app in a wrapper.
+1. **Attack the 1-in-3 abort rate.** Partly done: the debug-port driving mode (built,
+   proven on websites) skips the flaky accessibility channel entirely, and Yarn's own app
+   can be launched with the debug port on. What remains is measuring it at volume on the
+   Yarn app and making it the default there.
+2. **Third app, chosen by Yarn.** Directly attacks the generalization risk. Websites and a
+   native app have each had first runs; what's missing is depth on an app *Yarn picks*,
+   ideally something visually driven.
 3. **Recipes.** The cost and determinism story for production, on the strength of the
-   17-steps-to-6 direction rather than that specific number.
+   17-steps-to-6 direction rather than that specific number. Still the clearest unbuilt
+   lever.
 4. **Settle Q2.** Whose workspace the demos run in. Q1 is decided; this one is cheap to
    decide and blocks anything customer-facing.
 
