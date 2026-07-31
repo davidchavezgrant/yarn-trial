@@ -373,6 +373,17 @@ export class CdpBackend {
 				`--user-data-dir=${PROFILE_DIR}`,
 				"--no-first-run",
 				"--no-default-browser-check",
+				// The profile is PORTABLE because of this flag. Chromium encrypts its cookie jar and
+				// saved logins (OSCrypt) with a random key it stores in the login keychain, minted per
+				// machine — so a profile copied to another Mac decrypts to garbage there and the
+				// session reads as corrupt. `--use-mock-keychain` swaps that for a fixed key, so the
+				// profile directory is self-contained and can be moved between fleet boxes by the
+				// credential vault (src/remote/control/creds.ts) with no keychain surgery. Flipping it
+				// on invalidates any cookies a PRIOR run sealed under a real keychain — a one-time
+				// re-sign-in per web app, the cost of making web sessions roam. macOS's own keychain
+				// was thin protection here anyway (the key sits in the same account as the data); the
+				// vault's at-rest encryption is what replaces it.
+				"--use-mock-keychain",
 				...KEEP_RENDERING_FLAGS,
 			], { stdio: "ignore", detached: true });
 			// A missing CHROME_BIN emits an async ENOENT that would otherwise be an uncaught
