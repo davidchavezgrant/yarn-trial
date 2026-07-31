@@ -5,11 +5,12 @@ import { Driver } from "./driver.js";
 import { envNum } from "./env.js";
 import {
 	ACT_TOOL,
+	actionTarget,
 	appSlug,
 	checkHome,
-	destructiveTarget,
 	DRIVER_RULES,
 	ensureObservable,
+	externalityTarget,
 	failedProvider,
 	findScopeAmbiguities,
 	findWindow,
@@ -19,6 +20,8 @@ import {
 	frontierMatches,
 	frontierRemaining,
 	frontierSummary,
+	gatedId,
+	gatedSection,
 	isVagueSurface,
 	makeClient,
 	mergeGraph,
@@ -30,6 +33,7 @@ import {
 	OUT,
 	providerRouting,
 	recoverLeakedGraph,
+	reversibleTarget,
 	retryTransient,
 	runKey,
 	settleMsFor,
@@ -37,13 +41,16 @@ import {
 	toActionRequest,
 	type WindowRef,
 } from "./harness.js";
+import { boundaryDescription, classifyBoundary } from "./boundary.js";
 import { ensureBrowser } from "./browser.js";
 import { CDP_ACT_TOOL, CDP_FIND_TOOL, CDP_RULES, CdpBackend } from "./cdp.js";
 import { DOM_ACT_TOOL, DOM_RULES, DomBackend, FIND_TOOL } from "./dom.js";
+import { appendMutation, detectMutation, readJournal } from "./journal.js";
 import { startOverlay } from "./overlay.js";
 import { appmapsDir } from "./paths.js";
 import { parseTarget, type Target, targetLabel, targetSlug, type TargetVocabulary, targetVocabulary } from "./target.js";
-import type { AppMap, AppMapEdge, AppMapHome, AppMapNode } from "./types.js";
+import { runTeardown } from "./teardown.js";
+import type { AppMap, AppMapEdge, AppMapHome, AppMapNode, GatedBoundary } from "./types.js";
 
 /**
  * The only backstop, and it counts actions rather than seconds on purpose. A wall-clock cap
@@ -69,6 +76,37 @@ const DISMISS_CAP = envNum("EXPLORE_DISMISS_CAP", 20);
 /** The destructive-label pre-flight. Its own switch, deliberately not tied to `guidance`. */
 const GUARD_ON = (process.env.EXPLORE_GUARD ?? "on") !== "off";
 /**
+ * Guarded descent: on a REVERSIBLE-labelled control (delete/reset/archive/export — not the
+ * off-machine verbs), press it ONCE to surface whatever it gates, read that boundary, and
+ * Escape without committing. Off by default: it spends grounding budget and, unlike today's
+ * pure refusal, actually presses a destructive-looking control — a declared choice, logged in
+ * the stamp like the guard and the dismiss cap. Externality is refused regardless of this flag.
+ */
+const DESCENT_ON = (process.env.EXPLORE_DESCENT ?? "off") === "on";
+
+/**
+ * The claim tool, ported from the task agent (src/agent.ts). Descent creates scratch content
+ * to descend safely — a throwaway draft whose Delete confirmation is ours to open — so the
+ * pass needs the same ledger the agent uses to account for what it made. Persisted to the
+ * journal as a `resource` mutation the instant it is claimed, which is what the agent's own
+ * ledger does NOT do (its claims live only in memory) — so a crashed descent is recoverable
+ * by `npm run cleanup` where a crashed task run is not.
+ */
+const CLAIM_TOOL: Anthropic.Tool = {
+	name: "claim",
+	description:
+		"Declare a scratch resource this pass created so the harness can account for it afterwards. " +
+		"Call it IMMEDIATELY after creating the thing, with the exact name as the app renders it. Prefer creating scratch to touching real content.",
+	input_schema: {
+		type: "object",
+		properties: {
+			name: { type: "string", description: 'Exact name as it appears in the app, e.g. "scratch-descent-7f3a".' },
+			note: { type: "string", description: "One sentence: what it is and why descent needed it." },
+		},
+		required: ["name"],
+	},
+};
+/**
  * Observations kept in one context window before it is reset. Each costs ~7k tokens (AX
  * text plus a screenshot), so ~12 is ~85k — comfortable, and bounded no matter how long the
  * pass runs. See the chapter comment at the reset site.
@@ -81,7 +119,7 @@ type FinishInput = { document: string; nodes?: AppMapNode[]; edges?: AppMapEdge[
 type GraphInput = { nodes?: AppMapNode[]; edges?: AppMapEdge[] };
 type StopReason = "frontier-empty" | "action-ceiling" | "frontier-conceded" | "interrupted" | "error";
 
-const systemPrompt = (rules: string, vocab: TargetVocabulary, vision = true): string => `You are an exploration agent building grounding notes for ${vocab.subject}, so a future task-running agent can navigate it directly without dead ends. You drive it through a UI driver: each turn you receive ${vocab.container}'s elements (addressing handle, role, label/value)${vision ? " and a screenshot" : "; element frames give positions — there is no screenshot"}, and you perform ONE action via the "act" tool.
+const systemPrompt = (rules: string, vocab: TargetVocabulary, descent: boolean, vision = true): string => `You are an exploration agent building grounding notes for ${vocab.subject}, so a future task-running agent can navigate it directly without dead ends. You drive it through a UI driver: each turn you receive ${vocab.container}'s elements (addressing handle, role, label/value)${vision ? " and a screenshot" : "; element frames give positions — there is no screenshot"}, and you perform ONE action via the "act" tool.
 
 Your goal is a map, not a task: systematically visit the main surfaces — ${vocab.surfaces} — and record where things live and how to operate them.
 
@@ -89,8 +127,20 @@ Safety rules (absolute):
 - NEVER take destructive or externally visible actions: no deleting, no sending/sharing, no account or sync changes, no creating events/documents you can't discard, no toggling settings you don't revert.
 - Opening panels, tabs, menus, and pickers is fine. Close what you open (escape, foreground) before moving on.
 - Leave it in the state you found it.
-${vocab.cautions ? `\n${vocab.cautions}\n` : ""}
-${rules}
+${vocab.cautions ? `\n${vocab.cautions}\n` : ""}${
+	descent
+		? `
+# Guarded descent is ON for this pass
+
+A destructive feature hides its richest surface behind its opening press: clicking "Delete" or "Export" opens a confirmation dialog that ENUMERATES what the flow does, and that dialog commits nothing — only a SECOND press would. So those boundaries are worth mapping, safely:
+
+- When you press a control whose label reads reversible-destructive (delete, remove, discard, reset, archive, export, clear), the HARNESS takes over: it reads whatever dialog or sheet appears, records it, and presses Escape ITSELF to close it without committing. You do not press anything inside that dialog — you will get a fresh observation after the Escape. Just choose to press the opening control when mapping such a flow, then continue.
+- Controls that commit OFF the machine (send, share, publish, invite, purchase, sign out, account changes) are refused outright and never opened — reading their boundary would mean crossing it. Record and dismiss those.
+- To map a delete/archive flow safely on real content, first CREATE a throwaway object (a scratch draft/project with a distinctive name) and call "claim" the instant it exists, then descend ITS destructive menu. Scratch you claimed is yours to open; the user's content is not.
+- Settings you toggle while mapping are put back automatically after the pass, so a reversible toggle is fine to flip. Things you CREATE are reported, not deleted — one scratch object is fine, five is a mess left behind.
+`
+		: ""
+}${rules}
 
 Use the "record" tool whenever you learn something a task agent would need: where a setting lives, the exact interaction pattern for a control (e.g. "right-click X, then choose Y"), a dead end ("Z is NOT in Settings"), or a quirk. Record findings as you go — do not save them all for the end. "record" also accepts graph nodes and edges: emit them as you discover surfaces rather than holding the whole graph until the end. Anything you record is checkpointed to disk immediately and survives even if this run is killed, and it is preserved verbatim across context resets — anything you merely reasoned about is not.
 
@@ -241,9 +291,12 @@ const provenanceHeader = (p: {
 	dismissed: number;
 	surfaces: number;
 	chapters: number;
+	gatedRead?: number;
+	gatedRefused?: number;
 }): string =>
 	`<!-- provenance: explore | app: ${p.app} | date: ${new Date().toISOString().slice(0, 10)} | backend: ${p.backend}${p.vision ? "" : " | vision: off"} | actions: ${p.actions} | elapsed: ${p.elapsed} | findings: ${p.findings} | finds: ${p.findCalls}` +
 	` | controls: ${p.actuated} actuated / ${p.dismissed} dismissed / ${p.seen} seen | surfaces: ${p.surfaces} | chapters: ${p.chapters} | stopped: ${p.stopped}` +
+	` | descent: ${DESCENT_ON ? "on" : "off"} | gated: ${p.gatedRead ?? 0} read / ${p.gatedRefused ?? 0} refused` +
 	`${p.guidance ? " | operator-guidance: yes" : ""}${p.salvaged ? " | salvaged: session died before finish" : ""} -->\n` +
 	"<!-- controls actuated/seen is a LOWER BOUND ON BREADTH, not a coverage percentage: the denominator only grows as surfaces are opened, and operating a control is not understanding it. -->\n" +
 	"<!-- Written by src/explore.ts. DO NOT HAND-EDIT: edits make this a curated recipe, not exploration output — move such notes to docs/recipes/<app>.md instead. -->\n\n";
@@ -348,6 +401,19 @@ async function main(): Promise<void> {
 	const graphNodes = new Map<string, AppMapNode>();
 	const graphEdges = new Map<string, AppMapEdge>();
 	const merge = (g: GraphInput): number => mergeGraph(graphNodes, graphEdges, g);
+	// The graph-so-far, shaped for detectMutation's settingKey/scope lookup. Rebuilt per call
+	// because both maps grow as the pass records — cheap next to a model call.
+	const accumulatedGraph = (): AppMap => ({
+		app,
+		capturedAt: "",
+		provenance: "explore",
+		nodes: [...graphNodes.values()],
+		edges: [...graphEdges.values()],
+	});
+
+	// `gated` accumulates boundary reads the same way `findings` accumulates prose; the journal
+	// path and claim ledger are set below, once `stamp` exists.
+	const gated: GatedBoundary[] = [];
 
 	const coverageNow = (stopped: string) => ({
 		seen: ledger.seen.size,
@@ -357,6 +423,8 @@ async function main(): Promise<void> {
 		chapters,
 		stopped,
 		dismissals: [...new Set(ledger.dismissed.values())],
+		gatedRead: gated.filter((g) => g.tierReached === 1).length,
+		gatedRefused: gated.filter((g) => g.tierReached === 0).length,
 	});
 
 	/**
@@ -366,6 +434,10 @@ async function main(): Promise<void> {
 	 */
 	const stamp = runKey("explore-", app);
 	const checkpointPath = `${OUT}/runs/${stamp}.checkpoint.json`;
+	// Descent's mutation journal, shared with the task agent's format so `npm run cleanup` can
+	// replay a crashed descent; `claimed` mirrors the agent's ledger.
+	const journalPath = `${OUT}/runs/${stamp}.journal.jsonl`;
+	const claimed: Array<{ kind: string; name: string; note?: string; step: number }> = [];
 	const checkpoint = (): void => {
 		fs.writeFileSync(
 			checkpointPath,
@@ -406,7 +478,8 @@ async function main(): Promise<void> {
 		const elapsed = hm(Date.now() - startedAt);
 		const prose =
 			provenanceHeader({ app, actions, elapsed, findings: findings.length, backend: backendKind, findCalls, vision, guidance, salvaged, ...cov }) +
-			recovered.cleaned;
+			recovered.cleaned +
+			gatedSection(gated);
 		fs.writeFileSync(outPath, prose);
 		console.log(`\n=== exploration ${salvaged ? "SALVAGED" : "finished"} after ${actions} actions, ${elapsed}, ${findings.length} findings ===`);
 		console.log(`stopped: ${stopped} | controls: ${cov.actuated} actuated / ${cov.dismissed} dismissed / ${cov.seen} seen across ${cov.surfaces} surfaces | chapters: ${chapters}`);
@@ -423,8 +496,10 @@ async function main(): Promise<void> {
 			...(home ? { home } : {}),
 			nodes: [...graphNodes.values()],
 			edges: [...graphEdges.values()],
+			...(gated.length ? { gated } : {}),
 		};
 		fs.writeFileSync(graphPath, JSON.stringify(graph, null, 2));
+		if (gated.length) console.log(`gated boundaries: ${cov.gatedRead} read / ${cov.gatedRefused} refused`);
 		const ambiguities = findScopeAmbiguities(graph);
 		console.log(`structured graph: ${graphPath} (${graph.nodes.length} nodes, ${graph.edges.length} edges)`);
 		if (ambiguities.length > 0) {
@@ -498,8 +573,11 @@ async function main(): Promise<void> {
 		const webAreaOnly = target.kind === "web";
 		const doObserve = (name: string) =>
 			cdp ? cdp.observe(name) : dom ? dom.observe(name, Infinity) : observe(driver!, win!, name, { webAreaOnly });
-		tools = cdp ? [CDP_ACT_TOOL, CDP_FIND_TOOL, ...EXTRA_TOOLS] : dom ? [DOM_ACT_TOOL, FIND_TOOL, ...EXTRA_TOOLS] : [ACT_TOOL, ...EXTRA_TOOLS];
-		basePrompt = systemPrompt(cdp ? CDP_RULES : dom ? DOM_RULES : DRIVER_RULES, targetVocabulary(target), vision);
+		// The claim tool is only offered under descent — a non-descent pass never creates
+		// anything, so a claim ledger it can't act on is just a distraction in the prompt.
+		const extra = DESCENT_ON ? [...EXTRA_TOOLS, CLAIM_TOOL] : EXTRA_TOOLS;
+		tools = cdp ? [CDP_ACT_TOOL, CDP_FIND_TOOL, ...extra] : dom ? [DOM_ACT_TOOL, FIND_TOOL, ...extra] : [ACT_TOOL, ...extra];
+		basePrompt = systemPrompt(cdp ? CDP_RULES : dom ? DOM_RULES : DRIVER_RULES, targetVocabulary(target), DESCENT_ON, vision);
 		console.log(
 			cdp
 				? `exploring ${app} url=${target.kind === "web" ? target.url : "(attached)"} backend=cdp`
@@ -542,6 +620,52 @@ async function main(): Promise<void> {
 		 */
 		let finishRefusals = 0;
 		let obsThisChapter = 1;
+
+		/**
+		 * Chapter boundary: throw the transcript away and start a fresh context.
+		 *
+		 * Context, not step count, was the real ceiling — each observation is ~7k tokens and
+		 * they all accumulate, so a 25-action pass was already ~175k. A sliding window would not
+		 * survive a long run either: the assistant turns and tool results keep piling up over
+		 * ~2000 actions, and pruning per turn would invalidate the prompt cache every single turn.
+		 *
+		 * A full reset is bounded no matter how long the pass runs. It is only safe because the
+		 * durable memory now lives outside the transcript — findings and the accumulated graph,
+		 * both already on disk — so what is discarded is reasoning, not knowledge. The frontier
+		 * goes in the seed as well, which means the reset cannot lose track of where the pass
+		 * still has to go.
+		 *
+		 * Both the normal action path and the descent path call this after pushing their one
+		 * tool_result, so a descent-heavy stretch is bounded the same way an action-heavy one is.
+		 * Returns the next `obsThisChapter` for the caller to store.
+		 */
+		const maybeChapterReset = (obsCount: number, obs: ObservationBundle): number => {
+			if (obsCount + 1 < CHAPTER_OBSERVATIONS) return obsCount + 1;
+			chapters++;
+			checkpoint();
+			const nodeList = [...graphNodes.values()].slice(0, 300).map((n) => `${n.id} (${n.kind})`).join(", ");
+			const noteList = findings.slice(-120).map((f) => `- ${f}`).join("\n");
+			console.log(`  --- chapter ${chapters}: context reset (${findings.length} findings, ${graphNodes.size} nodes carried forward) ---`);
+			messages.length = 0;
+			messages.push({
+				role: "user",
+				content: [
+					{
+						type: "text",
+						text:
+							`You are exploring "${app}" and have been going for ${hm(Date.now() - startedAt)} over ${actions} actions. ` +
+							`This is chapter ${chapters}: the earlier transcript has been cleared to bound context. Nothing else has changed — the app is where you left it, and everything below is what you recorded.\n\n` +
+							`# Findings so far (${findings.length}${findings.length > 120 ? ", most recent 120 shown" : ""})\n${noteList}\n\n` +
+							`# Graph so far (${graphNodes.size} nodes, ${graphEdges.size} edges)\n${nodeList || "(none recorded yet — start recording nodes as you go)"}\n\n` +
+							`# ${frontierSummary(ledger)}\n\n` +
+							"There is no time limit on this pass — take as long as a surface needs. Current observation follows.",
+					},
+					...observationBlocks(obs, vision),
+				],
+			});
+
+			return 1;
+		};
 
 		for (;;) {
 			// Same shape as the ceiling below: a stopped pass still asks for the map it has,
@@ -686,6 +810,29 @@ async function main(): Promise<void> {
 				continue;
 			}
 
+			if (toolUse.name === "claim") {
+				const c = toolUse.input as { name: string; note?: string };
+				claimed.push({ kind: "created", name: c.name, note: c.note, step: actions });
+				// Persist as a resource mutation NOW, not at finish: this is the crash-recovery
+				// the task agent lacks. A descent that dies after creating scratch but before
+				// finishing still leaves a journal entry `npm run cleanup` can report.
+				appendMutation(journalPath, { kind: "resource", control: c.name, surface: "", resource: c.name, step: actions });
+				console.log(`    claim: "${c.name}"${c.note ? ` — ${c.note}` : ""}`);
+				messages.push({
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: toolUse.id,
+							content:
+								`Claimed "${c.name}". It is recorded and will be reported at the end of the pass; ` +
+								"it is NOT deleted automatically. Use it as the throwaway target for descent, not the user's own content.",
+						},
+					],
+				});
+				continue;
+			}
+
 			// Read-only page search: costs a turn but not an action, like record.
 			if (toolUse.name === "find") {
 				const q = (toolUse.input as { query: string }).query;
@@ -709,14 +856,21 @@ async function main(): Promise<void> {
 			}
 
 			const input = toolUse.input as { reasoning?: string; action: any };
+			const web = target.kind === "web";
 
-			// Unattended-safety pre-flight. A label check over a fixed verb set — it knows
-			// nothing about this app. Opting out is its OWN switch (EXPLORE_GUARD=off): this
-			// used to ride on `guidance`, so steering the pass silently disarmed the guard.
-			const danger = GUARD_ON ? destructiveTarget(input.action, obs, target.kind === "web") : undefined;
-			if (danger) {
+			// Unattended-safety pre-flight, now two gates with opposite answers (see
+			// externalityTarget/reversibleTarget). Opting out is its OWN switch
+			// (EXPLORE_GUARD=off): this used to ride on `guidance`, so steering the pass
+			// silently disarmed the guard.
+			//
+			// EXTERNALITY — commits off the machine. Refused always, descent or not: one-way is
+			// one-way, and reading the boundary would mean crossing it.
+			const external = GUARD_ON ? externalityTarget(input.action, obs, web) : undefined;
+			if (external) {
 				refusals++;
-				console.log(`  REFUSED: "${danger}" reads destructive and this run is unattended`);
+				const node = actionTarget(input.action, obs);
+				gated.push({ id: gatedId(node, external), tierReached: 0, boundary: "not opened — off-machine", stoppedBecause: "externality:label", scratchUsed: false });
+				console.log(`  REFUSED (externality): "${external}" commits off-machine and is never opened`);
 				messages.push({
 					role: "user",
 					content: [
@@ -725,12 +879,42 @@ async function main(): Promise<void> {
 							tool_use_id: toolUse.id,
 							is_error: true,
 							content:
-								`Refused by the harness: the target's label ("${danger}") matches the destructive verb list, and this pass runs unattended. ` +
-								"The action did not run. Record what the control appears to do and dismiss it, or reach the surface another way.",
+								`Refused by the harness: "${external}" commits something OFF the machine (send/publish/share/purchase/account) and is one-way. ` +
+								"The action did not run and will not, on any setting. Record what the control appears to do and dismiss it.",
 						},
 					],
 				});
 				continue;
+			}
+
+			// REVERSIBLE — mutates local state that can be put back, or merely opens a local
+			// flow behind a scary label. Refused by default; under EXPLORE_DESCENT it is pressed
+			// ONCE to read the boundary and then Escaped without committing.
+			const reversible = GUARD_ON ? reversibleTarget(input.action, obs, web) : undefined;
+			let descending = false;
+			if (reversible) {
+				if (!DESCENT_ON) {
+					refusals++;
+					const node = actionTarget(input.action, obs);
+					gated.push({ id: gatedId(node, reversible), tierReached: 0, boundary: "not opened — descent off", stoppedBecause: "descent:off", scratchUsed: false });
+					console.log(`  REFUSED (reversible, descent off): "${reversible}"`);
+					messages.push({
+						role: "user",
+						content: [
+							{
+								type: "tool_result",
+								tool_use_id: toolUse.id,
+								is_error: true,
+								content:
+									`Refused by the harness: "${reversible}" reads destructive and guarded descent is off for this pass. ` +
+									"The action did not run. Record what the control appears to do and dismiss it, or reach the surface another way.",
+							},
+						],
+					});
+					continue;
+				}
+				descending = true;
+				console.log(`  DESCENT: "${reversible}" is reversible-labelled — pressing once to read the boundary, then Escaping`);
 			}
 
 			actions++;
@@ -738,6 +922,10 @@ async function main(): Promise<void> {
 			console.log(`[${actions}] ${input.reasoning ?? ""}`);
 			console.log(`    ${input.action.name} ${JSON.stringify({ ...input.action, name: undefined })}`);
 
+			// The observation the model was looking at when it chose this action. Credit,
+			// mutation detection and boundary classification are all only meaningful against it,
+			// and `obs` is reassigned to the post-action snapshot below.
+			const preObs = obs;
 			// Credit before acting: the handle and the geometry are only meaningful against
 			// the observation the model was looking at when it chose this action.
 			const credited = frontierCredit(ledger, input.action, obs);
@@ -781,6 +969,116 @@ async function main(): Promise<void> {
 					throw new TargetNotObservableError(app, "no addressable elements for 3 consecutive observations");
 			} else blindStreak = 0;
 
+			// Descent: the model pressed a reversible-labelled control ONLY so the harness could
+			// read what it gates. The model never gets to press anything inside the modal — the
+			// harness classifies the boundary, sends Escape ITSELF, and confirms it closed. The
+			// read-and-Escape invariant is what makes descent safe even when the two-phase
+			// assumption is wrong: Escape commits nothing, so the worst case is an inert press.
+			if (descending) {
+				// `reversible` is non-undefined here — `descending` is only set when it matched —
+				// but the compiler can't see across the intervening actuation, so pin it.
+				const gateLabel = reversible as string;
+				const node = actionTarget(input.action, preObs);
+				const boundary = classifyBoundary(preObs, obs);
+				const desc = boundaryDescription(boundary);
+				overlay.setDriving(true);
+				try {
+					const escAction = { name: "press_key", key: "escape", delivery_mode: "foreground" };
+					if (cdp) {
+						await cdp.act(escAction);
+					} else {
+						const esc = dom ? await dom.toRequest(escAction) : toActionRequest(escAction, win!);
+						if (esc) await driver!.act(esc);
+					}
+					await new Promise((r) => setTimeout(r, SETTLE_MS));
+					obs = await doObserve(`explore-step-${actions}-escape`);
+				} finally {
+					overlay.setDriving(false);
+				}
+
+				let stoppedBecause: string;
+				let dirty = false;
+				if (boundary.kind === "no-modal") {
+					// The two-phase assumption was WRONG here: no modal, so the press may have
+					// committed. detectMutation reads the truth from the value diff, not the
+					// model's account. Graph passed undefined — a boundary read does not need
+					// scope attribution, and cleanup restores by (control, surface).
+					const mutation = detectMutation(input.action, preObs, obs, undefined, actions);
+					if (mutation) {
+						appendMutation(journalPath, mutation);
+						dirty = true;
+						stoppedBecause = "descent:no-modal-committed";
+						console.log(`    descent MISS: no modal, "${mutation.control}" changed ${JSON.stringify(mutation.before)} -> ${JSON.stringify(mutation.after)} — journaled for cleanup`);
+					} else {
+						stoppedBecause = "descent:no-modal-inert";
+						console.log("    descent: no modal appeared and nothing changed — the press was inert");
+					}
+				} else if (boundary.kind === "oauth-window") {
+					stoppedBecause = "externality:oauth-window";
+					console.log(`    descent: OAuth surface (${desc}) — read and backed out`);
+				} else {
+					stoppedBecause = `descent:read-and-escape:${boundary.kind}`;
+					console.log(`    descent: ${desc} — read and Escaped`);
+				}
+
+				gated.push({
+					id: gatedId(node, gateLabel),
+					tierReached: boundary.kind === "no-modal" ? 0 : 1,
+					boundary: desc,
+					stoppedBecause,
+					scratchUsed: claimed.length > 0,
+				});
+				checkpoint();
+
+				frontierIngest(ledger, obs);
+				const rest = frontierRemaining(ledger);
+				const guidance =
+					boundary.kind === "no-modal"
+						? dirty
+							? "No confirmation dialog appeared and a value changed — the harness journaled it for cleanup. Do NOT press this control again."
+							: "No confirmation dialog appeared and nothing changed. It may commit on a later step or need scratch content to act on — record it and move on."
+						: "The harness pressed Escape to close it WITHOUT committing, and the boundary is recorded. Do NOT press the control again — record anything else it revealed and move on.";
+				messages.push({
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: toolUse.id,
+							content: [
+								{
+									type: "text",
+									text:
+										`Descent on "${reversible}": ${desc}\n${guidance}` +
+										(rest.length === 0 ? "\n\nTHE FRONTIER IS EMPTY — call finish." : `\n\n${frontierSummary(ledger)}`) +
+										"\n\nNew observation follows.",
+								},
+								...observationBlocks(obs, vision),
+							],
+						},
+					],
+				});
+				// One tool_result pushed, exactly like a normal action, so it counts toward the
+				// chapter budget the same way — otherwise a descent-heavy stretch grows context
+				// without ever triggering the reset that bounds it.
+				obsThisChapter = maybeChapterReset(obsThisChapter, obs);
+				continue;
+			}
+
+			// Journal what this action CHANGED, from the value diff rather than the model's
+			// account — the same detection the task agent runs. Exploration is supposed to be
+			// non-mutating, but a toggle it flips while mapping is a real change the pass must
+			// be able to hand to teardown; without this, only descent's mutations were tracked
+			// and an ordinary setting the pass nudged would be left changed. Only when descent
+			// is on: a plain refuse-everything pass never runs teardown, so journaling would be
+			// write-only. Graph passed so scope/settingKey attach when resolvable.
+			if (DESCENT_ON && !isError) {
+				const mutation = detectMutation(input.action, preObs, obs, accumulatedGraph(), actions);
+				if (mutation) {
+					appendMutation(journalPath, mutation);
+					console.log(`    journaled: "${mutation.control}"${mutation.surface ? ` in ${mutation.surface}` : ""} ${JSON.stringify(mutation.before ?? "")} -> ${JSON.stringify(mutation.after ?? "")}`);
+				}
+			}
+
 			const before = ledger.seen.size;
 			frontierIngest(ledger, obs);
 			const rest = frontierRemaining(ledger);
@@ -808,46 +1106,7 @@ async function main(): Promise<void> {
 				],
 			});
 
-			/**
-			 * Chapter boundary: throw the transcript away and start a fresh context.
-			 *
-			 * Context, not step count, was the real ceiling — each observation is ~7k tokens
-			 * and they all accumulate, so a 25-action pass was already ~175k. A sliding
-			 * window would not survive a long run either: the assistant turns and tool
-			 * results keep piling up over ~2000 actions, and pruning per turn would
-			 * invalidate the prompt cache every single turn.
-			 *
-			 * A full reset is bounded no matter how long the pass runs. It is only safe
-			 * because the durable memory now lives outside the transcript — findings and the
-			 * accumulated graph, both already on disk — so what is discarded is reasoning,
-			 * not knowledge. The frontier goes in the seed as well, which means the reset
-			 * cannot lose track of where the pass still has to go.
-			 */
-			if (++obsThisChapter >= CHAPTER_OBSERVATIONS) {
-				chapters++;
-				obsThisChapter = 1;
-				checkpoint();
-				const nodeList = [...graphNodes.values()].slice(0, 300).map((n) => `${n.id} (${n.kind})`).join(", ");
-				const noteList = findings.slice(-120).map((f) => `- ${f}`).join("\n");
-				console.log(`  --- chapter ${chapters}: context reset (${findings.length} findings, ${graphNodes.size} nodes carried forward) ---`);
-				messages.length = 0;
-				messages.push({
-					role: "user",
-					content: [
-						{
-							type: "text",
-							text:
-								`You are exploring "${app}" and have been going for ${hm(Date.now() - startedAt)} over ${actions} actions. ` +
-								`This is chapter ${chapters}: the earlier transcript has been cleared to bound context. Nothing else has changed — the app is where you left it, and everything below is what you recorded.\n\n` +
-								`# Findings so far (${findings.length}${findings.length > 120 ? ", most recent 120 shown" : ""})\n${noteList}\n\n` +
-								`# Graph so far (${graphNodes.size} nodes, ${graphEdges.size} edges)\n${nodeList || "(none recorded yet — start recording nodes as you go)"}\n\n` +
-								`# ${frontierSummary(ledger)}\n\n` +
-								"There is no time limit on this pass — take as long as a surface needs. Current observation follows.",
-						},
-						...observationBlocks(obs, vision),
-					],
-				});
-			}
+			obsThisChapter = maybeChapterReset(obsThisChapter, obs);
 		}
 	} catch (err) {
 		/**
@@ -912,6 +1171,40 @@ async function main(): Promise<void> {
 			console.log(`graph checkpoint (not promoted to docs/appmaps): ${checkpointPath}`);
 		}
 	} finally {
+		// Put the app back BEFORE closing the backends — teardown needs one of them. Only under
+		// descent: a refuse-everything pass mutates nothing to restore, and its journal is empty
+		// anyway. Wrapped so a teardown failure never buries the map the pass already wrote,
+		// exactly as the task agent guards its own cleanup. Teardown takes exactly one of
+		// driver/cdp, so it restores through whichever backend drove the pass.
+		if (DESCENT_ON) {
+			try {
+				const journal = readJournal(journalPath);
+				const settings = journal.filter((m) => m.kind === "setting");
+				if (settings.length || claimed.length) {
+					console.log(`\n=== descent cleanup: ${settings.length} mutation(s), ${claimed.length} claimed resource(s) ===`);
+					overlay.setDriving(true);
+					const report = await runTeardown({
+						...(cdp ? { cdp } : { driver: driver! }),
+						client,
+						model,
+						app,
+						journal,
+						claimed,
+						graph: accumulatedGraph(),
+						steps: [],
+						budget: envNum("CLEANUP_STEPS", 10),
+						mode: "explore-descent",
+						vision,
+						usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, modelCalls: 0 },
+					});
+					overlay.setDriving(false);
+					const dirty = Array.isArray(report.dirty) ? report.dirty.length : 0;
+					console.log(`cleanup: ${report.restored ?? 0} restored, ${report.failed ?? 0} failed, ${dirty} still dirty` + (claimed.length ? `; ${claimed.length} scratch resource(s) reported, not deleted` : ""));
+				}
+			} catch (err) {
+				console.error(`descent cleanup failed (map already written): ${err instanceof Error ? err.message : String(err)}`);
+			}
+		}
 		await driver?.close();
 		// Disconnects only — the browser stays up holding the signed-in profile (src/cdp.ts).
 		await cdp?.close();

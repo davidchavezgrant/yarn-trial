@@ -134,6 +134,38 @@ export interface AppMapCoverage {
 	stopped: string;
 	/** Deduped reasons given for dismissals — why the skipped controls were skipped. */
 	dismissals?: string[];
+	/** Gated controls whose boundary surface was read under descent (see AppMap.gated). */
+	gatedRead?: number;
+	/** Gated controls refused outright — externality, or descent off. */
+	gatedRefused?: number;
+}
+
+/**
+ * What was seen at the point a guarded descent stopped.
+ *
+ * The map used to record only that a destructive-labelled control EXISTS ("Export: refused,
+ * unmapped"), which is indistinguishable from "not in this app". A boundary record is the
+ * difference between a hole and a boundary: it says what the flow offers and why the pass
+ * went no further, so a task agent given a delete/export task has grounding instead of a
+ * dead end, and the safety line is auditable the way `dismissals` already is.
+ */
+export interface GatedBoundary {
+	/** Node id of the gated control, matching `nodes` when the pass recorded one. */
+	id: string;
+	settingKey?: string;
+	/**
+	 * How far the pass went. 0 = refused at the label (externality, or descent off);
+	 * 1 = the opening press ran, the boundary surface was read, and Escape restored.
+	 * Higher tiers (reversible mutation, scratch-and-commit) are not implemented yet;
+	 * the field is numeric so maps stay readable when they are.
+	 */
+	tierReached: 0 | 1;
+	/** What the boundary surface said: danger copy, option labels, external host. */
+	boundary: string;
+	/** Why the pass stopped there, e.g. "externality:oauth-window" or "descent:read-and-escape". */
+	stoppedBecause: string;
+	/** Whether the descent operated on content the pass created (claimed scratch). */
+	scratchUsed: boolean;
 }
 
 /**
@@ -180,4 +212,6 @@ export interface AppMap {
 	home?: AppMapHome;
 	nodes: AppMapNode[];
 	edges: AppMapEdge[];
+	/** Boundary reads from guarded descent. Absent on maps from passes without EXPLORE_DESCENT. */
+	gated?: GatedBoundary[];
 }

@@ -8,6 +8,10 @@ import {
 	checkHome,
 	actionTarget,
 	destructiveTarget,
+	externalityTarget,
+	gatedId,
+	gatedSection,
+	reversibleTarget,
 	failedProvider,
 	findScopeAmbiguities,
 	framesShifted,
@@ -1531,6 +1535,95 @@ test("destructiveTarget__AllowsDownload__When__TargetIsWeb", () => {
 test("destructiveTarget__RefusesEnter__When__WebAndAimedAtANamedControl", () => {
 	// On the web, Enter is a submit. Partial guard — see the documented hole.
 	assert.equal(destructiveTarget({ name: "press_key", key: "return", element_index: 7 }, webCtl("Submit"), true), "Submit");
+});
+
+// --- the two-gate split. "Destructive" fuses two questions with opposite answers once
+// descent exists: does this commit OFF the machine (externality — refuse always) vs does
+// this mutate local state we could put back (reversible — descent-eligible). The tests pin
+// the partition (every verb in exactly one gate) and the union (destructiveTarget refuses
+// exactly what it refused before the split).
+
+const DESKTOP_EXTERNALITY = ["Publish", "Send", "Share", "Invite", "Buy", "Purchase", "Subscribe", "Unsubscribe", "Sign out", "Log out", "Revoke", "Deactivate"];
+const DESKTOP_REVERSIBLE = ["Delete", "Remove", "Discard", "Erase", "Trash", "Clear", "Export", "Download", "Reset", "Restore", "Merge", "Archive"];
+
+test("externalityTarget__RefusesEveryOffMachineVerb__When__TargetIsDesktop", () => {
+	for (const label of DESKTOP_EXTERNALITY) {
+		const obs = obsWith([ie(label, "Menu", { handle: 9 })]);
+		assert.equal(externalityTarget({ name: "click", element_index: 9 }, obs), label);
+		assert.equal(reversibleTarget({ name: "click", element_index: 9 }, obs), undefined, `${label} must not also be reversible`);
+	}
+});
+
+test("reversibleTarget__FlagsEveryLocalMutationVerb__When__TargetIsDesktop", () => {
+	for (const label of DESKTOP_REVERSIBLE) {
+		const obs = obsWith([ie(label, "Menu", { handle: 9 })]);
+		assert.equal(reversibleTarget({ name: "click", element_index: 9 }, obs), label);
+		assert.equal(externalityTarget({ name: "click", element_index: 9 }, obs), undefined, `${label} must not also be externality`);
+	}
+});
+
+test("destructiveTarget__RefusesTheUnionOfBothGates__When__EitherMatches", () => {
+	// The split must not change what the pre-split guard refused: teardown's restore guard
+	// and the descent-off explore path both call destructiveTarget and must stay identical.
+	for (const label of [...DESKTOP_EXTERNALITY, ...DESKTOP_REVERSIBLE]) {
+		const obs = obsWith([ie(label, "Menu", { handle: 9 })]);
+		assert.equal(destructiveTarget({ name: "click", element_index: 9 }, obs), label);
+	}
+	const benign = obsWith([ie("Open settings", "Menu", { handle: 9 })]);
+	assert.equal(destructiveTarget({ name: "click", element_index: 9 }, benign), undefined);
+});
+
+test("externalityTarget__RefusesCommitVerbs__When__TargetIsWeb", () => {
+	// Web commit verbs ship state to a server — all externality, none reversible.
+	for (const label of ["Confirm", "Submit", "Post", "Reply", "Accept", "Place order", "Pay now"]) {
+		assert.equal(externalityTarget({ name: "click", element_index: 7 }, webCtl(label), true), label);
+		assert.equal(reversibleTarget({ name: "click", element_index: 7 }, webCtl(label), true), undefined);
+	}
+});
+
+test("reversibleTarget__AllowsExportAndDownload__When__TargetIsWeb", () => {
+	// Same web carve-out the union has always had: a download is a local side effect.
+	for (const label of ["Download", "Export"]) {
+		assert.equal(reversibleTarget({ name: "click", element_index: 7 }, webCtl(label), true), undefined);
+		assert.equal(externalityTarget({ name: "click", element_index: 7 }, webCtl(label), true), undefined);
+	}
+});
+
+// --- gated-boundary recording. gatedId slugs a control into a graph-style id; gatedSection
+// renders the Tier-1 reads into the prose the task agent gets injected.
+
+test("gatedId__JoinsSurfaceAndName__When__NodeResolved", () => {
+	assert.equal(gatedId({ surface: "Brand Kit", name: "Delete Brand" }, "Delete Brand"), "brand-kit/delete-brand");
+});
+
+test("gatedId__FallsBackToLabel__When__ControlResolvedToNothing", () => {
+	// The control the guard matched by coordinate may not resolve to a named node; the raw
+	// label still has to produce a stable id, because a gated control with no node is exactly
+	// what the boundary record exists to capture.
+	assert.equal(gatedId(undefined, "Export…"), "export");
+	assert.equal(gatedId({ surface: "", name: "" }, "Reset all"), "reset-all");
+});
+
+test("gatedSection__RendersOnlyTierOneReads__When__MixedTiers", () => {
+	const section = gatedSection([
+		{ id: "project/export", tierReached: 1, boundary: "confirm-dialog: formats {mp4, gif}", stoppedBecause: "descent:read-and-escape:confirm-dialog", scratchUsed: false },
+		{ id: "acct/sign-out", tierReached: 0, boundary: "not opened — off-machine", stoppedBecause: "externality:label", scratchUsed: false },
+	]);
+	assert.match(section, /## Gated flows/);
+	assert.match(section, /project\/export/);
+	assert.match(section, /formats \{mp4, gif\}/);
+	// A Tier-0 refusal is not something a task agent can act on, so it stays out of the prose.
+	assert.doesNotMatch(section, /sign-out/);
+});
+
+test("gatedSection__IsEmpty__When__NoTierOneReads", () => {
+	// A non-descent pass produces only refusals; its document must be byte-identical to before,
+	// so the section contributes nothing rather than an empty heading.
+	assert.equal(gatedSection([]), "");
+	assert.equal(
+		gatedSection([{ id: "x/y", tierReached: 0, boundary: "not opened", stoppedBecause: "descent:off", scratchUsed: false }]),
+		"",
+	);
 });
 
 test("destructiveTarget__IgnoresEnter__When__TargetIsAMacApp", () => {

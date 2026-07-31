@@ -36,8 +36,22 @@ function runScript(body: string): Promise<{ code: number | null; signal: NodeJS.
 	return new Promise((resolve) => {
 		const child = spawn(process.execPath, ["--input-type=module", "-e", body], { stdio: ["ignore", "pipe", "ignore"] });
 		let out = "";
-		child.stdout.on("data", (b) => (out += b.toString()));
-		child.on("spawn", () => setTimeout(() => child.kill("SIGINT"), 300));
+		let signalled = false;
+		// Signal only ONCE the child has printed "ready" — the line it writes after installing its
+		// handlers. A blind timer raced node startup under a saturated test runner: a SIGINT that
+		// lands before the handler is installed runs the default terminate instead, which is the
+		// exact intermittent failure this indirection removes. A short fallback still fires in case
+		// a body ever forgets to print ready, so a bug cannot hang the suite.
+		const fire = () => {
+			if (signalled) return;
+			signalled = true;
+			child.kill("SIGINT");
+		};
+		child.stdout.on("data", (b) => {
+			out += b.toString();
+			if (out.includes("ready")) fire();
+		});
+		child.on("spawn", () => setTimeout(fire, 3000));
 		child.on("close", (code, signal) => {
 			rmSync(dir, { recursive: true, force: true });
 			resolve({ code, signal, out });
@@ -50,7 +64,7 @@ test("overlaySignals__TerminateTheProcess__When__NoOtherHandlerIsPresent", async
 	// default terminate and leave the probe hung on Ctrl-C.
 	const { code, signal, out } = await runScript(`
 ${OVERLAY_HANDLERS}
-setTimeout(() => { process.stdout.write("ALIVE\\n"); process.exit(2); }, 3000);
+setTimeout(() => { process.stdout.write("ALIVE\\n"); process.exit(2); }, 10000);
 process.stdout.write("ready\\n");
 `);
 	assert.ok(out.includes("STOP"), "banner cleanup ran");
@@ -64,7 +78,7 @@ test("overlaySignals__DeferToTheGracefulHandler__When__OneIsRegisteredAfter", as
 	const { code, out } = await runScript(`
 ${OVERLAY_HANDLERS}
 process.on("SIGINT", () => { process.stdout.write("GRACEFUL\\n"); setTimeout(() => process.exit(0), 150); });
-setTimeout(() => { process.stdout.write("TIMEOUT\\n"); process.exit(2); }, 3000);
+setTimeout(() => { process.stdout.write("TIMEOUT\\n"); process.exit(2); }, 10000);
 process.stdout.write("ready\\n");
 `);
 	assert.ok(out.includes("STOP"), "banner cleanup still ran");

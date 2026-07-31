@@ -5,7 +5,7 @@ import { quitApp } from "./appctl.js";
 import * as axdom from "./axdom.js";
 import { Driver } from "./driver.js";
 import { appmapsDir, appSlug, outDir } from "./paths.js";
-import type { ActionRequest, AppMap, AppMapEdge, AppMapHome, AppMapNode, Expectation, ScopeAmbiguity, StepRecord, SurfaceScope } from "./types.js";
+import type { ActionRequest, AppMap, AppMapEdge, AppMapHome, AppMapNode, Expectation, GatedBoundary, ScopeAmbiguity, StepRecord, SurfaceScope } from "./types.js";
 
 /**
  * Snapshot at load, unlike the accessors in paths.ts: this is a CLI process whose data root
@@ -1091,24 +1091,40 @@ export function recoverLeakedGraph(text: string): {
  * It over-refuses by design — "Reset zoom" is harmless and gets blocked. A refusal costs one
  * turn and is handed back as a tool result, so the pass reads it and moves on; the reverse
  * mistake is not recoverable.
+ *
+ * "Destructive" is two different questions fused into one word, and they have opposite
+ * answers once a descent capability exists — so the verb set is split into two gates and
+ * `destructiveTarget()` remains their union:
+ *
+ * - EXTERNALITY: the action commits something OFF the machine (send, publish, purchase,
+ *   account change). Genuinely one-way; refused always, descent or not.
+ * - REVERSIBLE: the action mutates local state that can in principle be put back (delete on
+ *   scratch, reset, archive) or merely opens a local flow (export's panel). Refused by
+ *   default, but eligible for guarded descent — see explore's EXPLORE_DESCENT.
+ *
+ * A verb belongs to exactly one gate; tests pin both the partition and the union.
  */
-const DESTRUCTIVE_LABEL =
-	/\b(delete|remove|discard|erase|trash|clear|publish|export|download|send|share|invite|buy|purchase|subscribe|unsubscribe|sign ?out|log ?out|revoke|deactivate|reset|restore|merge|archive)\b/i;
+const EXTERNALITY_LABEL =
+	/\b(publish|send|share|invite|buy|purchase|subscribe|unsubscribe|sign ?out|log ?out|revoke|deactivate)\b/i;
+const REVERSIBLE_LABEL =
+	/\b(delete|remove|discard|erase|trash|clear|export|download|reset|restore|merge|archive)\b/i;
 
 /**
- * The same guard, retuned for the open web, where the verb set above is wrong in both
+ * The same gates, retuned for the open web, where the verb set above is wrong in both
  * directions.
  *
  * Too narrow: a website's destructive act is usually a bare commit verb — Confirm, Submit,
  * Post, Reply, Accept, Place order — none of which appear above, and every one of which is
  * irreversible and externally visible in exactly the way the carve-out exists to prevent.
+ * All of them are externality: a commit verb on the web ships state to a server.
  *
  * Too broad: `download` is on every documentation page on the internet, and blocking it would
- * refuse a large fraction of ordinary navigation. It is dropped here — a download is a local
- * side effect, not an externally visible one.
+ * refuse a large fraction of ordinary navigation. It (and `export`) is dropped here — a
+ * download is a local side effect, not an externally visible one.
  */
-const DESTRUCTIVE_LABEL_WEB =
-	/\b(delete|remove|discard|erase|trash|clear|publish|send|share|invite|buy|purchase|subscribe|unsubscribe|sign ?out|log ?out|revoke|deactivate|reset|restore|merge|archive|confirm|submit|post|reply|accept|decline|place order|checkout|check out|pay|book|sign ?up|register|apply|transfer|withdraw)\b/i;
+const EXTERNALITY_LABEL_WEB =
+	/\b(publish|send|share|invite|buy|purchase|subscribe|unsubscribe|sign ?out|log ?out|revoke|deactivate|confirm|submit|post|reply|accept|decline|place order|checkout|check out|pay|book|sign ?up|register|apply|transfer|withdraw)\b/i;
+const REVERSIBLE_LABEL_WEB = /\b(delete|remove|discard|erase|trash|clear|reset|restore|merge|archive)\b/i;
 /**
  * Which control an action operates, resolved against the observation the model was looking at.
  *
@@ -1151,20 +1167,88 @@ export function actionTarget(action: any, obs: ObservationBundle): InteractiveEl
  * submits. Closing that needs form membership, which the AX tree does not report.
  */
 export function destructiveTarget(action: any, obs: ObservationBundle, web = false): string | undefined {
+	return externalityTarget(action, obs, web) ?? reversibleTarget(action, obs, web);
+}
+
+/**
+ * The control this action would PRESS, or undefined when the action presses nothing.
+ *
+ * Only *pressing* things is guarded. A keystroke can be destructive too, but nothing
+ * here can tell which one is, and guessing at key combinations would block the pass
+ * from typing at all. The one exception is web: Enter is a submit, so an Enter aimed at a
+ * NAMED control is treated as pressing that control. Enter with no target still passes —
+ * see the hole documented above.
+ */
+function pressedTarget(action: any, obs: ObservationBundle, web: boolean): InteractiveElement | undefined {
 	const target = actionTarget(action, obs);
-	// Only *pressing* things is guarded. A keystroke can be destructive too, but nothing
-	// here can tell which one is, and guessing at key combinations would block the pass
-	// from typing at all. The one exception is web: Enter is a submit, so an Enter aimed at a
-	// NAMED control is treated as pressing that control. Enter with no target still passes —
-	// see the hole documented above.
 	const pressing = ["click", "double_click", "right_click"];
 	const isPress =
 		pressing.includes(String(action?.name)) ||
 		(web && String(action?.name) === "press_key" && /^(return|enter)$/i.test(String(action?.key ?? "")) && target !== undefined);
-	if (!target || !isPress) return undefined;
-	const pattern = web ? DESTRUCTIVE_LABEL_WEB : DESTRUCTIVE_LABEL;
+
+	return isPress ? target : undefined;
+}
+
+/**
+ * Would this action commit something OFF the machine — send, publish, purchase, account
+ * change? The hard gate: refused always, in code, descent or not. One-way is one-way.
+ */
+export function externalityTarget(action: any, obs: ObservationBundle, web = false): string | undefined {
+	const target = pressedTarget(action, obs, web);
+	if (!target) return undefined;
+	const pattern = web ? EXTERNALITY_LABEL_WEB : EXTERNALITY_LABEL;
 
 	return pattern.test(target.name) ? target.name : undefined;
+}
+
+/**
+ * Would this action mutate LOCAL state that can in principle be put back — or open a local
+ * flow behind a destructive-looking label? The soft gate: refused by default, but eligible
+ * for guarded descent (open, read the boundary, Escape) when the caller opts in.
+ */
+export function reversibleTarget(action: any, obs: ObservationBundle, web = false): string | undefined {
+	const target = pressedTarget(action, obs, web);
+	if (!target) return undefined;
+	const pattern = web ? REVERSIBLE_LABEL_WEB : REVERSIBLE_LABEL;
+
+	return pattern.test(target.name) ? target.name : undefined;
+}
+
+/**
+ * Node id for a gated boundary. Prefers a surface/label slug so it reads like the graph's own
+ * ids; falls back to the raw label when the control resolved to nothing. Not required to match
+ * a node in `nodes` — a gated control the pass never recorded as a node is exactly the hole the
+ * boundary record exists to fill.
+ */
+export function gatedId(node: { surface: string; name: string } | undefined, label: string): string {
+	const slugify = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+	const name = slugify(node?.name || label);
+	const surface = node?.surface ? slugify(node.surface) : "";
+
+	return surface ? `${surface}/${name}` : name;
+}
+
+/**
+ * The prose "Gated flows" section, appended to the grounding document the task agent reads.
+ *
+ * This is the whole point of descent reaching the prose rather than only the graph: a task
+ * agent given "show me how to export" now sees what the export dialog offers and where the
+ * pass stopped, instead of a dead end. Only Tier-1 reads are worth prose — a Tier-0 refusal
+ * says nothing a task agent can use. Empty string when there is nothing to say, so a
+ * non-descent pass's document is byte-identical to before.
+ */
+export function gatedSection(gated: GatedBoundary[]): string {
+	const read = gated.filter((g) => g.tierReached === 1);
+	if (!read.length) return "";
+	const lines = read.map((g) => `- **${g.id}** — ${g.boundary} _(stopped: ${g.stoppedBecause})_`);
+
+	return (
+		"\n\n## Gated flows (read at the boundary, not committed)\n\n" +
+		"Destructive-labelled controls whose confirmation surface was opened and read under guarded descent, then Escaped without committing. " +
+		"Use these to perform a delete/export/archive task up to — but not through — its point of no return.\n\n" +
+		lines.join("\n") +
+		"\n"
+	);
 }
 
 export function observationBlocks(obs: ObservationBundle, vision = true, ax = true): Array<Anthropic.TextBlockParam | Anthropic.ImageBlockParam> {
