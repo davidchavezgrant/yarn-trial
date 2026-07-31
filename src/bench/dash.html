@@ -84,9 +84,9 @@
 	.num { color: var(--ink-2); }
 	tr.mrow { cursor: pointer; }
 	tr.mrow:hover td { background: rgba(255, 255, 255, 0.035); }
-	.caret { color: var(--s1); margin-right: 5px; }
 	td.arm .dn { color: var(--ink); }
 	td.arm .chips { margin-top: 3px; }
+	td.treecell { text-align: right; white-space: nowrap; }
 	td.task, td.target { color: var(--muted); max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 	/* row detail: the appmap + the run's path through it */
@@ -199,6 +199,7 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
 const SERIES = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181"];
+const RED = "#e66767";
 const STATUS = { good: "#0ca30c", warning: "#fab219", serious: "#ec835a", critical: "#d03b3b" };
 const OUTCOME_COLORS = {
 	succeeded: STATUS.good, "gave-up": STATUS.critical, unready: STATUS.warning,
@@ -329,7 +330,7 @@ function stepLine(points, color, opts = {}) {
 
 /* ---- sections ----------------------------------------------------------------------- */
 
-function statusChip(e, rowKey) {
+function statusChip(e, rowKey, selected) {
 	const color = e.status === "running" ? SERIES[0] : e.status === "queued" ? "#898781" :
 		e.status === "awaiting-collect" ? STATUS.warning : OUTCOME_COLORS[e.status] || "#898781";
 	// Running chips carry a js-elapsed span so the 1s ticker advances them between SSE
@@ -348,7 +349,7 @@ function statusChip(e, rowKey) {
 		: "";
 	const judge = e.judgeTrajectory ? ` · judge ${e.judgeTrajectory[0]}` : "";
 	const open = rowKey ? ` data-row="${esc(rowKey)}" data-job="${esc(e.jobId)}"` : "";
-	return `<span class="chip"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${e.note ? "\n" + esc(e.note) : ""}\nclick to view on the map">` +
+	return `<span class="chip${selected ? " sel" : ""}"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${e.note ? "\n" + esc(e.note) : ""}\nclick to view on the map">` +
 		`<span class="dot" style="background:${color}"></span>${esc(e.host)} · ${label}${esc(extra)}${esc(judge)}</span>`;
 }
 
@@ -395,14 +396,16 @@ const TASK_HEAD = "<tr>" + th("name", NAME_TIP) + th("target", "app or site the 
 	th("task", "the goal-only prompt the run was given") + th("model", "what actually ran, off the run logs") +
 	th("ok", "succeeded / collected") +
 	th("steps", "mean actions per run") + th("time", "mean wall-clock per run") +
-	th("out-tok", "mean output tokens per run") + th("est $", "published-rate estimate across collected runs — not an invoice") + "</tr>";
+	th("out-tok", "mean output tokens per run") + th("est $", "published-rate estimate across collected runs — not an invoice") +
+	th("map", "the appmap as a full node-link tree — edge thickness = traversal heat, blue = the run's path") + "</tr>";
 const EXPLORE_HEAD = "<tr>" + th("name", NAME_TIP) + th("target", "app or site the pass explored") +
 	th("task") + th("model", "what actually ran, off the run logs") +
 	th("actions", "actions the pass took (elapsed on hover)") +
 	th("controls seen / act / dism", "of every control the pass observed (seen), how many it operated (actuated) vs swept off the frontier without operating (dismissed) — the pass ends when the frontier empties, and dismissing is a legitimate way to empty it") +
 	th("surfaces", "distinct screens/panels/tabs/dialogs controls were found on — what you navigate BETWEEN; controls live ON them") +
 	th("nodes", "appmap graph nodes (edges on hover)") +
-	th("ambig", "settings editable at two scopes under one identity (same settingKey, different scope) — the wrong-scope trap; each gets a prompt warning") + "</tr>";
+	th("ambig", "settings editable at two scopes under one identity (same settingKey, different scope) — the wrong-scope trap; each gets a prompt warning") +
+	th("map", "the appmap this pass produced, as a full node-link tree — edge thickness = traversal heat across collected runs") + "</tr>";
 
 // Friendly names are DERIVED from the arm's structure (kind + flags + phase), not
 // hand-mapped per id, so new matrix cells name themselves. The id stays as subtext —
@@ -441,14 +444,28 @@ function modelCell(p) {
 	return `<td class="num" data-tip="${esc(tip)}">${esc(shown)}</td>`;
 }
 
+// Which run a row's detail (and its tree button) shows: the explicitly selected one, else
+// the first collected, else the first submitted.
+function selJob(p, key) {
+	if (typeof openRows[key] === "string") return openRows[key];
+	const c = p.entries.find((e) => e.collected) || p.entries[0];
+	return c && c.jobId;
+}
+
+function treeCell(p, key) {
+	const job = selJob(p, key);
+	return `<td class="treecell">${job ? `<button class="btnv" data-viewtree="${esc(job)}">⤢</button>` : ""}</td>`;
+}
+
 function armCell(a, p, key) {
 	const tip = [a.id, a.informs || "", `flags: ${a.flags || "(none)"}`].filter(Boolean).join("\n");
+	const sel = openRows[key] ? selJob(p, key) : undefined;
 	const taskCell = a.task
 		? `<td class="task" data-tip="${esc(a.task)}">${esc(a.task)}</td>`
 		: a.kind === "explore"
 			? `<td class="task" data-tip="grounding pass — no task prompt. The objective is coverage: operate every safe control until the frontier of un-operated controls empties, then write the appmap (docs/appmaps/)">Explore</td>`
 			: `<td class="task">–</td>`;
-	return `<td class="arm" data-tip="${esc(tip)}"><span class="caret">${openRows[key] ? "▾" : "▸"}</span><span class="dn">${esc(displayName(a))}</span><div class="chips">${p.entries.map((e) => statusChip(e, key)).join("")}</div></td>
+	return `<td class="arm" data-tip="${esc(tip)}"><span class="dn">${esc(displayName(a))}</span><div class="chips">${p.entries.map((e) => statusChip(e, key, e.jobId === sel)).join("")}</div></td>
 		<td class="target">${esc(a.url ? a.url.replace(/^https?:\/\//, "") : a.app)}</td>
 		${taskCell}
 		${modelCell(p)}`;
@@ -461,7 +478,7 @@ function taskRow(a, p) {
 		<td class="num">${fmtNum(p.meanSteps)}</td>
 		<td class="num">${p.meanElapsedSec != null ? fmtDur(p.meanElapsedSec) : "–"}</td>
 		<td class="num">${fmtK(p.meanOutputTokens)}</td>
-		<td class="num">${p.usd ? fmtMoney(p.usd) : p.unpriced ? "?×" + p.unpriced : "–"}</td></tr>` + (openRows[key] ? detailRowHtml(a, p, key) : "");
+		<td class="num">${p.usd ? fmtMoney(p.usd) : p.unpriced ? "?×" + p.unpriced : "–"}</td>${treeCell(p, key)}</tr>` + (openRows[key] ? detailRowHtml(a, p, key) : "");
 }
 
 function exploreRow(a, p) {
@@ -475,7 +492,7 @@ function exploreRow(a, p) {
 		<td class="num">${controls}</td>
 		<td class="num">${fmtNum(ex.surfaces)}</td>
 		<td class="num"><span data-tip="${ex.graphEdges != null ? ex.graphEdges + " edges" : ""}">${fmtNum(ex.graphNodes)}</span></td>
-		<td class="num">${fmtNum(ex.scopeAmbiguities)}</td></tr>` + (openRows[key] ? detailRowHtml(a, p, key) : "");
+		<td class="num">${fmtNum(ex.scopeAmbiguities)}</td>${treeCell(p, key)}</tr>` + (openRows[key] ? detailRowHtml(a, p, key) : "");
 }
 
 /* ---- row detail: appmap + path ------------------------------------------------------- */
@@ -492,25 +509,27 @@ function fetchDetail(job) {
 		.then((r) => r.json())
 		.then((d) => { detailCache[job] = d; })
 		.catch(() => { detailCache[job] = { steps: [], mutatedKeys: [], note: "failed to load detail" }; })
-		.finally(() => { delete detailInflight[job]; render(); });
+		.finally(() => {
+			delete detailInflight[job];
+			render();
+			if (pendingTree === job) { pendingTree = null; openTree(job); }
+		});
 }
 
+// No run-selector tabs here: the chips under the arm's name are the selector, and the
+// displayed run's chip is the highlighted one.
 function detailRowHtml(a, p, key) {
-	const collected = p.entries.filter((e) => e.collected).map((e) => e.jobId);
-	const sel = typeof openRows[key] === "string" ? openRows[key] : collected[0] || (p.entries[0] && p.entries[0].jobId);
-	const tabs = p.entries.map((e) =>
-		`<span class="chip jobtab${e.jobId === sel ? " sel" : ""}" data-row="${esc(key)}" data-job="${esc(e.jobId)}">${esc(e.host)} · ${esc(e.jobId)}</span>`).join("");
+	const sel = selJob(p, key);
 	let body;
 	if (!sel) body = `<div class="empty">nothing submitted yet</div>`;
 	else if (!detailCache[sel]) { fetchDetail(sel); body = `<div class="empty">loading ${esc(sel)}…</div>`; }
 	else body = detailBody(detailCache[sel]);
-	return `<tr class="detail-row"><td colspan="9"><div class="d-head">${tabs}</div>${body}</td></tr>`;
+	return `<tr class="detail-row"><td colspan="10">${body}</td></tr>`;
 }
 
 function detailBody(d) {
 	const noteBits = [d.note, d.graphSource ? `map: ${d.graphSource}` : ""].filter(Boolean).join(" · ");
-	const btn = d.graph ? `<button class="btnv" data-viewtree="${esc(d.jobId)}">view full tree ⤢</button> ` : "";
-	const note = btn || noteBits ? `<div class="d-note">${btn}${esc(noteBits)}</div>` : "";
+	const note = noteBits ? `<div class="d-note">${esc(noteBits)}</div>` : "";
 	const steps = d.steps.length
 		? `<ol>` + d.steps.map((s) =>
 			`<li${s.reasoning ? ` data-tip="${esc(s.reasoning)}"` : ""}><span class="${s.verified ? "ok-v" : "bad-v"}">${s.verified ? "✓" : "✗"}</span> ${esc(s.label)} <span class="meta">${esc((s.surface || "").split("/").pop() || "")}</span></li>`).join("") + `</ol>`
@@ -625,16 +644,20 @@ function treeSvg(d) {
 		}
 		const isMut = n.settingKey && mutated.has(n.settingKey);
 		const amb = n.settingKey && scopesByKey[n.settingKey] && scopesByKey[n.settingKey].size > 1;
-		const fill = steps.length ? "var(--s1)" : n.kind === "surface" ? "var(--ink-2)" : "var(--baseline)";
+		// Shape carries the kind — filled dot = surface (a place), hollow dot = control —
+		// because leaf surfaces (menus, pickers) sit in the same columns as controls and a
+		// tone-only difference read as unexplained highlighting.
+		const fill = steps.length ? "var(--s1)" : n.kind === "surface" ? "var(--ink-2)" : "none";
+		const stroke = isMut ? "var(--s2)" : n.kind === "control" && !steps.length ? "var(--muted)" : "none";
 		const tip = [
-			n.id,
+			`${n.kind}: ${n.id}`,
 			n.settingKey ? `setting: ${n.settingKey} (${n.scope} scope)` : n.scope ? `${n.scope} scope` : "",
 			`visits: ${visits} across ${heat.runs} collected run(s)`,
 			steps.length ? `this run: step ${steps.join(", ")}` : "",
 			amb ? "⚠ dual-scope setting" : "",
 			isMut ? "mutated by this run" : "",
 		].filter(Boolean).join("\n");
-		nodes += `<g data-tip="${esc(tip)}"><circle cx="${X(p)}" cy="${Y(p)}" r="${n.kind === "surface" ? 4.5 : 3}" fill="${fill}"${isMut ? ' stroke="var(--s2)" stroke-width="2"' : ""}/>` +
+		nodes += `<g data-tip="${esc(tip)}"><circle cx="${X(p)}" cy="${Y(p)}" r="${n.kind === "surface" ? 4.5 : 3}" fill="${fill}"${stroke !== "none" ? ` stroke="${stroke}" stroke-width="${isMut ? 2 : 1.2}"` : ""}/>` +
 			`<text x="${X(p) + 10}" y="${Y(p) + 3.5}"${n.kind === "surface" ? ' class="lbl"' : ""}>${esc(n.title)}${amb ? " ⚠" : ""}${steps.length ? `<tspan fill="var(--s1)">  ${steps.join(",")}</tspan>` : ""}</text></g>`;
 		for (const k of childrenOf(n)) draw(k, n);
 	};
@@ -647,9 +670,17 @@ function openTree(job) {
 	const d = detailCache[job];
 	if (!d || !d.graph) return;
 	$("tm-title").textContent = "appmap tree";
-	$("tm-sub").textContent = `${d.armId} · ${job} · ${d.graphSource || ""} · thick = traversed often across ${d.heat ? d.heat.runs : 0} collected run(s) · blue = this run's path · orange = mutated`;
+	$("tm-sub").textContent = `${d.armId} · ${job} · ${d.graphSource || ""}   —   ● surface (a place) · ○ control · thick edge = traversed often across ${d.heat ? d.heat.runs : 0} collected run(s) · blue = this run's path · orange = mutated · ⚠ dual-scope`;
 	$("tm-body").innerHTML = treeSvg(d);
 	$("treeModal").classList.add("on");
+}
+
+// The row button can be clicked before the detail was ever fetched — fetch, then open.
+let pendingTree = null;
+
+function requestTree(job) {
+	if (detailCache[job]) openTree(job);
+	else { pendingTree = job; fetchDetail(job); }
 }
 
 // The board reads as a drain timeline: within each section, rows whose runs FINISHED come
@@ -682,7 +713,7 @@ function renderBoard() {
 	for (const ph of phases) {
 		const arms = state.arms.filter((a) => a.phase === ph && a.kind !== "compile" && a.passes.length);
 		if (!arms.length) continue;
-		html += `<tr class="phase-h"><td colspan="9">phase ${ph}</td></tr>`;
+		html += `<tr class="phase-h"><td colspan="10">phase ${ph}</td></tr>`;
 		const explores = arms.filter((a) => a.kind === "explore");
 		const tasks = arms.filter((a) => a.kind !== "explore");
 		if (explores.length) html += EXPLORE_HEAD + timelineRows(explores).map(({ a, p }) => exploreRow(a, p)).join("");
@@ -700,8 +731,10 @@ function renderExplore() {
 		label: a.id.replace("p1-explore-", "") + (p.model !== "(default)" ? " · " + p.model : ""),
 		values: [p.explore.controlsSeen, p.explore.controlsActuated, p.explore.controlsDismissed],
 	})));
+	// seen/actuated/dismissed as green/blue/red (found / operated / skipped) — green and red
+	// are never adjacent (blue sits between) and the bars carry direct labels.
 	$("chart-explore").innerHTML = vBars(groups, [
-		{ name: "seen", color: SERIES[2] }, { name: "actuated", color: SERIES[0] }, { name: "dismissed", color: SERIES[1] },
+		{ name: "seen", color: SERIES[2] }, { name: "actuated", color: SERIES[0] }, { name: "dismissed", color: RED },
 	]);
 }
 
@@ -798,7 +831,7 @@ function render() {
 // every push, so handlers must live on the container, not the rows.
 $("board").addEventListener("click", (ev) => {
 	const vt = ev.target.closest("[data-viewtree]");
-	if (vt) { openTree(vt.dataset.viewtree); return; }
+	if (vt) { requestTree(vt.dataset.viewtree); return; }
 	const job = ev.target.closest("[data-job][data-row]");
 	if (job) {
 		const { row, job: id } = job.dataset;
