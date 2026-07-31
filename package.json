@@ -15,7 +15,7 @@
     "recipe": "tsx src/core/recipe-cli.ts",
     "home": "tsx src/core/home.ts",
     "humanize": "tsx src/cursor/humanize.ts",
-    "build:native": "swiftc -O native/axdom.swift -o native/axdom && swiftc -O native/liveview.swift -o native/liveview",
+    "build:native": "swiftc -O native/axdom.swift -o native/axdom && swiftc -O native/liveview.swift -o native/liveview && swiftc -O native/default-browser.swift -o native/default-browser",
     "app": "tsc -p tsconfig.electron.json && electron dist-electron/electron/main.js"
   },
   "keywords": [],

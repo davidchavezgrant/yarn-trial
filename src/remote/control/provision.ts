@@ -3,7 +3,16 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { resourcesRoot } from "../../paths.js";
-import { CHROME_DOMAIN, CHROME_POLICY, type ChromePolicyState, chromePolicyProblems, chromePolicyWriteLines, describeChromePolicy } from "../chrome-policy.js";
+import {
+	AUTO_LAUNCH_PROTOCOLS,
+	autoLaunchWriteLines,
+	CHROME_DOMAIN,
+	CHROME_POLICY,
+	type ChromePolicyState,
+	chromePolicyProblems,
+	chromePolicyWriteLines,
+	describeChromePolicy,
+} from "../chrome-policy.js";
 import { attempt, type Attempt } from "./attempt.js";
 import { type HostEntry, type Inventory, loadHosts, resolveHost } from "./hosts.js";
 import { firstLine, runnerArgv, type RsyncRunner, runRsync, runSsh, rsyncDestination, rsyncShell, SPAWN_FAILED_EXIT, type SshRunner, TIMEOUT_EXIT } from "./ssh.js";
@@ -90,10 +99,15 @@ const READY_POLL_MS = 3_000;
  * `ready`, which polls for up to three minutes and legitimately times out on a first boot. Last
  * in the list, it would be the step a slow host silently never reached, and the privacy control
  * would be missing on exactly the machines nobody watched finish.
+ *
+ * `defaultbrowser` sits in the same slot for the same reasons, and one more: it can end waiting
+ * on a HUMAN (macOS confirms every programmatic default-browser change with a dialog on the
+ * Mac's own screen), and a step that can wait 40s must not be the one between a slow first boot
+ * and its `ready` report.
  */
-export type StepName = "reach" | "sync" | "runnerctl" | "launchagent" | "browser" | "ready";
+export type StepName = "reach" | "sync" | "runnerctl" | "launchagent" | "browser" | "defaultbrowser" | "ready";
 
-const STEP_ORDER: StepName[] = ["reach", "sync", "runnerctl", "launchagent", "browser", "ready"];
+const STEP_ORDER: StepName[] = ["reach", "sync", "runnerctl", "launchagent", "browser", "defaultbrowser", "ready"];
 
 export interface ProvisionStep {
 	step: StepName;
@@ -199,6 +213,25 @@ export async function provisionHost(host: HostEntry, opts: ProvisionOptions = {}
 	const browser = await attempt(() => run(host, ["sh", `${REMOTE_CHECKOUT}/${STAGE_DIR}/install-chrome-policy.sh`], { timeoutMs }));
 	steps.push({ step: "browser", ok: browser.ok, detail: browser.ok ? firstLine(browser.stdout) || "chrome policy applied" : `chrome policy not applied: ${browser.detail}` });
 
+	// Recorded-not-failed for the same reason `browser` is: a Mac whose default browser is
+	// still Safari runs jobs fine — what breaks is following a sign-in's OAuth handoff into a
+	// browser the CDP liveview can see. And explicitly skippable, because the swap pops a
+	// LaunchServices confirmation on the Mac's console, which mid-demo is somebody's filmed
+	// frame; PROVISION_DEFAULT_BROWSER=off re-provisions without touching it.
+	if ((process.env.PROVISION_DEFAULT_BROWSER ?? "").trim().toLowerCase() === "off")
+		steps.push({ step: "defaultbrowser", ok: true, detail: "skipped (PROVISION_DEFAULT_BROWSER=off)" });
+	else {
+		const dflt = await attempt(() => run(host, ["sh", `${REMOTE_CHECKOUT}/${STAGE_DIR}/install-default-browser.sh`], { timeoutMs }));
+		steps.push({
+			step: "defaultbrowser",
+			ok: dflt.ok,
+			// The script's own first line carries the useful half of a refusal — which browser
+			// LaunchServices still points at, and that a human click is what is owed — so it
+			// outranks attempt()'s stderr-first summary here.
+			detail: dflt.ok ? firstLine(dflt.stdout) || "default browser is Chrome" : firstLine(dflt.stdout) || dflt.detail,
+		});
+	}
+
 	const ready = await waitForRunner(host, run, timeoutMs, opts.readyTimeoutMs ?? READY_TIMEOUT_MS);
 	if (!ready.ok) return fail("ready", ready.detail);
 	steps.push({ step: "ready", ok: true, detail: ready.detail });
@@ -254,6 +287,13 @@ export interface RemoteDoctor {
 	 * outranks a recommended policy, which is the failure mode worth catching.
 	 */
 	chromePolicy?: ChromePolicyState;
+	/**
+	 * LaunchServices' default handler for https on the host, as a bundle id — the OAuth-handoff
+	 * precondition for CDP liveview sign-ins. Absent from runners that do not yet report it
+	 * (serve.ts wiring is still to land), which is not "wrong browser": never grade a question
+	 * that was never asked.
+	 */
+	defaultBrowser?: string;
 	lease?: { holder?: { lease?: { operator?: string; app?: string }; heldSec?: number } };
 }
 
@@ -389,6 +429,14 @@ export function doctorProblems(report: RemoteDoctor): string[] {
 	// next to the policy table they grade — see chrome-policy.ts.
 	problems.push(...chromePolicyProblems(report.chromePolicy));
 
+	// The CDP liveview's other sign-in precondition: the OAuth handoff opens the DEFAULT
+	// browser, and only the debug-flagged Chrome is one the screencast can follow into.
+	// Undefined stays silent — the same never-grade-an-unasked-question rule as above.
+	if (report.defaultBrowser !== undefined && report.defaultBrowser !== CHROME_DOMAIN)
+		problems.push(
+			`default browser is ${report.defaultBrowser}, not Google Chrome — a sign-in's OAuth handoff opens where a CDP liveview cannot see it; re-run ./run provision and click "Use Google Chrome" on the Mac's own screen (./run signin <host>)`,
+		);
+
 	// Last because it is the most total: a locked host cannot run anything, whatever else it has.
 	// Tested against `=== true` rather than truthiness so a runner too old to report the field
 	// stays silent instead of being graded clean on a question it was never asked.
@@ -437,6 +485,7 @@ export function stageProvisioningFiles(dir: string, modelKey?: string): string[]
 		["install-runnerctl.sh", INSTALL_RUNNERCTL, 0o755],
 		["install-launchagent.sh", INSTALL_LAUNCHAGENT, 0o755],
 		["install-chrome-policy.sh", installChromePolicyScript(), 0o755],
+		["install-default-browser.sh", installDefaultBrowserScript(), 0o755],
 	];
 
 	// The key rides along as a FILE for the same reason the shims do, only more so. Anything in
@@ -789,7 +838,7 @@ check() {
 	fi
 }
 
-${chromePolicyWriteLines().join("\n")}
+${[...chromePolicyWriteLines(), ...autoLaunchWriteLines()].join("\n")}
 
 # cfprefsd caches preference files, so a running Chrome can still be serving the previous answer.
 # Nothing here restarts or quits Chrome: on a shared colo Mac that could be someone's half-finished
@@ -800,8 +849,90 @@ if pgrep -x "Google Chrome" >/dev/null 2>&1; then
 fi
 
 # One line, first line: provisionHost reports firstLine(stdout) as this step's detail.
-echo "chromePolicy=$APPLIED/${CHROME_POLICY.length} chrome=$CHROME running=$RUNNING${"${MISSING:+ missing:$MISSING}"}"
+echo "chromePolicy=$APPLIED/${CHROME_POLICY.length + (AUTO_LAUNCH_PROTOCOLS.length ? 1 : 0)} chrome=$CHROME running=$RUNNING${"${MISSING:+ missing:$MISSING}"}"
 [ -z "$MISSING" ]
+`;
+}
+
+/**
+ * Point the macOS default browser at Google Chrome — the last provisioning-time property the
+ * CDP liveview transport needs (docs/research/2026-07-31-liveview-transport-alternatives.md
+ * called it out as unverified): a sign-in's OAuth handoff leaves the app as an https URL,
+ * LaunchServices opens the DEFAULT browser, and only the debug-flagged persistent-profile
+ * Chrome (src/backends/cdp.ts) is a browser the screencast can follow into.
+ *
+ * THERE IS NO SILENT PATH. LSSetDefaultHandlerForURLScheme and NSWorkspace's
+ * setDefaultApplication both end in the same user-confirmation dialog for the browser role,
+ * by design; MDM is the only exception and this fleet has none. So the honest shape is:
+ * trigger the swap, say plainly that a human must click "Use Google Chrome" once on the Mac's
+ * own screen (Screen Sharing — ./run signin — or liveview), and report the handler
+ * LaunchServices actually has, so doctor can keep asserting it afterwards. The trigger is a
+ * compiled Swift helper (native/default-browser.swift) because the LaunchServices API is not
+ * reachable from a shell; it ships to the host the way the axdom sidecar does, as an rsync'd
+ * build artifact.
+ *
+ * ONE CHROME PER MAC. The handoff lands in the RUNNING Chrome instance; a second, portless
+ * Chrome — someone double-clicking Chrome.app while the flagged one is up — makes delivery
+ * ambiguous, and the tab can open in the instance the screencast cannot see. This step only
+ * aims the default-browser pointer; making the sign-in flow bring the persistent-profile
+ * Chrome up BEFORE the handoff is runner-side wiring that is still to come.
+ */
+function installDefaultBrowserScript(): string {
+	return `#!/bin/sh
+# Installed by src/remote/control/provision.ts. Edit there, not here — a re-provision overwrites this.
+#
+# Points the macOS default browser at Google Chrome, so an OAuth handoff (an app opening an
+# https URL) lands in the debug-flagged persistent-profile Chrome the cdp backend launches —
+# the only browser a CDP liveview can screencast. macOS confirms every programmatic
+# default-browser change with a dialog on the Mac's own screen; a human clicks it ONCE, via
+# Screen Sharing (./run signin) or liveview, and every later run of this script is a
+# read-only no-op.
+#
+# One Chrome per Mac: the handoff lands in the RUNNING instance, so a second portless Chrome
+# alongside the flagged one makes URL delivery ambiguous — the tab can open where the
+# screencast cannot see it. Keep the one the backend launched; the sign-in flow should bring
+# it up before the handoff.
+set -eu
+BIN="$HOME/${REMOTE_CHECKOUT}/native/default-browser"
+CHROME_APP="/Applications/Google Chrome.app"
+WANT=${CHROME_DOMAIN}
+
+# No Chrome, nothing to point at — and unlike the policy script there is nothing useful to
+# pre-write, so this is a report line and a success.
+if [ ! -d "$CHROME_APP" ]; then
+	echo "defaultBrowser=skipped chrome=absent"
+	exit 0
+fi
+
+# The helper is a build artifact (npm run build:native on the control machine), rsync'd like
+# the axdom sidecar. Its absence degrades this step, never the pass.
+if [ ! -x "$BIN" ]; then
+	echo "defaultBrowser=unknown helper missing — run npm run build:native, then re-provision"
+	exit 1
+fi
+
+# Read BEFORE set: already-Chrome exits here with NO dialog. That is the idempotence, and it
+# is what makes re-provisioning a converted fleet safe mid-demo.
+CURRENT=$("$BIN" read || echo unknown)
+if [ "$CURRENT" = "$WANT" ]; then
+	echo "defaultBrowser=$CURRENT"
+	exit 0
+fi
+
+# Trigger the swap and wait up to 40s (inside the 60s step budget) for the click. A human
+# watching the screen confirms in-run; an absent one gets the pending report below, clicks
+# later, and --doctor re-checks.
+"$BIN" set "$CHROME_APP" 40 || true
+
+CURRENT=$("$BIN" read || echo unknown)
+if [ "$CURRENT" = "$WANT" ]; then
+	echo "defaultBrowser=$CURRENT"
+	exit 0
+fi
+
+# One line, first line: provisionHost reports firstLine(stdout) as this step's detail.
+echo "defaultBrowser=$CURRENT pending human confirmation — click \\"Use Google Chrome\\" on the Mac's own screen (./run signin <host>), then re-check with --doctor"
+exit 1
 `;
 }
 

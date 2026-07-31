@@ -10,6 +10,7 @@ tools/winrec
 # Swift sidecar build artifacts
 native/axdom
 native/liveview
+native/default-browser
 tmp/
 dist-electron
 

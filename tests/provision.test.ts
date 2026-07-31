@@ -62,6 +62,7 @@ function fleetDouble(source: string, reply: (argv: string[]) => SshResult | unde
 			if (argv[0] === "sh" && argv[1].endsWith("install-runnerctl.sh")) return ok("runnerctl=/usr/local/bin/runnerctl\n");
 			if (argv[0] === "sh" && argv[1].endsWith("install-launchagent.sh")) return ok(`launchagent=/Users/administrator/Library/LaunchAgents/${LAUNCH_LABEL}.plist\n`);
 			if (argv[0] === "sh" && argv[1].endsWith("install-chrome-policy.sh")) return ok("chromePolicy=3/3 chrome=present running=no\n");
+			if (argv[0] === "sh" && argv[1].endsWith("install-default-browser.sh")) return ok("defaultBrowser=com.google.Chrome\n");
 			if (argv[0] === "runnerctl" && argv[1] === "status") return ok(`${JSON.stringify({ ok: true, state: "idle" })}\n`);
 
 			return { code: 1, stdout: "", stderr: `unexpected remote argv ${JSON.stringify(argv)}` };
@@ -94,10 +95,10 @@ test("provisionHost__CompletesEveryStep__When__TheHostAnswers", async () => {
 		const result = await provisionHost(host("mac1"), rec.opts);
 
 		assert.equal(result.ok, true, JSON.stringify(result.steps));
-		assert.deepEqual(stepNames(result), ["reach", "sync", "runnerctl", "launchagent", "browser", "ready"]);
+		assert.deepEqual(stepNames(result), ["reach", "sync", "runnerctl", "launchagent", "browser", "defaultbrowser", "ready"]);
 		// The last row is the only proof that matters: launchd accepted the job AND the socket
 		// the job holds is answering.
-		assert.match(result.steps[5].detail ?? "", /runner is idle/);
+		assert.match(result.steps[6].detail ?? "", /runner is idle/);
 
 		// Repo first, then the provisioning payload into the checkout's staging dir.
 		assert.equal(rec.rsync.length, 2);
@@ -186,11 +187,11 @@ test("provisionHost__ReportsNotReady__When__TheRunnerNeverAnswers", async () => 
 		const result = await provisionHost(host("mac1"), rec.opts);
 
 		assert.equal(result.ok, false);
-		assert.deepEqual(stepNames(result), ["reach", "sync", "runnerctl", "launchagent", "browser", "ready"]);
+		assert.deepEqual(stepNames(result), ["reach", "sync", "runnerctl", "launchagent", "browser", "defaultbrowser", "ready"]);
 		assert.equal(result.steps[2].ok, true, "an unreachable socket is not a missing shim");
 		// First boot installs dependencies and compiles the shell, so the operator has to be
 		// told this is plausibly "not yet" rather than "broken".
-		assert.match(result.steps[5].detail ?? "", /npm install/);
+		assert.match(result.steps[6].detail ?? "", /npm install/);
 	});
 });
 
@@ -265,7 +266,7 @@ test("provisionHost__ShipsAnExecutableElectronServeAgent__When__StagingThePayloa
 test("stageProvisioningFiles__WritesTheWholePayload__When__GivenAnEmptyDirectory", async () => {
 	await inTempDir("yarn-source-", (dir) => {
 		const names = stageProvisioningFiles(dir);
-		assert.deepEqual(names.sort(), ["com.yarn.runner.plist.in", "install-chrome-policy.sh", "install-launchagent.sh", "install-runnerctl.sh", "runnerctl", "yarn-runner-serve"]);
+		assert.deepEqual(names.sort(), ["com.yarn.runner.plist.in", "install-chrome-policy.sh", "install-default-browser.sh", "install-launchagent.sh", "install-runnerctl.sh", "runnerctl", "yarn-runner-serve"]);
 		// Idempotent: a second provision reuses the same names, and writeFileSync's mode does
 		// not apply to a file that already exists.
 		fs.chmodSync(path.join(dir, "runnerctl"), 0o600);
@@ -428,7 +429,7 @@ test("provisionHost__StillFinishes__When__TheChromePolicyCannotBeApplied", async
 		const result = await provisionHost(host("mac1"), rec.opts);
 
 		// The pass CONTINUES rather than truncating — `ready` still ran and passed.
-		assert.deepEqual(stepNames(result), ["reach", "sync", "runnerctl", "launchagent", "browser", "ready"]);
+		assert.deepEqual(stepNames(result), ["reach", "sync", "runnerctl", "launchagent", "browser", "defaultbrowser", "ready"]);
 		assert.equal(result.steps.find((s) => s.step === "ready")?.ok, true);
 		// ...and is still graded a failure, so `./run provision` exits nonzero and nobody reads
 		// a silent skip as a success.
@@ -481,6 +482,105 @@ test("stageProvisioningFiles__WritesTheChromePolicyScriptExecutable__When__Stagi
 		// rsync --archive carries the mode across; a shim that arrives non-executable fails as
 		// "Permission denied" on the far side, minutes later.
 		assert.equal(fs.statSync(path.join(dir, "install-chrome-policy.sh")).mode & 0o777, 0o755);
+	});
+});
+
+// --- Default browser. The CDP liveview transport can follow a sign-in's OAuth handoff into
+// the external browser only if that browser IS the debug-flagged persistent-profile Chrome
+// (docs/research/2026-07-31-liveview-transport-alternatives.md named this precondition as
+// unverified). macOS confirms every programmatic default-browser swap with a dialog on the
+// Mac's own console — there is no silent path without MDM — so the step triggers the swap,
+// says a human must click once, and reports what LaunchServices actually answers.
+
+test("provisionHost__PointsTheDefaultBrowserAtChrome__When__ProvisioningAHost", async () => {
+	await inTempDir("yarn-source-", async (source) => {
+		const rec = fleetDouble(source);
+		const result = await provisionHost(host("mac1"), rec.opts);
+
+		const step = result.steps.find((s) => s.step === "defaultbrowser");
+		assert.equal(step?.ok, true, JSON.stringify(result.steps));
+		assert.match(step?.detail ?? "", /defaultBrowser=com\.google\.Chrome/);
+
+		// Same slot logic as `browser`: after the runner exists, before the step that can
+		// legitimately spend three minutes timing out on a first boot.
+		const order = stepNames(result);
+		assert.ok(order.indexOf("defaultbrowser") > order.indexOf("browser"));
+		assert.ok(order.indexOf("defaultbrowser") < order.indexOf("ready"));
+
+		// The staged script, like every installer here — never a command line carrying data.
+		assert.ok(rec.remote.some((argv) => argv[0] === "sh" && argv[1] === `${REMOTE_CHECKOUT}/${STAGE_DIR}/install-default-browser.sh`));
+	});
+});
+
+test("provisionHost__StillFinishes__When__TheDefaultBrowserAwaitsItsHumanClick", async () => {
+	await inTempDir("yarn-source-", async (source) => {
+		// The ordinary first-provision outcome: LaunchServices posted its dialog and nobody was
+		// watching the screen. The host still runs jobs — only liveview OAuth handoffs suffer —
+		// so the pass continues, and the row grades non-ok so nobody reads pending as done.
+		const rec = fleetDouble(source, (argv) =>
+			argv[0] === "sh" && argv[1].endsWith("install-default-browser.sh")
+				? { code: 1, stdout: 'defaultBrowser=com.apple.Safari pending human confirmation — click "Use Google Chrome" on the Mac\'s own screen (./run signin <host>), then re-check with --doctor\n', stderr: "" }
+				: undefined,
+		);
+		const result = await provisionHost(host("mac1"), rec.opts);
+
+		assert.deepEqual(stepNames(result), ["reach", "sync", "runnerctl", "launchagent", "browser", "defaultbrowser", "ready"]);
+		assert.equal(result.steps.find((s) => s.step === "ready")?.ok, true);
+		assert.equal(result.ok, false);
+		// The detail is the script's OWN report — which browser still holds the role and that a
+		// click is owed — not attempt()'s exit-code summary.
+		const step = result.steps.find((s) => s.step === "defaultbrowser");
+		assert.match(step?.detail ?? "", /com\.apple\.Safari/);
+		assert.match(step?.detail ?? "", /pending human confirmation/);
+	});
+});
+
+test("provisionHost__SkipsTheSwap__When__TheOperatorSaysOff", async () => {
+	await inTempDir("yarn-source-", async (source) => {
+		// The swap pops a dialog on the Mac's console. Re-provisioning mid-demo must be able to
+		// leave it alone, and the skip has to grade ok — an operator who said so is not a fault.
+		const prev = process.env.PROVISION_DEFAULT_BROWSER;
+		process.env.PROVISION_DEFAULT_BROWSER = "off";
+		try {
+			const rec = fleetDouble(source);
+			const result = await provisionHost(host("mac1"), rec.opts);
+
+			assert.equal(result.ok, true, JSON.stringify(result.steps));
+			assert.match(result.steps.find((s) => s.step === "defaultbrowser")?.detail ?? "", /skipped/);
+			assert.equal(rec.remote.some((argv) => argv[1]?.endsWith("install-default-browser.sh")), false, "the script must not even be run");
+		} finally {
+			if (prev === undefined) delete process.env.PROVISION_DEFAULT_BROWSER;
+			else process.env.PROVISION_DEFAULT_BROWSER = prev;
+		}
+	});
+});
+
+test("stageProvisioningFiles__ShipsADefaultBrowserScriptThatReadsBeforeItTriggers__When__StagingThePayload", async () => {
+	await inTempDir("yarn-source-", (dir) => {
+		stageProvisioningFiles(dir);
+		const script = fs.readFileSync(path.join(dir, "install-default-browser.sh"), "utf8");
+		assert.equal(fs.statSync(path.join(dir, "install-default-browser.sh")).mode & 0o777, 0o755);
+
+		// Read BEFORE set: an already-converted host must exit without posing the dialog —
+		// that is the idempotence that makes re-provisioning safe mid-demo.
+		assert.ok(script.indexOf('"$BIN" read') < script.indexOf('"$BIN" set'), "the read must come before the trigger");
+
+		// The trigger goes through the compiled LaunchServices helper, never a hand edit of
+		// LaunchServices' own plists — the route that requires an lsregister reset and races
+		// cfprefsd. The known-fragile spellings must not appear at all.
+		for (const fragile of ["LSHandlers", "com.apple.LaunchServices", "lsregister"]) assert.equal(script.includes(fragile), false, `the script must not touch ${fragile}`);
+
+		// The human-click story, stated where the operator will read it: the report line names
+		// the button and the way to reach the screen.
+		assert.match(script, /Use Google Chrome/);
+		assert.match(script, /signin/);
+
+		// The posture note rides with the step: one Chrome per Mac, and the handoff lands in
+		// the RUNNING instance.
+		assert.match(script, /portless Chrome/);
+
+		// Same first-line contract as the other installers — provisionHost reports firstLine().
+		assert.match(script, /^echo "defaultBrowser=/m);
 	});
 });
 
@@ -612,6 +712,26 @@ test("doctorProblems__FlagsTheAutofillDropdown__When__ChromePolicyWasNeverApplie
 	assert.equal(problems.length, 1);
 	assert.match(problems[0], /AutofillAddressEnabled/);
 	assert.match(problems[0], /sign-in stream/);
+});
+
+test("doctorProblems__FlagsTheDefaultBrowser__When__AnotherBrowserHoldsTheHandoff", () => {
+	// The OAuth handoff opens the DEFAULT browser, and only the debug-flagged Chrome is one
+	// the CDP screencast can follow into — a Safari-defaulted host runs jobs fine and fails
+	// exactly the sign-in flow, which is why doctor has to say it out loud.
+	const problems = doctorProblems({ ...HEALTHY, defaultBrowser: "com.apple.Safari" });
+
+	assert.equal(problems.length, 1);
+	assert.match(problems[0], /default browser is com\.apple\.Safari/);
+	// The fix, including the half a re-provision alone cannot do: the click on the Mac's screen.
+	assert.match(problems[0], /provision/);
+	assert.match(problems[0], /Use Google Chrome/);
+});
+
+test("doctorProblems__StaysSilent__When__TheDefaultBrowserIsChromeOrUnreported", () => {
+	assert.deepEqual(doctorProblems({ ...HEALTHY, defaultBrowser: "com.google.Chrome" }), []);
+	// HEALTHY carries no `defaultBrowser` — an older runner, or one whose serve.ts does not
+	// yet report the field. Never grade a question that was never asked.
+	assert.deepEqual(doctorProblems(HEALTHY), []);
 });
 
 test("doctorProblems__StaysQuiet__When__TheRunnerIsTooOldToReportChromePolicy", () => {
