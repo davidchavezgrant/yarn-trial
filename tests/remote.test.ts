@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { enrollHosts } from "../src/remote/control/enroll.js";
-import { type FleetRow, fleetStatus, pickIdleHost, pickShortestQueue } from "../src/remote/control/fleet.js";
+import { type FleetRow, fleetStatus, pickIdleHost, pickShortestQueue, stranded } from "../src/remote/control/fleet.js";
 import { type HostEntry, type Inventory, HOSTS_SCHEMA, importHosts, loadHosts, parseRtsz, resolveHost } from "../src/remote/control/hosts.js";
 import { applyCredentials, parseCredentials, TEAM_SCHEMA } from "../src/remote/control/team.js";
 import { loadRunnerEnv } from "../src/remote/runner/spawn.js";
@@ -685,3 +685,50 @@ function genKey(dir: string): string {
 
 	return path.join(dir, "seed");
 }
+
+test("stranded__MovesAQueuedJobToTheHostThatFreedFirst__When__AnotherMacIsIdle", () => {
+	// The queue is per host and jobs never migrate, so the host holding the line may not be
+	// the one that finishes first. Observed 2026-07-31: mac2 idle for six minutes while an
+	// explore waited behind a long pass on mac1.
+	const rows: any = [
+		{ name: "mac1", reachable: true, state: "busy", jobId: "long-run", queue: [{ jobId: "waiting", queuedAt: "2026-07-31T22:32:00Z" }] },
+		{ name: "mac2", reachable: true, state: "idle" },
+		{ name: "mac3", reachable: true, state: "busy", jobId: "other" },
+	];
+	assert.deepEqual(stranded(rows), [{ job: rows[0].queue[0], from: "mac1", to: "mac2" }]);
+});
+
+test("stranded__MovesNothing__When__EveryHostIsBusy", () => {
+	// Nothing to move to: queueing behind a busy host was the right call and stays right.
+	const rows: any = [
+		{ name: "mac1", reachable: true, state: "busy", queue: [{ jobId: "a", queuedAt: "2026-07-31T22:00:00Z" }] },
+		{ name: "mac2", reachable: true, state: "busy" },
+	];
+	assert.deepEqual(stranded(rows), []);
+});
+
+test("stranded__NeverMovesMoreJobsThanIdleHosts__When__QueuesAreLong", () => {
+	// One job per idle Mac, or a caller acting on the list would oversubscribe the free host
+	// and recreate the queue it was draining.
+	const rows: any = [
+		{ name: "mac1", reachable: true, state: "busy", queue: [
+			{ jobId: "a", queuedAt: "2026-07-31T22:00:00Z" },
+			{ jobId: "b", queuedAt: "2026-07-31T22:05:00Z" },
+			{ jobId: "c", queuedAt: "2026-07-31T22:10:00Z" },
+		] },
+		{ name: "mac2", reachable: true, state: "idle" },
+	];
+	const moves = stranded(rows);
+	assert.equal(moves.length, 1);
+	// And it is the one that has waited LONGEST, not whichever happens to be first in the array.
+	assert.equal(moves[0].job.jobId, "a");
+});
+
+test("stranded__IgnoresUnreachableHosts__When__OneIsDown", () => {
+	// An unreachable host is not idle capacity, however its last-known state reads.
+	const rows: any = [
+		{ name: "mac1", reachable: true, state: "busy", queue: [{ jobId: "a", queuedAt: "2026-07-31T22:00:00Z" }] },
+		{ name: "mac2", reachable: false, state: "idle" },
+	];
+	assert.deepEqual(stranded(rows), []);
+});

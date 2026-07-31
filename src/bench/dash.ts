@@ -49,6 +49,7 @@ export interface EntryView {
 	 * answered and no longer holds it; the manifest's stale state string otherwise.
 	 */
 	status: string;
+	/** Seconds the run has been going (running) or took per its own log (collected). */
 	elapsedSec?: number;
 	queuePosition?: number;
 	stalled?: boolean;
@@ -159,6 +160,7 @@ function entryView(e: ManifestEntry, fleet: FleetView): EntryView {
 			...(m?.success !== undefined ? { success: m.success } : {}),
 			...(m?.failureKind ? { failureKind: m.failureKind } : {}),
 			...(m?.steps !== undefined ? { steps: m.steps } : {}),
+			...(m?.elapsedSec !== undefined ? { elapsedSec: m.elapsedSec } : {}),
 			...(m?.verifiedSteps !== undefined ? { verifiedSteps: m.verifiedSteps } : {}),
 			...(m?.modelCalls !== undefined ? { modelCalls: m.modelCalls } : {}),
 			...(m?.outputTokens !== undefined ? { outputTokens: m.outputTokens } : {}),

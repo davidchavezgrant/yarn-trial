@@ -131,6 +131,21 @@ export interface ProvisionOptions {
 	syncTimeoutMs?: number;
 	/** 0 makes `ready` a single probe with no sleep, which is what tests want. */
 	readyTimeoutMs?: number;
+	/**
+	 * Ship the code and STOP — no runnerctl shim, no LaunchAgent, no browser policy.
+	 *
+	 * Exists because install-launchagent.sh does `launchctl bootout` before bootstrap, so a
+	 * full provision RESTARTS THE RUNNER. That is correct when setting a Mac up and
+	 * destructive when one is working: the restart's sweepOrphans() finds the in-flight job's
+	 * record with a dead pid and marks it `orphaned`. A completed 118-action explore was
+	 * orphaned this way on 2026-07-31 by a provision fired to sync code before dispatching a
+	 * DIFFERENT arm.
+	 *
+	 * rsyncing source under a running job is safe on its own — Node has already loaded its
+	 * modules, so the running process is unaffected and only the NEXT job picks up new code,
+	 * which is exactly what a pre-dispatch sync wants.
+	 */
+	syncOnly?: boolean;
 }
 
 /**
@@ -190,6 +205,9 @@ export async function provisionHost(host: HostEntry, opts: ProvisionOptions = {}
 	}
 	if (!synced.ok) return fail("sync", synced.detail);
 	steps.push({ step: "sync", ok: true, detail: `${source} -> ${REMOTE_CHECKOUT}/` });
+	// Everything below either installs or bounces something. A sync-only pass stops here so it
+	// cannot disturb a Mac that is mid-run.
+	if (opts.syncOnly) return { host: host.name, ok: true, steps };
 
 	const shim = await attempt(() => run(host, ["sh", `${REMOTE_CHECKOUT}/${STAGE_DIR}/install-runnerctl.sh`], { timeoutMs }));
 	if (!shim.ok) return fail("runnerctl", shim.detail);

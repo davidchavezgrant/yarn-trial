@@ -181,6 +181,37 @@ export function pickShortestQueue(rows: FleetRow[]): FleetRow | undefined {
 	return busy.reduce((best, r) => ((r.queue?.length ?? 0) < (best.queue?.length ?? 0) ? r : best));
 }
 
+/**
+ * Queued jobs that should move, because a host went idle after they were queued elsewhere.
+ *
+ * The queue is PER HOST and jobs never migrate: `dispatch auto` picks a host at submit time,
+ * and once no host is idle it queues on the shortest line. That choice is right at submit
+ * time and wrong a minute later — whichever host finishes FIRST may not be the one holding
+ * the line. Observed 2026-07-31: mac2 sat idle for six minutes while an explore waited behind
+ * a long-running pass on mac1.
+ *
+ * Moving a QUEUED job is cheap and safe: it has no process yet (pid 0), so cancelling it
+ * destroys no work — only the bookkeeping. A RUNNING job is never touched.
+ *
+ * Returns pairs oldest-queued-first, one per idle host, so a caller moving them cannot
+ * oversubscribe a Mac. Advisory like the pickers above: the state read here can be a round
+ * trip stale, and the re-submit's reply is the truth.
+ */
+export function stranded(rows: FleetRow[]): Array<{ job: FleetQueueEntry; from: string; to: string }> {
+	const idle = rows.filter((r) => r.reachable && r.state === "idle");
+	if (!idle.length) return [];
+	// Oldest first across all queues: the job that has waited longest has the best claim on
+	// the first free Mac, regardless of which line it is standing in.
+	const waiting = rows
+		.filter((r) => r.reachable && (r.queue?.length ?? 0) > 0)
+		.flatMap((r) => (r.queue ?? []).map((job) => ({ job, from: r.name })))
+		// queuedAt is an ISO string; oldest first means SMALLEST timestamp. An entry without
+		// one sorts last rather than first — an unknown wait is not evidence of a long one.
+		.sort((a, b) => (a.job.queuedAt ?? "9999").localeCompare(b.job.queuedAt ?? "9999"));
+
+	return waiting.slice(0, idle.length).map((w, i) => ({ ...w, to: idle[i].name }));
+}
+
 /** `./run hosts` — the fleet as a table. The `reason` column is the whole value of this view. */
 async function main(): Promise<void> {
 	const rows = await fleetStatus();

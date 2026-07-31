@@ -293,9 +293,11 @@ async function syncFleet(opts: PhaseOptions, log: (s: string) => void): Promise<
 	try {
 		const { provisionFleet } = await import("../remote/control/provision.js");
 		const { loadHosts } = await import("../remote/control/hosts.js");
-		const rows = await provisionFleet(loadHosts());
+		// syncOnly: a FULL provision reinstalls the LaunchAgent, which boots the runner out and
+		// orphans whatever it was running. Dispatching one arm must never kill another's work.
+		const rows = await provisionFleet(loadHosts(), { syncOnly: true });
 		const bad = rows.filter((r) => !r.ok);
-		log(`fleet synced: ${rows.length - bad.length}/${rows.length} host(s) up to date${bad.length ? ` — ${bad.map((r) => r.host).join(", ")} FAILED` : ""}`);
+		log(`fleet code synced (no runner restart): ${rows.length - bad.length}/${rows.length} host(s)${bad.length ? ` — ${bad.map((r) => r.host).join(", ")} FAILED` : ""}`);
 	} catch (e) {
 		log(`fleet sync skipped: ${(e as Error).message}`);
 	}

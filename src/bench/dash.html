@@ -67,7 +67,8 @@
 
 	/* matrix board */
 	table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
-	th { text-align: left; font-size: 11px; color: var(--muted); font-weight: 500; padding: 3px 10px 3px 0; border-bottom: 1px solid var(--grid); }
+	th { text-align: left; font-size: 11px; color: var(--ink-2); font-weight: 500; padding: 3px 10px 3px 0; border-bottom: 1px solid var(--grid); }
+	th[data-tip] { cursor: help; text-decoration: underline dotted var(--baseline); text-underline-offset: 3px; }
 	td { padding: 4px 10px 4px 0; border-bottom: 1px solid var(--grid); font-size: 12px; vertical-align: top; }
 	tr:last-child td { border-bottom: none; }
 	td.arm { color: var(--ink); white-space: nowrap; }
@@ -282,7 +283,13 @@ function statusChip(e) {
 		: esc(e.status);
 	if (e.status === "queued" && e.queuePosition) label += " #" + e.queuePosition;
 	if (e.stalled) label += " ⚠stalled";
-	const extra = e.collected && e.steps != null ? ` · ${e.steps} steps${e.usd != null ? " · " + fmtMoney(e.usd) : ""}` : "";
+	// Collected chips answer "what did this run amount to": steps, how long it ran
+	// (job-record run time, else the run log's own clock), and what it cost.
+	const ranFor = e.runSec ?? e.elapsedSec;
+	const extra = e.collected
+		? [e.steps != null ? `${e.steps} steps` : "", ranFor != null ? fmtDur(ranFor) : "", e.usd != null ? fmtMoney(e.usd) : ""]
+			.filter(Boolean).map((p) => ` · ${p}`).join("")
+		: "";
 	const judge = e.judgeTrajectory ? ` · judge ${e.judgeTrajectory[0]}` : "";
 	return `<span class="chip" data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${e.note ? "\n" + esc(e.note) : ""}">` +
 		`<span class="dot" style="background:${color}"></span>${esc(e.host)} · ${label}${esc(extra)}${esc(judge)}</span>`;
@@ -319,31 +326,66 @@ function armOf(jobId) {
 	return null;
 }
 
+// Explore passes and task runs measure different things, so each section of the board gets
+// its own header row — an explore's discovery numbers must never sit under "steps"/"tokens"
+// columns, and an explore has no success ratio to show (its stamp has no success field;
+// rendering one as "0/1 ok" read as a failure).
+const th = (label, tip) => `<th${tip ? ` data-tip="${esc(tip)}"` : ""}>${label}</th>`;
+const TASK_HEAD = "<tr>" + th("arm", "hover a row's arm for the decision it informs") + th("flags") +
+	th("done", "collected / planned runs") + th("ok", "succeeded / collected") +
+	th("steps", "mean actions per run") + th("time", "mean wall-clock per run") +
+	th("out-tok", "mean output tokens per run") + th("est $", "published-rate estimate across collected runs — not an invoice") +
+	th("runs", "one chip per run — hover for the job id") + "</tr>";
+const EXPLORE_HEAD = "<tr>" + th("arm", "hover a row's arm for the decision it informs") + th("flags") +
+	th("done", "collected / planned passes") + th("actions", "actions the pass took (elapsed on hover)") +
+	th("controls", "actuated / dismissed / seen") + th("surfaces") +
+	th("nodes", "appmap graph nodes (edges on hover)") + th("ambig", "dual-scope settings the graph flags") +
+	th("runs", "one chip per pass — hover for the job id") + "</tr>";
+
+function armCell(a, p) {
+	return `<td class="arm" data-tip="${esc(a.informs || "")}">${esc(a.id)}${p.model !== "(default)" ? `<div class="meta">${esc(p.model)}</div>` : ""}</td>
+		<td class="flags">${esc(a.flags)}</td>
+		<td class="num">${p.collected}/${a.n}</td>`;
+}
+
+function taskRow(a, p) {
+	return `<tr>${armCell(a, p)}
+		<td class="num">${p.collected ? p.successes + "/" + p.collected : "–"}</td>
+		<td class="num">${fmtNum(p.meanSteps)}</td>
+		<td class="num">${p.meanElapsedSec != null ? fmtDur(p.meanElapsedSec) : "–"}</td>
+		<td class="num">${fmtK(p.meanOutputTokens)}</td>
+		<td class="num">${p.usd ? fmtMoney(p.usd) : p.unpriced ? "?×" + p.unpriced : "–"}</td>
+		<td>${p.entries.map(statusChip).join("")}</td></tr>`;
+}
+
+function exploreRow(a, p) {
+	const ex = p.explore || {};
+	const controls = ex.controlsSeen != null
+		? `<span data-tip="actuated ${ex.controlsActuated} · dismissed ${ex.controlsDismissed} · seen ${ex.controlsSeen}">${ex.controlsActuated} / ${ex.controlsDismissed} / ${ex.controlsSeen}</span>`
+		: "–";
+	return `<tr>${armCell(a, p)}
+		<td class="num"><span data-tip="${esc(ex.elapsed ? "elapsed " + ex.elapsed : "")}">${fmtNum(ex.actions)}</span></td>
+		<td class="num">${controls}</td>
+		<td class="num">${fmtNum(ex.surfaces)}</td>
+		<td class="num"><span data-tip="${ex.graphEdges != null ? ex.graphEdges + " edges" : ""}">${fmtNum(ex.graphNodes)}</span></td>
+		<td class="num">${fmtNum(ex.scopeAmbiguities)}</td>
+		<td>${p.entries.map(statusChip).join("")}</td></tr>`;
+}
+
 function renderBoard() {
 	const phases = [...new Set(state.arms.map((a) => a.phase))].sort();
-	let html = `<table><tr><th>arm</th><th>flags</th><th>done</th><th>ok</th><th>steps x̄</th><th>s x̄</th><th>tok x̄</th><th>$</th><th>runs</th></tr>`;
+	let html = "<table>";
 	for (const ph of phases) {
-		const arms = state.arms.filter((a) => a.phase === ph && a.kind !== "compile");
-		if (!arms.some((a) => a.passes.length)) continue;
+		const arms = state.arms.filter((a) => a.phase === ph && a.kind !== "compile" && a.passes.length);
+		if (!arms.length) continue;
 		html += `<tr class="phase-h"><td colspan="9">phase ${ph}</td></tr>`;
-		for (const a of arms) {
-			if (!a.passes.length) continue;
-			for (const p of a.passes) {
-				const ex = p.explore;
-				const mid = ex
-					? `<td colspan="4" class="num">${ex.controlsActuated != null ? `${ex.controlsActuated}/${ex.controlsDismissed}/${ex.controlsSeen} controls · ${ex.surfaces ?? "–"} surfaces · ${ex.graphNodes ?? "–"} nodes · ${ex.scopeAmbiguities ?? "–"} ambig` : "–"}</td>`
-					: `<td class="num">${fmtNum(p.meanSteps)}</td><td class="num">${p.meanElapsedSec != null ? fmtDur(p.meanElapsedSec) : "–"}</td><td class="num">${fmtK(p.meanOutputTokens)}</td><td class="num">${p.usd ? fmtMoney(p.usd) : p.unpriced ? "?×" + p.unpriced : "–"}</td>`;
-				html += `<tr><td class="arm" data-tip="${esc(a.informs || "")}">${esc(a.id)}${p.model !== "(default)" ? `<div class="meta">${esc(p.model)}</div>` : ""}</td>
-					<td class="flags">${esc(a.flags)}</td>
-					<td class="num">${p.collected}/${a.n}</td>
-					<td class="num">${p.collected ? p.successes + "/" + p.collected : "–"}</td>
-					${mid}
-					<td>${p.entries.map(statusChip).join("")}</td></tr>`;
-			}
-		}
+		const explores = arms.filter((a) => a.kind === "explore");
+		const tasks = arms.filter((a) => a.kind !== "explore");
+		if (explores.length) html += EXPLORE_HEAD + explores.flatMap((a) => a.passes.map((p) => exploreRow(a, p))).join("");
+		if (tasks.length) html += TASK_HEAD + tasks.flatMap((a) => a.passes.map((p) => taskRow(a, p))).join("");
 	}
 	$("board").innerHTML = html + "</table>";
-	$("board-sub").textContent = `${state.progress.submitted} submitted of ${state.progress.planned} planned runs · ${state.progress.collected} collected`;
+	$("board-sub").textContent = `${state.progress.submitted} submitted of ${state.progress.planned} planned runs · ${state.progress.collected} collected · hover headers and chips for definitions`;
 }
 
 function renderExplore() {

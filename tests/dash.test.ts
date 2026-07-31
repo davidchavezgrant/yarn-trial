@@ -70,7 +70,7 @@ test("BuildState__RollsUpSuccessAndCost__When__EntriesAreCollected", () => {
 				jobId: "job-ok",
 				state: "done",
 				collected: true,
-				metrics: { success: true, steps: 5, model: "claude-opus-5", inputTokens: 1_000_000, outputTokens: 100_000, endedAt: "2026-07-31T20:10:00.000Z" },
+				metrics: { success: true, steps: 5, elapsedSec: 205, model: "claude-opus-5", inputTokens: 1_000_000, outputTokens: 100_000, endedAt: "2026-07-31T20:10:00.000Z" },
 			}),
 			entry({ jobId: "job-bad", state: "failed", collected: true, metrics: { success: false, failureKind: "unready" } }),
 		),
@@ -81,6 +81,8 @@ test("BuildState__RollsUpSuccessAndCost__When__EntriesAreCollected", () => {
 	const p = armView(s, "p2-ax-grounded")?.passes[0];
 	assert.equal(p?.collected, 2);
 	assert.equal(p?.successes, 1);
+	// The chip's "ran for" readout: the run log's own clock reaches the wire on collected entries.
+	assert.equal(p?.entries.find((e) => e.jobId === "job-ok")?.elapsedSec, 205);
 	// claude-opus-5: $5/M input + $25/M output → 1M in + 0.1M out = $7.50
 	assert.ok(Math.abs((p?.usd ?? 0) - 7.5) < 1e-9);
 	assert.equal(p?.failureBreakdown, "unready 1");

@@ -8,8 +8,8 @@
 
 | arm | model | flags | actions | elapsed | calls | out-tok | $ | actuated/dismissed/seen | surfaces | nodes | edges | ambiguities |
 |---|---|---|---|---|---|---|---|---|---|
-| p1-explore-ax | (default) | --backend ax | 96 | 40m | — | — | ?×1 | 47/350/396 | 34 | 150 | 71 | 10 |
-| p1-explore-cdp | (default) | --backend cdp | — | — | — | — | — | — | — | — | — | — |
+| p1-explore-ax | (default) | --backend ax | — | — | — | — | — | — | — | — | — | — |
+| p1-explore-cdp | (default) | --backend cdp | 118 | 36m | 333 | 52608 | ?×1 | 55/1933/1985 | 63 | 196 | 54 | 15 |
 | p1-explore-web-cdp | (default) | --backend cdp --url https://app.notion.com | — | — | — | — | — | — | — | — | — | — |
 | p1-explore-vision | (default) | --backend ax --no-ax | — | — | — | — | — | — | — | — | — | — |
 
@@ -112,12 +112,12 @@ _No run has judge metrics yet — run `./run bench judge` after runs land, then 
 
 | arm | job | host | queue wait s | run s |
 |---|---|---|---|---|
-| p1-explore-ax | explore-2026-07-31T21-58-58-241-yarn | mac1 | — | 1674 |
+| p1-explore-cdp | explore-2026-07-31T21-59-02-351-yarn | mac2 | — | 2165 |
 
 ## Raw stamps per arm
 
-- **p1-explore-ax**: `explore-2026-07-31T21-58-58-241-yarn` (mac1)
-- **p1-explore-cdp**: `explore-2026-07-31T21-59-02-351-yarn` (mac2, uncollected)
+- **p1-explore-ax**: `explore-2026-07-31T22-41-01-629-yarn` (mac2, uncollected)
+- **p1-explore-cdp**: `explore-2026-07-31T21-59-02-351-yarn` (mac2)
 - **p1-explore-web-cdp**: `explore-2026-07-31T21-59-06-554-https-app.notion.com` (mac3, uncollected)
 - **p1-explore-vision**: `explore-2026-07-31T21-59-10-834-yarn` (mac1, uncollected)
 

@@ -861,3 +861,21 @@ test("doctorProblems__StaysSilent__When__TheRunnerIsTooOldToReportTheLock", () =
 	assert.deepEqual(doctorProblems({ ...HEALTHY, screenLocked: undefined }), []);
 	assert.deepEqual(doctorProblems({ ...HEALTHY, screenLocked: false }), []);
 });
+
+test("provisionHost__ShipsCodeWithoutTouchingTheRunner__When__SyncOnly", async () => {
+	// A full provision runs install-launchagent.sh, which does `launchctl bootout` before
+	// bootstrap — so it RESTARTS the runner, and the restart's sweepOrphans() marks whatever
+	// was in flight as `orphaned`. A completed 118-action explore was lost that way on
+	// 2026-07-31 by a provision fired only to sync code before dispatching a different arm.
+	await inTempDir("yarn-source-", async (source) => {
+		const rec = fleetDouble(source);
+		const res = await provisionHost(host("mac1"), { ...rec.opts, syncOnly: true });
+
+		assert.equal(res.ok, true, JSON.stringify(res.steps));
+		// Sync happened; nothing after it did.
+		assert.deepEqual(stepNames(res), ["reach", "sync"]);
+		// And nothing invoked the installer that boots the agent out.
+		const flat = rec.remote.map((c) => c.join(" ")).join(" | ");
+		assert.ok(!/install-launchagent/.test(flat), "syncOnly must never run the LaunchAgent installer");
+	});
+});
