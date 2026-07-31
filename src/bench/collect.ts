@@ -367,11 +367,16 @@ function collectEntry(entry: ManifestEntry, job: JobRecord | undefined, dataDir:
 
 	if (arm?.kind === "explore") {
 		// The job record names the exact artifact paths; the slug fallback covers a job record
-		// that carries none (older runner, or a record written before the queue drain).
-		// Falls back to the shared derivation when the record has no artifact path — a record
-		// written before the slug was unified, or one from a kind that does not list them.
-		const md = path.join(dataDir, job?.artifacts?.appmap ?? `docs/appmaps/${appmapSlug(arm.app, { visionOnly: Boolean(arm.dispatch.noAx) })}.md`);
-		const graphFile = job?.artifacts?.appmapGraph ? path.join(dataDir, job.artifacts.appmapGraph) : md.replace(/\.md$/, ".json");
+		// that carries none (older runner, or a record written before the queue drain) — and a
+		// record whose path names a file that DOES NOT EXIST. That last case is real: a runner
+		// running pre-unification code recorded `https-app.notion.com.md` for a pass that wrote
+		// `web-app.notion.com.md`, and honoring the stale record over the shared derivation
+		// re-froze empty metrics on every re-collect. The record wins only when its file is there.
+		const derived = path.join(dataDir, `docs/appmaps/${appmapSlug(arm.app, { visionOnly: Boolean(arm.dispatch.noAx) })}.md`);
+		const recorded = job?.artifacts?.appmap ? path.join(dataDir, job.artifacts.appmap) : undefined;
+		const md = recorded && fs.existsSync(recorded) ? recorded : derived;
+		const recordedGraph = job?.artifacts?.appmapGraph ? path.join(dataDir, job.artifacts.appmapGraph) : undefined;
+		const graphFile = recordedGraph && fs.existsSync(recordedGraph) ? recordedGraph : md.replace(/\.md$/, ".json");
 		try {
 			metrics = { ...metrics, ...parseAppmapStamp(fs.readFileSync(md, "utf8")) };
 		} catch {
