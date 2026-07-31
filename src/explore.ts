@@ -38,6 +38,7 @@ import {
 	type WindowRef,
 } from "./harness.js";
 import { ensureBrowser } from "./browser.js";
+import { CDP_ACT_TOOL, CDP_FIND_TOOL, CDP_RULES, CdpBackend } from "./cdp.js";
 import { DOM_ACT_TOOL, DOM_RULES, DomBackend, FIND_TOOL } from "./dom.js";
 import { startOverlay } from "./overlay.js";
 import { appmapsDir } from "./paths.js";
@@ -279,19 +280,26 @@ async function main(): Promise<void> {
 	// Optional per-run guidance: relaxes or tightens the safety rules for this app
 	// (e.g. "creating a draft is allowed; use <address> if a form needs an email").
 	const guidance = target.kind === "web" ? positional[0] : positional[1];
-	// A web target defaults to the CDP backend: it snapshots the page rather than the window,
-	// so the browser's own tab strip, omnibox and menu bar never reach the frontier.
+	// A web target defaults to a page-snapshot backend: it observes the page rather than the
+	// window, so the browser's own tab strip, omnibox and menu bar never reach the frontier.
 	const backendKind = backendIdx >= 0 ? (argv[backendIdx + 1] ?? "ax") : target.kind === "web" ? "dom" : "ax";
-	if (!["ax", "dom"].includes(backendKind)) {
-		console.error('usage: tsx src/explore.ts ["App Name" | --url <https://…>] ["guidance"] [--backend ax|dom]');
+	if (!["ax", "dom", "cdp"].includes(backendKind)) {
+		console.error('usage: tsx src/explore.ts ["App Name" | --url <https://…>] ["guidance"] [--backend ax|dom|cdp]');
+		console.error("--backend cdp explores over CDP directly (playwright-core) with NO cua in the loop; web targets get their own Chrome, Electron targets need --remote-debugging-port.");
 		process.exit(1);
 	}
 	const { client, model } = makeClient();
 	// A grounding pass clicks through the whole app for minutes on end — same takeover as a
 	// task run, different colour so the mode is readable at a glance.
 	const overlay = startOverlay("explore", `Agent exploring ${app} — do not touch`);
-	const driver = await Driver.start("explore");
-	const interrupted = onInterrupt(() => driver.close());
+	// Same posture as agent.ts: the CDP backend runs with no cua driver at all — that absence
+	// is its reason to exist. Everything below that needs the driver is conditional on this.
+	const driver = backendKind === "cdp" ? undefined : await Driver.start("explore");
+	let cdp: CdpBackend | undefined;
+	const interrupted = onInterrupt(async () => {
+		await driver?.close();
+		await cdp?.close();
+	});
 	const findings: string[] = [];
 	const slug = targetSlug(target);
 	const outPath = `${appmapsDir()}/${slug}.md`;
@@ -454,33 +462,43 @@ async function main(): Promise<void> {
 		// A web target has no app to launch: the driver brings up its own Chromium against a
 		// persistent profile and navigates it, which is also what makes a logged-in site
 		// reachable without handling credentials here.
-		let win: WindowRef;
-		if (target.kind === "web") {
-			({ win } = await ensureBrowser(driver, target, { cdp: backendKind === "dom" }));
+		// On the CDP backend there is no driver and no window: the page is the target, and
+		// acquisition (launch-or-attach, tab pick, navigate) lives in CdpBackend.acquire.
+		let win: WindowRef | undefined;
+		if (backendKind === "cdp") {
+			cdp = await CdpBackend.acquire(target);
+		} else if (target.kind === "web") {
+			({ win } = await ensureBrowser(driver!, target, { cdp: backendKind === "dom" }));
 		} else {
-			await driver.act({ kind: "tool", name: "launch_app", args: { name: app } });
+			await driver!.act({ kind: "tool", name: "launch_app", args: { name: app } });
 			await new Promise((r) => setTimeout(r, 1500));
 			// Reassigned by ensureObservable — see the same call in src/agent.ts.
-			win = await findWindow(driver, app);
+			win = await findWindow(driver!, app);
 		}
 		// Last chance to take your hands off before the run owns the pointer.
 		await overlay.countdown();
 		// Exploration runs once and its whole purpose is coverage, so it exhausts the
 		// continuation chain on every observation — the opposite tradeoff from the agent
-		// loop, which re-observes after every action and pays per-step for depth.
+		// loop, which re-observes after every action and pays per-step for depth. (The CDP
+		// backend has no such chain: ariaSnapshot returns the whole tree in one call.)
 		const dom =
 			backendKind === "dom"
-				? await DomBackend.bind(driver, win, Infinity, target.kind === "web" ? target.origin : undefined)
+				? await DomBackend.bind(driver!, win!, Infinity, target.kind === "web" ? target.origin : undefined)
 				: undefined;
-		if (!dom) win = await ensureObservable(driver, win, app);
+		if (!dom && !cdp) win = await ensureObservable(driver!, win!, app);
 		// webAreaOnly keeps the browser's own tab strip, omnibox and menu bar out of the
 		// frontier on the AX fallback. A no-op for a Mac app, and unreachable on the DOM
-		// backend, which snapshots the page rather than the window.
+		// and CDP backends, which observe the page rather than the window.
 		const webAreaOnly = target.kind === "web";
-		const doObserve = (name: string) => (dom ? dom.observe(name, Infinity) : observe(driver, win, name, { webAreaOnly }));
-		tools = dom ? [DOM_ACT_TOOL, FIND_TOOL, ...EXTRA_TOOLS] : [ACT_TOOL, ...EXTRA_TOOLS];
-		basePrompt = systemPrompt(dom ? DOM_RULES : DRIVER_RULES, targetVocabulary(target));
-		console.log(`exploring ${app} pid=${win.pid} window=${win.windowId} backend=${backendKind}`);
+		const doObserve = (name: string) =>
+			cdp ? cdp.observe(name) : dom ? dom.observe(name, Infinity) : observe(driver!, win!, name, { webAreaOnly });
+		tools = cdp ? [CDP_ACT_TOOL, CDP_FIND_TOOL, ...EXTRA_TOOLS] : dom ? [DOM_ACT_TOOL, FIND_TOOL, ...EXTRA_TOOLS] : [ACT_TOOL, ...EXTRA_TOOLS];
+		basePrompt = systemPrompt(cdp ? CDP_RULES : dom ? DOM_RULES : DRIVER_RULES, targetVocabulary(target));
+		console.log(
+			cdp
+				? `exploring ${app} url=${target.kind === "web" ? target.url : "(attached)"} backend=cdp`
+				: `exploring ${app} pid=${win!.pid} window=${win!.windowId} backend=${backendKind}`,
+		);
 		console.log(`ends when the frontier empties; no time cap, action backstop ${MAX_ACTIONS}\n`);
 
 		let blindStreak = 0;
@@ -667,7 +685,7 @@ async function main(): Promise<void> {
 				const q = (toolUse.input as { query: string }).query;
 				let text: string;
 				try {
-					const hits = await dom!.find(q);
+					const hits = await (cdp ?? dom!).find(q);
 					text = hits.length
 						? `find("${q}") matched ${hits.length}:\n` +
 							hits
@@ -726,10 +744,16 @@ async function main(): Promise<void> {
 			overlay.setDriving(true);
 			try {
 				try {
-					const request = dom ? await dom.toRequest(input.action) : toActionRequest(input.action, win);
-					resultText = request
-						? (await driver.act(request)).text.slice(0, 400)
-						: "waited (no driver action)";
+					if (cdp) {
+						// Acts directly — no driver dispatch. assertSupported inside act() rejects
+						// unknown verbs before anything executes, same contract as toActionRequest.
+						resultText = (await cdp.act(input.action)).slice(0, 400);
+					} else {
+						const request = dom ? await dom.toRequest(input.action) : toActionRequest(input.action, win!);
+						resultText = request
+							? (await driver!.act(request)).text.slice(0, 400)
+							: "waited (no driver action)";
+					}
 				} catch (err) {
 					resultText = `ACTION FAILED: ${err instanceof Error ? err.message : String(err)}`;
 					isError = true;
@@ -881,7 +905,9 @@ async function main(): Promise<void> {
 			console.log(`graph checkpoint (not promoted to docs/appmaps): ${checkpointPath}`);
 		}
 	} finally {
-		await driver.close();
+		await driver?.close();
+		// Disconnects only — the browser stays up holding the signed-in profile (src/cdp.ts).
+		await cdp?.close();
 		overlay.stop();
 	}
 }
