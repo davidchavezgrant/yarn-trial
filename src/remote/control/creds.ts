@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { appSlug } from "../../paths.js";
-import { sanitiseOperator } from "../runner/profiles.js";
+import { exportProfile } from "../runner/credbundle.js";
+import { resolveBundleId, sanitiseOperator } from "../runner/profiles.js";
 import {
 	bundleSource,
 	credRoot,
@@ -52,6 +53,14 @@ import {
  *  - CHECK-IN, after a run: pull the box's now-current session home and re-seal it into the vault,
  *    so the next run — anywhere — starts from what this run left behind. This is the write that
  *    keeps the vault authoritative, and it carries any refresh token the run rotated.
+ *
+ * CHECK-IN HAS A LOCAL FORM, and it is the PREFERRED one: `checkinSession({ host: LOCAL_HOST })`
+ * snapshots the session on the OPERATOR'S OWN machine and seals it straight into the vault — no
+ * remote box, no ssh. Sign-in is the hard, human part (MFA/SSO/a password manager), and doing it
+ * on a machine the operator is already sitting at is trivial, where doing it on a colo box needs
+ * the whole remote-sign-in apparatus (liveview, screen share, TCC-responsible-process handling).
+ * So authenticate where it is easy, capture there, and let checkout distribute to the fleet. The
+ * remote capture path stays for the case where a session only ever existed on a box.
  *
  * The two rules the rest of the fleet holds apply here unchanged: the app name and operator cross
  * ONLY inside a base64 spec (`runnerArgv`), and the only path that crosses is a staging path the
@@ -115,6 +124,11 @@ export interface CredDeps {
 	/** Local staging dir for the plaintext tar in transit. Defaults to a fresh temp dir. */
 	stageDir?: string;
 	env?: NodeJS.ProcessEnv;
+	/** LOCAL capture only: the home dir and profile store to snapshot. Injected in tests; production uses the real ones. */
+	home?: string;
+	root?: string;
+	/** LOCAL capture only: skip the app quit. Injected in tests so the suite never quits a real app. */
+	quit?: (app: string) => Promise<void>;
 }
 
 function deps(d: CredDeps): {
@@ -208,6 +222,9 @@ export async function checkoutSession(
 	}
 }
 
+/** The pseudo-host for capturing on the operator's OWN machine instead of a fleet box. */
+export const LOCAL_HOST = "local";
+
 export interface CheckinResult {
 	ok: boolean;
 	host: string;
@@ -230,11 +247,50 @@ export async function checkinSession(
 	args: { host: HostEntry | string; app: string; operator?: string; signedIn?: boolean },
 	d: CredDeps = {},
 ): Promise<CheckinResult> {
-	const { inv, run, rsync, vault, key, stage } = deps(d);
-	const host = toHost(args.host, inv);
 	const operator = (args.operator ?? defaultOperator()).trim() || defaultOperator();
 	const op = sanitiseOperator(operator);
 	const slug = appSlug(args.app);
+
+	// LOCAL capture — the preferred path (see the module header): the operator signs in on their
+	// OWN machine and the session is sealed straight into the vault, with no remote box and no ssh.
+	// `exportProfile` runs against this laptop's own ~/Library (quitting the local app first for a
+	// clean snapshot). `assumeOwned` is set because a personal machine has no runner-managed
+	// owners.json — whatever is signed in is the operator's.
+	if (typeof args.host === "string" && args.host.trim().toLowerCase() === LOCAL_HOST) {
+		const vault = d.vaultRoot ?? credRoot();
+		const key = loadOrCreateKey(vault, d.env ?? process.env);
+		const stageDir = d.stageDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "yarn-vault-"));
+		const localTar = path.join(stageDir, `${op}-${slug}.local.tar.gz`);
+		let exp: Awaited<ReturnType<typeof exportProfile>>;
+		try {
+			const bundleId = await resolveBundleId(args.app);
+			exp = await exportProfile({
+				app: args.app,
+				operator,
+				outFile: localTar,
+				assumeOwned: true,
+				...(bundleId ? { bundleId } : {}),
+				...(d.home ? { home: d.home } : {}),
+				...(d.root ? { root: d.root } : {}),
+				...(d.quit ? { quit: d.quit } : {}),
+			});
+		} catch (e) {
+			return { ok: false, host: LOCAL_HOST, app: args.app, operator, stored: false, error: `could not snapshot the local ${args.app} session: ${(e as Error).message}` };
+		}
+		if (!exp.found) return { ok: true, host: LOCAL_HOST, app: args.app, operator, stored: false, source: exp.source };
+		try {
+			const tar = fs.readFileSync(localTar);
+			putBundle(vault, key, op, slug, tar);
+			recordCheckin(vault, { operator: op, slug, app: args.app, host: LOCAL_HOST, sha256: sha256(tar), signedIn: args.signedIn !== false });
+
+			return { ok: true, host: LOCAL_HOST, app: args.app, operator, stored: true, bytes: tar.length, source: exp.source };
+		} finally {
+			fs.rmSync(localTar, { force: true });
+		}
+	}
+
+	const { inv, run, rsync, vault, key, stage } = deps(d);
+	const host = toHost(args.host, inv);
 
 	const exp = lastFrame((await run(host, runnerArgv("credexport", { app: args.app, operator }), { timeoutMs: CALL_TIMEOUT_MS })).stdout);
 	if (exp?.ok !== true) return { ok: false, host: host.name, app: args.app, operator, stored: false, error: String(exp?.error ?? "") || `credexport refused on ${host.name}` };
@@ -375,14 +431,16 @@ export async function signoutEverywhere(args: { app: string; operator?: string }
 
 // ── CLI ─────────────────────────────────────────────────────────────────────────────────────
 
-const USAGE = `usage: ./run creds status                    what the vault holds, per operator + app
-       ./run creds audit [n]                  the last n credential events (default 40)
-       ./run creds checkin <mac> "<App>"      pull this box's current session into the vault
-       ./run creds checkout <mac> "<App>"     push the vault's session onto this box
-       ./run creds signout-everywhere "<App>" wipe this operator's session across the whole fleet
+const USAGE = `usage: ./run creds status                     what the vault holds, per operator + app
+       ./run creds audit [n]                   the last n credential events (default 40)
+       ./run creds checkin local "<App>"       seal THIS Mac's session into the vault (the easy path: sign in here)
+       ./run creds checkin <mac> "<App>"       seal a fleet box's session into the vault
+       ./run creds checkout <mac> "<App>"      push the vault's session onto a fleet box
+       ./run creds signout-everywhere "<App>"  wipe this operator's session across the whole fleet
 
-  Sessions move between Macs through the vault at ~/.yarn-runner/credstore, sealed at rest.
-  checkin/checkout run automatically around a dispatch; the verbs here are the manual handles.`;
+  The preferred flow: sign in on your OWN machine (native MFA/SSO), then \`checkin local\` seals
+  that session into the vault at ~/.yarn-runner/credstore; the fleet gets it via checkout — no
+  remote sign-in needed. checkin/checkout also run automatically around a dispatch (YARN_VAULT=1).`;
 
 async function main(argv: string[]): Promise<number> {
 	const [verb, ...rest] = argv;

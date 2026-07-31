@@ -105,6 +105,28 @@ test("checkinSession__SealsBundleAndRecordsLedger__When__BoxHasASession", async 
 	assert.equal(readAudit(vault).some((e) => e.event === "checkin"), true);
 });
 
+test("checkinSession__SealsLocalSession__When__HostIsLocal", async () => {
+	// The preferred path: capture on the operator's OWN machine — no ssh, no remote box. The local
+	// home has a signed-in app and the profile store has no ownership record (a personal Mac).
+	const vault = tmp();
+	const h = fs.mkdtempSync(path.join(os.tmpdir(), "creds-home-"));
+	fs.mkdirSync(path.join(h, "Library/Application Support/VaultTestApp"), { recursive: true });
+	fs.writeFileSync(path.join(h, "Library/Application Support/VaultTestApp/session.json"), "local-sesh");
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "creds-store-"));
+
+	const res = await checkinSession(
+		{ host: "local", app: "VaultTestApp", operator: "dave" },
+		{ vaultRoot: vault, env: {}, home: h, root, quit: async () => {} },
+	);
+
+	assert.equal(res.ok, true);
+	assert.equal(res.host, "local", "captured from this machine, not a fleet box");
+	assert.equal(res.stored, true);
+	const key = loadOrCreateKey(vault, {});
+	assert.ok(getBundle(vault, key, "dave", "vaulttestapp"), "the local session is sealed in the vault");
+	assert.equal(ledgerEntryFor(vault, "dave", "vaulttestapp")?.lastHost, "local");
+});
+
 test("checkinSession__StoresNothing__When__BoxHasNoSession", async () => {
 	const vault = tmp();
 	const { run } = fakeRun({ doctor: DOCTOR, credexport: { ok: true, found: false, source: "none" } });

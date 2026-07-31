@@ -73,6 +73,22 @@ test("exportProfile__RefusesOthersLiveSession__When__CallerDoesNotOwnIt", async 
 	assert.ok(!fs.existsSync(out), "and nothing was written");
 });
 
+test("exportProfile__CapturesLive__When__AssumeOwnedAndNoOwnerRecord", async () => {
+	// The LOCAL-capture case: a session is live under $HOME but no runner ever recorded ownership
+	// (a personal machine has no owners.json). assumeOwned snapshots it; without the flag, the fleet
+	// guard treats an unowned live session as not-ours and exports nothing.
+	const h = home("my-laptop-session");
+	const root = tmp("store");
+	assert.equal(currentOwner(root, "Yarn"), undefined, "nobody owns anything in a fresh store");
+
+	const owned = await exportProfile({ app: "Yarn", operator: "dave", outFile: path.join(tmp("stage"), "local.tar.gz"), home: h, root, quit: noQuit, assumeOwned: true });
+	assert.equal(owned.found, true, "assumeOwned snapshots the live session with no owners.json");
+	assert.equal(owned.source, "live");
+
+	const guarded = await exportProfile({ app: "Yarn", operator: "dave", outFile: path.join(tmp("stage"), "guard.tar.gz"), home: h, root, quit: noQuit });
+	assert.equal(guarded.found, false, "without assumeOwned, an unowned live session is NOT exported (the fleet guard)");
+});
+
 test("exportProfile__QuitsBeforeSnapshot__So__TheBundleReflectsTheFlushedProfile", async () => {
 	const h = home("mid-write");
 	const root = tmp("store");

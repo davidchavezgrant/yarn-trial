@@ -56,6 +56,13 @@ export interface ExportOptions {
 	exec?: TarExec;
 	/** Stop the app before its live profile is copied. Injected in tests; production uses `quitApp`. */
 	quit?: (app: string) => Promise<void>;
+	/**
+	 * Snapshot the live session WITHOUT checking `owners.json`. Only for LOCAL capture, where the
+	 * operator is on their own single-user machine and whatever is signed in is theirs — there is no
+	 * runner-managed ownership record to consult. The default (false) keeps the ownership guard that
+	 * stops a shared FLEET box from ever exporting one operator's live session as another's.
+	 */
+	assumeOwned?: boolean;
 }
 
 /**
@@ -78,7 +85,7 @@ export async function exportProfile(opts: ExportOptions): Promise<ExportResult> 
 	const operator = sanitiseOperator(opts.operator);
 	const id: AppIdentity = { name: opts.app, ...(opts.bundleId ? { bundleId: opts.bundleId } : {}) };
 
-	if (ownsLive(root, opts.app, opts.operator)) {
+	if (opts.assumeOwned || ownsLive(root, opts.app, opts.operator)) {
 		// Nothing to capture if the app has no data at all; skip the quit in that case so an empty
 		// export never disturbs a running app for no reason.
 		if (!capturePaths(id, home).length) return { found: false, source: "live", paths: [], bytes: 0 };

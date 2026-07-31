@@ -33,7 +33,8 @@
 #   ./run uninstall <mac> "App"             remove an app from that Mac, plus all parked profiles for it
 #   ./run creds status                      what signed-in sessions the fleet vault holds
 #   ./run creds checkout <mac> "App"        push your stored session onto a box (auto; YARN_VAULT=0 disables)
-#   ./run creds checkin <mac> "App"         pull a box's current session into the vault
+#   ./run creds checkin local "App"         seal THIS Mac's signed-in session into the vault (preferred)
+#   ./run creds checkin <mac> "App"         seal a fleet box's session into the vault
 #   ./run creds signout-everywhere "App"    wipe your session for an app across the whole fleet + vault
 #   ./run liveview [<mac>] ["App"]          window-scoped sign-in: drive just one window in a browser
 #   ./run bench plan                        print the benchmark matrix (no side effects)
