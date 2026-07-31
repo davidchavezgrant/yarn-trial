@@ -53,6 +53,16 @@ export interface StepRecord {
 	targetRole?: string;
 	/** That control's bounds in SCREENSHOT PIXELS, the same space coordinate actions consume. */
 	targetRect?: { x: number; y: number; w: number; h: number };
+	/** That control's name as the model saw it, so channel attribution can be read per step. */
+	targetName?: string;
+	/**
+	 * Which channel NAMED the control this step operated: an AX label, the DOM descriptor
+	 * (axdom sidecar — the control is anonymous in bare AX), or neither ("none": addressed by
+	 * handle or coordinate with no name at all). Absent when no element was resolved. This is
+	 * the per-step answer to "which perception channel did the work", counted by code rather
+	 * than inferred from run-level flags.
+	 */
+	targetNamedBy?: "ax" | "dom" | "none";
 }
 
 /**

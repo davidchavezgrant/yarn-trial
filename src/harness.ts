@@ -52,6 +52,14 @@ export interface InteractiveElement {
 	role: string;
 	/** Label, or the DOM descriptor when the control is anonymous. "" when it has neither. */
 	name: string;
+	/**
+	 * Which channel supplied `name`: the AX label, or the DOM descriptor standing in for an
+	 * anonymous control ("none" when both are empty). Carried so a step record can say which
+	 * perception channel did the naming — the raw material for channel-contribution stats.
+	 * Optional because the DOM/CDP backends build their own elements and have no AX label to
+	 * distinguish from; absent means the question does not apply on that backend.
+	 */
+	namedBy?: "ax" | "dom" | "none";
 	/** Nearest named ancestor: which panel or menu this sits in. "" at top level. */
 	surface: string;
 	/**
@@ -568,7 +576,15 @@ export async function observe(
 		// A disabled control cannot be actuated, so listing it in the frontier would leave an
 		// entry nothing can ever clear. It re-enters the moment the app enables it.
 		if (INTERACTIVE_ROLES.includes(e.role) && e.enabled !== false && (!opts.webAreaOnly || inWebArea(e)))
-			interactive.push({ handle: e.element_index, role: e.role, name: key ?? "", surface: parent, value: val ? value : "", ...toPixels(e.frame) });
+			interactive.push({
+				handle: e.element_index,
+				role: e.role,
+				name: key ?? "",
+				namedBy: label ? "ax" : descriptor ? "dom" : "none",
+				surface: parent,
+				value: val ? value : "",
+				...toPixels(e.frame),
+			});
 		const inWhat = parent && !label.slice(0, 40).startsWith(parent) ? ` in="${parent}"` : "";
 		lines.push(`[${e.element_index}] ${e.role} "${label.slice(0, 80)}"${val}${dsc}${inWhat}${f}${e.selected ? " SELECTED" : ""}${e.enabled === false ? " DISABLED" : ""}`);
 	}

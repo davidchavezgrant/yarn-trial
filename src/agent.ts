@@ -1224,7 +1224,14 @@ async function main(): Promise<void> {
 				screenshotFile: `agent-step-${step}.png`,
 				pixelDelta: delta,
 				modelReasoning: input.reasoning,
-				...(target ? { targetRole: target.role, targetRect: { x: target.x, y: target.y, w: target.w, h: target.h } } : {}),
+				...(target
+					? {
+							targetRole: target.role,
+							targetRect: { x: target.x, y: target.y, w: target.w, h: target.h },
+							targetName: target.name,
+							...(target.namedBy ? { targetNamedBy: target.namedBy } : {}),
+						}
+					: {}),
 			});
 
 			// Journal what this step CHANGED, as opposed to what it was aimed at. Detection is

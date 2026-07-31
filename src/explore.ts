@@ -80,7 +80,7 @@ type FinishInput = { document: string; nodes?: AppMapNode[]; edges?: AppMapEdge[
 type GraphInput = { nodes?: AppMapNode[]; edges?: AppMapEdge[] };
 type StopReason = "frontier-empty" | "action-ceiling" | "frontier-conceded" | "interrupted" | "error";
 
-const systemPrompt = (rules: string, vocab: TargetVocabulary): string => `You are an exploration agent building grounding notes for ${vocab.subject}, so a future task-running agent can navigate it directly without dead ends. You drive it through a UI driver: each turn you receive ${vocab.container}'s elements (addressing handle, role, label/value) and a screenshot, and you perform ONE action via the "act" tool.
+const systemPrompt = (rules: string, vocab: TargetVocabulary, vision = true): string => `You are an exploration agent building grounding notes for ${vocab.subject}, so a future task-running agent can navigate it directly without dead ends. You drive it through a UI driver: each turn you receive ${vocab.container}'s elements (addressing handle, role, label/value)${vision ? " and a screenshot" : "; element frames give positions — there is no screenshot"}, and you perform ONE action via the "act" tool.
 
 Your goal is a map, not a task: systematically visit the main surfaces — ${vocab.surfaces} — and record where things live and how to operate them.
 
@@ -231,6 +231,7 @@ const provenanceHeader = (p: {
 	findings: number;
 	backend: string;
 	findCalls: number;
+	vision: boolean;
 	guidance?: string;
 	salvaged?: boolean;
 	stopped: string;
@@ -240,7 +241,7 @@ const provenanceHeader = (p: {
 	surfaces: number;
 	chapters: number;
 }): string =>
-	`<!-- provenance: explore | app: ${p.app} | date: ${new Date().toISOString().slice(0, 10)} | backend: ${p.backend} | actions: ${p.actions} | elapsed: ${p.elapsed} | findings: ${p.findings} | finds: ${p.findCalls}` +
+	`<!-- provenance: explore | app: ${p.app} | date: ${new Date().toISOString().slice(0, 10)} | backend: ${p.backend}${p.vision ? "" : " | vision: off"} | actions: ${p.actions} | elapsed: ${p.elapsed} | findings: ${p.findings} | finds: ${p.findCalls}` +
 	` | controls: ${p.actuated} actuated / ${p.dismissed} dismissed / ${p.seen} seen | surfaces: ${p.surfaces} | chapters: ${p.chapters} | stopped: ${p.stopped}` +
 	`${p.guidance ? " | operator-guidance: yes" : ""}${p.salvaged ? " | salvaged: session died before finish" : ""} -->\n` +
 	"<!-- controls actuated/seen is a LOWER BOUND ON BREADTH, not a coverage percentage: the denominator only grows as surfaces are opened, and operating a control is not understanding it. -->\n" +
@@ -265,8 +266,13 @@ async function main(): Promise<void> {
 		console.error(err instanceof Error ? err.message : String(err));
 		process.exit(1);
 	}
+	// A/B arm for grounding: drop the screenshot from every model message, leaving the element
+	// list as the pass's only perception. The complement (--no-ax) has no explore equivalent by
+	// construction — the frontier ledger, dismissal matching, and the stop condition all read
+	// element identity, so a vision-only pass would have nothing to count coverage with.
+	const vision = !afterUrl.includes("--no-vision");
 	const bi = afterUrl.indexOf("--backend");
-	let positional = afterUrl.filter((_, i) => bi < 0 || (i !== bi && i !== bi + 1));
+	let positional = afterUrl.filter((a, i) => a !== "--no-vision" && (bi < 0 || (i !== bi && i !== bi + 1)));
 	const app = target.kind === "web" ? targetLabel(target) : (positional[0] ?? "Notion Calendar");
 	// parseTarget returns the FALLBACK name for an app run, not the positional, so the slug
 	// below would stamp this pass's output to "notion-calendar" no matter which app was named —
@@ -391,7 +397,7 @@ async function main(): Promise<void> {
 		if (problem) console.log(`WARNING: discarding declared home — ${problem}`);
 		const elapsed = hm(Date.now() - startedAt);
 		const prose =
-			provenanceHeader({ app, actions, elapsed, findings: findings.length, backend: backendKind, findCalls, guidance, salvaged, ...cov }) +
+			provenanceHeader({ app, actions, elapsed, findings: findings.length, backend: backendKind, findCalls, vision, guidance, salvaged, ...cov }) +
 			recovered.cleaned;
 		fs.writeFileSync(outPath, prose);
 		console.log(`\n=== exploration ${salvaged ? "SALVAGED" : "finished"} after ${actions} actions, ${elapsed}, ${findings.length} findings ===`);
@@ -479,7 +485,7 @@ async function main(): Promise<void> {
 		const webAreaOnly = target.kind === "web";
 		const doObserve = (name: string) => (dom ? dom.observe(name, Infinity) : observe(driver, win, name, { webAreaOnly }));
 		tools = dom ? [DOM_ACT_TOOL, FIND_TOOL, ...EXTRA_TOOLS] : [ACT_TOOL, ...EXTRA_TOOLS];
-		basePrompt = systemPrompt(dom ? DOM_RULES : DRIVER_RULES, targetVocabulary(target));
+		basePrompt = systemPrompt(dom ? DOM_RULES : DRIVER_RULES, targetVocabulary(target), vision);
 		console.log(`exploring ${app} pid=${win.pid} window=${win.windowId} backend=${backendKind}`);
 		console.log(`ends when the frontier empties; no time cap, action backstop ${MAX_ACTIONS}\n`);
 
@@ -505,7 +511,7 @@ async function main(): Promise<void> {
 						"If a surface takes minutes to respond — some apps embed an agent of their own — wait for it rather than moving on.\n\n" +
 						`${frontierSummary(ledger)}\n\nInitial observation follows.`,
 				},
-				...observationBlocks(obs),
+				...observationBlocks(obs, vision),
 			],
 		});
 
@@ -772,7 +778,7 @@ async function main(): Promise<void> {
 						is_error: isError,
 						content: [
 							{ type: "text", text: `Driver result: ${resultText}${frontierNote}\n\nNew observation follows.` },
-							...observationBlocks(obs),
+							...observationBlocks(obs, vision),
 						],
 					},
 				],
@@ -814,7 +820,7 @@ async function main(): Promise<void> {
 								`# ${frontierSummary(ledger)}\n\n` +
 								"There is no time limit on this pass — take as long as a surface needs. Current observation follows.",
 						},
-						...observationBlocks(obs),
+						...observationBlocks(obs, vision),
 					],
 				});
 			}
@@ -872,6 +878,7 @@ async function main(): Promise<void> {
 					findings: findings.length,
 					backend: backendKind,
 					findCalls,
+					vision,
 					guidance,
 					salvaged: true,
 					...coverageNow("error"),
