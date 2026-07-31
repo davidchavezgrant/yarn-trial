@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
-import { buildState, type FleetView } from "../src/bench/dash.js";
+import { buildDetail, buildState, type FleetView, groundingArmId, matchPath } from "../src/bench/dash.js";
 import type { Manifest, ManifestEntry } from "../src/bench/manifest.js";
+import { armById } from "../src/bench/matrix.js";
 
 /**
  * The dashboard's state assembly, pure by construction: manifest + fleet snapshot in,
@@ -146,4 +150,76 @@ test("BuildState__OmitsArmPasses__When__NothingSubmitted", () => {
 	assert.ok(s.arms.length > 20);
 	assert.ok(s.arms.every((a) => a.passes.length === 0));
 	assert.equal(s.progress.submitted, 0);
+});
+
+// --- run detail: the appmap walk ---
+
+const GRAPH = {
+	nodes: [
+		{ id: "brand-kit", title: "Brand Kit", kind: "surface", scope: "brand" },
+		{ id: "brand-kit/screen-clips", title: "Screen Clips", kind: "surface", scope: "brand" },
+		{ id: "brand-kit/screen-clips/cursor-style", title: "Cursor Style", kind: "control", scope: "brand", settingKey: "cursor-style" },
+		{ id: "draft/design", title: "Design", kind: "surface", scope: "document" },
+		{ id: "draft/design/cursor-style", title: "Cursor Style", kind: "control", scope: "document", settingKey: "cursor-style" },
+	],
+	edges: [
+		{ from: "root", to: "brand-kit", action: 'click "Brand Kit" in the far-left sidebar' },
+		{ from: "brand-kit", to: "brand-kit/screen-clips", action: 'click "Screen Clips" in the tab list' },
+	],
+};
+
+const rawStep = (index: number, targetName: string | undefined, over: Record<string, unknown> = {}) => ({
+	index,
+	action: { kind: "tool", name: "click", args: {} },
+	verified: true,
+	...(targetName ? { targetName } : {}),
+	...over,
+});
+
+test("MatchPath__MarksSurfaceTransitions__When__EdgeQuotedNamesMatchTargets", () => {
+	const steps = matchPath(GRAPH, [rawStep(0, "Brand Kit"), rawStep(1, "Screen Clips")]);
+	assert.equal(steps[0]?.edgeTo, "brand-kit");
+	assert.equal(steps[1]?.edgeTo, "brand-kit/screen-clips");
+	assert.equal(steps[1]?.surface, "brand-kit/screen-clips");
+});
+
+test("MatchPath__PrefersControlUnderCurrentSurface__When__TitlesCollide", () => {
+	// Two "Cursor Style" controls exist (brand vs document scope) — after walking to
+	// Screen Clips, the click must anchor to THAT surface's control, not the draft's.
+	const steps = matchPath(GRAPH, [rawStep(0, "Brand Kit"), rawStep(1, "Screen Clips"), rawStep(2, "Cursor Style")]);
+	assert.equal(steps[2]?.nodeId, "brand-kit/screen-clips/cursor-style");
+});
+
+test("MatchPath__LeavesStepUnanchored__When__NothingMatches", () => {
+	const steps = matchPath(GRAPH, [rawStep(0, "Mystery Button"), rawStep(1, undefined, { action: { kind: "key", key: "escape" } })]);
+	assert.equal(steps[0]?.nodeId, undefined);
+	assert.equal(steps[0]?.edgeTo, undefined);
+	assert.equal(steps[1]?.label, "key escape");
+});
+
+test("GroundingArmId__PicksTheMapTheArmConsumed__When__TaskArm", () => {
+	assert.equal(groundingArmId(armById("p2-cdp-grounded")!), "p1-explore-cdp");
+	assert.equal(groundingArmId(armById("p2-ax-grounded")!), "p1-explore-ax");
+	assert.equal(groundingArmId(armById("p2-web-grounded")!), "p1-explore-web-cdp");
+	assert.equal(groundingArmId(armById("p2-vision-only-grounded-visionmap")!), "p1-explore-vision");
+});
+
+test("BuildDetail__WalksRunThroughLiveMap__When__NoArchiveExists", () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dash-detail-"));
+	try {
+		fs.mkdirSync(path.join(dir, "docs", "appmaps"), { recursive: true });
+		fs.mkdirSync(path.join(dir, "out", "runs"), { recursive: true });
+		fs.writeFileSync(path.join(dir, "docs", "appmaps", "yarn.json"), JSON.stringify(GRAPH));
+		fs.writeFileSync(
+			path.join(dir, "out", "runs", "job-d.json"),
+			JSON.stringify({ steps: [rawStep(0, "Brand Kit"), rawStep(1, "Screen Clips"), rawStep(2, "Cursor Style")] }),
+		);
+		const m = manifest(entry({ jobId: "job-d", state: "done", collected: true }));
+		const d = buildDetail("job-d", m, { dataDir: dir, benchRoot: path.join(dir, "bench") });
+		assert.equal(d.graphSource, "docs/appmaps/yarn.json (live)");
+		assert.equal(d.steps.length, 3);
+		assert.equal(d.steps[2]?.nodeId, "brand-kit/screen-clips/cursor-style");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
 });

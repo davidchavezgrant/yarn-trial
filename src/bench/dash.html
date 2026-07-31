@@ -79,7 +79,42 @@
 		border-radius: 10px; padding: 1px 8px; margin: 1px 3px 1px 0; font-size: 11px; white-space: nowrap;
 	}
 	.chip .dot { flex: none; }
+	.chip[data-job] { cursor: pointer; }
+	.chip.sel { border-color: var(--s1); }
 	.num { color: var(--ink-2); }
+	tr.mrow { cursor: pointer; }
+	tr.mrow:hover td { background: rgba(255, 255, 255, 0.035); }
+	.caret { color: var(--s1); margin-right: 5px; }
+	td.arm .dn { color: var(--ink); }
+	td.arm .chips { margin-top: 3px; }
+	td.task, td.target { color: var(--muted); max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+	/* row detail: the appmap + the run's path through it */
+	.detail-row > td { background: rgba(255, 255, 255, 0.02); }
+	.d-head { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 8px 0 4px; }
+	.d-note { color: var(--muted); font-size: 11px; margin: 4px 0 8px; }
+	.detail { display: grid; grid-template-columns: minmax(280px, 340px) 1fr; gap: 18px; padding-bottom: 10px; }
+	.d-steps { max-height: 440px; overflow-y: auto; }
+	.d-steps ol { margin: 0; padding-left: 24px; }
+	.d-steps li { padding: 2px 0; font-size: 12px; color: var(--ink-2); }
+	.ok-v { color: var(--good); font-weight: 600; }
+	.bad-v { color: var(--critical); font-weight: 600; }
+	.d-map { max-height: 440px; overflow-y: auto; }
+	.surf { border-left: 2px solid var(--grid); margin: 4px 0 4px 2px; padding-left: 10px; }
+	.surf.onpath { border-left-color: var(--s1); }
+	.surf > summary { cursor: pointer; font-size: 12px; color: var(--ink-2); }
+	.surf.onpath > summary { color: var(--ink); }
+	.scopebadge { font-size: 10px; border: 1px solid var(--border); border-radius: 8px; padding: 0 6px; margin-left: 6px; color: var(--muted); }
+	.ctrl {
+		display: inline-block; border: 1px solid var(--border); border-radius: 9px;
+		padding: 0 7px; margin: 2px 4px 2px 0; font-size: 11px; color: var(--ink-2);
+	}
+	.ctrl.onpath { border-color: var(--s1); color: var(--ink); }
+	.ctrl.mut { border-color: var(--s2); }
+	.stepno {
+		display: inline-block; min-width: 13px; text-align: center; background: var(--s1);
+		color: #fff; border-radius: 8px; font-size: 10px; padding: 0 4px; margin-left: 5px; vertical-align: 1px;
+	}
 
 	/* charts */
 	svg { display: block; width: 100%; height: auto; }
@@ -124,13 +159,12 @@
 	</section>
 
 	<section class="grid2">
-		<div class="card"><h2>Phase 1 — discovery per backend</h2><div class="sub">controls actuated / dismissed / seen per explore arm — the leaner-vs-blinder question</div><div id="chart-explore"></div></div>
+		<div class="card"><h2>Phase 1 — discovery per backend</h2><div class="sub">controls seen / actuated / dismissed per explore arm — the leaner-vs-blinder question</div><div id="chart-explore"></div></div>
 		<div class="card"><h2>Task outcomes by arm</h2><div class="sub">collected runs by verdict; pending = submitted, not yet collected</div><div id="chart-outcomes"></div></div>
 		<div class="card"><h2>Grounding effect — steps x̄</h2><div class="sub">grounded vs ungrounded, per backend (phase 2 core)</div><div id="chart-steps"></div></div>
 		<div class="card"><h2>Grounding effect — output tokens x̄</h2><div class="sub">same arms, token cost of going in blind</div><div id="chart-tokens"></div></div>
 		<div class="card"><h2>Attention — offered vs shown</h2><div class="sub">mean interactive elements observed vs list lines rendered into the prompt</div><div id="chart-attention"></div></div>
 		<div class="card"><h2>Cumulative est. cost</h2><div class="sub" id="cost-sub"></div><div id="chart-cost"></div></div>
-		<div class="card"><h2>Queue wait vs run time</h2><div class="sub">per collected job, from job records</div><div id="chart-timing"></div></div>
 		<div class="card"><h2>Judge</h2><div class="sub">offline adversarial re-grade; disagreements with self-report are the finding</div><div id="judge"></div></div>
 	</section>
 
@@ -153,7 +187,10 @@ const OUTCOME_COLORS = {
 	failed: STATUS.critical, pending: "#383835",
 };
 const fmtMoney = (n) => n < 0.01 && n > 0 ? "$" + n.toFixed(4) : "$" + n.toFixed(2);
-const fmtDur = (s) => s == null ? "–" : s >= 3600 ? Math.floor(s / 3600) + "h" + String(Math.floor(s % 3600 / 60)).padStart(2, "0") + "m" : s >= 60 ? Math.floor(s / 60) + "m" + String(Math.round(s % 60)).padStart(2, "0") + "s" : Math.round(s) + "s";
+// Seconds stay visible past the hour mark — they are what makes a live ticker read as live.
+const fmtDur = (s) => s == null ? "–"
+	: s >= 3600 ? Math.floor(s / 3600) + "h" + String(Math.floor(s % 3600 / 60)).padStart(2, "0") + "m" + String(Math.floor(s % 60)).padStart(2, "0") + "s"
+	: s >= 60 ? Math.floor(s / 60) + "m" + String(Math.round(s % 60)).padStart(2, "0") + "s" : Math.round(s) + "s";
 const fmtNum = (n) => n == null ? "–" : Number.isInteger(n) ? String(n) : n >= 100 ? String(Math.round(n)) : n.toFixed(1);
 const fmtK = (n) => n == null ? "–" : n >= 10000 ? (n / 1000).toFixed(0) + "k" : n >= 1000 ? (n / 1000).toFixed(1) + "k" : fmtNum(n);
 const hhmm = (iso) => { const d = new Date(iso); return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); };
@@ -273,7 +310,7 @@ function stepLine(points, color, opts = {}) {
 
 /* ---- sections ----------------------------------------------------------------------- */
 
-function statusChip(e) {
+function statusChip(e, rowKey) {
 	const color = e.status === "running" ? SERIES[0] : e.status === "queued" ? "#898781" :
 		e.status === "awaiting-collect" ? STATUS.warning : OUTCOME_COLORS[e.status] || "#898781";
 	// Running chips carry a js-elapsed span so the 1s ticker advances them between SSE
@@ -291,7 +328,8 @@ function statusChip(e) {
 			.filter(Boolean).map((p) => ` · ${p}`).join("")
 		: "";
 	const judge = e.judgeTrajectory ? ` · judge ${e.judgeTrajectory[0]}` : "";
-	return `<span class="chip" data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${e.note ? "\n" + esc(e.note) : ""}">` +
+	const open = rowKey ? ` data-row="${esc(rowKey)}" data-job="${esc(e.jobId)}"` : "";
+	return `<span class="chip"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${e.note ? "\n" + esc(e.note) : ""}\nclick to view on the map">` +
 		`<span class="dot" style="background:${color}"></span>${esc(e.host)} · ${label}${esc(extra)}${esc(judge)}</span>`;
 }
 
@@ -329,47 +367,194 @@ function armOf(jobId) {
 // Explore passes and task runs measure different things, so each section of the board gets
 // its own header row — an explore's discovery numbers must never sit under "steps"/"tokens"
 // columns, and an explore has no success ratio to show (its stamp has no success field;
-// rendering one as "0/1 ok" read as a failure).
+// rendering one as "0/1 ok" read as a failure). Flags live in the arm tooltip (the display
+// name is derived from them) and per-run completion lives on the chips, so neither needs
+// a column.
 const th = (label, tip) => `<th${tip ? ` data-tip="${esc(tip)}"` : ""}>${label}</th>`;
-const TASK_HEAD = "<tr>" + th("arm", "hover a row's arm for the decision it informs") + th("flags") +
-	th("done", "collected / planned runs") + th("ok", "succeeded / collected") +
+const NAME_TIP = "hover for the arm id, flags and the decision this cell informs · click to expand the appmap and the run's path · click a run chip to view that run";
+const TASK_HEAD = "<tr>" + th("name", NAME_TIP) + th("target", "app or site the run drives") +
+	th("task", "the goal-only prompt the run was given") + th("model", "what actually ran, off the run logs") +
+	th("ok", "succeeded / collected") +
 	th("steps", "mean actions per run") + th("time", "mean wall-clock per run") +
-	th("out-tok", "mean output tokens per run") + th("est $", "published-rate estimate across collected runs — not an invoice") +
-	th("runs", "one chip per run — hover for the job id") + "</tr>";
-const EXPLORE_HEAD = "<tr>" + th("arm", "hover a row's arm for the decision it informs") + th("flags") +
-	th("done", "collected / planned passes") + th("actions", "actions the pass took (elapsed on hover)") +
-	th("controls act / dism / seen", "of every control the pass observed (seen), how many it operated (actuated) vs swept off the frontier without operating (dismissed) — the pass ends when the frontier empties, and dismissing is a legitimate way to empty it") + th("surfaces") +
-	th("nodes", "appmap graph nodes (edges on hover)") + th("ambig", "dual-scope settings the graph flags") +
-	th("runs", "one chip per pass — hover for the job id") + "</tr>";
+	th("out-tok", "mean output tokens per run") + th("est $", "published-rate estimate across collected runs — not an invoice") + "</tr>";
+const EXPLORE_HEAD = "<tr>" + th("name", NAME_TIP) + th("target", "app or site the pass explored") +
+	th("task") + th("model", "what actually ran, off the run logs") +
+	th("actions", "actions the pass took (elapsed on hover)") +
+	th("controls seen / act / dism", "of every control the pass observed (seen), how many it operated (actuated) vs swept off the frontier without operating (dismissed) — the pass ends when the frontier empties, and dismissing is a legitimate way to empty it") +
+	th("surfaces", "distinct screens/panels/tabs/dialogs controls were found on — what you navigate BETWEEN; controls live ON them") +
+	th("nodes", "appmap graph nodes (edges on hover)") +
+	th("ambig", "settings editable at two scopes under one identity (same settingKey, different scope) — the wrong-scope trap; each gets a prompt warning") + "</tr>";
 
-function armCell(a, p) {
-	return `<td class="arm" data-tip="${esc(a.informs || "")}">${esc(a.id)}${p.model !== "(default)" ? `<div class="meta">${esc(p.model)}</div>` : ""}</td>
-		<td class="flags">${esc(a.flags)}</td>
-		<td class="num">${p.collected}/${a.n}</td>`;
+// Friendly names are DERIVED from the arm's structure (kind + flags + phase), not
+// hand-mapped per id, so new matrix cells name themselves. The id stays as subtext —
+// it is the key the report and the manifest speak.
+function displayName(a) {
+	const f = a.flags || "";
+	const backend = f.includes("--backend cdp") ? "CDP" : "AX";
+	if (a.kind === "explore") {
+		const what = f.includes("--no-ax") ? "vision-only explore" : f.includes("--url") ? "web explore" : "explore";
+		return `${what} (${backend})`;
+	}
+	const head = a.kind === "replay" ? "recipe replay"
+		: f.includes("USE_RECIPE") ? "curated-recipe task"
+		: f.includes("NO_GROUNDING") ? "ungrounded task" : "grounded task";
+	const mods = [backend];
+	if (f.includes("--no-ax")) mods.push("vision-only");
+	if (f.includes("APPMAP_VARIANT=vision")) mods.push("vision map");
+	if (f.includes("AXDOM=0")) mods.push("axdom off");
+	if (f.includes("--no-vision")) mods.push("no vision");
+	if (f.includes("--url")) mods.push("web");
+	if (f.includes("--no-rescue")) mods.push("no rescue");
+	if (a.phase === 4) mods.push("2nd task");
+	if (a.phase === 5) mods.push("filmed");
+	return `${head} (${mods.join(", ")})`;
+}
+
+const normModel = (m) => m.replace(/^[a-z-]+[:/]/i, "").replace(/:[a-z-]+$/i, "");
+const rowId = (a, p) => `${a.id}|${p.model}`;
+
+function modelCell(p) {
+	// "(default)" is only the dispatch label — show what it resolves to (this machine's
+	// key precedence) until collected runs report what ACTUALLY ran, which always wins.
+	const fallback = p.model === "(default)" ? (state.defaultModel ? normModel(state.defaultModel) : "default") : p.model;
+	const shown = p.ranModels ? [...new Set(p.ranModels.map(normModel))].join(", ") : fallback;
+	const tip = (p.ranModels ? `ran: ${p.ranModels.join(", ")}` : `expected (uncollected): ${state.defaultModel ?? "unknown"}`) + `\ndispatched as: ${p.model}`;
+	return `<td class="num" data-tip="${esc(tip)}">${esc(shown)}</td>`;
+}
+
+function armCell(a, p, key) {
+	const tip = [a.id, a.informs || "", `flags: ${a.flags || "(none)"}`].filter(Boolean).join("\n");
+	const taskCell = a.task
+		? `<td class="task" data-tip="${esc(a.task)}">${esc(a.task)}</td>`
+		: a.kind === "explore"
+			? `<td class="task" data-tip="grounding pass — no task prompt. The objective is coverage: operate every safe control until the frontier of un-operated controls empties, then write the appmap (docs/appmaps/)">Explore</td>`
+			: `<td class="task">–</td>`;
+	return `<td class="arm" data-tip="${esc(tip)}"><span class="caret">${openRows[key] ? "▾" : "▸"}</span><span class="dn">${esc(displayName(a))}</span><div class="chips">${p.entries.map((e) => statusChip(e, key)).join("")}</div></td>
+		<td class="target">${esc(a.url ? a.url.replace(/^https?:\/\//, "") : a.app)}</td>
+		${taskCell}
+		${modelCell(p)}`;
 }
 
 function taskRow(a, p) {
-	return `<tr>${armCell(a, p)}
+	const key = rowId(a, p);
+	return `<tr class="mrow" data-toggle="${esc(key)}">${armCell(a, p, key)}
 		<td class="num">${p.collected ? p.successes + "/" + p.collected : "–"}</td>
 		<td class="num">${fmtNum(p.meanSteps)}</td>
 		<td class="num">${p.meanElapsedSec != null ? fmtDur(p.meanElapsedSec) : "–"}</td>
 		<td class="num">${fmtK(p.meanOutputTokens)}</td>
-		<td class="num">${p.usd ? fmtMoney(p.usd) : p.unpriced ? "?×" + p.unpriced : "–"}</td>
-		<td>${p.entries.map(statusChip).join("")}</td></tr>`;
+		<td class="num">${p.usd ? fmtMoney(p.usd) : p.unpriced ? "?×" + p.unpriced : "–"}</td></tr>` + (openRows[key] ? detailRowHtml(a, p, key) : "");
 }
 
 function exploreRow(a, p) {
+	const key = rowId(a, p);
 	const ex = p.explore || {};
 	const controls = ex.controlsSeen != null
-		? `<span data-tip="actuated ${ex.controlsActuated} · dismissed ${ex.controlsDismissed} · seen ${ex.controlsSeen}">${ex.controlsActuated} / ${ex.controlsDismissed} / ${ex.controlsSeen}</span>`
+		? `<span data-tip="seen ${ex.controlsSeen} · actuated ${ex.controlsActuated} · dismissed ${ex.controlsDismissed}">${ex.controlsSeen} / ${ex.controlsActuated} / ${ex.controlsDismissed}</span>`
 		: "–";
-	return `<tr>${armCell(a, p)}
+	return `<tr class="mrow" data-toggle="${esc(key)}">${armCell(a, p, key)}
 		<td class="num"><span data-tip="${esc(ex.elapsed ? "elapsed " + ex.elapsed : "")}">${fmtNum(ex.actions)}</span></td>
 		<td class="num">${controls}</td>
 		<td class="num">${fmtNum(ex.surfaces)}</td>
 		<td class="num"><span data-tip="${ex.graphEdges != null ? ex.graphEdges + " edges" : ""}">${fmtNum(ex.graphNodes)}</span></td>
-		<td class="num">${fmtNum(ex.scopeAmbiguities)}</td>
-		<td>${p.entries.map(statusChip).join("")}</td></tr>`;
+		<td class="num">${fmtNum(ex.scopeAmbiguities)}</td></tr>` + (openRows[key] ? detailRowHtml(a, p, key) : "");
+}
+
+/* ---- row detail: appmap + path ------------------------------------------------------- */
+
+const detailCache = {};
+const detailInflight = {};
+const openRows = {}; // rowId -> true (first collected run) | a specific jobId
+let prevOpenSurfs = new Set();
+
+function fetchDetail(job) {
+	if (detailCache[job] || detailInflight[job]) return;
+	detailInflight[job] = true;
+	fetch("/api/detail?job=" + encodeURIComponent(job))
+		.then((r) => r.json())
+		.then((d) => { detailCache[job] = d; })
+		.catch(() => { detailCache[job] = { steps: [], mutatedKeys: [], note: "failed to load detail" }; })
+		.finally(() => { delete detailInflight[job]; render(); });
+}
+
+function detailRowHtml(a, p, key) {
+	const collected = p.entries.filter((e) => e.collected).map((e) => e.jobId);
+	const sel = typeof openRows[key] === "string" ? openRows[key] : collected[0] || (p.entries[0] && p.entries[0].jobId);
+	const tabs = p.entries.map((e) =>
+		`<span class="chip jobtab${e.jobId === sel ? " sel" : ""}" data-row="${esc(key)}" data-job="${esc(e.jobId)}">${esc(e.host)} · ${esc(e.jobId)}</span>`).join("");
+	let body;
+	if (!sel) body = `<div class="empty">nothing submitted yet</div>`;
+	else if (!detailCache[sel]) { fetchDetail(sel); body = `<div class="empty">loading ${esc(sel)}…</div>`; }
+	else body = detailBody(detailCache[sel]);
+	return `<tr class="detail-row"><td colspan="9"><div class="d-head">${tabs}</div>${body}</td></tr>`;
+}
+
+function detailBody(d) {
+	const noteBits = [d.note, d.graphSource ? `map: ${d.graphSource}` : ""].filter(Boolean).join(" · ");
+	const note = noteBits ? `<div class="d-note">${esc(noteBits)}</div>` : "";
+	const steps = d.steps.length
+		? `<ol>` + d.steps.map((s) =>
+			`<li${s.reasoning ? ` data-tip="${esc(s.reasoning)}"` : ""}><span class="${s.verified ? "ok-v" : "bad-v"}">${s.verified ? "✓" : "✗"}</span> ${esc(s.label)} <span class="meta">${esc((s.surface || "").split("/").pop() || "")}</span></li>`).join("") + `</ol>`
+		: `<div class="empty">no steps recorded</div>`;
+	return note + `<div class="detail"><div class="d-steps">${steps}</div><div class="d-map">${mapTree(d)}</div></div>`;
+}
+
+// The graph renders as a sitemap tree — node ids are path-like ("brand-kit/screen-clips"),
+// so surfaces nest by prefix and controls hang off their surface. The run's path overlays
+// as numbered badges: a number on a surface is the step that ARRIVED there (a matched
+// navigation edge), a number on a control is the step that operated it.
+function mapTree(d) {
+	const g = d.graph;
+	if (!g) return `<div class="empty">no appmap graph for this arm yet</div>`;
+	const surfaces = g.nodes.filter((n) => n.kind === "surface");
+	const controls = g.nodes.filter((n) => n.kind === "control");
+	const sids = new Set(surfaces.map((s) => s.id));
+	const parentOf = (id) => {
+		let p = id.includes("/") ? id.slice(0, id.lastIndexOf("/")) : "";
+		while (p && !sids.has(p)) p = p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
+		return p || "root";
+	};
+	const nodeSteps = {}, surfSteps = {};
+	for (const s of d.steps) {
+		if (s.nodeId) (nodeSteps[s.nodeId] = nodeSteps[s.nodeId] || []).push(s.index);
+		if (s.edgeTo) (surfSteps[s.edgeTo] = surfSteps[s.edgeTo] || []).push(s.index);
+	}
+	const pathSurfs = new Set(Object.keys(surfSteps));
+	for (const id of Object.keys(nodeSteps)) pathSurfs.add(parentOf(id));
+	for (const sid of [...pathSurfs]) { let p = sid; while (p && p !== "root") { p = parentOf(p); pathSurfs.add(p); } }
+	const mutated = new Set(d.mutatedKeys);
+	const scopesByKey = {};
+	for (const c of controls) if (c.settingKey) (scopesByKey[c.settingKey] = scopesByKey[c.settingKey] || new Set()).add(c.scope);
+	const ctrlsBySurf = {};
+	for (const c of controls) { const p = parentOf(c.id); (ctrlsBySurf[p] = ctrlsBySurf[p] || []).push(c); }
+	// Manual open/close of surfaces must survive the SSE re-render: if any of this graph's
+	// surfaces were on screen, trust that snapshot; otherwise default-open the path.
+	const trustSnapshot = surfaces.some((s) => prevOpenSurfs.has(s.id));
+	const badges = (xs) => (xs || []).map((n) => `<span class="stepno">${n}</span>`).join("");
+	const chip = (c) => {
+		const amb = c.settingKey && scopesByKey[c.settingKey] && scopesByKey[c.settingKey].size > 1;
+		const isMut = c.settingKey && mutated.has(c.settingKey);
+		const tip = [
+			c.settingKey ? `setting: ${c.settingKey} (${c.scope} scope)` : "",
+			amb ? "⚠ same setting is editable at another scope — the wrong-scope trap" : "",
+			isMut ? "MUTATED by this run (journal)" : "",
+			c.options && c.options.length ? `options: ${c.options.join(", ")}` : "",
+		].filter(Boolean).join("\n");
+		return `<span class="ctrl${nodeSteps[c.id] ? " onpath" : ""}${isMut ? " mut" : ""}"${tip ? ` data-tip="${esc(tip)}"` : ""}>${esc(c.title)}${amb ? "⚠" : ""}${badges(nodeSteps[c.id])}</span>`;
+	};
+	const renderSurf = (s) => {
+		const kids = surfaces.filter((k) => k.id !== s.id && parentOf(k.id) === s.id);
+		const cs = ctrlsBySurf[s.id] || [];
+		const onPath = pathSurfs.has(s.id);
+		const open = trustSnapshot ? prevOpenSurfs.has(s.id) : onPath;
+		return `<details class="surf${onPath ? " onpath" : ""}" data-sid="${esc(s.id)}"${open ? " open" : ""}>
+			<summary>${esc(s.title)}${badges(surfSteps[s.id])}<span class="scopebadge">${esc(s.scope || "")}</span><span class="meta"> ${cs.length ? `${cs.length} controls` : ""}</span></summary>
+			<div>${cs.map(chip).join("")}</div>${kids.map(renderSurf).join("")}</details>`;
+	};
+	const roots = surfaces.filter((s) => parentOf(s.id) === "root");
+	const unplaced = ctrlsBySurf.root || [];
+	return `<div class="d-note">${surfaces.length} surfaces · ${controls.length} controls · blue = on the run's path (numbers = step order) · orange = mutated by the run · ⚠ = dual-scope setting</div>`
+		+ roots.map(renderSurf).join("")
+		+ (unplaced.length ? `<details class="surf" data-sid="root-ctrls"${trustSnapshot ? (prevOpenSurfs.has("root-ctrls") ? " open" : "") : " open"}><summary>${esc(g.home || "home")}</summary><div>${unplaced.map(chip).join("")}</div></details>` : "");
 }
 
 // The board reads as a drain timeline: within each section, rows whose runs FINISHED come
@@ -394,6 +579,9 @@ function timelineRows(arms) {
 }
 
 function renderBoard() {
+	// Snapshot which map surfaces are open BEFORE the re-render wipes them, so a push
+	// doesn't collapse the tree someone is reading.
+	prevOpenSurfs = new Set([...document.querySelectorAll(".surf[open]")].map((el) => el.dataset.sid));
 	const phases = [...new Set(state.arms.map((a) => a.phase))].sort();
 	let html = "<table>";
 	for (const ph of phases) {
@@ -406,18 +594,19 @@ function renderBoard() {
 		if (tasks.length) html += TASK_HEAD + timelineRows(tasks).map(({ a, p }) => taskRow(a, p)).join("");
 	}
 	$("board").innerHTML = html + "</table>";
-	$("board-sub").textContent = `${state.progress.submitted} submitted of ${state.progress.planned} planned runs · ${state.progress.collected} collected · finished first (in finish order), in-flight below (newest start last) · hover headers and chips for definitions`;
+	$("board-sub").textContent = `${state.progress.submitted} submitted of ${state.progress.planned} planned runs · ${state.progress.collected} collected · finished first (in finish order), in-flight below (newest start last) · click an arm to see its map + path`;
 }
 
 function renderExplore() {
 	const arms = state.arms.filter((a) => a.phase === 1 && a.passes.some((p) => p.explore && p.explore.controlsSeen != null));
 	if (!arms.length) { $("chart-explore").innerHTML = `<div class="empty">waiting for a collected explore…</div>`; return; }
+	// Funnel order (seen ≥ actuated+dismissed); colors follow the series, not the position.
 	const groups = arms.flatMap((a) => a.passes.filter((p) => p.explore && p.explore.controlsSeen != null).map((p) => ({
 		label: a.id.replace("p1-explore-", "") + (p.model !== "(default)" ? " · " + p.model : ""),
-		values: [p.explore.controlsActuated, p.explore.controlsDismissed, p.explore.controlsSeen],
+		values: [p.explore.controlsSeen, p.explore.controlsActuated, p.explore.controlsDismissed],
 	})));
 	$("chart-explore").innerHTML = vBars(groups, [
-		{ name: "actuated", color: SERIES[0] }, { name: "dismissed", color: SERIES[1] }, { name: "seen", color: SERIES[2] },
+		{ name: "seen", color: SERIES[2] }, { name: "actuated", color: SERIES[0] }, { name: "dismissed", color: SERIES[1] },
 	]);
 }
 
@@ -473,20 +662,6 @@ function renderCost() {
 	);
 }
 
-function renderTiming() {
-	const rows = [];
-	for (const a of state.arms) for (const p of a.passes) for (const e of p.entries)
-		if (e.queueWaitSec != null || e.runSec != null)
-			rows.push({ label: a.id, tip: e.jobId + " on " + e.host, segs: [
-				{ name: "queue wait", color: SERIES[1], value: e.queueWaitSec || 0 },
-				{ name: "run", color: SERIES[0], value: e.runSec || 0 },
-			] });
-	if (!rows.length) { $("chart-timing").innerHTML = `<div class="empty">no collected job records yet</div>`; return; }
-	$("chart-timing").innerHTML = `<div class="scroll">` + hStack(rows, [
-		{ name: "queue wait", color: SERIES[1] }, { name: "run", color: SERIES[0] },
-	], { padL: 140, fmt: fmtDur }) + `</div>`;
-}
-
 function renderJudge() {
 	const j = state.judge;
 	if (!j.judged) { $("judge").innerHTML = `<div class="empty">no judged runs yet — the dash folds verdicts in after \`bench judge\` + collect</div>`; return; }
@@ -519,10 +694,31 @@ function render() {
 	renderFleet(); renderBoard(); renderExplore(); renderOutcomes();
 	groundingChart("chart-steps", (x) => x.meanSteps, fmtNum);
 	groundingChart("chart-tokens", (x) => x.meanOutputTokens, fmtK);
-	renderAttention(); renderCost(); renderTiming(); renderJudge(); renderEvents();
+	renderAttention(); renderCost(); renderJudge(); renderEvents();
 }
 
 /* ---- wiring -------------------------------------------------------------------------- */
+
+// Row expansion + run selection, delegated once — the board's innerHTML is replaced on
+// every push, so handlers must live on the container, not the rows.
+$("board").addEventListener("click", (ev) => {
+	const job = ev.target.closest("[data-job][data-row]");
+	if (job) {
+		const { row, job: id } = job.dataset;
+		// A chip toggles ITS run's view: click once to open/select, click the same run's
+		// chip again to collapse. Clicking anywhere else on the row also collapses.
+		if (openRows[row] === id) delete openRows[row];
+		else openRows[row] = id;
+		render();
+		return;
+	}
+	const t = ev.target.closest("[data-toggle]");
+	if (t) {
+		const k = t.dataset.toggle;
+		if (openRows[k]) delete openRows[k]; else openRows[k] = true;
+		render();
+	}
+});
 
 const es = new EventSource("/events");
 es.onmessage = (ev) => { state = JSON.parse(ev.data); receivedAt = Date.now(); $("conn").classList.add("ok"); render(); };

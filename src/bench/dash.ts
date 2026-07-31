@@ -1,9 +1,13 @@
 import fs from "node:fs";
 import http from "node:http";
+import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { readJournal } from "../core/journal.js";
 import type { FleetRow } from "../remote/control/fleet.js";
+import { appSlug, dataRoot } from "../paths.js";
+import { archiveDirFor } from "./collect.js";
 import { estimateCost, rollupCost, usd } from "./cost.js";
-import { type Arm, flagsLine, MATRIX, type Phase } from "./matrix.js";
+import { type Arm, armById, flagsLine, MATRIX, type Phase } from "./matrix.js";
 import { benchDir, type Manifest, type ManifestEntry, readManifest, utcDate } from "./manifest.js";
 import { judgeDisagreements, modelPasses, passLabel, rollup } from "./report.js";
 
@@ -73,6 +77,8 @@ export interface EntryView {
 
 export interface PassView {
 	model: string;
+	/** Distinct model ids the collected runs actually recorded — divergence from `model` is a finding. */
+	ranModels?: string[];
 	submitted: number;
 	collected: number;
 	successes: number;
@@ -111,6 +117,10 @@ export interface ArmView {
 	n: number;
 	flags: string;
 	app: string;
+	/** Task arms: the goal-only prompt the run was given. */
+	task?: string;
+	/** Web arms: the URL the run pointed at (off the dispatch flags). */
+	url?: string;
 	informs?: string;
 	passes: PassView[];
 }
@@ -119,6 +129,12 @@ export interface DashState {
 	date: string;
 	generatedAt: string;
 	autoCollect: boolean;
+	/**
+	 * What "(default)" resolves to in THIS environment (makeClient's key precedence) — a
+	 * hint for uncollected passes. The fleet Macs resolve their own env, so collected runs'
+	 * ranModels is the truth and always wins in the UI.
+	 */
+	defaultModel?: string;
 	progress: { planned: number; submitted: number; collected: number; running: number; queued: number; successes: number };
 	fleet: FleetView;
 	arms: ArmView[];
@@ -185,8 +201,11 @@ function passView(arm: Arm, model: string | undefined, entries: ManifestEntry[],
 	const r = rollup(arm, entries);
 	const first = r.collected[0]?.metrics;
 
+	const ranModels = [...new Set(r.collected.map((e) => e.metrics?.model).filter((m): m is string => typeof m === "string"))];
+
 	return {
 		model: passLabel(model),
+		...(ranModels.length ? { ranModels } : {}),
 		submitted: entries.length,
 		collected: r.collected.length,
 		successes: r.successes,
@@ -232,7 +251,7 @@ function passView(arm: Arm, model: string | undefined, entries: ManifestEntry[],
 	};
 }
 
-export function buildState(manifest: Manifest, fleet: FleetView, events: DashEvent[], autoCollect: boolean): DashState {
+export function buildState(manifest: Manifest, fleet: FleetView, events: DashEvent[], autoCollect: boolean, defaultModel?: string): DashState {
 	const arms: ArmView[] = MATRIX.map((arm) => ({
 		id: arm.id,
 		phase: arm.phase,
@@ -240,6 +259,8 @@ export function buildState(manifest: Manifest, fleet: FleetView, events: DashEve
 		n: arm.n,
 		flags: flagsLine(arm),
 		app: arm.app,
+		...(arm.task ? { task: arm.task } : {}),
+		...(arm.dispatch.url ? { url: arm.dispatch.url } : {}),
 		...(arm.informs ? { informs: arm.informs } : {}),
 		passes: modelPasses(manifest, arm.id)
 			.map((model) => passView(arm, model, manifest.entries.filter((e) => e.armId === arm.id && e.model === model), fleet))
@@ -278,6 +299,7 @@ export function buildState(manifest: Manifest, fleet: FleetView, events: DashEve
 		date: manifest.date,
 		generatedAt: new Date().toISOString(),
 		autoCollect,
+		...(defaultModel ? { defaultModel } : {}),
 		progress: {
 			planned: MATRIX.reduce((sum, a) => sum + a.n, 0),
 			submitted: manifest.entries.length,
@@ -303,6 +325,183 @@ export function buildState(manifest: Manifest, fleet: FleetView, events: DashEve
 			})),
 		},
 		events: events.slice(-100),
+	};
+}
+
+/** ---- run detail: the appmap graph + the path a run took through it ---------------------- */
+
+export interface DetailStep {
+	index: number;
+	/** What the step did, human-readable: the element it acted on, or the keys/text it sent. */
+	label: string;
+	kind: string;
+	verified: boolean;
+	channel?: string;
+	reasoning?: string;
+	/** Where the run believed it was after this step (graph surface id). */
+	surface?: string;
+	/** Matched graph node (control) this step acted on. */
+	nodeId?: string;
+	/** Matched navigation edge (surface transition) this step performed. */
+	edgeTo?: string;
+}
+
+export interface DashDetail {
+	jobId: string;
+	armId: string;
+	graph?: { nodes: any[]; edges: any[]; home?: string };
+	/** Where the graph came from — archived arm map, live docs/appmaps, or nothing. */
+	graphSource?: string;
+	steps: DetailStep[];
+	/** settingKeys the run's journal recorded as actually mutated. */
+	mutatedKeys: string[];
+	note?: string;
+}
+
+/**
+ * Which phase-1 explore produced the map a task arm ran against. Mirrors how orchestrate
+ * grounds the arms: web arms read the web explore, APPMAP_VARIANT=vision reads the
+ * vision-only pass, otherwise the arm's own backend's map.
+ */
+export function groundingArmId(arm: Arm): string {
+	if (arm.dispatch.url || arm.id.startsWith("p2-web")) return "p1-explore-web-cdp";
+	if (arm.env?.APPMAP_VARIANT === "vision") return "p1-explore-vision";
+	if (arm.dispatch.backend === "cdp") return "p1-explore-cdp";
+
+	return "p1-explore-ax";
+}
+
+const stepLabel = (a: Record<string, any>, s: Record<string, any>): { label: string; kind: string } => {
+	if (s.targetName) return { label: String(s.targetName), kind: a.kind === "tool" ? String(a.name ?? "act") : String(a.kind) };
+	if (a.kind === "type") return { label: `type "${a.text}"`, kind: "type" };
+	if (a.kind === "key") return { label: `key ${a.key}`, kind: "key" };
+	if (a.kind === "hotkey") return { label: `keys ${(a.keys ?? []).join("+")}`, kind: "hotkey" };
+	if (a.kind === "scroll") return { label: `scroll ${a.direction}`, kind: "scroll" };
+	if (a.kind === "tool") return { label: String(a.name ?? "tool"), kind: "tool" };
+
+	return { label: a.kind ?? "action", kind: String(a.kind ?? "action") };
+};
+
+/**
+ * Walk a run's steps through the appmap graph. Matching is by the names the run RESOLVED
+ * (StepRecord.targetName — what was actually clicked), against edge actions' quoted names
+ * (`click "Brand Kit" …` → the root→brand-kit transition) and control titles, preferring
+ * matches under the surface the walk currently stands on. Heuristic by construction — an
+ * unmatched step stays in the list unanchored rather than being guessed onto the map.
+ */
+export function matchPath(graph: { nodes: any[]; edges: any[] }, rawSteps: Array<Record<string, any>>): DetailStep[] {
+	const norm = (s: string): string => s.trim().toLowerCase();
+	const controls = graph.nodes.filter((n) => n.kind === "control");
+	let surface = "root";
+
+	return rawSteps.map((s) => {
+		const { label, kind } = stepLabel(s.action ?? {}, s);
+		const out: DetailStep = {
+			index: s.index,
+			label,
+			kind,
+			verified: s.verified === true,
+			...(s.verificationChannel ? { channel: String(s.verificationChannel) } : {}),
+			...(s.modelReasoning ? { reasoning: String(s.modelReasoning) } : {}),
+		};
+		const name = s.targetName ? norm(String(s.targetName)) : undefined;
+		if (name) {
+			// Surface transition first: an edge whose quoted name is what was clicked.
+			const edges = graph.edges.filter((e) => {
+				const quoted = String(e.action ?? "").match(/"([^"]+)"/)?.[1];
+
+				return quoted !== undefined && norm(quoted) === name;
+			});
+			const edge = edges.find((e) => e.from === surface) ?? edges[0];
+			if (edge) {
+				surface = String(edge.to);
+				out.edgeTo = surface;
+			} else {
+				const hits = controls.filter((n) => norm(String(n.title ?? "")) === name);
+				const hit = hits.find((n) => String(n.id).startsWith(`${surface}/`)) ?? hits[0];
+				if (hit) out.nodeId = String(hit.id);
+			}
+		}
+		out.surface = surface;
+
+		return out;
+	});
+}
+
+const readJsonFile = (file: string): Record<string, any> | undefined => {
+	try {
+		return JSON.parse(fs.readFileSync(file, "utf8"));
+	} catch {
+		return undefined;
+	}
+};
+
+/** The archived graph for an explore arm's pass, else the live docs/appmaps copy. */
+function resolveGraph(
+	entry: ManifestEntry,
+	exploreArmId: string,
+	app: string,
+	benchRoot: string,
+	dataDir: string,
+): { graph?: DashDetail["graph"]; source?: string } {
+	const archive = archiveDirFor(benchRoot, { ...entry, armId: exploreArmId });
+	try {
+		const file = fs.readdirSync(archive).find((f) => f.endsWith(".json"));
+		if (file) {
+			const g = readJsonFile(path.join(archive, file));
+			if (g?.nodes) return { graph: { nodes: g.nodes, edges: g.edges ?? [], ...(g.home ? { home: String(g.home) } : {}) }, source: `${exploreArmId} pass (archived)` };
+		}
+	} catch {
+		// No archive for that arm yet — fall through to the live map.
+	}
+	const live = readJsonFile(path.join(dataDir, "docs", "appmaps", `${appSlug(app)}.json`));
+	if (live?.nodes) return { graph: { nodes: live.nodes, edges: live.edges ?? [], ...(live.home ? { home: String(live.home) } : {}) }, source: `docs/appmaps/${appSlug(app)}.json (live)` };
+
+	return {};
+}
+
+/** Everything the board's dropdown needs for one run: the map, the walk, the mutations. */
+export function buildDetail(jobId: string, manifest: Manifest, opts: { dataDir?: string; benchRoot?: string } = {}): DashDetail {
+	const dataDir = opts.dataDir ?? dataRoot();
+	const benchRoot = opts.benchRoot ?? benchDir(manifest.date);
+	const entry = manifest.entries.find((e) => e.jobId === jobId);
+	if (!entry) return { jobId, armId: "?", steps: [], mutatedKeys: [], note: "no manifest entry for this job" };
+	const arm = armById(entry.armId);
+	if (!arm) return { jobId, armId: entry.armId, steps: [], mutatedKeys: [], note: "unknown arm" };
+
+	const exploreArmId = arm.kind === "explore" ? arm.id : groundingArmId(arm);
+	const { graph, source } = resolveGraph(entry, exploreArmId, arm.app, benchRoot, dataDir);
+
+	const notes: string[] = [];
+	if (!graph) notes.push("no appmap graph found for this arm yet");
+	if (arm.kind === "explore") notes.push("grounding pass — the map IS the output; there is no task path");
+	if (flagsLine(arm).includes("NO_GROUNDING")) notes.push("ungrounded run — the agent never saw this map; the walk is reconstructed for comparison");
+
+	let steps: DetailStep[] = [];
+	if (arm.kind !== "explore") {
+		const runLog = readJsonFile(path.join(dataDir, "out", "runs", `${jobId}.json`));
+		const rawSteps: Array<Record<string, any>> = Array.isArray(runLog?.steps) ? runLog.steps : [];
+		if (!runLog) notes.push("run log not on this machine yet — collect pulls it when the run lands");
+		steps = graph ? matchPath(graph, rawSteps) : rawSteps.map((s) => ({ ...stepLabel(s.action ?? {}, s), index: s.index, verified: s.verified === true }));
+	}
+
+	const mutatedKeys = [
+		...new Set(
+			readJournal(path.join(dataDir, "out", "runs", `${jobId}.journal.jsonl`))
+				.filter((m) => m.kind === "setting")
+				.map((m) => (m as Record<string, any>).settingKey)
+				.filter((k): k is string => typeof k === "string"),
+		),
+	];
+
+	return {
+		jobId,
+		armId: entry.armId,
+		...(graph ? { graph } : {}),
+		...(source ? { graphSource: source } : {}),
+		steps,
+		mutatedKeys,
+		...(notes.length ? { note: notes.join("; ") } : {}),
 	};
 }
 
@@ -355,13 +554,22 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	const events: DashEvent[] = [];
 	const clients = new Set<http.ServerResponse>();
 
+	// What "(default)" would run HERE — the same key precedence makeClient applies. A hint
+	// for uncollected passes only; keyless environments just leave it blank.
+	let defaultModel: string | undefined;
+	try {
+		defaultModel = (await import("../core/harness/model.js")).makeClient().model;
+	} catch {
+		// No usable key on this machine — collected runs will supply the truth.
+	}
+
 	const addEvent = (line: string): void => {
 		events.push({ t: new Date().toISOString(), line });
 		if (events.length > 200) events.shift();
 	};
 
 	const push = (): void => {
-		const data = `data: ${JSON.stringify(buildState(manifest, fleet, events, autoCollect))}\n\n`;
+		const data = `data: ${JSON.stringify(buildState(manifest, fleet, events, autoCollect, defaultModel))}\n\n`;
 		for (const res of clients) res.write(data);
 	};
 
@@ -423,10 +631,14 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			res.end(fs.readFileSync(htmlPath));
 		} else if (url === "/api/state") {
 			res.writeHead(200, { "content-type": "application/json" });
-			res.end(JSON.stringify(buildState(manifest, fleet, events, autoCollect), null, "\t"));
+			res.end(JSON.stringify(buildState(manifest, fleet, events, autoCollect, defaultModel), null, "\t"));
+		} else if (url.startsWith("/api/detail")) {
+			const job = new URL(url, "http://localhost").searchParams.get("job") ?? "";
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(JSON.stringify(buildDetail(job, manifest)));
 		} else if (url === "/events") {
 			res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
-			res.write(`data: ${JSON.stringify(buildState(manifest, fleet, events, autoCollect))}\n\n`);
+			res.write(`data: ${JSON.stringify(buildState(manifest, fleet, events, autoCollect, defaultModel))}\n\n`);
 			clients.add(res);
 			req.on("close", () => clients.delete(res));
 		} else {
