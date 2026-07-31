@@ -133,6 +133,120 @@ export const CHROME_POLICY: ChromePolicyKey[] = [
  */
 const BARE_POLICY_KEY = /^[A-Za-z][A-Za-z0-9]*$/;
 
+/**
+ * The external-protocol allowlist — a different dialog from the three keys above, same
+ * mechanism, same file, so there is exactly one way this repo sets Chrome policy.
+ *
+ * WHY. A sign-in's OAuth handoff ends with the page launching the app's own URL scheme, and
+ * Chrome interposes its "Open <App>.app?" confirmation. That dialog is browser chrome: a CDP
+ * `Page.startScreencast` shows only the page, so to a liveview teammate the sign-in just
+ * stops (src/remote/liveview-cdp.ts — the SCK engine auto-presses exactly this dialog; the
+ * CDP engine cannot see it to press it). `AutoLaunchProtocolsFromOrigins` is Chromium's
+ * sanctioned way to skip the dialog for a named scheme launched from named origins
+ * (schema: an array of {protocol, allowed_origins} dicts, Chrome 85+).
+ *
+ * MANDATORY-ONLY, unlike the keys above. The policy's template metadata carries no
+ * `can_be_recommended`, and its published docs say "Can be recommended: No" outright — a
+ * value arriving at recommended level is rejected with a level error, not applied. On this
+ * fleet the unattended path reaches ONLY recommended (no passwordless sudo, no MDM — see the
+ * header), so the write lines target /Library/Managed Preferences via `sudo -n` and report
+ * missing when that fails, rather than writing a user-domain value that reads back fine in
+ * `defaults` while Chrome ignores it. Set-but-ineffective is the one state this file must
+ * never manufacture — it is the believed-but-armed failure the header calls worse than none.
+ */
+export const AUTO_LAUNCH_POLICY_KEY = "AutoLaunchProtocolsFromOrigins";
+
+export interface AutoLaunchProtocolEntry {
+	/**
+	 * The scheme with NO separator and in lowercase: "slack", never "slack:", "slack://" or
+	 * "Skype" — Chromium matches the bare lowercase scheme and silently ignores the rest.
+	 */
+	protocol: string;
+	/**
+	 * URLBlocklist-style origin patterns allowed to launch the scheme without the dialog:
+	 * "https://accounts.google.com", "example.com", "*". A path or query part makes Chromium
+	 * ignore the whole pattern, so the validator refuses them here instead.
+	 */
+	allowedOrigins: string[];
+}
+
+/**
+ * EMPTY on purpose — the mechanism is wired, the data is not known yet. Yarn's own URL scheme
+ * is written nowhere in this repo: the only trace is the dialog title the SCK auto-presser
+ * matches ("Open Yarn.app?"), which names the APP, not the scheme. Read the scheme off a real
+ * handoff — the yarn-something:// URL Chrome is asking about while that dialog is up — and add
+ * it here with the OAuth provider's origin(s). DO NOT guess it: a wrong scheme grades the host
+ * clean while every handoff still stops on the dialog.
+ */
+export const AUTO_LAUNCH_PROTOCOLS: AutoLaunchProtocolEntry[] = [];
+
+/** Chromium's own constraint (bare, lowercase) — which also keeps the XML below inert in a shell. */
+const BARE_PROTOCOL = /^[a-z][a-z0-9+.-]*$/;
+
+/**
+ * An origin pattern reaches a single-quoted XML fragment on a `defaults write` command line,
+ * so its alphabet is closed twice over: nothing XML-special, nothing shell-special. The slash
+ * is allowed only as a scheme's "//" — Chromium ignores any pattern carrying a path or query,
+ * and an ignored entry is a host grading clean while the dialog stays.
+ */
+function checkOriginPattern(origin: string): void {
+	if (!/^[A-Za-z0-9*.:/-]+$/.test(origin))
+		throw new Error(`auto-launch origin ${JSON.stringify(origin)} is outside the safe alphabet — it would reach a shell inside an XML fragment`);
+	if (origin.replace(/^[A-Za-z*][A-Za-z0-9+.*-]*:\/\//, "").includes("/"))
+		throw new Error(`auto-launch origin ${JSON.stringify(origin)} carries a path — Chromium silently ignores such patterns, which reads as set while the dialog stays`);
+}
+
+/**
+ * The policy value as the XML plist fragment `defaults write` accepts, generated from the
+ * table so the value and its grader cannot drift. Undefined when there is nothing to write.
+ */
+export function autoLaunchProtocolsPlist(entries: AutoLaunchProtocolEntry[] = AUTO_LAUNCH_PROTOCOLS): string | undefined {
+	if (!entries.length) return undefined;
+
+	const dicts = entries.map(({ protocol, allowedOrigins }) => {
+		if (!BARE_PROTOCOL.test(protocol))
+			throw new Error(`auto-launch protocol ${JSON.stringify(protocol)} is not a bare lowercase scheme — write "slack", never "slack:" or "slack://" (Chromium ignores the separator forms, and this string reaches a shell)`);
+		if (!allowedOrigins.length)
+			throw new Error(`auto-launch protocol ${JSON.stringify(protocol)} has no allowed_origins — Chromium requires both fields, and an empty list allows nothing while reading as set`);
+		for (const origin of allowedOrigins) checkOriginPattern(origin);
+
+		return `<dict><key>allowed_origins</key><array>${allowedOrigins.map((o) => `<string>${o}</string>`).join("")}</array><key>protocol</key><string>${protocol}</string></dict>`;
+	});
+
+	return `<array>${dicts.join("")}</array>`;
+}
+
+/**
+ * The script section that applies the allowlist — same generated-not-hand-written rule as
+ * `chromePolicyWriteLines`, and empty while the table is, so today's installer is unchanged.
+ *
+ * `sudo -n`: mandatory on macOS means /Library/Managed Preferences, which needs root, and
+ * provisioning is a BatchMode ssh that cannot answer a password prompt — so the write is
+ * attempted without one and its failure is a report, not a crash. The check requires the
+ * managed plist to EXIST as well as the key to read back: a value visible to `defaults` but
+ * not forced is precisely the ignored-below-mandatory state the table header warns about,
+ * and it must grade as missing.
+ */
+export function autoLaunchWriteLines(entries: AutoLaunchProtocolEntry[] = AUTO_LAUNCH_PROTOCOLS): string[] {
+	const plist = autoLaunchProtocolsPlist(entries);
+	if (!plist) return [];
+
+	return [
+		`# lets the OAuth handoff launch ${entries.map((e) => e.protocol).join(", ")} from its own sign-in origins with no "Open <App>?" dialog — browser chrome a CDP liveview cannot show`,
+		`sudo -n defaults write "/Library/Managed Preferences/$DOMAIN" ${AUTO_LAUNCH_POLICY_KEY} '${plist}' 2>/dev/null || true`,
+		`if [ -f "/Library/Managed Preferences/$DOMAIN.plist" ] && defaults read "$DOMAIN" ${AUTO_LAUNCH_POLICY_KEY} >/dev/null 2>&1; then`,
+		`\tAPPLIED=$((APPLIED + 1))`,
+		`else`,
+		`\tMISSING="$MISSING ${AUTO_LAUNCH_POLICY_KEY}"`,
+		`fi`,
+	];
+}
+
+/** Everything the graders scan: the boolean table, plus the allowlist key once it has entries. */
+function policedKeyNames(): string[] {
+	return [...CHROME_POLICY.map((p) => p.key), ...(AUTO_LAUNCH_PROTOCOLS.length ? [AUTO_LAUNCH_POLICY_KEY] : [])];
+}
+
 export type PolicyLevel = "mandatory" | "recommended" | "unset";
 
 export interface ChromePolicyKeyState {
@@ -177,7 +291,7 @@ export function readChromePolicy(read: PlistReader, opts: { home: string; user: 
 	return {
 		chromeInstalled: opts.chromeInstalled,
 		...(opts.chromeRunning === undefined ? {} : { chromeRunning: opts.chromeRunning }),
-		keys: CHROME_POLICY.map(({ key }) => {
+		keys: policedKeyNames().map((key) => {
 			for (const [level, doc] of sources) {
 				// `in`, not a truthiness test: the value we want to find is `false`, and every
 				// shorter spelling of this check reports a correctly-policed host as unset.
@@ -206,7 +320,7 @@ export function chromePolicyProblems(state: ChromePolicyState | undefined): stri
 	if (!state.chromeInstalled) return [];
 
 	const problems: string[] = [];
-	const unset = state.keys.filter((k) => k.level === "unset");
+	const unset = state.keys.filter((k) => k.level === "unset" && k.key !== AUTO_LAUNCH_POLICY_KEY);
 	if (unset.length)
 		problems.push(
 			`Chrome autofill policy not applied (${unset.map((k) => k.key).join(", ")}) — a sign-in stream can show saved form data to whoever is watching: ./run provision --host <name>`,
@@ -216,8 +330,23 @@ export function chromePolicyProblems(state: ChromePolicyState | undefined): stri
 	// user preference beating a recommended policy — so the message names that rather than
 	// telling someone to re-run a provision that will not help.
 	for (const k of state.keys)
-		if (k.level !== "unset" && k.value !== false)
+		if (k.key !== AUTO_LAUNCH_POLICY_KEY && k.level !== "unset" && k.value !== false)
 			problems.push(`Chrome policy ${k.key} is ${JSON.stringify(k.value)} at ${k.level} level, not false — a user or synced preference is overriding it; this needs an MDM profile to enforce`);
+
+	// The allowlist grades on LEVEL, not value: Chromium rejects this policy below mandatory
+	// with a level error, so "set at recommended" is set-but-ineffective — it reads back fine
+	// in `defaults` while every handoff still stops on the dialog, which is strictly worse
+	// than unset because it is also believed. Only in the scan at all once the table has
+	// entries, so an empty table grades nothing.
+	const auto = state.keys.find((k) => k.key === AUTO_LAUNCH_POLICY_KEY);
+	if (auto && auto.level === "unset")
+		problems.push(
+			`Chrome external-protocol allowlist (${AUTO_LAUNCH_POLICY_KEY}) not applied — a sign-in's OAuth handoff stops on the "Open <App>?" dialog, which a CDP liveview cannot show; the policy is mandatory-only, so this needs root or an MDM profile`,
+		);
+	else if (auto && auto.level !== "mandatory")
+		problems.push(
+			`Chrome policy ${AUTO_LAUNCH_POLICY_KEY} is at ${auto.level} level and Chrome ignores it below mandatory — it reads as set while the "Open <App>?" dialog still appears; move it to /Library/Managed Preferences (root) or an MDM profile`,
+		);
 
 	if (state.chromeRunning && state.keys.some((k) => k.level !== "unset"))
 		problems.push("Chrome is running, and it re-reads platform policy only periodically — quit and reopen it before trusting a sign-in stream");
@@ -265,7 +394,7 @@ export function inspectChromePolicy(opts: {
 	return {
 		chromeInstalled: opts.chromeInstalled,
 		...(opts.chromeRunning === undefined ? {} : { chromeRunning: opts.chromeRunning }),
-		keys: CHROME_POLICY.map(({ key }): ChromePolicyKeyState => {
+		keys: policedKeyNames().map((key): ChromePolicyKeyState => {
 			let raw: string | undefined;
 			try {
 				raw = opts.readDefault(CHROME_DOMAIN, key);
@@ -301,7 +430,8 @@ export function describeChromePolicy(state: ChromePolicyState | undefined): stri
 	if (!state) return "not reported";
 	if (!state.chromeInstalled) return "Chrome not installed";
 	const levels = state.keys.map((k) => k.level);
-	const applied = state.keys.filter((k) => k.level !== "unset" && k.value === false).length;
+	// The allowlist counts as applied only where Chrome will honour it — at mandatory level.
+	const applied = state.keys.filter((k) => (k.key === AUTO_LAUNCH_POLICY_KEY ? k.level === "mandatory" : k.level !== "unset" && k.value === false)).length;
 
 	return `${applied}/${state.keys.length} applied${levels.includes("mandatory") ? " (mandatory)" : levels.includes("recommended") ? " (recommended)" : ""}`;
 }

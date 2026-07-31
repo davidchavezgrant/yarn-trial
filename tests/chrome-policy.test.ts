@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+	AUTO_LAUNCH_POLICY_KEY,
+	AUTO_LAUNCH_PROTOCOLS,
+	autoLaunchProtocolsPlist,
+	autoLaunchWriteLines,
 	CHROME_DOMAIN,
 	CHROME_POLICY,
 	type ChromePolicyState,
@@ -301,4 +305,114 @@ test("CHROME_POLICY__DisablesTheFormHistoryStore__When__ListingTheKeys", () => {
 	// And the honesty requirement: the password entry must not claim to hide saved passwords.
 	const pw = CHROME_POLICY.find((p) => p.key === "PasswordManagerEnabled");
 	assert.match(pw?.why ?? "", /does NOT hide/);
+});
+
+// --- The external-protocol allowlist (AutoLaunchProtocolsFromOrigins). Added for the CDP
+// liveview sign-in flow: an OAuth handoff ends with the page launching the app's URL scheme,
+// and Chrome's "Open <App>?" confirmation is browser chrome a page screencast cannot show.
+// The table ships EMPTY — Yarn's scheme is written nowhere in this repo and must be read off
+// a real handoff, never guessed — so these tests exercise the mechanism with explicit entries.
+
+/** A state carrying only the allowlist key, at the given level. */
+function allowlistState(level: "mandatory" | "recommended" | "unset"): ChromePolicyState {
+	return { chromeInstalled: true, keys: [{ key: AUTO_LAUNCH_POLICY_KEY, level, ...(level === "unset" ? {} : { value: "(1 entry)" }) }] };
+}
+
+test("autoLaunchProtocolsPlist__RendersTheChromiumSchema__When__GivenEntries", () => {
+	// The exact shape Chromium documents: an array of dicts, each REQUIRING both `protocol`
+	// (bare scheme, no separator) and `allowed_origins` (URLBlocklist-style patterns).
+	const xml = autoLaunchProtocolsPlist([{ protocol: "slack", allowedOrigins: ["https://slack.com", "*"] }]);
+
+	assert.equal(
+		xml,
+		"<array><dict><key>allowed_origins</key><array><string>https://slack.com</string><string>*</string></array><key>protocol</key><string>slack</string></dict></array>",
+	);
+});
+
+test("autoLaunchProtocolsPlist__ReturnsUndefined__When__TheTableIsEmpty", () => {
+	assert.equal(autoLaunchProtocolsPlist([]), undefined);
+	// And the module's own table IS empty until someone reads the real scheme off a real
+	// handoff. This assertion is meant to flip the day that happens — update it with the entry.
+	assert.deepEqual(AUTO_LAUNCH_PROTOCOLS, []);
+});
+
+test("autoLaunchProtocolsPlist__Throws__When__TheSchemeCarriesItsSeparator", () => {
+	// Chromium matches the bare lowercase scheme and silently ignores "yarn:", "yarn://" and
+	// "Yarn" — an entry it ignores grades the host clean while every handoff still stops.
+	for (const wrong of ["yarn://", "yarn:", "Yarn"]) assert.throws(() => autoLaunchProtocolsPlist([{ protocol: wrong, allowedOrigins: ["*"] }]), /bare lowercase scheme/, wrong);
+});
+
+test("autoLaunchProtocolsPlist__Throws__When__AnOriginCouldBeShellOrXmlInput", () => {
+	// The origins reach a single-quoted XML fragment on a `defaults write` command line, so
+	// the alphabet has to be closed against both syntaxes at the point of generation.
+	for (const wrong of ["https://a.com'; touch /tmp/x", "<script>", "https://a.com b", "https://a.com?next=x"])
+		assert.throws(() => autoLaunchProtocolsPlist([{ protocol: "slack", allowedOrigins: [wrong] }]), /safe alphabet/, wrong);
+});
+
+test("autoLaunchProtocolsPlist__Throws__When__AnOriginCarriesAPath", () => {
+	// Chromium ignores any pattern with a /path element — another set-but-ineffective shape,
+	// refused here instead of silently dropped there.
+	assert.throws(() => autoLaunchProtocolsPlist([{ protocol: "slack", allowedOrigins: ["https://a.com/oauth"] }]), /carries a path/);
+	// The scheme's own "//" is not a path.
+	assert.ok(autoLaunchProtocolsPlist([{ protocol: "slack", allowedOrigins: ["https://a.com"] }]));
+});
+
+test("autoLaunchProtocolsPlist__Throws__When__AProtocolHasNoOrigins", () => {
+	// Chromium requires both fields, and an empty origin list allows nothing while reading as set.
+	assert.throws(() => autoLaunchProtocolsPlist([{ protocol: "slack", allowedOrigins: [] }]), /no allowed_origins/);
+});
+
+test("autoLaunchWriteLines__EmitsNothing__When__TheTableIsEmpty", () => {
+	// Today's installer must be byte-identical to yesterday's: mechanism wired, data absent.
+	assert.deepEqual(autoLaunchWriteLines([]), []);
+	assert.deepEqual(autoLaunchWriteLines(), []);
+});
+
+test("autoLaunchWriteLines__TargetsTheManagedDomain__When__GivenEntries", () => {
+	const lines = autoLaunchWriteLines([{ protocol: "slack", allowedOrigins: ["https://slack.com"] }]).join("\n");
+
+	// MANDATORY-ONLY: the policy's template has no can_be_recommended, so a recommended-level
+	// value is rejected with a level error. The write therefore goes to /Library/Managed
+	// Preferences (root, hence sudo -n under a BatchMode ssh)...
+	assert.match(lines, /sudo -n defaults write "\/Library\/Managed Preferences\/\$DOMAIN" AutoLaunchProtocolsFromOrigins/);
+	// ...and NEVER to the user domain, which would read back fine in `defaults` while Chrome
+	// ignored it — the set-but-ineffective state this module exists to never manufacture.
+	assert.equal(/defaults write "\$DOMAIN" AutoLaunchProtocolsFromOrigins/.test(lines), false);
+
+	// The check demands the value be FORCED, not merely readable: the managed plist must
+	// exist as well as the key answering.
+	assert.match(lines, /\[ -f "\/Library\/Managed Preferences\/\$DOMAIN\.plist" \]/);
+	assert.match(lines, /MISSING="\$MISSING AutoLaunchProtocolsFromOrigins"/);
+});
+
+test("chromePolicyProblems__FlagsTheAllowlist__When__ItIsUnset", () => {
+	const problems = chromePolicyProblems(allowlistState("unset"));
+
+	assert.equal(problems.length, 1);
+	assert.match(problems[0], /external-protocol allowlist/);
+	assert.match(problems[0], /root or an MDM profile/);
+	// Its own message, never folded into the autofill one — the fix is different (root/MDM,
+	// not a re-run of provision) and so is the thing at risk (a stalled handoff, not a leak).
+	assert.equal(/saved form data/.test(problems[0]), false);
+});
+
+test("chromePolicyProblems__ReportsSetButIneffective__When__TheAllowlistArrivedBelowMandatory", () => {
+	// The trap state: `defaults read` answers, describeChromePolicy could count it, and Chrome
+	// rejects it with a level error — worse than unset because it is also believed.
+	const problems = chromePolicyProblems(allowlistState("recommended"));
+
+	assert.equal(problems.length, 1);
+	assert.match(problems[0], /ignores it below mandatory/);
+	assert.match(problems[0], /Managed Preferences|MDM/);
+});
+
+test("chromePolicyProblems__StaysSilent__When__TheAllowlistIsForced", () => {
+	assert.deepEqual(chromePolicyProblems(allowlistState("mandatory")), []);
+});
+
+test("describeChromePolicy__CountsTheAllowlistOnlyAtMandatory__When__RenderingAStatusCell", () => {
+	// The boolean keys count as applied at recommended; the allowlist only where Chrome will
+	// actually honour it.
+	assert.equal(describeChromePolicy(allowlistState("recommended")), "0/1 applied (recommended)");
+	assert.equal(describeChromePolicy(allowlistState("mandatory")), "1/1 applied (mandatory)");
 });
