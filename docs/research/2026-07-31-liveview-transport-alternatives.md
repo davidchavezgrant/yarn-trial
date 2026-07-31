@@ -98,3 +98,11 @@ pays; until then it's cost without benefit.
 Insight to keep: remote-UX has two independent axes — **output smoothness** (codec/fps, what
 WebRTC improves) and **input responsiveness** (echo round-trip, what local prediction
 improves) — and users weight the second far higher.
+
+---
+
+**Implemented 2026-07-31** (branch `screencast-engine`): `src/remote/liveview-cdp.ts` —
+`connectCdpEngine()` behind the same `EngineHandle` seam as the SCK engine (which gained a
+transport-neutral `onExit`; `child` is now optional). Selected locally via
+`LIVEVIEW_TRANSPORT=cdp` on `./run liveview` (`LIVEVIEW_CDP_URL` names the endpoint;
+unset, `CDP_PORT`/9222). SCK remains the default; runner/fleet wiring is a next step.

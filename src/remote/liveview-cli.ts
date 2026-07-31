@@ -19,7 +19,8 @@ import { pathToFileURL } from "node:url";
 import { loadHosts, resolveHost } from "./control/hosts.js";
 import { lastFrame, runnerArgv, runSsh } from "./control/ssh.js";
 import { loginBlockedByRun } from "./liveview.js";
-import { startLiveViewServer } from "./liveview-server.js";
+import { connectCdpEngine } from "./liveview-cdp.js";
+import { startLiveViewServer, type ServerOptions } from "./liveview-server.js";
 
 const USAGE = `usage: ./run liveview [<mac>] ["<App Name>"] [--lan] [--fps N]
 
@@ -27,7 +28,11 @@ const USAGE = `usage: ./run liveview [<mac>] ["<App Name>"] [--lan] [--fps N]
   <mac>          a host from hosts.json — prints the ssh -L tunnel to reach its viewer
   "<App Name>"   with a mac: bring this app to the front there first (reuses signin's launch)
   --lan          bind beyond loopback for a quick same-network demo (a raw login stream — avoid)
-  --fps N        capture frame rate (default 15)
+  --fps N        capture frame rate (default 15; SCK engine only)
+
+  LIVEVIEW_TRANSPORT=cdp   stream a Chromium target over Page.startScreencast instead of
+                           window capture (LIVEVIEW_CDP_URL names the debug endpoint;
+                           unset, CDP_PORT/9222 applies). Local mode only.
 
 Window-scoped sign-in: the teammate sees ONLY the window being signed into, drives it in their
 own browser, and closes the tab. The session lands in the app's own storage; nothing is stored
@@ -96,7 +101,15 @@ async function main(): Promise<void> {
 	// The runner names the sign-in target so the engine can crop/guard the browser leg; a local
 	// second positional does the same for a human running this by hand.
 	const targetApp = process.env.LIVEVIEW_APP || app || undefined;
-	const srv = await startLiveViewServer({ lan, fps, port, token, maxLifetimeMs, idleAfterCloseMs, app: targetApp });
+	// LIVEVIEW_TRANSPORT=cdp streams the target over Page.startScreencast instead of SCK —
+	// for Chromium targets already up with --remote-debugging-port (LIVEVIEW_CDP_URL points
+	// at the endpoint; unset, the CDP_PORT default applies). Local/env selection only for
+	// now; the runner verb stays on SCK until the fleet wiring lands.
+	const engine: ServerOptions["engine"] | undefined =
+		process.env.LIVEVIEW_TRANSPORT === "cdp"
+			? () => connectCdpEngine({ endpoint: process.env.LIVEVIEW_CDP_URL, app: targetApp })
+			: undefined;
+	const srv = await startLiveViewServer({ lan, fps, port, token, maxLifetimeMs, idleAfterCloseMs, app: targetApp, engine });
 	// An env-supplied token means runner mode, where stdout lands in a persistent job log
 	// (out/jobs/.../log.txt) readable locally and via the runner's `logs` verb — printing the
 	// full URL would park a live capture+inject credential there for its whole lifetime. The
