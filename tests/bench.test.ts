@@ -7,6 +7,8 @@ import type { JobRecord } from "../src/remote/runner/jobs.js";
 import {
 	archiveDirFor,
 	collect,
+	failureKind,
+	poisonedHosts,
 	jobTiming,
 	journalScopes,
 	parseAppmapStamp,
@@ -686,7 +688,7 @@ test("renderReport__ListsStampsAndSections__When__ManifestHasEntries", () => {
 	assert.match(md, /`job-1` \(mac1\)/);
 	assert.match(md, /`job-2` \(mac1, uncollected\)/);
 	// The collected arm's row carries its numbers; the arm with no collected runs shows —.
-	assert.match(md, /\| p2-ax-grounded \|[^\n]*\| 1\/3 \| 1\/1 \| 4 \| 52 \| 6 \|/);
+	assert.match(md, /\| p2-ax-grounded \|[^\n]*\| 1\/3 \| 1\/1 \| — \| 4 \| 52 \| 6 \|/);
 	assert.match(md, /TODO: which backend/);
 });
 
@@ -746,4 +748,45 @@ test("archiveDirFor__KeysOnModelAndArm__When__TwoPassesShareOneManifest", () => 
 	assert.notEqual(sol, fable, "each pass archives its own maps");
 	assert.match(sol, /appmaps\/openai-gpt-5.6-sol-nitro\/p1-explore-ax$/);
 	assert.match(archiveDirFor("/b", base), /appmaps\/default\/p1-explore-ax$/);
+});
+
+test("failureKind__ClassifiesEachShape__When__RunsFailDifferently", () => {
+	const job = (over: Record<string, unknown>) => ({ id: "j", kind: "task", app: "Yarn", task: "t", operator: "d", state: "failed", pid: 0, startedAt: "", artifacts: { log: "" }, ...over }) as any;
+	// Success: no kind at all.
+	assert.equal(failureKind(job({}), { success: true }, true), undefined);
+	// Exit 3 is the readiness gate — a host problem (signed out), not a model problem.
+	assert.equal(failureKind(job({ exitCode: 3 }), { success: false }, false), "unready");
+	// Exit 2 is the prompt audit.
+	assert.equal(failureKind(job({ exitCode: 2 }), { success: false }, false), "hinted-refused");
+	// An operator stop is its own bucket — neither the model's nor the host's fault.
+	assert.equal(failureKind(job({ state: "stopped" }), { success: false }, false), "stopped");
+	// A run log with success:false is the agent's own verdict.
+	assert.equal(failureKind(job({ exitCode: 1 }), { success: false, steps: 7 }, true), "gave-up");
+	// Terminal with no run log: orphan/signal/died-before-first-write.
+	assert.equal(failureKind(job({ exitCode: null, signal: "SIGKILL" }), { success: false }, false), "crashed");
+	assert.equal(failureKind(undefined, { success: false }, false), "crashed");
+});
+
+test("poisonedHosts__FlagsTheHost__When__LastThreeRunsFailIdentically", () => {
+	const entry = (host: string, jobId: string, kind?: string, success = false) => ({
+		armId: "p2-ax-grounded", jobId, host, submittedAt: "", state: "done", collected: true,
+		metrics: { success, ...(kind ? { failureKind: kind } : {}) },
+	}) as any;
+	const m = (entries: any[]) => ({ date: "2026-07-31", createdAt: "", entries }) as any;
+
+	// Three identical failures: flagged, with the remedy named.
+	const warned = poisonedHosts(m([entry("mac2", "a", "unready"), entry("mac2", "b", "unready"), entry("mac2", "c", "unready")]));
+	assert.equal(warned.length, 1);
+	assert.match(warned[0], /POISONED HOST/);
+	assert.match(warned[0], /mac2/);
+	assert.match(warned[0], /signin/);
+
+	// A success inside the window breaks the streak.
+	assert.deepEqual(poisonedHosts(m([entry("mac2", "a", "unready"), entry("mac2", "b", undefined, true), entry("mac2", "c", "unready")])), []);
+	// Three DIFFERENT failures are three unlucky runs, not one broken host.
+	assert.deepEqual(poisonedHosts(m([entry("mac2", "a", "unready"), entry("mac2", "b", "crashed"), entry("mac2", "c", "gave-up")])), []);
+	// Two failures are not enough evidence.
+	assert.deepEqual(poisonedHosts(m([entry("mac2", "a", "unready"), entry("mac2", "b", "unready")])), []);
+	// Local compiles never poison anything.
+	assert.deepEqual(poisonedHosts(m([entry("local", "a", "crashed"), entry("local", "b", "crashed"), entry("local", "c", "crashed")])), []);
 });

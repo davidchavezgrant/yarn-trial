@@ -9,6 +9,7 @@ import { openApp } from "../../core/appctl.js";
 import { ensureBrowserEndpoint, ensureElectronEndpoint } from "../../backends/electron-attach.js";
 import { sidecarStatus } from "../../core/axdom.js";
 import { screenIsLocked } from "../../core/harness/observation.js";
+import { envNum } from "../../env.js";
 import { dataRoot, outDir, resourcesRoot } from "../../paths.js";
 import { type ChromePolicyState, inspectChromePolicy } from "../chrome-policy.js";
 import { firstLine } from "../control/ssh.js";
@@ -1180,6 +1181,25 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		});
 	}
 
+	/**
+	 * Seconds since the running job's log last grew, or undefined when it cannot be read.
+	 * The watchdog signal for a live-but-wedged run: the reaper catches DEAD holders, but a
+	 * hung driver call holds the lease with a healthy pid forever. Advisory only — a hard
+	 * model turn is legitimately minutes of silence, so nothing here kills anything; the
+	 * status just says how long the silence has lasted and the operator (or the bench
+	 * collector reading fleet status) decides.
+	 */
+	function logSilenceSec(jobId: string): number | undefined {
+		try {
+			return Math.max(0, Math.round((Date.now() - fs.statSync(logPath(jobId, root)).mtimeMs) / 1000));
+		} catch {
+			return undefined;
+		}
+	}
+
+	/** Log silence past this is flagged `stalled: true` in status. Advisory, never a kill. */
+	const STALL_SEC = envNum("JOB_STALL_MINS", 30) * 60;
+
 	function status(): RunnerResponse {
 		const perms = opts.permissions?.();
 		const stale = staleGrants(bootPermissions, perms);
@@ -1202,6 +1222,8 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		const { holder } = inspect(runnerDir);
 		if (!holder) return { ok: true, state: "idle", ...tcc, ...queue };
 
+		const silence = logSilenceSec(holder.lease.jobId);
+
 		return {
 			ok: true,
 			state: "busy",
@@ -1210,6 +1232,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			app: holder.lease.app,
 			kind: holder.lease.kind,
 			elapsedSec: holder.heldSec,
+			...(silence !== undefined ? { logSilenceSec: silence, ...(silence >= STALL_SEC ? { stalled: true } : {}) } : {}),
 			...tcc,
 			...queue,
 		};

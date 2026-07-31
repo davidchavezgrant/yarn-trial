@@ -46,6 +46,10 @@ export interface FleetRow {
 	 * with a cancel button, so both cross rather than just a count.
 	 */
 	queue?: FleetQueueEntry[];
+	/** Seconds since the running job's log last grew — the live-but-wedged signal. */
+	logSilenceSec?: number;
+	/** The runner's own verdict that the silence passed its stall threshold. Advisory. */
+	stalled?: boolean;
 	/**
 	 * Whether the remote has its Accessibility and Screen Recording grants. A host can be
 	 * perfectly reachable and still unable to run anything, and that failure is invisible
@@ -129,6 +133,8 @@ async function hostStatus(host: HostEntry, run: SshRunner, timeoutMs: number): P
 		...(typeof parsed?.app === "string" ? { app: parsed.app } : {}),
 		...(typeof parsed?.elapsedSec === "number" ? { elapsedSec: parsed.elapsedSec } : {}),
 		...(typeof parsed?.jobId === "string" ? { jobId: parsed.jobId } : {}),
+		...(typeof parsed?.logSilenceSec === "number" ? { logSilenceSec: parsed.logSilenceSec } : {}),
+		...(parsed?.stalled === true ? { stalled: true } : {}),
 		...(queue.length ? { queue } : {}),
 		...(typeof parsed?.tccOk === "boolean" ? { tccOk: parsed.tccOk } : {}),
 		...(Array.isArray(parsed?.staleGrants) && parsed.staleGrants.length ? { staleGrants: parsed.staleGrants.map(String) } : {}),

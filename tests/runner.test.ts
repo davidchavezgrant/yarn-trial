@@ -10,6 +10,7 @@ import {
 	type JobRecord,
 	listJobs,
 	listQueued,
+	logPath,
 	mintJobId,
 	pidAlive,
 	readJob,
@@ -862,6 +863,41 @@ function quickSpawner(lifeSec = 0.3): { calls: Array<{ command: string; args: st
 		},
 	};
 }
+
+test("status__ReportsLogSilence__When__ARunIsInFlight", async () => {
+	// The watchdog signal for live-but-wedged runs: the reaper catches dead holders, but a
+	// hung driver call keeps a healthy pid on the lease forever. Advisory — status carries
+	// the silence, nothing kills anything.
+	await withTempAsync("yr-serve-", async (dir) => {
+		const prevData = process.env.YARN_RUNNER_DATA;
+		process.env.YARN_RUNNER_DATA = dir;
+		const spawner = fakeSpawner();
+		const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
+		let pid = 0;
+		try {
+			const [res] = await request(runner.socketPath, "submit", { kind: "task", app: "Yarn", task: "t", operator: "dave" });
+			pid = res.pid;
+
+			// Fresh log (fakeSpawner just wrote it): tiny silence, not stalled.
+			const [fresh] = await request(runner.socketPath, "status");
+			assert.equal(typeof fresh.logSilenceSec, "number");
+			assert.ok(fresh.logSilenceSec < 5, "a just-written log is not silent");
+			assert.equal(fresh.stalled, undefined);
+
+			// Age the log file an hour: silent past the threshold, flagged stalled.
+			const old = Date.now() / 1000 - 3600;
+			fs.utimesSync(logPath(res.jobId), old, old);
+			const [aged] = await request(runner.socketPath, "status");
+			assert.ok(aged.logSilenceSec >= 3500, "silence reads off the log mtime");
+			assert.equal(aged.stalled, true);
+		} finally {
+			if (pid) try { process.kill(-pid, "SIGKILL"); } catch {}
+			await runner.close();
+			if (prevData === undefined) delete process.env.YARN_RUNNER_DATA;
+			else process.env.YARN_RUNNER_DATA = prevData;
+		}
+	});
+});
 
 test("submit__CarriesTheModelToTheChildEnv__When__AModelIsAsked", async () => {
 	await withTempAsync("yr-serve-", async (dir) => {

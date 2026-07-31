@@ -226,6 +226,11 @@ export async function collect(opts: CollectOptions = {}): Promise<CollectOutcome
 		log(`✓ ${entry.armId} ${entry.jobId}: ${state}${next.note ? ` — ${next.note}` : ""}`);
 	}
 
+	// After the pass, before the report: a host that is failing everything identically will
+	// quietly eat every arm queued on it, and the operator finds out one 9-hour day later.
+	// Advisory — nothing is dispatched or stopped from here — but LOUD, with the remedy named.
+	for (const warning of poisonedHosts(manifest)) log(warning);
+
 	const reportPath = writeReport(manifest, { ...(opts.reportDir ? { dir: opts.reportDir } : {}) });
 	writeManifest(manifest, outRoot);
 
@@ -242,6 +247,72 @@ export function archiveDirFor(benchRoot: string, entry: ManifestEntry): string {
 	const model = (entry.model ?? "default").replace(/[^A-Za-z0-9._-]+/g, "-");
 
 	return path.join(benchRoot, "appmaps", model, entry.armId);
+}
+
+/** Consecutive identical failures on one host before it is called poisoned. */
+const POISON_STREAK = 3;
+
+/** The remedy each failure kind calls for, printed with the warning so it is actionable. */
+const POISON_REMEDY: Record<string, string> = {
+	unready: 'the app is not at its home state there — usually signed out. Fix: ./run signin <host> "<App>"',
+	crashed: "runs are dying before writing a log — check the Mac (runner log, disk, TCC grants): ./run provision --doctor",
+	"hinted-refused": "the prompt audit is refusing on that host — its checkout may be stale: ./run provision",
+	"gave-up": "the agent runs but keeps failing there — compare its runs against the same arm on other hosts before trusting arm numbers",
+};
+
+/**
+ * Hosts whose last POISON_STREAK collected runs ALL failed the same way.
+ *
+ * The failure shape this exists for happened before the matrix ever ran: Yarn signed out on
+ * two of three Macs, which fails every run queued there with exit 3 while the third Mac's
+ * runs sail through — and an arm's "1/3 success" then measures the FLEET, not the model.
+ * Same-kind is required because three different failures are more likely three unlucky runs
+ * than one broken host. Entries are ordered by collection (manifest append order).
+ */
+export function poisonedHosts(m: Manifest): string[] {
+	const byHost = new Map<string, ManifestEntry[]>();
+	for (const e of m.entries) {
+		if (!e.collected || e.host === "local" || !e.metrics) continue;
+		byHost.set(e.host, [...(byHost.get(e.host) ?? []), e]);
+	}
+
+	const warnings: string[] = [];
+	for (const [host, entries] of byHost) {
+		const tail = entries.slice(-POISON_STREAK);
+		if (tail.length < POISON_STREAK) continue;
+		const kinds = tail.map((e) => e.metrics?.failureKind).filter(Boolean);
+		if (kinds.length < POISON_STREAK || new Set(kinds).size !== 1) continue;
+		const kind = kinds[0] as string;
+		warnings.push(
+			`⚠ POISONED HOST: the last ${POISON_STREAK} runs on ${host} all failed as "${kind}" ` +
+				`(${tail.map((e) => e.jobId).join(", ")}). ${POISON_REMEDY[kind] ?? "investigate before queuing more arms there"}. ` +
+				`Runs already queued on ${host} will likely fail the same way — cancel them from the fleet panel if the cause is host-side.`,
+		);
+	}
+
+	return warnings;
+}
+
+/**
+ * WHY a run failed — the classification the arm rollups aggregate. `success: false` alone
+ * collapses a signed-out host, an agent that honestly gave up, and a SIGKILL into one
+ * number, and those three call for entirely different responses (sign in / read the run /
+ * check the Mac). Exit codes come off the job record; the run log's own verdict wins when
+ * one exists, because the child's exit code can be lost (`null`) while the log is intact.
+ */
+export function failureKind(
+	job: JobRecord | undefined,
+	metrics: RunMetrics,
+	hasRunLog: boolean,
+): RunMetrics["failureKind"] | undefined {
+	if (metrics.success === true) return undefined;
+	if (job?.state === "stopped") return "stopped";
+	if (job?.exitCode === 3) return "unready";
+	if (job?.exitCode === 2) return "hinted-refused";
+	// A run log that says success:false is the agent's own conclusion — it ran to a verdict.
+	if (hasRunLog && metrics.success === false) return "gave-up";
+	// No run log on a terminal job: orphaned, signalled, or died before the first write.
+	return "crashed";
 }
 
 /** Metrics for one terminal entry, from whatever artifacts landed. Missing files become notes. */
@@ -284,6 +355,8 @@ function collectEntry(entry: ManifestEntry, job: JobRecord | undefined, dataDir:
 			metrics = { ...metrics, success: false };
 			notes.push("no run log — counted as failure");
 		}
+		const kind = failureKind(job, metrics, runLog !== undefined);
+		if (kind) metrics = { ...metrics, failureKind: kind };
 		const scopes = journalScopes(path.join(dataDir, `out/runs/${entry.jobId}.journal.jsonl`));
 		if (scopes.length) metrics = { ...metrics, mutationScopes: scopes };
 	}

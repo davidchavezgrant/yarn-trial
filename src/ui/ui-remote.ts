@@ -255,7 +255,10 @@ export interface FleetRowView {
  */
 export function describeFleetRow(row: FleetRow, now: () => number = Date.now): FleetRowView {
 	const label = row.state === "busy" ? [row.operator ?? "?", row.app ?? "?"].join(" · ") : "";
-	const detail = row.state === "busy" ? `${label} · ${formatElapsed(row.elapsedSec ?? 0)}` : "";
+	// A stalled run is named in the detail rather than a separate badge: the row is one line,
+	// and "silent 42m" beside the elapsed is the whole story an operator needs.
+	const stall = row.stalled && row.logSilenceSec !== undefined ? ` · ⚠ silent ${formatElapsed(row.logSilenceSec)}` : "";
+	const detail = row.state === "busy" ? `${label} · ${formatElapsed(row.elapsedSec ?? 0)}${stall}` : "";
 	// The wait is computed from queuedAt rather than reported by the runner, because the
 	// runner's status is a snapshot and a queue entry's age keeps growing between polls.
 	const queue = (row.queue ?? []).map((q) => {

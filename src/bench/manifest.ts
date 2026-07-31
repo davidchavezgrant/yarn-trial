@@ -51,6 +51,15 @@ export interface RunMetrics {
 	 */
 	homeReset?: string;
 	/**
+	 * WHY a run failed, when it did — `success: false` alone collapses distinctions the
+	 * report's conclusions turn on. `unready` (exit 3: the app was not at home — usually
+	 * signed out; a host problem, not a model problem), `gave-up` (the agent ran and
+	 * concluded failure), `hinted-refused` (exit 2: the prompt audit), `stopped` (an
+	 * operator), `crashed` (terminal with no run log, an orphan, or a kill signal).
+	 * Absent on successes.
+	 */
+	failureKind?: "unready" | "gave-up" | "hinted-refused" | "stopped" | "crashed";
+	/**
 	 * The attention question, per run: mean interactive elements per pre-action observation,
 	 * and mean element-list lines actually rendered into the prompt (0 on vision-only arms).
 	 * The ax/cdp gap here is "leaner"; whether leaner is denser or blinder is answered by the

@@ -37,6 +37,8 @@ interface ArmRollup {
 	meanShownLines?: number;
 	/** Runs that did NOT start from the declared home state (homeReset none/failed/skipped). */
 	unnormalisedRuns: number;
+	/** `unready 2, crashed 1` — why the arm's failures failed. Empty string when none did. */
+	failureBreakdown: string;
 }
 
 const mean = (xs: number[]): number | undefined => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : undefined);
@@ -68,14 +70,23 @@ function rollup(arm: Arm, entries: ManifestEntry[]): ArmRollup {
 		// A run that inherited the previous run's navigation is not comparable raw; the count
 		// flags the arm rather than hiding the caveat in per-run fields nobody reads.
 		unnormalisedRuns: collected.filter((e) => e.metrics?.homeReset && e.metrics.homeReset !== "reset").length,
+		failureBreakdown: (() => {
+			const kinds = new Map<string, number>();
+			for (const e of collected) {
+				const k = e.metrics?.failureKind;
+				if (k) kinds.set(k, (kinds.get(k) ?? 0) + 1);
+			}
+
+			return [...kinds].map(([k, n]) => `${k} ${n}`).join(", ");
+		})(),
 	};
 }
 
-const taskTableHeader = "| arm | model | flags | done | success | steps x̄ | s x̄ | calls x̄ | out-tok x̄ | rejections | doc-scope muts | obs-nodes x̄ | shown x̄ | unnormalised |";
-const taskTableRule = "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|";
+const taskTableHeader = "| arm | model | flags | done | success | failures | steps x̄ | s x̄ | calls x̄ | out-tok x̄ | rejections | doc-scope muts | obs-nodes x̄ | shown x̄ | unnormalised |";
+const taskTableRule = "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|";
 
 const taskRow = (r: ArmRollup, model: string): string =>
-	`| ${r.arm.id} | ${model} | ${flagsLine(r.arm)} | ${r.collected.length}/${r.arm.n} | ${pct(r.successes, r.collected.length)} | ${fmt(r.meanSteps)} | ${fmt(r.meanElapsedSec)} | ${fmt(r.meanModelCalls)} | ${fmt(r.meanOutputTokens)} | ${r.rejections} | ${r.documentScopeMutations} | ${fmt(r.meanObsNodes)} | ${fmt(r.meanShownLines)} | ${r.unnormalisedRuns ? `⚠ ${r.unnormalisedRuns}` : "0"} |`;
+	`| ${r.arm.id} | ${model} | ${flagsLine(r.arm)} | ${r.collected.length}/${r.arm.n} | ${pct(r.successes, r.collected.length)} | ${r.failureBreakdown || "—"} | ${fmt(r.meanSteps)} | ${fmt(r.meanElapsedSec)} | ${fmt(r.meanModelCalls)} | ${fmt(r.meanOutputTokens)} | ${r.rejections} | ${r.documentScopeMutations} | ${fmt(r.meanObsNodes)} | ${fmt(r.meanShownLines)} | ${r.unnormalisedRuns ? `⚠ ${r.unnormalisedRuns}` : "0"} |`;
 
 /** The model passes present for an arm, in first-seen order; [undefined] when none ran yet. */
 const modelPasses = (m: Manifest, armId: string): Array<string | undefined> => {
