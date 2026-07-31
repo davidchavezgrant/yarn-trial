@@ -137,8 +137,27 @@ export function runKey(prefix: string, app: string): string {
  * if it ever read that variable out of its own environment — a launchd plist, a shell that
  * exported it once — every job it started would share one id, one job directory and one log.
  */
+let _lastMintMs = 0;
+let _mintDedup = 0;
+
 export function mintRunKey(prefix: string, app: string): string {
-	return `${prefix}${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}-${appSlug(app)}`;
+	// Milliseconds, not seconds. `runKey`'s own comment names "two runs land in the same second"
+	// as the collision RUN_STAMP exists to avoid — and a runner dispatching several jobs, or an
+	// explore and an agent run started together, does exactly that. At seconds precision both
+	// mint one key and clobber each other's run log, recording and job directory. The ISO string
+	// is `...T23-19-59.123Z`; taking 23 chars keeps the millis, and `:`/`.` are folded to `-`.
+	const now = new Date();
+	const ms = now.getTime();
+	// Even at millisecond precision a tight dispatch loop can mint twice inside one millisecond.
+	// A per-process counter disambiguates only that case, so the common path keeps the clean
+	// `...-123-app` shape and only a genuine collision gets a `-1`/`-2` suffix. Monotonic within
+	// the process, which is where the runner mints; across processes the millis already differ
+	// because two OS processes do not start a job on the same millisecond and the same clock.
+	_mintDedup = ms === _lastMintMs ? _mintDedup + 1 : 0;
+	_lastMintMs = ms;
+	const suffix = _mintDedup > 0 ? `-${_mintDedup}` : "";
+
+	return `${prefix}${now.toISOString().replace(/[:.]/g, "-").slice(0, 23)}${suffix}-${appSlug(app)}`;
 }
 
 /**
@@ -425,6 +444,14 @@ export async function observe(
 	opts: { webAreaOnly?: boolean } = {},
 ): Promise<ObservationBundle> {
 	const shotPath = `${OUT}/${shotName}.png`;
+	// Delete any same-named frame FIRST. Shot names carry no run stamp (`agent-step-3`,
+	// `home-probe`), so a PNG from an earlier run sits at this exact path. The existsSync guard
+	// below exists precisely for the case the driver reports success but writes nothing — and
+	// against a stale file it passes, feeding a previous run's frame to the screenshot channel,
+	// pixelDelta and visualJudge. Removing it means existsSync tests only what THIS call wrote.
+	try {
+		fs.rmSync(shotPath, { force: true });
+	} catch {}
 	const state = await driver.act({
 		kind: "tool",
 		name: "get_window_state",
@@ -657,8 +684,19 @@ export function frontierIngest(ledger: FrontierLedger, obs: ObservationBundle): 
 export function frontierCredit(ledger: FrontierLedger, action: any, before: ObservationBundle): string[] {
 	const hits = new Set<string>();
 	const handle = action?.element_index ?? action?.ref;
-	if (handle !== undefined && handle !== null)
+	if (handle !== undefined && handle !== null) {
 		for (const e of before.interactive) if (e.handle === handle) hits.add(frontierKey(e));
+		// A resolved handle is the whole action: toActionRequest DROPS x/y when a handle is
+		// present, so the driver never clicks the coordinate. Crediting the box under those
+		// unused coordinates too would retire a second control the run never operated, and
+		// `controls: N actuated` — the breadth number the stamp reports — would overstate
+		// coverage. Mirror actionTarget's precedence and stop here.
+		if (hits.size > 0) {
+			for (const k of hits) ledger.actuated.add(k);
+
+			return [...hits];
+		}
+	}
 
 	// Coordinate actions name no element, so credit whatever box the point lands in — needed
 	// because some controls only respond to pixel clicks, and painted surfaces have no
@@ -1269,9 +1307,22 @@ function homeTargets(app: string, graph: AppMap | undefined): { home?: AppMap["h
 	return { home, wanted };
 }
 
-/** The first observation line naming any of `wanted`. */
+/**
+ * The first observation line whose ELEMENT LABEL is one of `wanted`.
+ *
+ * Anchored to the role-label position — `[42] AXButton "Library"` — not a bare substring of
+ * the rendered line. A line also carries `value="..."` and `in="..."` in the same quoted form,
+ * so an unanchored `includes('"Library"')` matched a combobox reading value="Library", or any
+ * control nested under a panel whose nearest named ancestor is "Library". Whichever such line
+ * came first in walk order won, its index was parsed, and resetToHome clicked it — or probeHome
+ * declared a sign-in wall "ready" because a dropdown happened to read the home label.
+ */
 function findHomeLine(text: string, wanted: string[]): string | undefined {
-	return text.split("\n").find((l) => wanted.some((label) => l.includes(`"${label}"`)));
+	return text.split("\n").find((l) => {
+		const label = l.match(/^\[\d+\] \S+ "([^"]*)"/)?.[1];
+
+		return label !== undefined && wanted.includes(label);
+	});
 }
 
 /**

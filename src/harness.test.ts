@@ -868,6 +868,20 @@ test("frontier__ExcludesControl__When__ActionAddressesItsHandle", () => {
 	assert.deepEqual(frontierRemaining(ledger).map((e) => e.name), ["Cancel"]);
 });
 
+test("frontier__CreditsOnlyTheHandle__When__ActionCarriesBothHandleAndCoordinates", () => {
+	// toActionRequest drops x/y when a handle is present, so the driver clicks "Save" and never
+	// the coordinate. Crediting the box under those unused coordinates too would retire "Delete"
+	// — a control the run never operated — and overstate the coverage the stamp reports.
+	const ledger = newFrontier();
+	const obs = obsWith([
+		ie("Save", "Toolbar", { handle: 3, x: 0, y: 0, w: 60, h: 20 }),
+		ie("Delete", "Toolbar", { handle: 4, x: 100, y: 100, w: 60, h: 20 }),
+	]);
+	frontierIngest(ledger, obs);
+	frontierCredit(ledger, { name: "click", element_index: 3, x: 120, y: 110 }, obs);
+	assert.deepEqual(frontierRemaining(ledger).map((e) => e.name), ["Delete"]);
+});
+
 test("frontier__ExcludesControl__When__CoordinateClickLandsInItsFrame", () => {
 	// The path that matters for apps whose rail only answers pixel clicks: there is no
 	// handle in the action at all, so containment is the only way the ledger learns anything.
@@ -1307,10 +1321,11 @@ function withRunStamp(value: string | undefined, fn: () => void): void {
 
 test("runKey__MintsTimestampedSlug__When__NoStampIsSupplied", () => {
 	withRunStamp(undefined, () => {
-		// The shape a hand-started run has always written, unchanged: out/runs/<key>.json
-		// is read by name elsewhere, so this format is a compatibility surface.
-		assert.match(runKey("", "Notion Calendar"), /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-notion-calendar$/);
-		assert.match(runKey("explore-", "Yarn"), /^explore-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-yarn$/);
+		// out/runs/<key>.json is read by name elsewhere, so the format is a compatibility
+		// surface — but it carries MILLISECONDS now: two runs started in the same second (a
+		// runner dispatching several jobs) otherwise mint one key and clobber each other.
+		assert.match(runKey("", "Notion Calendar"), /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}(-\d+)?-notion-calendar$/);
+		assert.match(runKey("explore-", "Yarn"), /^explore-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}(-\d+)?-yarn$/);
 	});
 });
 
@@ -1392,7 +1407,18 @@ function driverShowing(elements: { role: string; label: string }[]): Driver {
 	});
 
 	return {
-		act: async () => ({ text: "", structuredJson: payload }),
+		act: async (req: ActionRequest) => {
+			// Write the PNG observe() looks for, keyed off the driver's own argument. Without
+			// this the fixture passed only because a real run had left a same-named file in out/;
+			// observe() now deletes any stale frame before capture, so the mock must produce one.
+			const shot = req.kind === "tool" ? (req.args as Record<string, unknown>).screenshot_out_file : undefined;
+			if (typeof shot === "string") {
+				fs.mkdirSync(shot.replace(/\/[^/]+$/, ""), { recursive: true });
+				fs.writeFileSync(shot, "png");
+			}
+
+			return { text: "", structuredJson: payload };
+		},
 	} as unknown as Driver;
 }
 

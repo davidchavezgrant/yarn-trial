@@ -216,11 +216,25 @@ test("defaultRunnerDir__HonoursOverride__When__EnvVarIsSet", () => {
 test("mintJobId__MatchesTheRunLogStamp__When__AppNameHasSpaces", () => {
 	const id = mintJobId("task", "Notion Calendar");
 	// Exactly the shape agent.ts builds for out/runs/<stamp>-<slug>.json, so the job dir, the
-	// run log and the recording dir share one key.
-	assert.match(id, /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-notion-calendar$/);
-	assert.match(mintJobId("explore", "Yarn"), /^explore-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-yarn$/);
+	// run log and the recording dir share one key. Carries milliseconds so a runner dispatching
+	// several jobs in the same second does not mint one id for all of them.
+	assert.match(id, /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}(-\d+)?-notion-calendar$/);
+	assert.match(mintJobId("explore", "Yarn"), /^explore-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}(-\d+)?-yarn$/);
 	// The app string arrives over a socket and becomes a path segment.
 	assert.equal(mintJobId("task", "../../etc").includes("/"), false);
+});
+
+test("mintJobId__YieldsDistinctIds__When__TwoAreMintedInTheSameSecond", () => {
+	// The collision the millis precision exists to prevent: a runner dispatching two jobs back
+	// to back would otherwise give both the same id, directory and log.
+	const prev = process.env.RUN_STAMP;
+	delete process.env.RUN_STAMP;
+	try {
+		const ids = new Set(Array.from({ length: 20 }, () => mintJobId("task", "Yarn")));
+		assert.equal(ids.size, 20);
+	} finally {
+		if (prev !== undefined) process.env.RUN_STAMP = prev;
+	}
 });
 
 test("mintJobId__YieldsAFreshId__When__TheRunnerAlreadySetRunStamp", () => {
