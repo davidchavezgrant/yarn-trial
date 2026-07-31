@@ -16,6 +16,47 @@ sample sizes and are deliberately absent. Everything qualitative about grounding
 
 ---
 
+## TL;DR
+
+- **The harness is the product, not the driver.** The agent loop, verification, grounding,
+  and cleanup transferred unchanged across three actuator backends; build those, and treat
+  the actuator as a swappable peripheral. (§0, §1)
+- **Drive web and Electron over CDP, not accessibility APIs.** Attaching playwright-core to
+  a Chrome/Electron you launch yourself deletes our four worst problems at once — the 300s
+  session lifetime, runs killing each other, the consent gate, and the snapshot cap. (§1)
+- **Verify every action by re-observing, and never let the model self-certify.** Clicks
+  that "aren't supported" work, clicks that report success do nothing; only a fresh
+  observation tells the truth, and the model will exploit any hole in the evidence rules
+  you leave open. (§2)
+- **The scariest failure passes every check: changing the wrong copy of a setting.** Apps
+  keep the same setting at a global and a per-document scope; text evidence can't tell
+  them apart, and every ungrounded run picked the wrong one. Grounding plus making the
+  agent state its chosen scope is the mitigation. (§2, §3)
+- **Ground each app with one automated exploration pass** (~40 min for a full app, ~3% of
+  the onboarding budget) — it buys correctness, not just speed — and treat the resulting
+  map like experimental input, because ours got contaminated twice. (§3)
+- **macOS permissions attach to the process that asks, and children inherit them.** A run
+  started over SSH sees an empty accessibility tree and a black screenshot with no error;
+  every run must descend from the grant-holding process. This one fact dictates the fleet
+  architecture. (§4)
+- **Runs must mechanically undo their own changes.** Journal what actually changed by
+  diffing observations (never the model's account), restore in reverse with
+  harness-written checks, and only after the recording is saved. (§5)
+- **Reliability and cursor-feel are separate problems.** The pointer never physically
+  moves during a run; the human-feeling cursor is drawn in post from the run's own data,
+  replaying real human motion — fitted to what Yarn's pipeline outputs, not raw mouse
+  input. (§6)
+- **Sign-in needs a human, and that decides the deployment model.** SSO+MFA can't be
+  automated and credentials must never reach the model, so sessions live on persistent
+  machines, signed in once per app by a person. (§8)
+- **The biggest unbuilt lever is recipe replay:** record a task once, replay it
+  deterministically with the model only as exception handler. Design action records to be
+  replayable from day one. (§9)
+- **Put every rule in code.** Each rule we kept by convention — prompt hygiene, log
+  writing, provenance — was broken within a day; each one moved into code held. (§7)
+
+---
+
 ## 0. The one-paragraph architecture
 
 `agent.ts` runs the loop: observe → model proposes ONE action + a machine-checkable
