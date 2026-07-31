@@ -33,6 +33,7 @@
 #   ./run bench plan                        print the benchmark matrix (no side effects)
 #   ./run bench phase <1|2|3|4> --go        submit that phase to the fleet queue (without --go: preview only)
 #   ./run bench collect                     pull finished benchmark runs, compute metrics, rewrite the report
+#   ./run bench judge                       re-grade landed runs with the offline judge (idempotent; before reading the report)
 #
 # Teammates run none of that: drop team-credentials.json beside this script (or in
 # ~/.yarn-runner/, or ship it inside the .app) and the first ./run installs the fleet key and

@@ -281,7 +281,7 @@ export function judgeReportPath(logPath: string): string {
  * Throws when the reply is unparseable — an unparseable judge must be loud, not a default
  * verdict: a silent fallback in either direction is a confident answer nobody gave.
  */
-export async function judgeRun(stamp: string, opts?: { noFrames?: boolean }): Promise<JudgeReport> {
+export async function judgeRun(stamp: string, opts?: { noFrames?: boolean; model?: string }): Promise<JudgeReport> {
 	const { logPath, log } = resolveRunLog(stamp);
 	const gathered = opts?.noFrames ? { frames: [], stale: false } : trustedFrames(log);
 	const frames = sampleFrames(gathered.frames, envNum("JUDGE_MAX_FRAMES", 12));
@@ -298,7 +298,7 @@ export async function judgeRun(stamp: string, opts?: { noFrames?: boolean }): Pr
 	}
 
 	const { client, model } = makeClient();
-	const judgeModel = process.env.JUDGE_MODEL ?? model;
+	const judgeModel = opts?.model ?? process.env.JUDGE_MODEL ?? model;
 	// 3000, not visualJudge's 2000: same reasoning-eats-output lesson, but this judge writes a
 	// verdict per channel plus citations over a whole trajectory, and a cap it hits on exactly
 	// the hardest runs is the worst direction for the bias to run.

@@ -67,6 +67,19 @@ export interface RunMetrics {
 	 */
 	meanObservationNodes?: number;
 	meanListShownToModel?: number;
+	/**
+	 * The offline adversarial judge (src/core/judge.ts), off the run's `.judge.json` artifact.
+	 * A second opinion, not a replacement verdict: `success` is the run grading itself, the
+	 * judge is a separate model refuting it against the appmap scope rubric — DISAGREEMENT
+	 * between the two is the finding the report surfaces. Frozen into the artifact when the
+	 * judge step runs, so collect stays a deterministic reader: re-collecting never re-rolls
+	 * the model call.
+	 */
+	judgeTrajectory?: string;  // PASS | FAIL | UNPROVEN
+	judgeVisual?: string;      // PASS | FAIL | UNPROVEN | UNAVAILABLE
+	judgeScope?: string;
+	judgeModel?: string;       // what actually judged, off the artifact
+	judgeFrames?: number;      // framesUsed
 	/** Replay runs. */
 	recipeSteps?: number;
 	rescuedSteps?: number;

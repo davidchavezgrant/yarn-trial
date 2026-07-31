@@ -335,6 +335,7 @@ async function defaultCompile(): Promise<CompileFn> {
 const USAGE = `usage: ./run bench plan
        ./run bench phase <1|2|3|4> [--model <id>] [--go] [--force]
        ./run bench collect
+       ./run bench judge
 
 plan     print the resolved matrix — every arm, flags, n, phase. No side effects.
 phase    dispatch that phase's runs to the fleet queue. WITHOUT --go: preview and exit 2.
@@ -347,7 +348,10 @@ phase    dispatch that phase's runs to the fleet queue. WITHOUT --go: preview an
          maps under out/bench/<date>/appmaps/<model>/).
          --force skips the phase-2 "phase-1 maps collected this pass" gate.
 collect  pull artifacts for every uncollected manifest entry, compute metrics, rewrite
-         the report skeleton. Idempotent; run it as often as you like while the queue drains.`;
+         the report skeleton. Idempotent; run it as often as you like while the queue drains.
+judge    grades collected runs with the offline adversarial judge (pinned to
+         openai/gpt-5.6-sol; JUDGE_MODEL overrides); idempotent — skips runs already
+         judged. Run after runs land, before reading the report's Judge section.`;
 
 async function main(argv: string[]): Promise<number> {
 	const cmd = argv[0];
@@ -377,6 +381,16 @@ async function main(argv: string[]): Promise<number> {
 		const outcome = await collect();
 		console.log(`collected ${outcome.collected.length}, pending ${outcome.pending.length}${outcome.reportPath ? `; report: ${outcome.reportPath}` : ""}`);
 
+		return EXIT_OK;
+	}
+	if (cmd === "judge") {
+		const { judgeBench } = await import("./judge.js");
+		const outcome = await judgeBench();
+		console.log(`judged ${outcome.judged.length}, skipped ${outcome.skipped.length}, failed ${outcome.failed.length}`);
+		for (const f of outcome.failed) console.log(`  ✗ ${f.jobId}: ${f.error}`);
+
+		// Advisory step: per-entry failures are reported above, not fatal — a re-run judges
+		// only what failed or landed since.
 		return EXIT_OK;
 	}
 	console.error(USAGE);

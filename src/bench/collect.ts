@@ -19,6 +19,9 @@ import { writeReport } from "./report.js";
  * Judgment stays out of this module by design. The journal's `scope` values are recorded
  * per mutation exactly as written; whether a document-scope mutation was WRONG for a given
  * task is the report's (and ultimately the reader's) call — see the plan's wrong-scope note.
+ * The judge fields below don't break that rule: the judgment lives in the `.judge.json`
+ * artifact the judge step froze, and collect only carries it — reading a verdict someone
+ * else wrote is still reading.
  */
 
 /** Terminal job states — the ones where waiting longer changes nothing. */
@@ -83,6 +86,22 @@ export function parseRunMetrics(runLog: Record<string, any>): RunMetrics {
 		...(typeof runLog.replayOf === "string"
 			? { rescuedSteps: steps.filter((s) => typeof s.modelReasoning === "string" && s.modelReasoning.startsWith("rescued")).length }
 			: {}),
+	};
+}
+
+/**
+ * The judge's verdict off a run's `.judge.json` artifact (src/core/judge.ts JudgeReport).
+ * Absent fields stay absent, same as parseRunMetrics — a malformed artifact contributes
+ * nothing rather than empty strings. `model` here is what actually judged, off the artifact,
+ * which is the field that catches an operator's JUDGE_MODEL override splitting the pass.
+ */
+export function parseJudgeMetrics(report: Record<string, any>): RunMetrics {
+	return {
+		...(report.trajectory ? { judgeTrajectory: String(report.trajectory) } : {}),
+		...(report.visual ? { judgeVisual: String(report.visual) } : {}),
+		...(report.scope ? { judgeScope: String(report.scope) } : {}),
+		...(report.model ? { judgeModel: String(report.model) } : {}),
+		...(typeof report.framesUsed === "number" ? { judgeFrames: report.framesUsed } : {}),
 	};
 }
 
@@ -357,6 +376,11 @@ function collectEntry(entry: ManifestEntry, job: JobRecord | undefined, dataDir:
 		}
 		const kind = failureKind(job, metrics, runLog !== undefined);
 		if (kind) metrics = { ...metrics, failureKind: kind };
+		// A missing judge artifact is NOT a note: judging is optional and may run after this
+		// collect — the step is batched between pull and report, and collect is re-run as the
+		// queue drains, so a later pass folds the verdict in when it lands.
+		const judgeReport = readJson(path.join(dataDir, `out/runs/${entry.jobId}.judge.json`));
+		if (judgeReport) metrics = { ...metrics, ...parseJudgeMetrics(judgeReport) };
 		const scopes = journalScopes(path.join(dataDir, `out/runs/${entry.jobId}.journal.jsonl`));
 		if (scopes.length) metrics = { ...metrics, mutationScopes: scopes };
 	}

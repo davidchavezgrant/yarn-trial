@@ -163,6 +163,60 @@ function stampList(m: Manifest): string[] {
 
 const isTask = (a: Arm): boolean => a.kind === "task";
 
+/**
+ * Runs where the self-grade and the judge contradict each other — the finding this whole
+ * feature exists for. `success` is the run grading itself; the judge is a separate model
+ * refuting it against the scope rubric. Only a hard verdict disagrees: UNPROVEN is the
+ * judge declining to rule, and "the judge couldn't tell" is not evidence against either side.
+ */
+export function judgeDisagreements(entries: ManifestEntry[]): ManifestEntry[] {
+	return entries.filter((e) => {
+		const m = e.metrics;
+		if (!m) return false;
+
+		return (m.success === true && m.judgeTrajectory === "FAIL") || (m.success === false && m.judgeTrajectory === "PASS");
+	});
+}
+
+/** P/F/U tallies over one verdict field, rendered as `2/0/1`. */
+const verdictCounts = (entries: ManifestEntry[], pick: (m: RunMetrics) => string | undefined): string => {
+	const count = (v: string): number => entries.filter((e) => e.metrics && pick(e.metrics) === v).length;
+
+	return `${count("PASS")}/${count("FAIL")}/${count("UNPROVEN")}`;
+};
+
+function judgeSection(m: Manifest): string[] {
+	const judged = m.entries.filter((e) => e.metrics?.judgeTrajectory !== undefined);
+	// An ABSENT section reads as "nothing to disagree with", which is exactly the lie the
+	// judge exists to kill — so the section always renders, and an unjudged manifest says so.
+	if (judged.length === 0) return ["_No run has judge metrics yet — run \`./run bench judge\` after runs land, then re-collect._"];
+
+	const lines = [
+		"| arm | model | judged | trajectory P/F/U | visual P/F/U |",
+		"|---|---|---|---|---|",
+	];
+	const arms = MATRIX.filter((a) => judged.some((e) => e.armId === a.id));
+	for (const arm of arms)
+		for (const model of modelPasses(m, arm.id)) {
+			const entries = judged.filter((e) => e.armId === arm.id && e.model === model);
+			if (!entries.length) continue;
+			lines.push(
+				`| ${arm.id} | ${passLabel(model)} | ${entries.length} | ${verdictCounts(entries, (mm) => mm.judgeTrajectory)} | ${verdictCounts(entries, (mm) => mm.judgeVisual)} |`,
+			);
+		}
+
+	lines.push("", "### Disagreements", "");
+	const disagreements = judgeDisagreements(m.entries);
+	if (!disagreements.length) lines.push("_None — every judged run's verdict matches its self-report._");
+	else
+		for (const e of disagreements)
+			lines.push(
+				`- **${e.armId}** \`${e.jobId}\`: self-reported success=${e.metrics?.success}, judge trajectory=${e.metrics?.judgeTrajectory}, scope: ${e.metrics?.judgeScope || "—"}`,
+			);
+
+	return lines;
+}
+
 export function renderReport(m: Manifest): string {
 	const p2 = phaseArms(2);
 	const core = p2.filter((a) => isTask(a) && /^p2-(ax|cdp)-(un)?grounded$/.test(a.id));
@@ -216,6 +270,10 @@ export function renderReport(m: Manifest): string {
 		...taskTable(p4.filter(isTask), m),
 		"",
 		...replayTable(p4.filter((a) => a.kind === "replay"), m),
+		"",
+		"## Judge",
+		"",
+		...judgeSection(m),
 		"",
 		"## Timing (queue wait vs run, from job records)",
 		"",
