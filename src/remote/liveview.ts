@@ -245,6 +245,10 @@ export function remedyFor(err: ErrorEvent): string {
 			return `the capture stream stopped (${err.detail}) — retry, and check the app is still open`;
 		case "spawn-failed":
 			return `the engine binary would not start (${err.detail}) — it is gitignored, so run npm run build:native on that Mac`;
+		case "cdp-unreachable":
+			return `no Chromium debug endpoint answered (${err.detail}) — launch the target with --remote-debugging-port first, point LIVEVIEW_CDP_URL at a live endpoint, or drop LIVEVIEW_TRANSPORT=cdp to fall back to window capture`;
+		case "no-page":
+			return `the debug endpoint answered but exposed no drivable page (${err.detail}) — open the target page or window first, then retry`;
 		default:
 			return err.detail;
 	}
@@ -278,18 +282,26 @@ export function loginBlockedByRun(runnerDir?: string): string | null {
 }
 
 /**
- * A live handle to a spawned engine. Thin: it owns the child process and the two parsers, and
- * turns raw fd traffic into typed callbacks. The server (liveview-server.ts) wires this to a
- * WebSocket. Kept out of the pure section so the parsers above stay independently testable.
+ * A live handle to a capture engine. Thin: frames out as JPEG buffers, typed events out,
+ * viewer commands in. The server (liveview-server.ts) wires this to a WebSocket. Two
+ * implementations exist: spawnEngine below (the native SCK/CGEvent child process) and
+ * connectCdpEngine in liveview-cdp.ts (Page.startScreencast over an existing debug port).
  *
- * fd layout matches the Swift side: stdin = commands, stdout = JSON events, fd 3 = binary frames.
+ * `onExit` is the transport-neutral "the engine died" signal — the server used to watch
+ * `child.on("exit")` directly, which only a child-process engine can offer. `child` stays,
+ * optional, for the callers that really do mean the process (the e2e harness, tests); no
+ * server logic may depend on it.
+ *
+ * fd layout of the spawned engine matches the Swift side: stdin = commands, stdout = JSON
+ * events, fd 3 = binary frames.
  */
 export interface EngineHandle {
 	send(cmd: EngineCommand): void;
 	onFrame(cb: (jpeg: Buffer) => void): void;
 	onEvent(cb: (ev: EngineEvent) => void): void;
+	onExit(cb: () => void): void;
 	close(): void;
-	readonly child: ChildProcess;
+	readonly child?: ChildProcess;
 }
 
 export interface EngineOptions {
@@ -316,7 +328,10 @@ export function engineArgs(opts: EngineOptions): string[] {
 	return args;
 }
 
-export function spawnEngine(opts: EngineOptions = {}): EngineHandle {
+/** The spawned engine always has a child process, and its callers (the e2e harness, the
+ *  degrade tests) reach for it — so the return type says so rather than making every one
+ *  of them re-prove the optional. */
+export function spawnEngine(opts: EngineOptions = {}): EngineHandle & { readonly child: ChildProcess } {
 	const bin = opts.bin ?? `${nativeDir()}/liveview`;
 	const args = engineArgs(opts);
 
@@ -326,6 +341,7 @@ export function spawnEngine(opts: EngineOptions = {}): EngineHandle {
 	const events = new EventParser();
 	const frameCbs: ((j: Buffer) => void)[] = [];
 	const eventCbs: ((e: EngineEvent) => void)[] = [];
+	const exitCbs: (() => void)[] = [];
 
 	// The engine dies for mundane reasons: the binary is gitignored, so a fresh checkout spawns
 	// ENOENT, and a crashed engine breaks the stdin pipe, whose EPIPE arrives as an ASYNC 'error'
@@ -339,8 +355,12 @@ export function spawnEngine(opts: EngineOptions = {}): EngineHandle {
 		const detail = `${err.code ?? err.message} (${bin})`;
 		for (const cb of eventCbs) cb({ ev: "error", kind: "spawn-failed", detail });
 	});
+	// onExit fires on 'exit' ONLY, not on spawn 'error': ENOENT emits 'error' with no 'exit',
+	// and that gap is load-bearing — the server's bridge staying up is what lets the viewer
+	// display the spawn-failed remedy instead of an immediate "disconnected".
 	child.on("exit", () => {
 		dead = true;
+		for (const cb of exitCbs) cb();
 	});
 	child.stdin?.on("error", () => {});
 
@@ -363,6 +383,9 @@ export function spawnEngine(opts: EngineOptions = {}): EngineHandle {
 		},
 		onEvent(cb) {
 			eventCbs.push(cb);
+		},
+		onExit(cb) {
+			exitCbs.push(cb);
 		},
 		close() {
 			if (gone()) return;

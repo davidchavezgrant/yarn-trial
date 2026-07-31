@@ -28,7 +28,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { networkInterfaces } from "node:os";
 import type { Duplex } from "node:stream";
-import { type EngineEvent, remedyFor, spawnEngine } from "./liveview.js";
+import { type EngineEvent, type EngineHandle, remedyFor, spawnEngine } from "./liveview.js";
 import { type DecodedFrame, encodeFrame, handshakeResponse, type Opcode, WsDecoder } from "./liveview-ws.js";
 import { viewerHtml } from "./liveview-viewer.js";
 
@@ -63,6 +63,12 @@ export interface ServerOptions {
 	idleAfterCloseMs?: number;
 	/** Called just before the server self-terminates (maxLifetime or idle). Injected for tests. */
 	onExpire?: (reason: "max-lifetime" | "idle") => void;
+	/**
+	 * Engine factory — how a viewer connection gets its capture engine. Defaults to spawning
+	 * the native SCK engine; the CLI passes connectCdpEngine for Chromium targets
+	 * (LIVEVIEW_TRANSPORT=cdp). One engine per connection either way, torn down with it.
+	 */
+	engine?: () => EngineHandle | Promise<EngineHandle>;
 }
 
 export interface RunningServer {
@@ -212,7 +218,7 @@ export function startLiveViewServer(opts: ServerOptions = {}): Promise<RunningSe
 			liveSockets.delete(socket);
 			connectionClosed(life, Date.now());
 		});
-		bridge(socket, opts);
+		void bridge(socket, opts);
 	});
 
 	return new Promise((resolve, reject) => {
@@ -245,9 +251,31 @@ export function startLiveViewServer(opts: ServerOptions = {}): Promise<RunningSe
  */
 const MAX_QUEUED_SEND_BYTES = 1.5 * 1024 * 1024;
 
-/** Wire one WebSocket to one engine instance. */
-function bridge(socket: Duplex, opts: ServerOptions): void {
-	const engine = spawnEngine({ fps: opts.fps, quality: opts.quality, maxWidth: opts.maxWidth, bin: opts.bin, app: opts.app });
+/**
+ * Wire one WebSocket to one engine instance. Async because the CDP engine connects before it
+ * can stream; bytes the viewer sends meanwhile sit in the socket's readable buffer until the
+ * 'data' listener attaches below, so nothing is lost to the await.
+ */
+async function bridge(socket: Duplex, opts: ServerOptions): Promise<void> {
+	let engine: EngineHandle;
+	try {
+		engine = await (opts.engine
+			? opts.engine()
+			: spawnEngine({ fps: opts.fps, quality: opts.quality, maxWidth: opts.maxWidth, bin: opts.bin, app: opts.app }));
+	} catch (e) {
+		// Neither built-in factory throws (both degrade to a typed error event), but a factory
+		// that does must not become an unhandled rejection that kills the detached server.
+		console.error(`engine failed to start: ${(e as Error).message}`);
+		socket.destroy();
+
+		return;
+	}
+	if (socket.destroyed) {
+		// The viewer left while the engine was connecting.
+		engine.close();
+
+		return;
+	}
 	const decoder = new WsDecoder();
 	let open = true;
 
@@ -317,7 +345,7 @@ function bridge(socket: Duplex, opts: ServerOptions): void {
 
 	socket.on("close", teardown);
 	socket.on("error", teardown);
-	engine.child.on("exit", teardown);
+	engine.onExit(teardown);
 }
 
 /** First non-loopback IPv4, for the LAN-demo URL. Best-effort. */
