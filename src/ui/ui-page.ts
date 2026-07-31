@@ -899,9 +899,10 @@ function renderJobs() {
   for (const name of Object.keys(fleetRows)) {
     const r = fleetRows[name];
     // Ours are already listed above under the same host key; this row is other operators'.
+    // No ownership badge: the detail already leads with the operator's name, which says
+    // whose run it is more precisely than "theirs" ever did.
     if (r.state !== 'busy' || running[name]) continue;
-    rows.push('<div class="job"><span class="s-busy">●</span><span>' + esc(name) + ' — ' + esc(r.detail || 'busy') + '</span>' +
-      '<span class="jmeta">theirs</span></div>');
+    rows.push('<div class="job"><span class="s-busy">●</span><span>' + esc(name) + ' — ' + esc(r.detail || 'busy') + '</span></div>');
   }
   for (const id of Object.keys(hstates)) {
     if (hstates[id].state !== 'rendering') continue;
@@ -1005,7 +1006,7 @@ function renderAttach() {
     // misdirected Follow.
     const what = o.queued ? ((o.operator || '?') + ' · ' + (o.app || o.jobId) + ' — queued') : ((row && row.detail) || o.app || o.jobId);
     return '<div class="offer"><span>' + esc(o.host) + ' — ' + esc(what) + '</span>' +
-      '<button class="mini" data-follow="' + esc(o.jobId) + '" data-host="' + esc(o.host) + '" data-app="' + esc(o.app || '') + '">Follow</button>' +
+      '<button class="mini" data-follow="' + esc(o.jobId) + '" data-host="' + esc(o.host) + '" data-app="' + esc(o.app || '') + '">Open log</button>' +
       '<button class="mini" data-dismiss="' + esc(o.jobId) + '">Dismiss</button></div>';
   }).join('');
 }

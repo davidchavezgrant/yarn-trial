@@ -865,7 +865,9 @@ test("renderJobs__ListsAnotherOperatorsRun__When__TheFleetProbeSeesOne", async (
 	await ui.loadFleet();
 	assert.equal(ui.nodes.jobswrap.style.display, "block");
 	assert.match(ui.nodes.jobs.innerHTML, /mac2 — aman · Yarn/);
-	assert.match(ui.nodes.jobs.innerHTML, /theirs/, "another operator's run must be labeled as not ours");
+	// No ownership badge: the detail leads with the operator's name, which already says whose
+	// run it is. "theirs" was dropped 2026-07-31 as redundant with it.
+	assert.ok(!ui.nodes.jobs.innerHTML.includes("theirs"), "the redundant ownership badge stays gone");
 });
 
 test("renderJobs__ListsTheRender__When__AHumanizeIsInFlight", async () => {
