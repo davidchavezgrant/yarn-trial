@@ -97,6 +97,12 @@ export interface DispatchOptions {
 	recipe?: string;
 	/** Replay only: `--no-rescue`, the unattended posture — a broken step fails instead of calling the model. */
 	noRescue?: boolean;
+	/** Web target: `--url <url>` on the child argv (task and explore). The app field stays the display label. */
+	url?: string;
+	/** `APPMAP_VARIANT=vision` on the child: ground from the `<slug>.vision.*` map. A dedicated
+	 *  option rather than a generic env dict — arbitrary env crossing the wire is a surface
+	 *  nothing needs, and a named field is one the runner can validate. */
+	appmapVariant?: "vision";
 	/**
 	 * Wait in line instead of being refused when the host is busy. Default true — the queue is
 	 * why an operator can dispatch five runs and close the lid. `false` restores the old
@@ -230,6 +236,8 @@ export async function dispatch(opts: DispatchOptions): Promise<DispatchResult> {
 		// The path is data-root-relative — the one key both machines share. The runner owns
 		// its validation (path discipline, file presence); nothing here second-guesses it.
 		...(kind === "replay" ? { recipe: opts.recipe } : {}),
+		...(opts.url ? { url: opts.url } : {}),
+		...(opts.appmapVariant ? { appmapVariant: opts.appmapVariant } : {}),
 		operator: opts.operator ?? defaultOperator(),
 	};
 	const wantQueue = opts.queue !== false;

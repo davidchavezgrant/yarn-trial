@@ -234,7 +234,7 @@ test("runPhase__ShapesOptionsPerArm__When__Phase2Dispatches", async () => {
 		assert.equal(byFlag((c) => c.noVision === true && c.backend === "cdp").length, 3);
 		assert.equal(byFlag((c) => c.useRecipe === true && !c.noAx).length, 3);
 		assert.equal(byFlag((c) => c.noAx === true).length, 9);
-		assert.equal(byFlag((c) => c.env?.APPMAP_VARIANT === "vision").length, 3);
+		assert.equal(byFlag((c) => c.appmapVariant === "vision").length, 3);
 		assert.equal(byFlag((c) => c.app === "Notion Calendar").length, 8);
 		// Samples interleave across arms rather than running one arm's n back-to-back.
 		assert.notEqual(fake.calls[0].noGrounding, fake.calls[1].noGrounding);

@@ -480,14 +480,18 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		// combination (e.g. --no-ax outside the ax backend) belongs to the child CLI, which
 		// refuses invalid ones itself — a second copy of its validation here would drift.
 		const backendArgs = rec.backend ? ["--backend", rec.backend] : [];
+		// A web target's argv drops the app positional: both CLIs read `--url` as the target
+		// and keep the label for display, and a stray positional would land in explore's
+		// guidance slot — becoming a safety instruction nobody wrote.
+		const urlArgs = rec.url ? ["--url", rec.url] : [];
 		const runArgs =
 			kind === "explore"
-				? [app, ...backendArgs]
+				? [...(rec.url ? [] : [app]), ...urlArgs, ...backendArgs]
 				: kind === "replay"
 					// The recipe path was validated relative at submit time; the child resolves
 					// paths against its cwd (the resources root), so hand it the data-root form.
-					? ["replay", path.join(dataRoot(), rec.recipe ?? ""), ...(rec.noRescue ? ["--no-rescue"] : [])]
-					: [task, app, ...(rec.record ? ["--record"] : []), ...(rec.noVision ? ["--no-vision"] : []), ...(rec.noAx ? ["--no-ax"] : []), ...backendArgs];
+					? ["replay", path.join(dataRoot(), rec.recipe ?? ""), ...(rec.noRescue ? ["--no-rescue"] : []), ...(rec.url ? ["--url", rec.url] : [])]
+					: [task, ...(rec.url ? [] : [app]), ...urlArgs, ...(rec.record ? ["--record"] : []), ...(rec.noVision ? ["--no-vision"] : []), ...(rec.noAx ? ["--no-ax"] : []), ...backendArgs];
 
 		let spawned: Spawned;
 		try {
@@ -503,6 +507,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 						...(rec.axdomOff ? { AXDOM: "0" } : {}),
 						...(rec.noGrounding ? { NO_GROUNDING: "1" } : {}),
 						...(rec.useRecipe ? { USE_RECIPE: "1" } : {}),
+						...(rec.appmapVariant ? { APPMAP_VARIANT: rec.appmapVariant } : {}),
 					},
 					cwd: resourcesRoot(),
 				},
@@ -641,6 +646,20 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			return { ok: false, error: `backend must be "ax" or "cdp", got ${JSON.stringify(params.backend)}` };
 		const backend = params.backend as "ax" | "cdp" | undefined;
 
+		// Same fixed-vocabulary rule for the appmap variant — it becomes an env value, and the
+		// only variant that exists is the vision map. A typo'd variant would silently ground the
+		// run from the ELEMENT map while the manifest recorded a vision arm.
+		if (params.appmapVariant !== undefined && params.appmapVariant !== "vision")
+			return { ok: false, error: `appmapVariant must be "vision", got ${JSON.stringify(params.appmapVariant)}` };
+		const appmapVariant = params.appmapVariant as "vision" | undefined;
+
+		// The URL is child argv, but it is not free text: the child's own webTarget() gate
+		// rejects non-http(s) later, and this earlier copy exists because by then the lease
+		// and a profile swap are already spent. Scheme-only — everything else is the child's.
+		if (params.url !== undefined && (typeof params.url !== "string" || !/^https?:\/\//.test(params.url)))
+			return { ok: false, error: `url must be an http(s) URL, got ${JSON.stringify(params.url)}` };
+		const url = params.url as string | undefined;
+
 		// A replay names its recipe as a data-root-relative path — the same key the file has on
 		// every machine. Checked for path discipline AND presence here: a missing recipe would
 		// otherwise cost the operator a lease, a profile swap and a child that dies on its first
@@ -675,6 +694,8 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			noRescue,
 			...(backend !== undefined ? { backend } : {}),
 			...(recipe !== undefined ? { recipe } : {}),
+			...(url !== undefined ? { url } : {}),
+			...(appmapVariant !== undefined ? { appmapVariant } : {}),
 		};
 		const claim = acquire(
 			{ jobId: id, operator, kind, app, startedAt: new Date().toISOString(), pid: process.pid },

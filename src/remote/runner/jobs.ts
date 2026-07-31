@@ -120,6 +120,10 @@ export interface JobRecord {
 	recipe?: string;
 	/** Replay only: `--no-rescue` — a broken step fails the replay, the unattended fleet posture. */
 	noRescue?: boolean;
+	/** Web target: `--url <url>` on the child argv. The app field stays the display label. */
+	url?: string;
+	/** `APPMAP_VARIANT=vision` in the child's environment: ground from the vision-variant map. */
+	appmapVariant?: "vision";
 	artifacts: JobArtifacts;
 }
 
@@ -143,6 +147,8 @@ export interface JobInit {
 	useRecipe?: boolean;
 	recipe?: string;
 	noRescue?: boolean;
+	url?: string;
+	appmapVariant?: "vision";
 	/** Accepted behind a held lease: the record starts `queued` and the drain spawns it later. */
 	queued?: boolean;
 }
@@ -242,6 +248,8 @@ export function createJob(init: JobInit, root = jobsDir()): JobRecord {
 		...(init.useRecipe ? { useRecipe: true } : {}),
 		...(init.recipe ? { recipe: init.recipe } : {}),
 		...(init.noRescue ? { noRescue: true } : {}),
+		...(init.url ? { url: init.url } : {}),
+		...(init.appmapVariant ? { appmapVariant: init.appmapVariant } : {}),
 		artifacts: artifactsFor(id, init),
 	};
 	writeJob(rec, root);

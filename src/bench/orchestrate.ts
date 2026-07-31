@@ -64,7 +64,7 @@ export type BenchDispatchOptions = Omit<DispatchOptions, "kind"> & {
 	recipe?: string;
 	noRescue?: boolean;
 	url?: string;
-	env?: Record<string, string>;
+	appmapVariant?: "vision";
 };
 
 export type DispatchFn = (opts: BenchDispatchOptions) => Promise<DispatchResult>;
@@ -129,7 +129,10 @@ export function dispatchOptionsFor(arm: Arm, recipe?: string): BenchDispatchOpti
 		...(d.noRescue ? { noRescue: true } : {}),
 		...(d.url ? { url: d.url } : {}),
 		...(recipe ? { recipe } : {}),
-		...(arm.env ? { env: arm.env } : {}),
+		// The one env arm has a first-class wire field now: the runner validates the variant
+		// and sets APPMAP_VARIANT on the child. Anything else in arm.env has no wire lane and
+		// would silently not reach the run — refuse loudly at plan time, not here.
+		...(arm.env?.APPMAP_VARIANT === "vision" ? { appmapVariant: "vision" as const } : {}),
 	};
 }
 
@@ -252,7 +255,7 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 		for (const p of planned) {
 			const arm = p.arm;
 			log(`  ${arm.id} [${p.sample + 1}/${arm.n}] ${arm.kind} "${arm.app}"${arm.task ? ` — ${JSON.stringify(arm.task)}` : ""} | ${flagsLine(arm)}`);
-			if (arm.env) log(`    env prerequisite: ${Object.entries(arm.env).map(([k, v]) => `${k}=${v}`).join(" ")} (must reach the runner — verify after the wire merge)`);
+			if (arm.env) log(`    env: ${Object.entries(arm.env).map(([k, v]) => `${k}=${v}`).join(" ")} (crosses the wire as appmapVariant)`);
 			if (arm.prereq) log(`    PREREQ: ${arm.prereq}`);
 		}
 		for (const arm of phaseArms(phase).filter((a) => a.kind === "compile"))
@@ -312,7 +315,7 @@ export function printPlan(log: (line: string) => void = console.log): void {
 			log(`  ${arm.id}  n=${arm.n}  ${arm.kind}  "${arm.app}"  ${flagsLine(arm)}`);
 			if (arm.task) log(`      task: ${JSON.stringify(arm.task)}`);
 			if (arm.sourceArm) log(`      source: ${arm.sourceArm}`);
-			if (arm.env) log(`      env prerequisite: ${Object.entries(arm.env).map(([k, v]) => `${k}=${v}`).join(" ")} (APPMAP_VARIANT wire support pending — resolve at merge)`);
+			if (arm.env) log(`      env: ${Object.entries(arm.env).map(([k, v]) => `${k}=${v}`).join(" ")} (crosses the wire as appmapVariant)`);
 			if (arm.prereq) log(`      PREREQ: ${arm.prereq}`);
 			if (arm.informs) log(`      informs: ${arm.informs}`);
 		}
