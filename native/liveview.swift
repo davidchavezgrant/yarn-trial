@@ -263,24 +263,53 @@ func axWindowElement(pid: pid_t, matching bounds: CGRect) -> AXUIElement? {
 struct ForeignScan {
 	/** Page-content rect in global points, when one was found. */
 	var webArea: CGRect?
+	/** Bounding box of the page's visible ink — the login card. Preferred over webArea. */
+	var ink: CGRect?
 	/** The "Open <App>" confirmation button, when it is on screen. */
 	var openButton: AXUIElement?
 	var openTitle: String = ""
 }
 
-// One bounded DFS answering both questions. Depth and node caps keep a pathological tree from
-// wedging the 500ms cadence; Chromium keeps the web area and its dialogs within a few levels.
+// One bounded DFS answering both questions.
+//
+// The web area is chosen by AREA, not by DFS order, and this is load-bearing: measured on a real
+// accounts.google.com window (2026-07-31), Chrome exposes TWO AXWebAreas — the page itself at
+// depth 8 (748x812) and a degenerate 0x0 sibling at depth 11. First-match would take whichever
+// the walk reached first, and a zero-size pick then failed the caller's sanity gate, which
+// applied NO crop at all — the whole browser stayed visible. Largest-wins is stable under both
+// orderings, and the real page content is always the biggest web area in its window.
+//
+// Budget is generous for the same measurement: the real web area sits behind ~30 AXGroups, and
+// the old 900-node cap could exhaust before reaching it on a busier page — which also degraded
+// to "no crop". Depth and node caps still exist so a pathological tree cannot wedge the 500ms
+// cadence, they are simply set past what Chromium actually needs.
+/// Roles that put actual ink on the page. The union of these inside the web area is the login
+/// CARD, which is what the operator needs to see — measured on accounts.google.com
+/// (2026-07-31): the web area is 748x812 while its ink is 468x488, just 37% of it. Cropping to
+/// the web area therefore still framed mostly empty page background.
+let INK_ROLES: Set<String> = [
+	"AXStaticText", "AXTextField", "AXSecureTextField", "AXButton", "AXLink", "AXImage",
+	"AXHeading", "AXRadioButton", "AXCheckBox", "AXPopUpButton", "AXMenuButton",
+]
+
 func scanForeignWindow(_ root: AXUIElement, appName: String) -> ForeignScan {
 	var out = ForeignScan()
-	var budget = 900
+	var budget = 12000
+	var bestArea: CGFloat = 0
+	var webEl: AXUIElement?
 	let wanted = normalizedAppName(appName)
 
 	func walk(_ el: AXUIElement, depth: Int) {
-		if depth > 14 || budget <= 0 { return }
+		if depth > 22 || budget <= 0 { return }
 		budget -= 1
 		let role = axAttr(el, kAXRoleAttribute) as? String ?? ""
-		if role == "AXWebArea", out.webArea == nil {
-			out.webArea = axFrame(el)
+		if role == "AXWebArea", let f = axFrame(el) {
+			let area = f.width * f.height
+			if area > bestArea {
+				bestArea = area
+				out.webArea = f
+				webEl = el
+			}
 		}
 		if role == "AXButton", out.openButton == nil {
 			let title = axAttr(el, kAXTitleAttribute) as? String ?? ""
@@ -291,15 +320,40 @@ func scanForeignWindow(_ root: AXUIElement, appName: String) -> ForeignScan {
 				out.openTitle = title
 			}
 		}
-		if out.webArea != nil && out.openButton != nil { return }
 		guard let kids = axAttr(el, kAXChildrenAttribute) as? [AXUIElement] else { return }
-		for k in kids {
-			walk(k, depth: depth + 1)
-			if out.webArea != nil && out.openButton != nil { return }
-		}
+		for k in kids { walk(k, depth: depth + 1) }
 	}
 
 	walk(root, depth: 0)
+
+	// Second pass inside the winning web area: bound the ink. Deliberately separate from the
+	// walk above — the union is only meaningful within ONE web area, and collecting it during a
+	// walk that may still switch web areas would mix two pages' geometry.
+	if let we = webEl, let web = out.webArea {
+		var inkBudget = 12000
+		var union: CGRect?
+		var leaves = 0
+		func inkWalk(_ el: AXUIElement, depth: Int) {
+			if depth > 22 || inkBudget <= 0 { return }
+			inkBudget -= 1
+			if INK_ROLES.contains(axAttr(el, kAXRoleAttribute) as? String ?? ""), let f = axFrame(el),
+			   f.width > 1, f.height > 1, web.intersects(f) {
+				// Clipped to the web area: a scrolled-out element reports its layout frame, which
+				// can sit far outside the viewport and would blow the union up to nothing useful.
+				let vis = f.intersection(web)
+				if vis.width > 1, vis.height > 1 {
+					leaves += 1
+					union = union == nil ? vis : union!.union(vis)
+				}
+			}
+			guard let kids = axAttr(el, kAXChildrenAttribute) as? [AXUIElement] else { return }
+			for k in kids { inkWalk(k, depth: depth + 1) }
+		}
+		inkWalk(we, depth: 0)
+		// A handful of leaves is a page mid-load, not a form; keep the web area until it settles.
+		if leaves >= 3 { out.ink = union }
+	}
+
 	return out
 }
 
@@ -349,11 +403,15 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 	private var lastEmit = Date.distantPast
 	private let minInterval: TimeInterval
 
-	// Constrained-browser state (see the header). `crop` is in FRACTIONS of the tracked window,
-	// which is the one coordinate space that survives the window moving or resizing between the
-	// scan and the frame/click it applies to. Shared boxes because three queues read them.
+	// Constrained-browser state (see the header). The crop is held in GLOBAL POINTS — exactly
+	// what AX reported — and converted to fractions at each use against the CURRENT bounds.
+	// Storing fractions instead would freeze them to the geometry at scan time, and the OAuth
+	// popup opens small and resizes itself a moment later: every frame and click between the
+	// resize and the next scan would be mapped against a window that no longer exists.
 	let foreign = Shared<Bool>(false)
-	let crop = Shared<CGRect?>(nil)
+	let cropPoints = Shared<CGRect?>(nil)
+	/** Live window bounds, mirrored for the frame queue (which never touches main state). */
+	let boundsBox = Shared<CGRect>(.zero)
 	private var lastScanAt = Date.distantPast
 	private var scanInFlight = false
 	private var lastPressAt = Date.distantPast
@@ -435,7 +493,12 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 		cfg.height = Int(scWindow.frame.height * scale * ratio)
 		cfg.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))
 		cfg.queueDepth = 5
-		cfg.showsCursor = true
+		// The REMOTE cursor is not composited into the stream. The physical pointer on a colo Mac
+		// belongs to nobody — it sits wherever the last person left it — and injected input moves
+		// it independently of where the operator is pointing, so a second cursor drifting around
+		// the frame is pure confusion. The operator's own browser cursor is the only pointer that
+		// should be visible, and it is drawn locally by their OS.
+		cfg.showsCursor = false
 
 		let s = SCStream(filter: filter, configuration: cfg, delegate: self)
 		do {
@@ -454,10 +517,32 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 		// A window switch resets the constrained state: the new window's own scan re-derives it,
 		// and stale crop fractions from the browser must never map clicks inside the app.
 		foreign.value = isForeign(app: currentApp)
-		crop.value = nil
+		cropPoints.value = nil
+		boundsBox.value = scWindow.frame
 		lastCropSent = nil
 		emitWindowEvent(id: id, title: scWindow.title ?? "", app: currentApp)
 		scheduleForeignScan()
+	}
+
+	/**
+	 * The crop as fractions of the window RIGHT NOW, or nil when there is none (or when it no
+	 * longer meaningfully overlaps the window — a stale rect from before a move must not crop
+	 * a sliver, since uncropped is merely the old behavior).
+	 */
+	func cropFraction() -> CGRect? {
+		guard let c = cropPoints.value else { return nil }
+		let b = boundsBox.value
+		guard b.width > 1, b.height > 1 else { return nil }
+		let inter = c.intersection(b)
+		// Absolute floor, not a fraction of the window: the point of the crop is that a login
+		// card is SMALL relative to its window (measured ~37% of the web area on Google's page,
+		// less of the window), so an area-ratio gate would veto exactly the crops worth making.
+		// What must be rejected is a DEGENERATE rect — a collapsed mid-load element — and 200pt
+		// on a side is below any real form yet far above the 0x0 and sliver cases.
+		guard inter.width >= 200, inter.height >= 160 else { return nil }
+
+		return CGRect(x: (inter.origin.x - b.origin.x) / b.width, y: (inter.origin.y - b.origin.y) / b.height,
+		              width: inter.width / b.width, height: inter.height / b.height)
 	}
 
 	/** The window event, with the constrained-mode fields riding along for the log and tests. */
@@ -469,7 +554,7 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 			"w": currentBounds.width, "h": currentBounds.height, "scale": currentScale,
 			"foreign": foreign.value,
 		]
-		if let c = crop.value {
+		if let c = cropFraction() {
 			ev["crop"] = ["x": c.origin.x, "y": c.origin.y, "w": c.width, "h": c.height]
 		}
 		emitEvent(ev)
@@ -504,22 +589,23 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 	}
 
 	private func applyScan(_ scan: ForeignScan, windowId: CGWindowID) {
-		// Web area → crop, as fractions of the window. Sanity-gated: a mid-load web area can
-		// report a collapsed rect, and cropping to a sliver would blank the stream — no crop
-		// beats a wrong crop, since uncropped is merely the old behavior.
-		var next: CGRect?
-		if let wa = scan.webArea, currentBounds.width > 0, currentBounds.height > 0 {
-			let inter = wa.intersection(currentBounds)
-			let areaOk = inter.width * inter.height >= 0.25 * currentBounds.width * currentBounds.height
-			if areaOk {
-				next = CGRect(
-					x: (inter.origin.x - currentBounds.origin.x) / currentBounds.width,
-					y: (inter.origin.y - currentBounds.origin.y) / currentBounds.height,
-					width: inter.width / currentBounds.width,
-					height: inter.height / currentBounds.height)
-			}
+		// Prefer the INK box (the login card) over the whole web area, with breathing room so
+		// the card is not cut flush to its own edge. The ink is 37% of the web area on a real
+		// Google sign-in page, which is the difference between "a card filling the view" and
+		// "a small card adrift in page background".
+		var target = scan.ink ?? scan.webArea
+		if let ink = scan.ink, let web = scan.webArea {
+			// Asymmetric-friendly but simple: enough that a card is never cut flush to its own
+			// rounded corner or its logo. Measured too tight at 8% — Google's mark sits above
+			// the first ink element and lost its top.
+			let padX = max(32, ink.width * 0.10)
+			let padY = max(40, ink.height * 0.12)
+			target = ink.insetBy(dx: -padX, dy: -padY).intersection(web)
 		}
-		crop.value = next
+		// Store in POINTS; cropFraction() re-derives fractions per use and applies the sanity
+		// gate against live geometry, so a resize between scans cannot leave a wrong crop.
+		cropPoints.value = target
+		let next = cropFraction()
 		// Say so when the crop meaningfully changes — the parent's log is how a mis-crop gets
 		// diagnosed from a transcript — but not on every 500ms tick of an unchanged one.
 		let moved: Bool = {
@@ -554,6 +640,7 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 	private func refreshBounds(for id: CGWindowID) {
 		guard let w = windowById(id), w.bounds != currentBounds else { return }
 		currentBounds = w.bounds
+		boundsBox.value = w.bounds
 		currentApp = w.app
 		currentPid = w.pid
 		foreign.value = isForeign(app: w.app)
@@ -570,7 +657,7 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 		// The viewer only ever SEES the crop, so its fractions are fractions OF the crop — the
 		// remap is what makes the toolbar physically unreachable, not just invisible: even a
 		// crafted x:0 y:0 lands on the crop's own corner, inside the page content.
-		if let c = crop.value {
+		if let c = cropFraction() {
 			cx = Double(c.origin.x) + cx * Double(c.width)
 			cy = Double(c.origin.y) + cy * Double(c.height)
 		}
@@ -592,7 +679,7 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 		// The crop applies at encode: only the page content's pixels ever leave the process, so
 		// the URL bar is absent from the stream itself, not merely hidden by the viewer. Crop
 		// fractions and CGImage.cropping both speak top-left-origin, same as CGWindowList.
-		if let c = crop.value {
+		if let c = cropFraction() {
 			let rect = CGRect(x: c.origin.x * CGFloat(image.width), y: c.origin.y * CGFloat(image.height),
 			                  width: c.width * CGFloat(image.width), height: c.height * CGFloat(image.height)).integral
 			if rect.width >= 64, rect.height >= 64, let cropped = image.cropping(to: rect) { image = cropped }

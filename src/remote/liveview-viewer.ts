@@ -26,7 +26,11 @@ export function viewerHtml(token: string): string {
   #status { color: #9a9; }
   #status.err { color: #f6a; }
   #stage { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-  canvas { max-width: 100%; max-height: 100%; cursor: crosshair; background: #000; box-shadow: 0 0 40px #0008; }
+  /* The LOCAL cursor stays — it is the operator's only pointer feedback, since the remote one
+     is no longer composited into the stream (cfg.showsCursor = false). 'default' rather than
+     'crosshair': this is a login form to click and type in, not a canvas to aim at, and an
+     arrow is what every other window on their screen shows. */
+  canvas { max-width: 100%; max-height: 100%; cursor: default; background: #000; box-shadow: 0 0 40px #0008; }
   kbd { background:#333; border-radius:3px; padding:0 4px; }
 </style>
 </head>

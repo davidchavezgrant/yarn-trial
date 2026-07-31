@@ -260,3 +260,38 @@ filtered, and without `--app` nothing changes.
 
 Also: encode ceilings raised for text legibility (quality 0.6 → 0.78, max width 1280 → 1920);
 the server's backpressure drop means a slow tunnel costs fps, never sharpness.
+
+## Crop to the ink, not the web area (2026-07-31, all measured)
+
+Three defects found by probing real Chrome windows rather than reasoning about them:
+
+- **First-match DFS picked a degenerate web area.** accounts.google.com exposes TWO
+  `AXWebArea`s — the page at depth 8 (748x812) and a 0x0 sibling at depth 11. Taking the first
+  in DFS order could pick the empty one, which then failed the sanity gate, so NO crop applied
+  and the whole browser stayed visible. Now the LARGEST wins, which is stable under either
+  ordering. The node budget also rose (900 -> 12000): the real web area sits behind ~30
+  AXGroups and the old cap could exhaust before reaching it — another silent no-crop.
+- **The web area is not the login card.** Measured: web area 748x812, but the union of
+  ink-bearing roles (text/field/button/link/image) inside it is 468x488 — 37%. Cropping to the
+  web area still framed mostly empty page background, which on a light page reads as a big
+  white screen. The crop is now the ink union plus padding (10%/12%, floors of 32/40pt so a
+  card is never cut flush to its logo or rounded corner).
+- **Fractions were frozen at scan time.** The OAuth popup opens small and resizes itself
+  moments later, so a crop stored as window fractions described a window that no longer
+  existed. The crop is held in global POINTS and converted per use against live bounds.
+
+The sanity gate changed shape with them: an area-RATIO gate would veto exactly the tight crops
+worth making (a card is small relative to its window by definition), so it is now an absolute
+floor (200x160pt) that rejects only degenerate rects.
+
+**No provider detection anywhere.** Nothing matches on Google, a URL, or a page signature. The
+mechanism is structural: "is this window some app other than the sign-in target" plus "where is
+the ink inside its web area". Okta, Microsoft, SSO portals and custom logins all crop by the
+same geometry. The single provider-shaped string is the `Open <App>` redirect button, and that
+is parameterized by the TARGET app's name. Degrades to no-crop (old behavior) for a
+canvas-rendered login with no AX ink, or a non-English browser for the redirect press.
+
+**Cursor**: the remote pointer is no longer composited (`showsCursor = false`). A colo Mac's
+physical pointer belongs to nobody and injected input moves it independently of where the
+operator is pointing, so it only ever appeared as a second cursor drifting around the frame.
+The operator's own browser cursor (now `default`, not `crosshair`) is the one pointer shown.
