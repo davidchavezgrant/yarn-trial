@@ -1499,9 +1499,6 @@ el('ground').onclick = () => dispatchOnce('ground', () => bus.ground(sel, host, 
 // loadApps too: the list is per-host, so switching machines must re-ask rather than leave the
 // previous Mac's inventory on screen looking like this one's.
 el('host').onchange = () => { host = el('host').value; bus.saveHostPref(host); check(); loadApps(); };
-// The refresh lives inside the fold's <summary>; without the preventDefault every probe
-// click would also toggle the fold shut.
-el('fleetrefresh').onclick = (e) => { if (e && e.preventDefault) { e.preventDefault(); e.stopPropagation(); } loadFleet(); };
 // The install form's fields live in module state so the probe repaint cannot wipe them.
 el('fleet').addEventListener('input', (e) => {
   if (!installForm || !e.target) return;

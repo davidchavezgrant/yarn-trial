@@ -72,8 +72,10 @@ const el = (): FakeEl => ({
 const IDS = [
 	"q", "apps", "url", "urlrow", "urlhint", "task", "warn", "go", "ground", "stop", "human", "cancelsignin",
 	"record", "host", "log", "runs", "status", "fleet", "busyhint", "fleetsum", "examples", "jobs", "jobswrap",
-	"viewerbar", "viewerback", "viewertitle", "taskform",
-	"creds", "key", "savekey",
+	"viewerbar", "viewerback", "viewertitle", "taskform", "fleetwrap", "unready",
+	// keymsg/keystate are innerHTML-created in the real DOM; the fake's innerHTML is a plain
+	// string, so they exist here as first-class nodes instead.
+	"creds", "key", "savekey", "keymsg", "keystate",
 ];
 
 interface Harness {
@@ -182,7 +184,11 @@ function mount(busOverrides: Record<string, unknown> = {}): Harness {
 		...busOverrides,
 	};
 	const document = {
-		getElementById: (id: string) => nodes[id] ?? el(),
+		// Strict like the real DOM: an unknown id is null, so a handler wired to a deleted
+		// element crashes HERE the way it crashes the real renderer at boot — that exact bug
+		// shipped on 2026-07-31 (el('fleetrefresh') after the button was removed) and this
+		// harness's lenient fake was what let 1200 tests miss a blank window.
+		getElementById: (id: string) => nodes[id] ?? null,
 		addEventListener() {},
 		createElement: () => el(),
 		querySelector: () => null,
