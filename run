@@ -12,6 +12,8 @@
 #   ./run "<task>" --url https://site.com   run a task against a website
 #   ./run browser-login https://site.com    one-time: sign in, so later web runs are logged in
 #   ./run browser-wipe [<mac>|all] [--go]   wipe Chrome profiles on the Macs (accounts, passwords)
+#   ./run session-wipe [<mac>|all] [--go]   sign everyone out of everything on the Macs: close
+#                                           every GUI app, wipe all app + browser session data
 #   ./run doctor                            check permissions, keys, deps before demoing
 #   ./run enroll                            one-time: mint the fleet key, pin host keys,
 #                                           install it on each Mac (prompts for passwords)
@@ -225,6 +227,17 @@ browser-wipe)
 	# of src/remote/control/browser-wipe.ts.
 	shift
 	exec npx tsx src/remote/control/browser-wipe.ts "$@"
+	;;
+
+session-wipe)
+	# Clear ALL session state on the fleet Macs: close every GUI app (SIGTERM, then SIGKILL —
+	# Chrome must be provably dead before anything is deleted, or it writes the files back on
+	# quit), then remove the default Chrome profiles, the cdp backend's persistent web-login
+	# profiles, every operator's parked app profiles, and every installed app's live data
+	# under ~/Library. The runner daemon survives. Gated — without --go it previews and
+	# exits 2; a busy host is refused without --force. See src/remote/control/session-wipe.ts.
+	shift
+	exec npx tsx src/remote/control/session-wipe.ts "$@"
 	;;
 
 browser-login)
