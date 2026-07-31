@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { openApp } from "../../core/appctl.js";
+import { ensureElectronEndpoint } from "../../backends/electron-attach.js";
 import { sidecarStatus } from "../../core/axdom.js";
 import { screenIsLocked } from "../../core/harness/observation.js";
 import { dataRoot, resourcesRoot } from "../../paths.js";
@@ -154,6 +155,13 @@ const LIVEVIEW_IDLE_AFTER_CLOSE_MS = 30_000;
  */
 const LIVEVIEW_FPS = 30;
 
+/**
+ * The debug port a liveview launch asks an Electron app for. 9222 to match the cdp backend's
+ * own app-target default (cdp.ts), so a sign-in and a later agent run on this Mac find the
+ * SAME endpoint instead of racing two instances of the app onto two ports.
+ */
+const CDP_APP_PORT = 9222;
+
 
 export interface Permissions {
 	accessibility: boolean;
@@ -215,6 +223,11 @@ export interface ServeOptions {
 	 * suite. Used by `signin` and `liveview`.
 	 */
 	open?: (app: string, opts: { foreground?: boolean }) => Promise<void>;
+	/**
+	 * Bring up the app's CDP debug endpoint for a liveview screencast, launching it with
+	 * `--remote-debugging-port` when nothing answers. Injected so the suite launches nothing.
+	 */
+	ensureEndpoint?: (app: string, preferredPort: number) => Promise<{ endpoint: string; port: number }>;
 	/**
 	 * Whether something is already listening on the liveview port. Injected so the "a login is
 	 * already up" branch is testable without binding a real socket.
@@ -359,6 +372,9 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 
 	/** Foreground the app, injectable so the suite does not launch real applications. */
 	const openAppFor = opts.open ?? openApp;
+
+	/** Bring up the app's CDP endpoint, injectable for the same reason as `open`. */
+	const ensureEndpointFor = opts.ensureEndpoint ?? ensureElectronEndpoint;
 
 	/** Sign an operator out, injectable so the suite deletes nothing real. */
 	const clearAuthFor =
@@ -913,6 +929,27 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 
 		// Foreground the app so it is the frontmost window the engine will follow when the operator
 		// connects. Same rationale as signin's openApp.
+		//
+		// Unless CDP is in play: the screencast engine needs a debug port, and only a LAUNCH can
+		// put that flag on the command line. `open -a` alone leaves nothing listening, so the
+		// CLI's auto-probe would find a dead endpoint and silently pick SCK — a fleet that never
+		// takes the CDP path however it is configured. `ensureElectronEndpoint` probes first and
+		// launches with the flag only if nothing answers; it never touches an instance it did not
+		// launch (a running app may hold unsaved work, and a port cannot be injected into a live
+		// process). A failure here is NOT fatal: fall through to the plain open and let the
+		// engine's own probe decide, which is exactly the SCK fallback the auto default promises.
+		// An operator who named an endpoint means THAT endpoint — they may be pointing the
+		// stream at something this Mac did not launch — so a named one is never overridden.
+		let endpoint = cdpUrl;
+		if (transport !== "sck" && !endpoint) {
+			try {
+				endpoint = (await ensureEndpointFor(app, CDP_APP_PORT)).endpoint;
+				log(`liveview: ${app} listening for CDP on ${endpoint}`);
+			} catch (e) {
+				log(`liveview: no CDP endpoint for ${app} (${(e as Error).message}) — the engine will fall back to window capture`);
+			}
+		}
+
 		try {
 			await openAppFor(app, { foreground: true });
 		} catch (e) {
@@ -944,7 +981,10 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 						// CLI's own auto-probe (or this host's runner.env, which childEnv layers
 						// in) decides — the same flag > env > auto precedence as a local run.
 						...(transport !== "auto" ? { LIVEVIEW_TRANSPORT: transport } : {}),
-						...(cdpUrl ? { LIVEVIEW_CDP_URL: cdpUrl } : {}),
+						// The endpoint the launch above actually opened, not just the one the
+						// operator named — an auto run has no `--cdp <url>` to carry, and pointing
+						// the probe at the port we just brought up beats re-deriving it.
+						...(endpoint ? { LIVEVIEW_CDP_URL: endpoint } : {}),
 					},
 				},
 			).pid;

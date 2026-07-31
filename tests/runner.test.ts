@@ -1086,7 +1086,15 @@ test("sweepOrphans__LeavesQueuedJobsAlone__When__TheRunnerRestarts", () => {
  * portInUse defaults to "free" so the liveview verb proceeds to spawn (the port-taken branch is
  * exercised explicitly below).
  */
-const noOpen = { open: async () => {}, portInUse: async () => false };
+const noOpen = {
+	open: async () => {},
+	portInUse: async () => false,
+	// MUST be stubbed alongside `open`: the liveview verb now brings up a CDP endpoint for the
+	// screencast engine, and the real one LAUNCHES the application. A suite that left this out
+	// would open Yarn on the developer's Mac — the same reason `open` is injected at all. The
+	// refusal arm (no endpoint, engine falls back to SCK) is exercised explicitly below.
+	ensureEndpoint: async (_app: string, port: number) => ({ endpoint: `http://127.0.0.1:${port}`, port }),
+};
 
 /**
  * The liveview verb foregrounds the app under the operator's profile and starts the capture server
@@ -1326,6 +1334,49 @@ test("liveview__PassesTheTransportToTheSpawnedServer__When__ThePayloadNamesCdp",
 	});
 });
 
+test("liveview__StartsAnyway__When__TheAppExposesNoDebugPort", async () => {
+	// A hardened Electron app strips --remote-debugging-port (the Figma-style argv sanitize), so
+	// the launch throws. That must NOT fail the sign-in: the endpoint is simply not named, the
+	// CLI's probe finds nothing, and the engine falls back to window capture — which is exactly
+	// what the auto default promises. Failing here would make CDP a requirement rather than a
+	// preference, and take the fleet's only sign-in path down with it.
+	await withTempAsync("yr-serve-", async (dir) => {
+		const spawner = mkdirSpawner();
+		const runner = await startRunner(dir, {
+			...noSwap,
+			...noOpen,
+			ensureEndpoint: async () => {
+				throw new Error("no endpoint: the app sanitizes its argv");
+			},
+			log: () => {},
+			spawn: spawner.spawn,
+		});
+		try {
+			const [res] = await request(runner.socketPath, "liveview", { app: "Yarn", operator: "dave" });
+			assert.equal(res.ok, true, String(res.error ?? ""));
+			assert.equal(spawner.envs[0].LIVEVIEW_CDP_URL, undefined);
+		} finally {
+			await runner.close();
+		}
+	});
+});
+
+test("liveview__KeepsTheNamedEndpoint__When__TheOperatorSuppliedOne", async () => {
+	// The operator may be pointing the stream at something this Mac did not launch, so a named
+	// endpoint outranks the one the launch would have opened.
+	await withTempAsync("yr-serve-", async (dir) => {
+		const spawner = mkdirSpawner();
+		const runner = await startRunner(dir, { ...noSwap, ...noOpen, log: () => {}, spawn: spawner.spawn });
+		try {
+			const [res] = await request(runner.socketPath, "liveview", { app: "Yarn", operator: "dave", endpoint: "http://127.0.0.1:9229" });
+			assert.equal(res.ok, true, String(res.error ?? ""));
+			assert.equal(spawner.envs[0].LIVEVIEW_CDP_URL, "http://127.0.0.1:9229");
+		} finally {
+			await runner.close();
+		}
+	});
+});
+
 test("liveview__LeavesTheTransportToTheCli__When__ThePayloadDoesNotNameOne", async () => {
 	// Absent a forced choice, the env stays unset so the CLI's own auto-probe (or this host's
 	// runner.env, which childEnv layers in) decides — setting "auto" here would override a
@@ -1338,7 +1389,10 @@ test("liveview__LeavesTheTransportToTheCli__When__ThePayloadDoesNotNameOne", asy
 			assert.equal(res.ok, true, String(res.error ?? ""));
 			assert.equal(res.transport, "auto", "the reply reports the requested transport, auto included");
 			assert.equal(spawner.envs[0].LIVEVIEW_TRANSPORT, undefined);
-			assert.equal(spawner.envs[0].LIVEVIEW_CDP_URL, undefined);
+			// The ENDPOINT is not the same question as the transport: auto still launches the app
+			// with a debug port and names it, so the CLI's probe aims at the port we just brought
+			// up rather than re-deriving one. Silence here would leave the probe guessing.
+			assert.equal(spawner.envs[0].LIVEVIEW_CDP_URL, "http://127.0.0.1:9222");
 		} finally {
 			await runner.close();
 		}
