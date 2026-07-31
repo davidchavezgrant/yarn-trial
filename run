@@ -11,6 +11,7 @@
 #   ./run recipe replay <file|stamp>        replay it — zero model calls unless a step breaks
 #   ./run "<task>" --url https://site.com   run a task against a website
 #   ./run browser-login https://site.com    one-time: sign in, so later web runs are logged in
+#   ./run browser-wipe [<mac>|all] [--go]   wipe Chrome profiles on the Macs (accounts, passwords)
 #   ./run doctor                            check permissions, keys, deps before demoing
 #   ./run enroll                            one-time: mint the fleet key, pin host keys,
 #                                           install it on each Mac (prompts for passwords)
@@ -189,6 +190,18 @@ bench)
 	# on the far side from their own ~/.yarn-runner/env.
 	shift
 	exec npx tsx src/bench/orchestrate.ts "$@"
+	;;
+
+browser-wipe)
+	# Remove every Chrome profile on the fleet Macs: the signed-in accounts, the saved
+	# passwords, the form history. Gated — without --go it previews and exits 2.
+	#
+	# Safe BECAUSE Chrome is quit first: a delete through a running, signed-in Chrome emits a
+	# sync tombstone that removes the credential from that person's Google vault and every
+	# device they own, while a delete with the browser closed is purely local. See the header
+	# of src/remote/control/browser-wipe.ts.
+	shift
+	exec npx tsx src/remote/control/browser-wipe.ts "$@"
 	;;
 
 browser-login)
