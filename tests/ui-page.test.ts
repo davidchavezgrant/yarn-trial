@@ -339,6 +339,56 @@ test("appendLine__CapsTheDom__When__ARunOutlivesTheScrollback", () => {
 	assert.equal(ui.nodes.log.children[ui.nodes.log.children.length - 1]!.textContent, '[449] click "Save"');
 });
 
+test("appendLine__DropsTheLine__When__ItIsInterpreterDeprecationNoise", () => {
+	// Pillow deprecates getdata() once per pixelDelta call — one line per STEP — and Node adds
+	// its own (node:123) DeprecationWarning chatter. None of it is actionable from this window;
+	// the job log on disk keeps the full stderr for toolchain debugging.
+	const ui = mount();
+	ui.appendLine('<string>:13: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.');
+	ui.appendLine("(node:4242) ExperimentalWarning: The Fetch API is an experimental feature");
+	ui.appendLine("npm warn config production Use `--omit=dev` instead.");
+	ui.appendLine("(Use `node --trace-deprecation ...` to show where the warning was created)");
+	assert.equal(ui.nodes.log.children.length, 0, "toolchain noise must not reach the pane");
+	ui.appendLine('[3] click "Save"');
+	assert.equal(ui.nodes.log.children.length, 1, "real agent output still paints");
+});
+
+test("appendLine__PaintsYellow__When__TheRunSurvivesTheTrouble", () => {
+	// A failed step check, a retried model call, a revived driver session: the run is still
+	// going, and red taught people to reach for Stop on runs that were recovering fine.
+	const ui = mount();
+	ui.appendLine("    -> ✗ expected 'Paris' in the observation — not found");
+	ui.appendLine("    -> model call failed (2/5), retrying in 4s: 500 Internal Server Error");
+	ui.appendLine("  driver session 'agent' expired (session_ended) — re-declaring and retrying");
+	ui.appendLine("  WARNING: start state is whatever the previous run left behind — NOT comparable for A/B measurement.");
+	ui.appendLine("    -> done(success) REFUTED by final observation: no evidence");
+	for (const c of ui.nodes.log.children) assert.equal(c.className, "t-warn", `"${c.textContent}" must be a warning, got "${c.className}"`);
+});
+
+test("appendLine__PaintsRed__When__TheRunIsDead", () => {
+	// Red is reserved for a verdict: the process died, the loop threw, or the run reported
+	// failure. Everything else that mentions an error is survivable and yellow above.
+	const ui = mount();
+	ui.appendLine("■ exited with code 1 after 63s");
+	ui.appendLine("agent failed: Error: 5 consecutive model-call failures; last: boom");
+	ui.appendLine("=== DONE (failure) after 12 actions ===");
+	ui.appendLine("✗ could not start the run: spawn npx ENOENT");
+	ui.appendLine("[mac1] ✗ stop failed: no such job");
+	for (const c of ui.nodes.log.children) assert.equal(c.className, "t-bad", `"${c.textContent}" must be an error, got "${c.className}"`);
+});
+
+test("appendLine__PaintsGreenOrDim__When__TheOutcomeIsGoodOrSummary", () => {
+	const ui = mount();
+	ui.appendLine("=== DONE (success (goal check passed, all steps verified)) after 9 actions ===");
+	ui.appendLine("■ finished after 74s");
+	assert.equal(ui.nodes.log.children[0]!.className, "t-ok");
+	assert.equal(ui.nodes.log.children[1]!.className, "t-ok");
+	// The verification summary restates failure counts; its color must stay dim, not inherit
+	// red/yellow from the words inside it.
+	ui.appendLine("verification: 8/9 steps verified (8 by text, 0 by geometry, 0 by pixels only); final goal check: PASSED ()");
+	assert.equal(ui.nodes.log.children[2]!.className, "t-meta");
+});
+
 test("line__FilesUnderTheGivenOwner__When__OneIsPassedExplicitly", () => {
 	// The app-list note reports about the SELECTION; before owner existed it was filed into
 	// whatever app happened to be mid-run, splicing list chatter into that run's transcript.

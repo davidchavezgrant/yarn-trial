@@ -691,24 +691,24 @@ function appendLine(text) {
   // not dimmed: nothing in those lines is actionable from this window, and they arrive once per
   // step (pixelDelta shells out to python for every action). The child's full stderr is still
   // in the job log on disk for whoever is debugging the toolchain itself.
-  if (/DeprecationWarning|ExperimentalWarning|^npm warn |^\(node:\d+\)|--trace-(deprecation|warnings)/i.test(text)) return;
+  if (/DeprecationWarning|ExperimentalWarning|^(\[[^\]]+\] )?(npm warn |\(node:\d+\))|--trace-(deprecation|warnings)/i.test(text)) return;
   const d = document.createElement('div');
   let cls = '';
   if (/^\[\d+\]/.test(text)) cls = 't-step';
   // Summary lines stay dim even when they contain words like "failed": the verdict's color
   // belongs to the DONE/exit line, not to every line that restates it.
   else if (/^(stats|verification|home reset|target|task|loaded|recording|run log|visual judge)/.test(text)) cls = 't-meta';
-  else if (/=== DONE \(failure/.test(text)) cls = 't-bad';
+  // Red means DEAD or refused outright: the process exited nonzero, the loop threw, the run
+  // reported failure, or a UI-initiated operation answered an error (those are the ^✗ lines —
+  // optionally behind the [host] tag a shared buffer prefixes). A mid-run "error" in quoted
+  // text is deliberately NOT enough to land here; survivable trouble is yellow, below.
+  else if (/^(\[[^\]]+\] )?(✗|agent failed:)|■ exited|=== DONE \(failure/.test(text)) cls = 't-bad';
   else if (/✓|PASSED|=== DONE|■ finished/.test(text)) cls = 't-ok';
-  // Yellow = something went wrong and the run is still going: a failed step check the agent now
-  // recovers from, a retried model call, a revived driver session, a refusal or pause with a
-  // stated remedy. Red is reserved for a run that is dead or an operation that failed outright —
-  // the ordering matters, because retry lines quote errors ("retrying in 4s: 500 Internal
-  // Server Error") and must claim the line before the error bucket sees it.
-  else if (/retrying|routing around|REFUTED|REFUS|sign-in needed|paused|WARNING|^\s*NOTE:/.test(text)) cls = 't-warn';
-  else if (/^✗|■ exited|error/i.test(text)) cls = 't-bad';
-  // Step-level ✗/FAIL that reached here is indented agent output whose run continued.
-  else if (/✗|FAIL/.test(text)) cls = 't-warn';
+  // Yellow = something went wrong and the run is still going (or paused with a stated remedy):
+  // a step check that failed and is being recovered from, a retried model call, a revived
+  // driver session, a WARNING/NOTE advisory, the sign-in pause. These quote error text
+  // ("retrying in 4s: 500 Internal Server Error"), which is why red no longer greps for it.
+  else if (/✗|FAIL|retrying|routing around|REFUS|REFUTED|sign-in needed|paused|WARNING|error|^\s*NOTE:/i.test(text)) cls = 't-warn';
   d.className = cls;
   d.textContent = text;
   const log = el('log');
