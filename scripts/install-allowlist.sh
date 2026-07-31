@@ -41,6 +41,18 @@ print(m[0]['ssh']['user']+'@'+m[0]['ssh']['host'])
 xml=$(npx tsx scripts/print-allowlist.ts)
 [[ -n $xml ]] || { echo "AUTO_LAUNCH_PROTOCOLS is empty — nothing to install"; exit 1; }
 
+# Refuse early without a terminal. `sudo` on the far side needs a pty to prompt, and ssh -t
+# cannot allocate one when OUR stdin is not a tty — which is the case for anything run from a
+# tool, a CI step, or Claude Code's `!` prefix. Without this guard the run gets as far as the
+# SSH session before dying on sudo's own error, which names the -t flag rather than the real
+# problem (there is no terminal to type into at all).
+if [[ ! -t 0 ]]; then
+	echo "This step needs a real terminal: it asks for ${host}'s admin password." >&2
+	echo "Run it in your own terminal window (not through a tool or a pipe):" >&2
+	echo "    cd $(pwd) && bash scripts/install-allowlist.sh $host" >&2
+	exit 3
+fi
+
 echo "Installing the external-protocol allowlist on $host ($addr)."
 echo "You will be asked for that Mac's admin password once."
 echo
