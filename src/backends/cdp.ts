@@ -694,8 +694,11 @@ export class CdpBackend {
 					// "E:" prefix marks an editable holder (contenteditable / input / textarea),
 					// so the chunk loop below can tell focus ARRIVING at an editor from focus
 					// LEAVING one — the two directions get opposite treatment.
+					// Classes are SORTED: Yarn re-mounts its editor with the same class set
+					// in a different order ("tiptap ProseMirror" vs "ProseMirror tiptap"),
+					// and a first-token desc read that as a different element mid-typing.
 					const ACTIVE_DESC =
-						"(() => { const a = document.activeElement; if (!a) return 'nothing'; const e = a.isContentEditable || a.tagName === 'INPUT' || a.tagName === 'TEXTAREA'; return (e ? 'E:' : '') + a.tagName.toLowerCase() + (a.className ? '.' + String(a.className).trim().split(/\\s+/)[0] : ''); })()";
+						"(() => { const a = document.activeElement; if (!a) return 'nothing'; const e = a.isContentEditable || a.tagName === 'INPUT' || a.tagName === 'TEXTAREA'; const c = a.classList ? Array.from(a.classList).sort().slice(0, 3).join('.') : ''; return (e ? 'E:' : '') + a.tagName.toLowerCase() + (c ? '.' + c : ''); })()";
 					// Focus arrives by a visible click, then the text by real keystrokes.
 					// The keystrokes are page.keyboard events, NOT locator.pressSequentially:
 					// the locator form runs playwright's editability check, which rejects
@@ -748,7 +751,7 @@ export class CdpBackend {
 							// narration followed it (round 7). The caret's container must contain
 							// the point that was clicked.
 							const MOVED_CHECK =
-								"(() => { const a = document.activeElement; if (!a) return null; const editable = a.isContentEditable || a.tagName === 'INPUT' || a.tagName === 'TEXTAREA'; if (!editable) return null; const r = a.getBoundingClientRect(); return { desc: a.tagName.toLowerCase() + (a.className ? '.' + String(a.className).trim().split(/\\s+/)[0] : ''), x: r.x, y: r.y, w: r.width, h: r.height }; })()";
+								"(() => { const a = document.activeElement; if (!a) return null; const editable = a.isContentEditable || a.tagName === 'INPUT' || a.tagName === 'TEXTAREA'; if (!editable) return null; const r = a.getBoundingClientRect(); const c = a.classList ? Array.from(a.classList).sort().slice(0, 3).join('.') : ''; return { desc: a.tagName.toLowerCase() + (c ? '.' + c : ''), x: r.x, y: r.y, w: r.width, h: r.height }; })()";
 							let took = false;
 							for (let tries = 0; tries < 6 && !took; tries++) {
 								await new Promise((r) => setTimeout(r, 200));
