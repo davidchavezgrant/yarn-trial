@@ -133,6 +133,40 @@ CDP's own gotchas, so you don't rediscover them:
 - Use a non-default debug port (we use 9777) so you can coexist with anything else
   speaking CDP.
 
+### Don't reach for cua's DOM backend — it's dominated in every branch
+
+There are THREE ways to perceive a Chromium target, and it's worth being explicit that
+cua's `browser_*` DOM path is never the right one:
+
+| Path | How it perceives | The catch |
+|---|---|---|
+| `ax` (cua driver) | the macOS **AX tree** | Chromium drops `id`/`class`/`data-*`, so icon buttons arrive as `AXButton ""` (what the axdom sidecar recovers) |
+| `dom` (cua `browser_*`) | `semantic_v2` snapshot **over CDP** | 300-node budget, non-configurable; needs the consent gate; on the shared daemon |
+| `cdp` (playwright-core) | `ariaSnapshot({mode:"ai"})` **over CDP** | none — whole tree in one call, typed refs, boxes, `[selected]` values |
+
+Two things people conflate as "cua stripped my data" are actually different problems: the
+`id`/`class` stripping is the **AX path** (row 1, fixed by the sidecar); the 300-node cap
+is the **DOM path** (row 2). They have nothing to do with each other.
+
+The load-bearing point: **cua's DOM path and pure CDP talk to the same Chromium over the
+same protocol** — cua's `browser_*` is a middleman in front of the exact channel `cdp`
+speaks directly. So going through it can only ADD problems, never remove them, and it is
+dominated in both branches that matter:
+
+- **Debug port reachable** → pure `cdp` wins. Same protocol, but no 300-node budget (we
+  built continuation-paging in `dom.ts` purely to climb out of it; Notion Calendar's week
+  view is 1176 nodes, so the default `DOM_MAX_PAGES=1` showed the model only the top 300),
+  no consent-token gate, no 300s TTL, no shared-daemon lease.
+- **Debug port stripped** (Figma-style hardened Electron — it sanitizes its own argv and
+  relaunches without the flag) → BOTH CDP paths are dead, so you fall back to `ax`. cua's
+  DOM path needs the same port `cdp` needs, so it dies too — and if the port were open you
+  wouldn't want the middleman anyway.
+
+There is no target where cua-DOM is the right choice. We keep `dom.ts` only as the
+historical record of how we learned "DOM and AX compose — a hybrid beats either"; the
+lesson transferred to `cdp` + a thin AX sidecar. If you're grepping for a reason to use
+it, there isn't one — pick `cdp` (port open) or `ax` (port closed).
+
 ### If you keep any cua
 
 - Check whether the Rust core is actually open source (package.json points at
