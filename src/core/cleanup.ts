@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { CdpBackend } from "../backends/cdp.js";
+import type { CdpBackend } from "../backends/cdp.js";
 import { Driver } from "./driver.js";
 import { envNum } from "../env.js";
 import { readJsonOr } from "../fsutil.js";
@@ -214,8 +214,9 @@ async function main(): Promise<void> {
 
 	const overlay = startOverlay("drive", `Agent restoring ${app} — do not touch`);
 	// --url selects the CDP-direct backend, mirroring the run that wrote the journal. The
-	// same rule as agent.ts: when cdp is set there is no driver at all.
-	const cdp = url ? await CdpBackend.acquire(webTarget(url)) : undefined;
+	// same rule as agent.ts: when cdp is set there is no driver at all. Loaded lazily so
+	// src/backends/ stays deletable without breaking journal replays for ax runs.
+	const cdp = url ? await (await import("../backends/cdp.js")).CdpBackend.acquire(webTarget(url)) : undefined;
 	const driver = cdp ? undefined : await Driver.start("cleanup");
 	const interrupted = onInterrupt(async () => {
 		await driver?.close();
