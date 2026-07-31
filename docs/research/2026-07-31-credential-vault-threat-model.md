@@ -1,8 +1,9 @@
 # Credential vault — threat model
 
-*2026-07-31. Read this before enabling `YARN_VAULT=1` fleet-wide or discussing the design with
-Jasper. The spec is `docs/specs/2026-07-31-credential-vault-spec.md`; this is the one page that
-says what the vault **enforces** versus what it merely **audits**.*
+*2026-07-31. The vault is ON by default as of this date (`YARN_VAULT=0` disables it). Read this
+before discussing the design with Jasper or widening the fleet. The spec is
+`docs/specs/2026-07-31-credential-vault-spec.md`; this is the one page that says what the vault
+**enforces** versus what it merely **audits**.*
 
 ## What the vault is for
 

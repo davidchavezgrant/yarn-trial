@@ -64,14 +64,20 @@ import {
  */
 
 /**
- * Whether dispatch automatically checks sessions out and in around every run — the productization
- * switch. Default OFF: turning it on changes what a dispatch DOES (an export/import round trip and
- * an app quit per run), and the mechanism ships built-and-tested so enabling it fleet-wide is a
- * deliberate choice, not a side effect of this change. The manual `./run creds` verbs work either
- * way. `YARN_VAULT=1|true|on`.
+ * Whether dispatch automatically checks sessions out and in around every run.
+ *
+ * ON by default (opted in 2026-07-31 by David): a dispatch checks the operator's session out onto
+ * the box before the run and back into the vault after, so runs stop being pinned to the box the
+ * operator signed in on. `YARN_VAULT=0|false|off` is the kill switch — set it if the vault ever
+ * misbehaves on a real run, and dispatch reverts to leaving each box's local session in place.
+ *
+ * The integration is best-effort by construction: every checkout/checkin failure becomes a logged
+ * note and the run proceeds to sign in and verify itself, so turning this on can only ADD a
+ * session install, never fail a run that would otherwise have worked. The manual `./run creds`
+ * verbs work regardless of this flag.
  */
 export function vaultEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-	return /^(1|true|on)$/i.test((env.YARN_VAULT ?? "").trim());
+	return !/^(0|false|off)$/i.test((env.YARN_VAULT ?? "").trim());
 }
 
 /**

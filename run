@@ -30,7 +30,7 @@
 #   ./run signout <mac> "App"               sign YOU out of an app on that Mac (deletes your data there)
 #   ./run uninstall <mac> "App"             remove an app from that Mac, plus all parked profiles for it
 #   ./run creds status                      what signed-in sessions the fleet vault holds
-#   ./run creds checkout <mac> "App"        push your stored session onto a box (auto on YARN_VAULT=1)
+#   ./run creds checkout <mac> "App"        push your stored session onto a box (auto; YARN_VAULT=0 disables)
 #   ./run creds checkin <mac> "App"         pull a box's current session into the vault
 #   ./run creds signout-everywhere "App"    wipe your session for an app across the whole fleet + vault
 #   ./run liveview [<mac>] ["App"]          window-scoped sign-in: drive just one window in a browser
@@ -192,7 +192,7 @@ creds)
 	# land on any free box and still be that operator. status/audit/checkin/checkout/
 	# signout-everywhere. Sessions ride the same pinned rsync/ssh channel as everything else;
 	# the vault at ~/.yarn-runner/credstore seals them at rest. Around a dispatch this runs
-	# automatically when YARN_VAULT=1; these are the manual handles. No have_key: no model.
+	# automatically (YARN_VAULT=0 disables it); these are the manual handles. No have_key: no model.
 	shift
 	exec npx tsx src/remote/control/creds.ts "$@"
 	;;

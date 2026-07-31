@@ -65,11 +65,12 @@ const DOCTOR = { ok: true, dataRoot: "/remote/data" };
 
 // ── helpers ──────────────────────────────────────────────────────────────────────────────
 
-test("vaultEnabled__ReadsTheSwitch__And__DefaultsOff", () => {
-	assert.equal(vaultEnabled({}), false);
+test("vaultEnabled__DefaultsOn__And__HasAKillSwitch", () => {
+	assert.equal(vaultEnabled({}), true, "opted in: on by default");
 	assert.equal(vaultEnabled({ YARN_VAULT: "1" }), true);
-	assert.equal(vaultEnabled({ YARN_VAULT: "true" }), true);
-	assert.equal(vaultEnabled({ YARN_VAULT: "0" }), false);
+	assert.equal(vaultEnabled({ YARN_VAULT: "0" }), false, "the kill switch");
+	assert.equal(vaultEnabled({ YARN_VAULT: "false" }), false);
+	assert.equal(vaultEnabled({ YARN_VAULT: "off" }), false);
 });
 
 test("runningElsewhere__FindsTheConflict__When__SameSessionLiveOnAnotherBox", () => {

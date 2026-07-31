@@ -115,6 +115,12 @@ export interface DispatchOptions {
 	 * refusal for callers that want to react to busy themselves.
 	 */
 	queue?: boolean;
+	/**
+	 * Override the credential vault for this dispatch. Absent = follow `vaultEnabled()` (on unless
+	 * `YARN_VAULT=0`). `false` runs the core submit path with no checkout/checkin — how the protocol
+	 * tests and any caller that wants to manage sessions itself opt out.
+	 */
+	vault?: boolean;
 	operator?: string;
 	inventory?: Inventory;
 	/** The ssh call, injected so tests exercise the fall-through logic without a network. */
@@ -288,13 +294,13 @@ export async function dispatch(opts: DispatchOptions): Promise<DispatchResult> {
 	const appmapNote = await (opts.sync ?? autoSync)({ inventory: inv });
 	const syncNote = [recipeNote, appmapNote].filter(Boolean).join("\n") || undefined;
 
-	// The credential vault (opt-in: YARN_VAULT). Two hooks around the submit: refuse if this
-	// operator's session for this app is already live elsewhere (single-writer per session), and
-	// check the session OUT onto the box just before its submit — the checkin is the run's other
-	// end, in `attach`. A replay carries no per-operator session concern beyond the app it drives,
-	// so it takes the same path. All best-effort: a vault that stumbles logs a note and the run
-	// proceeds to sign in and verify itself, exactly as it would with the feature off.
-	const vault = vaultEnabled();
+	// The credential vault (on by default; YARN_VAULT=0 disables). Two hooks around the submit:
+	// refuse if this operator's session for this app is already live elsewhere (single-writer per
+	// session), and check the session OUT onto the box just before its submit — the checkin is the
+	// run's other end, in `attach`. A replay carries no per-operator session concern beyond the app
+	// it drives, so it takes the same path. All best-effort: a vault that stumbles logs a note and
+	// the run proceeds to sign in and verify itself, exactly as it would with the feature off.
+	const vault = opts.vault ?? vaultEnabled();
 	if (vault) {
 		const rows = await fleetStatus({ inventory: inv, run, timeoutMs: DEFAULT_SSH_TIMEOUT_MS });
 		const busyOn = runningElsewhere(rows, spec.operator, opts.app);
@@ -973,7 +979,7 @@ async function attach(host: string, jobId: string, fromByte: number): Promise<nu
 	const remedy = signinRemedy(followed.exitCode, host, result.job?.app);
 	if (remedy) console.error(remedy);
 
-	// The vault's other end (opt-in: YARN_VAULT). The run just left a session on this box: if it
+	// The vault's other end (on by default; YARN_VAULT=0 disables). The run just left a session on this box: if it
 	// got past its readiness gate (exit 3 is a signed-out refusal), seal that now-current session
 	// back into the vault so the next run — anywhere — starts from it, and fold the outcome into
 	// the ledger so it LEARNS whether this app's session survived the move. A readiness refusal is

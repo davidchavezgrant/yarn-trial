@@ -70,7 +70,7 @@ credstore.ts (vault):                     credbundle.ts  → profiles.installPro
 fleet observes and records, so an external change (Google enabling DBSC) flips a field, not the
 architecture.
 
-## Dispatch decision table (opt-in: `YARN_VAULT=1`, default OFF)
+## Dispatch decision table (on by default; `YARN_VAULT=0` disables)
 
 | Situation | Action |
 |---|---|
@@ -82,8 +82,10 @@ architecture.
 | Run refused on readiness (exit 3) | **No checkin** (don't overwrite a good bundle with a dead one); mark `bound` if it was a moved bundle |
 | Moved bundle signed in / failed | Ledger learns `roams` / `bound` |
 
-Default OFF because enabling it changes what a dispatch *does* (export/import round trip + app
-quit). The mechanism ships built-and-tested; flipping it fleet-wide is a deliberate call.
+On by default (opted in 2026-07-31). `YARN_VAULT=0` reverts dispatch to leaving each box's local
+session in place — the kill switch if the vault ever misbehaves on a real run. The integration is
+best-effort: a checkout/checkin failure logs a note and the run signs in and verifies itself, so
+enabling it can only ADD a session install, never fail a run that would otherwise have worked.
 `./run creds checkout|checkin` are the manual handles and work regardless.
 
 ## CLI
