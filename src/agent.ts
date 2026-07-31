@@ -1320,25 +1320,14 @@ async function main(): Promise<void> {
 		 * as a success does, and those are the ones nobody is watching. The driver is still
 		 * open here — `driver.close()` is deliberately below.
 		 */
-		if (cleanupMode !== "off" && !interrupted() && !driver) {
-			// The teardown loop replays restores through the AX path (observe/toActionRequest
-			// against a WindowRef), which this backend does not have. The journal is still on
-			// disk with everything a restore needs — reported as unattempted, not hidden.
-			const journal = readJournal(journalPath);
-			if (journal.length || claimed.length)
-				cleanupReport = {
-					mode: cleanupMode,
-					skipped: "cdp backend has no teardown loop yet",
-					journalEntries: journal.length,
-					claimed: claimed.length,
-				};
-		} else if (cleanupMode !== "off" && !interrupted()) {
+		if (cleanupMode !== "off" && !interrupted()) {
 			try {
 				const journal = readJournal(journalPath);
 				if (journal.length || claimed.length) {
 					overlay.setDriving(true);
 					cleanupReport = await runTeardown({
-						driver: driver!,
+						driver,
+						cdp,
 						client,
 						model,
 						app,

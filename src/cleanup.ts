@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
+import { CdpBackend } from "./cdp.js";
 import { Driver } from "./driver.js";
 import { envNum } from "./env.js";
 import {
@@ -15,6 +16,7 @@ import {
 import { type Mutation, readJournal } from "./journal.js";
 import { collapseJournal, runTeardown } from "./teardown.js";
 import { startOverlay } from "./overlay.js";
+import { webTarget } from "./target.js";
 
 /**
  * Replay a run's mutation journal after the run itself has gone.
@@ -30,7 +32,11 @@ import { startOverlay } from "./overlay.js";
  * file owns only what a CLI owns: which journal, which app, driver lifecycle, and the exit
  * code. Everything below the driver boundary is reused.
  *
- * usage: npm run cleanup -- <stamp> [--app "App Name"] [--dry-run] [--no-vision]
+ * usage: npm run cleanup -- <stamp> [--app "App Name"] [--url <https://…>] [--dry-run] [--no-vision]
+ *
+ * `--url` replays over the CDP-direct backend (no cua driver), for journals written by
+ * `--backend cdp` runs. It is an operator input rather than something recovered from the
+ * run log because the run most in need of this CLI died without writing one.
  */
 
 const DEFAULT_BUDGET = 10;
@@ -126,12 +132,15 @@ async function main(): Promise<void> {
 	const vision = !argv.includes("--no-vision");
 	const appIdx = argv.indexOf("--app");
 	const appOverride = appIdx >= 0 ? argv[appIdx + 1] : undefined;
+	const urlIdx = argv.indexOf("--url");
+	const url = urlIdx >= 0 ? argv[urlIdx + 1] : undefined;
 	const stamp = argv.find(
-		(a, i) => !a.startsWith("--") && (appIdx < 0 || i !== appIdx + 1),
+		(a, i) => !a.startsWith("--") && (appIdx < 0 || i !== appIdx + 1) && (urlIdx < 0 || i !== urlIdx + 1),
 	);
 	if (!stamp) {
-		console.error('usage: npm run cleanup -- <stamp> [--app "App Name"] [--dry-run] [--no-vision]');
+		console.error('usage: npm run cleanup -- <stamp> [--app "App Name"] [--url <https://…>] [--dry-run] [--no-vision]');
 		console.error("  stamp identifies a run, e.g. 2026-07-30T03-00-00-yarn");
+		console.error("  --url replays over the CDP-direct backend, for journals written by --backend cdp runs");
 		process.exit(1);
 	}
 
@@ -173,31 +182,46 @@ async function main(): Promise<void> {
 	}
 
 	const overlay = startOverlay("drive", `Agent restoring ${app} — do not touch`);
-	const driver = await Driver.start("cleanup");
-	const interrupted = onInterrupt(() => driver.close());
+	// --url selects the CDP-direct backend, mirroring the run that wrote the journal. The
+	// same rule as agent.ts: when cdp is set there is no driver at all.
+	const cdp = url ? await CdpBackend.acquire(webTarget(url)) : undefined;
+	const driver = cdp ? undefined : await Driver.start("cleanup");
+	const interrupted = onInterrupt(async () => {
+		await driver?.close();
+		await cdp?.close();
+	});
 	const { client, model } = makeClient();
 	const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, modelCalls: 0 };
 	let summary = { attempted: 0, failed: 0 };
 
 	try {
-		await driver.act({ kind: "tool", name: "launch_app", args: { name: app } });
-		await new Promise((r) => setTimeout(r, 1500));
-		let win = await findWindow(driver, app);
-		await overlay.countdown();
-		win = await ensureObservable(driver, win, app);
+		if (cdp) {
+			await overlay.countdown();
+			// The dead run may have ended anywhere; a web target's home is its URL, and
+			// starting the replay there is the CDP equivalent of the reset below.
+			overlay.setDriving(true);
+			console.log(`home reset: ${await cdp.goHome()}`);
+		} else {
+			await driver!.act({ kind: "tool", name: "launch_app", args: { name: app } });
+			await new Promise((r) => setTimeout(r, 1500));
+			let win = await findWindow(driver!, app);
+			await overlay.countdown();
+			win = await ensureObservable(driver!, win, app);
 
-		// The run this is cleaning up after died wherever it died — quite possibly with a
-		// dropdown or modal standing open, which is the state in which the controls a restore
-		// needs are missing from the AX tree entirely. resetToHome already handles exactly
-		// that (escape, then click the declared home control, then retry).
-		overlay.setDriving(true);
-		const reset = await resetToHome(driver, win, app);
-		console.log(`home reset: ${reset.result} — ${reset.detail}`);
+			// The run this is cleaning up after died wherever it died — quite possibly with a
+			// dropdown or modal standing open, which is the state in which the controls a restore
+			// needs are missing from the AX tree entirely. resetToHome already handles exactly
+			// that (escape, then click the declared home control, then retry).
+			overlay.setDriving(true);
+			const reset = await resetToHome(driver!, win, app);
+			console.log(`home reset: ${reset.result} — ${reset.detail}`);
+		}
 
 		if (interrupted()) return;
 
 		const report = await runTeardown({
 			driver,
+			cdp,
 			client,
 			model,
 			app,
@@ -220,7 +244,9 @@ async function main(): Promise<void> {
 		summary = { attempted: Number(report.attempted ?? 0), failed: Number(report.failed ?? 0) };
 	} finally {
 		overlay.setDriving(false);
-		await driver.close();
+		await driver?.close();
+		// Disconnects only — the browser stays up holding the signed-in profile (src/cdp.ts).
+		await cdp?.close();
 		overlay.stop();
 		console.log(
 			`cleanup finished: ${summary.attempted - summary.failed}/${summary.attempted} restored, ` +
