@@ -44,31 +44,17 @@ import {
  */
 
 /**
- * The wire contract (being built concurrently, 2026-07-31): DispatchOptions grows
- * `backend`, `noAx`, `axdomOff`, `noGrounding`, `useRecipe`; kind `"replay"` with
- * `recipe` (data-root-relative) + `noRescue`. Typed locally and cast at the dispatch()
- * call site — after the wire branch merges the cast becomes a no-op. `url` and `env` are
- * bench-side assumptions on the same wire, printed by `bench plan` for the integrating
- * human; until the merged runner honours `env`, the manifest entry records it as a
- * pre-run requirement.
+ * The wire contract MERGED, and this type went with it.
+ *
+ * It used to be `Omit<DispatchOptions, "kind"> &` eleven redeclared fields, because
+ * `DispatchOptions` did not yet carry `backend`/`noAx`/`axdomOff`/`noGrounding`/`useRecipe`/
+ * `recipe`/`noRescue`/`url`/`appmapVariant`/`model` and `JobKind` had no `"replay"`. All of
+ * them landed (dispatch.ts declares each, jobs.ts's union includes replay), so the local copy
+ * was duplication and the `as DispatchOptions` at the call site had stopped bridging a gap and
+ * started suppressing real type errors — a cast that outlives its reason is worse than the
+ * gap it covered, because it silently accepts whatever the two sides drift into.
  */
-export type BenchDispatchOptions = Omit<DispatchOptions, "kind"> & {
-	// Omit, not intersection: intersecting `kind` with today's JobKind would narrow "replay"
-	// right back out — the whole point is that this checkout's union does not have it yet.
-	kind?: "task" | "explore" | "replay";
-	backend?: "ax" | "cdp";
-	noAx?: boolean;
-	axdomOff?: boolean;
-	noGrounding?: boolean;
-	useRecipe?: boolean;
-	recipe?: string;
-	noRescue?: boolean;
-	url?: string;
-	appmapVariant?: "vision";
-	model?: string;
-};
-
-export type DispatchFn = (opts: BenchDispatchOptions) => Promise<DispatchResult>;
+export type DispatchFn = (opts: DispatchOptions) => Promise<DispatchResult>;
 export type CompileFn = (stamp: string) => { path: string };
 
 export interface PhaseOptions {
@@ -116,7 +102,7 @@ export function plannedRuns(phase: Phase, manifest: Manifest, model?: string): P
 }
 
 /** The DispatchOptions a planned run crosses with. Task text goes over VERBATIM (property 1). */
-export function dispatchOptionsFor(arm: Arm, recipe?: string, model?: string): BenchDispatchOptions {
+export function dispatchOptionsFor(arm: Arm, recipe?: string, model?: string): DispatchOptions {
 	const d = arm.dispatch;
 
 	return {
@@ -334,10 +320,8 @@ export function printPlan(log: (line: string) => void = console.log): void {
 async function defaultDispatch(): Promise<DispatchFn> {
 	const { dispatch } = await import("../remote/control/dispatch.js");
 
-	// The cast is the contract seam: extra fields ride through to the wire branch's
-	// dispatch() once merged, and are ignored (recorded in the manifest as prerequisites)
-	// until then.
-	return (opts) => dispatch(opts as DispatchOptions);
+	// Returned directly: DispatchFn IS dispatch's signature now, so there is nothing to adapt.
+	return dispatch;
 }
 
 async function defaultCompile(): Promise<CompileFn> {

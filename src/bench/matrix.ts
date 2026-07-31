@@ -29,12 +29,13 @@ export type ArmKind = "task" | "explore" | "replay" | "compile";
 export type Phase = 1 | 2 | 3 | 4;
 
 /**
- * The dispatch knobs an arm turns, in the wire branch's exact spellings (contract,
- * 2026-07-31): DispatchOptions is gaining `backend`, `noAx`, `axdomOff`, `noGrounding`,
- * `useRecipe`, and kind "replay" with `recipe` + `noRescue`. They do not exist in this
- * checkout yet; orchestrate.ts casts at the dispatch() call site, which becomes a no-op
- * once that branch merges. `url` (the web-explore target) is NOT in the relayed contract —
- * it is a further assumption, flagged by `bench plan`; see the p1 web arm.
+ * The dispatch knobs an arm turns, in `DispatchOptions`' exact spellings.
+ *
+ * Every one of them now EXISTS on that type — `backend`, `noAx`, `axdomOff`, `noGrounding`,
+ * `useRecipe`, `recipe`, `noRescue`, `url`, `appmapVariant` — and `JobKind` carries "replay".
+ * This used to describe a contract being built concurrently, with orchestrate.ts casting at
+ * the dispatch() call site until it merged; it merged, the cast is gone, and the compiler now
+ * checks that an arm can only name a knob the wire actually has.
  */
 export interface ArmDispatch {
 	backend?: BenchBackend;

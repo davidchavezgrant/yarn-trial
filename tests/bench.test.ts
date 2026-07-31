@@ -24,9 +24,9 @@ import {
 	writeManifest,
 } from "../src/bench/manifest.js";
 import { armById, BACKENDS, MATRIX, phaseArms, phaseRunCount } from "../src/bench/matrix.js";
+import type { DispatchOptions } from "../src/remote/control/dispatch.js";
 import {
 	auditPhase,
-	type BenchDispatchOptions,
 	dispatchOptionsFor,
 	EXIT_NEEDS_GO,
 	EXIT_OK,
@@ -160,13 +160,13 @@ const accepted = (jobId: string, hostName = "mac1") => ({
 	attempts: [],
 });
 
-function fakeDispatch(): { calls: BenchDispatchOptions[]; fn: (o: BenchDispatchOptions) => Promise<any> } {
-	const calls: BenchDispatchOptions[] = [];
+function fakeDispatch(): { calls: DispatchOptions[]; fn: (o: DispatchOptions) => Promise<any> } {
+	const calls: DispatchOptions[] = [];
 	let n = 0;
 
 	return {
 		calls,
-		fn: async (o: BenchDispatchOptions) => {
+		fn: async (o: DispatchOptions) => {
 			calls.push(o);
 
 			return accepted(`job-${++n}`);
@@ -224,7 +224,7 @@ test("runPhase__ShapesOptionsPerArm__When__Phase2Dispatches", async () => {
 		assert.equal(code, EXIT_OK);
 		assert.equal(fake.calls.length, 41);
 
-		const byFlag = (pred: (c: BenchDispatchOptions) => boolean): BenchDispatchOptions[] => fake.calls.filter(pred);
+		const byFlag = (pred: (c: DispatchOptions) => boolean): DispatchOptions[] => fake.calls.filter(pred);
 		// Task text crosses verbatim and is goal-only for every call.
 		for (const c of fake.calls) {
 			assert.equal(c.kind, "task");
