@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { appmapsDir, outDir } from "../../paths.js";
+import { appmapsDir, outDir, recipesDir } from "../../paths.js";
 
 import { readJsonOr } from "../../fsutil.js";
 import { type HostEntry, type Inventory, loadHosts } from "./hosts.js";
@@ -36,6 +36,14 @@ import { assertSafeRemotePath, firstLine, remoteDataRoot, type RsyncRunner, runR
 /** Where collected copies land. Under out/ because it is derived and safe to delete. */
 export function stagingDir(): string {
 	return `${outDir()}/appmap-sync`;
+}
+
+/**
+ * Compiled recipes stage apart from appmaps: each collect rsyncs with `--delete`, so sharing
+ * one directory would have the recipe collect erase the appmap staging mid-dispatch.
+ */
+export function recipeStagingDir(): string {
+	return `${outDir()}/recipe-sync`;
 }
 
 export interface MapVersion {
@@ -94,6 +102,38 @@ export function readCapturedAt(file: string): string | undefined {
 	const parsed = readJsonOr<{ capturedAt?: unknown } | undefined>(file, undefined);
 
 	return typeof parsed?.capturedAt === "string" && parsed.capturedAt ? parsed.capturedAt : undefined;
+}
+
+/**
+ * Read a directory's compiled recipes, one entry per `.recipe.json` file.
+ *
+ * `compiledAt` plays the role `capturedAt` plays for appmaps: the stamp travels inside the
+ * artifact, so a `git checkout`'s mtimes cannot make an old recipe look fresh. A file that
+ * does not parse — rsynced mid-write, same as the appmap case — reads as unstamped and never
+ * overwrites anything. The curated prose beside these (`docs/recipes/<app>.md`) is
+ * deliberately excluded: it is hand-written and committed, so it arrives with the checkout;
+ * machine output is what has to move.
+ */
+export function readRecipes(dir: string): Map<string, MapVersion> {
+	const out = new Map<string, MapVersion>();
+	let entries: string[];
+	try {
+		entries = fs.readdirSync(dir);
+	} catch {
+		return out; // A host with no recipes directory is a normal state, not an error.
+	}
+
+	for (const file of entries.sort()) {
+		if (!file.endsWith(".recipe.json")) continue;
+		// The whole stem — `<slug>.<taskhash>.recipe` — because one app legitimately has one
+		// compiled recipe per task, and keying on the app alone would make them shadow each other.
+		const slug = file.slice(0, -".json".length);
+		const parsed = readJsonOr<{ compiledAt?: unknown } | undefined>(path.join(dir, file), undefined);
+		const stamp = typeof parsed?.compiledAt === "string" && parsed.compiledAt ? parsed.compiledAt : undefined;
+		out.set(slug, { slug, hasGraph: false, ...(stamp ? { capturedAt: stamp } : {}), files: [file] });
+	}
+
+	return out;
 }
 
 /**
@@ -196,6 +236,7 @@ export interface SyncOptions {
 
 const SYNC_TIMEOUT_MS = 60_000;
 const REMOTE_REL = "docs/appmaps";
+const RECIPES_REMOTE_REL = "docs/recipes";
 
 /**
  * Bring the fleet to one view of every app's map.
@@ -204,17 +245,51 @@ const REMOTE_REL = "docs/appmaps";
  * that is asleep must cost a log line, not a refused dispatch. Every host is independent —
  * one unreachable machine does not stop the other two converging.
  */
-export async function syncAppmaps(opts: SyncOptions = {}): Promise<SyncResult> {
+export function syncAppmaps(opts: SyncOptions = {}): Promise<SyncResult> {
+	return syncTree(opts, {
+		localDir: opts.localDir ?? appmapsDir(),
+		stageDir: opts.stageDir ?? stagingDir(),
+		remoteRel: REMOTE_REL,
+		read: readAppmaps,
+	});
+}
+
+/**
+ * The same convergence for compiled recipes, which a dispatched replay needs on its target
+ * Mac before the submit — the runner refuses a replay whose recipe file is not already there.
+ * Same rules by construction: newest stamp wins (`compiledAt`), unstamped never overwrites,
+ * unreachable hosts cost a note.
+ */
+export function syncRecipes(opts: SyncOptions = {}): Promise<SyncResult> {
+	return syncTree(opts, {
+		localDir: opts.localDir ?? recipesDir(),
+		stageDir: opts.stageDir ?? recipeStagingDir(),
+		remoteRel: RECIPES_REMOTE_REL,
+		read: readRecipes,
+	});
+}
+
+interface TreeConfig {
+	localDir: string;
+	stageDir: string;
+	/** Data-root-relative directory on every host — the same key everywhere. */
+	remoteRel: string;
+	/** How a directory becomes versions: appmap pairs or recipe files. */
+	read: (dir: string) => Map<string, MapVersion>;
+}
+
+/** The shared engine behind syncAppmaps and syncRecipes: collect, plan, move. */
+async function syncTree(opts: SyncOptions, cfg: TreeConfig): Promise<SyncResult> {
 	const run = opts.run ?? runSsh;
 	const rsync = opts.rsync ?? runRsync;
 	const timeoutMs = opts.timeoutMs ?? SYNC_TIMEOUT_MS;
-	const localDir = opts.localDir ?? appmapsDir();
-	const stage = opts.stageDir ?? stagingDir();
+	const localDir = cfg.localDir;
+	const stage = cfg.stageDir;
 	const hosts = opts.hosts ?? inventoryHosts(opts.inventory);
 	const dryRun = !!opts.dryRun;
 
 	fs.mkdirSync(localDir, { recursive: true });
-	const local: Source = { name: "local", dir: localDir, maps: readAppmaps(localDir) };
+	const local: Source = { name: "local", dir: localDir, maps: cfg.read(localDir) };
 	const sources: Source[] = [local];
 	const reports: HostSync[] = [];
 
@@ -230,7 +305,7 @@ export async function syncAppmaps(opts: SyncOptions = {}): Promise<SyncResult> {
 
 		const dir = path.join(stage, host.name);
 		fs.mkdirSync(dir, { recursive: true });
-		const remote = `${root}/${REMOTE_REL}`;
+		const remote = `${root}/${cfg.remoteRel}`;
 		try {
 			assertSafeRemotePath(remote);
 		} catch (e) {
@@ -252,7 +327,7 @@ export async function syncAppmaps(opts: SyncOptions = {}): Promise<SyncResult> {
 			continue;
 		}
 
-		sources.push({ name: host.name, dir, maps: readAppmaps(dir) });
+		sources.push({ name: host.name, dir, maps: cfg.read(dir) });
 	}
 
 	const all = planTransfers(sources);
@@ -282,7 +357,7 @@ export async function syncAppmaps(opts: SyncOptions = {}): Promise<SyncResult> {
 				"-a",
 				"-e", rsyncShell(host),
 				...files.map((f) => path.join(from.dir, f)),
-				`${host.ssh.user}@${host.ssh.host}:${report.root}/${REMOTE_REL}/`,
+				`${host.ssh.user}@${host.ssh.host}:${report.root}/${cfg.remoteRel}/`,
 			],
 			{ timeoutMs },
 		);
@@ -316,13 +391,32 @@ function inventoryHosts(inv?: Inventory): HostEntry[] {
  * Swallows everything and answers with a one-line summary, or undefined when nothing moved.
  */
 export async function autoSync(opts: SyncOptions = {}): Promise<string | undefined> {
+	return autoNote("appmaps", "appmap", syncAppmaps, opts);
+}
+
+/**
+ * The recipe fan-out that runs before a replay dispatch, exactly as `autoSync` runs before a
+ * task/explore dispatch — and under the same `APPMAP_SYNC=0` switch, because both are "move
+ * grounding artifacts around the fleet automatically" and an operator turning that off means
+ * all of it.
+ */
+export async function autoSyncRecipes(opts: SyncOptions = {}): Promise<string | undefined> {
+	return autoNote("recipes", "recipe", syncRecipes, opts);
+}
+
+async function autoNote(
+	label: string,
+	noun: string,
+	sync: (opts: SyncOptions) => Promise<SyncResult>,
+	opts: SyncOptions,
+): Promise<string | undefined> {
 	if (process.env.APPMAP_SYNC === "0") return undefined;
 
 	let result: SyncResult;
 	try {
-		result = await syncAppmaps(opts);
+		result = await sync(opts);
 	} catch (e) {
-		return `appmap sync skipped: ${(e as Error).message}`;
+		return `${noun} sync skipped: ${(e as Error).message}`;
 	}
 
 	const moved = result.transfers.length;
@@ -330,8 +424,8 @@ export async function autoSync(opts: SyncOptions = {}): Promise<string | undefin
 	if (!moved && !blocked.length) return undefined;
 
 	const parts: string[] = [];
-	if (moved) parts.push(`appmaps: ${summarise(result)}`);
-	for (const h of blocked) parts.push(`appmaps: ${h.host} skipped (${h.reason})`);
+	if (moved) parts.push(`${label}: ${summarise(result)}`);
+	for (const h of blocked) parts.push(`${label}: ${h.host} skipped (${h.reason})`);
 
 	return parts.join("\n");
 }
