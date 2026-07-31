@@ -297,9 +297,29 @@ test("stageProvisioningFiles__CarriesTheModelKeyAsA0600File__When__ProvisionerHa
 		stageProvisioningFiles(dir, undefined, "sk-ant-xyz");
 		assert.equal(fs.readFileSync(staged, "utf8"), "ANTHROPIC_API_KEY='sk-ant-xyz'\n");
 		assert.equal(fs.statSync(staged).mode & 0o777, 0o600);
+
 		// 0600 on the LOCAL staging copy too — it sits in /tmp, and rsync --archive is what
 		// carries the mode to the far side, so a loose bit here is a loose bit everywhere.
 		assert.equal(fs.statSync(staged).mode & 0o777, 0o600);
+
+		// The Azure Responses pair travels together: makeClient refuses an azure/* model with
+		// only one of them, so shipping half would turn a benchmark arm into a far-side error.
+		fs.rmSync(staged);
+		stageProvisioningFiles(dir, undefined, undefined, { key: "az-key", endpoint: "https://x.openai.azure.com/openai/v1" });
+		assert.equal(
+			fs.readFileSync(staged, "utf8"),
+			"AZURE_OPENAI_API_KEY='az-key'\nAZURE_OPENAI_ENDPOINT='https://x.openai.azure.com/openai/v1'\n",
+		);
+
+		// Half a pair ships nothing rather than something unusable.
+		fs.rmSync(staged);
+		assert.equal(stageProvisioningFiles(dir, undefined, undefined, { key: "az-key" }).includes("env"), false);
+		assert.equal(fs.existsSync(staged), false);
+
+		// An endpoint is a URL, and it lands inside a single-quoted shell assignment — a quote,
+		// a space or a non-https scheme is refused rather than written.
+		for (const bad of ["http://x.openai.azure.com/openai/v1", "https://x/ v1", "https://x/'v1"])
+			assert.throws(() => stageProvisioningFiles(dir, undefined, undefined, { key: "k", endpoint: bad }), /must be an https URL/);
 
 		// A file, never an argv. Anything in an ssh argv is reassembled into a command line on
 		// the remote, where `ps` shows it to every local account for as long as it runs.
