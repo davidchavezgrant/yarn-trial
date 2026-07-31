@@ -518,6 +518,9 @@ const EXAMPLES = {
   'Yarn': [
     'show me how to change the cursor type',
     'show me how to change the cursor type for just this one project, without affecting other projects',
+    // Sync points are the dots on a demo clip (Yarn's Auto Time release video calls them
+    // out); aligning them to the talk track is the feature's whole demo.
+    'show me how to sync the demo to the talk track with Auto Time',
     'show me how to delete a draft',
     'Create a new draft, then open the Script tab and write a two-scene script introducing a coffee ordering app called Brew, then set the voice to Cassidy. Do not rename the draft. Do not publish, export, or record anything.',
   ],
