@@ -938,9 +938,10 @@ test("paintStatus__ListsEveryLiveRun__When__TwoHostsAreBusy", () => {
 	assert.equal(ui.nodes.status.textContent, "idle");
 });
 
-test("check__GatesRunOnTheSelectedHostOnly__When__AnotherHostIsBusy", () => {
-	// The contention is one driver per MACHINE (LIMITATIONS §6), not one run per window: a run
-	// on mac1 must block another dispatch to mac1 and nothing else.
+test("check__OffersTheQueue__When__ARemoteHostIsBusy", () => {
+	// A busy REMOTE host takes the queue path (the runner stacks jobs), so Run stays
+	// enabled and relabels; the hint says where the job goes, since the submit is detached
+	// and no log pane opens here.
 	const ui = mount();
 	ui.apps = [{ name: "Notes" }];
 	ui.sel = "Notes";
@@ -949,13 +950,33 @@ test("check__GatesRunOnTheSelectedHostOnly__When__AnotherHostIsBusy", () => {
 
 	ui.host = "mac1";
 	ui.check();
-	assert.equal(ui.nodes.go.disabled, true, "the busy host accepted a second run");
-	assert.equal(ui.nodes.ground.disabled, true);
+	assert.equal(ui.nodes.go.disabled, false, "a busy remote host queues, it does not refuse");
+	assert.equal(ui.nodes.go.textContent, "Queue on mac1");
+	assert.equal(ui.nodes.ground.disabled, false);
+	assert.equal(ui.nodes.ground.textContent, "Queue grounding on mac1");
+	assert.match(ui.nodes.busyhint.textContent, /queue behind/);
 
 	ui.host = "local";
 	ui.check();
 	assert.equal(ui.nodes.go.disabled, false, "a free host was blocked by a run elsewhere");
+	assert.equal(ui.nodes.go.textContent, "Run on Notes");
 	assert.equal(ui.nodes.ground.disabled, false);
+});
+
+test("check__StillHidesRun__When__ThisMacIsBusy", () => {
+	// Local keeps the old posture: local runs never enter the runner registry, so there is
+	// no queue to feed, and a second driver session would kill the first (LIMITATIONS §6).
+	const ui = mount();
+	ui.apps = [{ name: "Notes" }];
+	ui.sel = "Notes";
+	ui.nodes.task.value = "show me how to make a checklist";
+	ui.events.started!({ app: "Yarn", task: "t", host: "local" });
+
+	ui.host = "local";
+	ui.check();
+	assert.equal(ui.nodes.go.style.display, "none");
+	assert.equal(ui.nodes.ground.style.display, "none");
+	assert.match(ui.nodes.busyhint.textContent, /This Mac is running Yarn/);
 });
 
 test("stop__NamesTheHostOwningTheSelectedPane__When__TwoRunsAreLive", async () => {

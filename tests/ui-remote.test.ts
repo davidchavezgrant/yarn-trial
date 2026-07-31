@@ -28,6 +28,7 @@ import {
 	recordRemoteRun,
 	saveModelKey,
 	silenceNote,
+	submitDetached,
 	writeRemotePrefs,
 } from "../src/ui/ui-remote.js";
 
@@ -141,6 +142,66 @@ test("fleetView__RendersEveryRow__When__OneHostIsDegraded", async () => {
 	// the banner disagreeing about who is busy would mean offering a job that had just ended.
 	assert.deepEqual(view.offers.map((o) => o.jobId), ["explore-j9"]);
 	assert.equal(view.error, undefined);
+});
+
+test("submitDetached__ReportsTheQueuePosition__When__TheHostIsBusy", async () => {
+	// The GUI's queue path: submit, don't follow. The message is the log-pane line, and the
+	// position is what tells the operator where in line the job landed.
+	const r = await submitDetached(
+		{ host: "mac1", app: "Yarn", task: "t", kind: "task", record: false, noVision: false },
+		async () => ({
+			ok: true,
+			host: { name: "mac1" } as any,
+			jobId: "j-q",
+			kind: "task" as const,
+			app: "Yarn",
+			artifacts: { log: "out/jobs/j-q/log.txt" },
+			queued: true,
+			position: 2,
+			behind: { operator: "sam", kind: "explore" },
+			attempts: [],
+		}),
+	);
+	assert.equal(r.ok, true);
+	assert.equal(r.queued, true);
+	assert.equal(r.position, 2);
+	assert.match(r.message, /queued on mac1 at position 2 behind sam's explore/);
+	assert.match(r.message, /j-q/);
+});
+
+test("submitDetached__SaysStartedElsewhere__When__TheHostWasActuallyIdle", async () => {
+	// Racing the queue: the host freed between the busy check and the submit, so the job
+	// started immediately — still not followed here, and the message must say where it went.
+	const r = await submitDetached(
+		{ host: "mac2", app: "Yarn", task: "t", kind: "task", record: false, noVision: false },
+		async () => ({
+			ok: true,
+			host: { name: "mac2" } as any,
+			jobId: "j-live",
+			kind: "task" as const,
+			app: "Yarn",
+			artifacts: { log: "out/jobs/j-live/log.txt" },
+			attempts: [],
+		}),
+	);
+	assert.equal(r.ok, true);
+	assert.equal(r.queued, false);
+	assert.match(r.message, /started on mac2/);
+	assert.match(r.message, /open its log/i);
+});
+
+test("submitDetached__Refuses__When__TheTargetIsAWebsite", async () => {
+	let dispatched = 0;
+	const r = await submitDetached(
+		{ host: "mac1", app: "notion.so", task: "t", kind: "task", record: false, noVision: false, url: "https://notion.so" },
+		async () => {
+			dispatched++;
+
+			return { ok: false, error: "unreachable", attempts: [] };
+		},
+	);
+	assert.equal(r.ok, false);
+	assert.equal(dispatched, 0, "a web target never reaches dispatch — the wire does not carry the URL");
 });
 
 test("attachOffers__FindsTheLiveJob__When__AHostIsBusy", () => {

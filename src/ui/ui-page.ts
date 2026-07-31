@@ -618,27 +618,32 @@ function check() {
   // happened to be showing, which is nobody's intent and not reproducible.
   const needsUrl = syncUrlRow();
   // Busy is PER HOST: a run on mac1 must not block a dispatch to mac2 or to this Mac — the
-  // contention is one driver per machine, not one run per window. A busy host elsewhere is
-  // the far side's lease to refuse; this only gates what this shell can already see.
+  // contention is one driver per machine, not one run per window. A busy REMOTE host takes
+  // the queue path (the runner stacks jobs and drains them oldest-first), so Run stays and
+  // relabels to "Queue on <mac>". LOCAL keeps the old hide-and-hint: local runs never enter
+  // the runner registry, so there is no queue to feed, and a second driver session would
+  // kill the first.
   const hostBusy = !!running[host];
-  el('go').disabled = hostBusy || !sel || !t || !!w || needsUrl;
-  // Hidden, not merely disabled, while the host is mid-run: a control that cannot be used
-  // until something else finishes is noise, and Stop — the control that CAN — takes its
-  // place. Disabled stays for the form-shaped cases (no target, no task), where the button
-  // is the prompt for what is missing.
-  el('go').style.display = hostBusy ? 'none' : '';
-  el('ground').style.display = hostBusy ? 'none' : '';
-  // …but a void where buttons were reads as breakage, so the hint says what owns the host
-  // and where the Stop control lives (it follows the running app's pane).
+  const localBusy = hostBusy && host === 'local';
+  const queueMode = hostBusy && host !== 'local';
+  el('go').disabled = localBusy || !sel || !t || !!w || needsUrl || (queueMode && !!selUrl());
+  el('go').style.display = localBusy ? 'none' : '';
+  el('ground').style.display = localBusy ? 'none' : '';
   el('busyhint').style.display = hostBusy ? 'block' : 'none';
-  if (hostBusy) el('busyhint').textContent = (host === 'local' ? 'This Mac' : host) + ' is running ' + running[host] +
+  if (localBusy) el('busyhint').textContent = 'This Mac is running ' + running[host] +
     (running[host] === sel ? ' — Stop is beside its log.' : ' — select ' + running[host] + ' to stop it, or pick another Mac.');
+  // The queue hint says where the job GOES, because the submit is detached: no log pane
+  // opens here, and without this line "nothing visibly happened" is the natural reading.
+  if (queueMode) el('busyhint').textContent = host + ' is running ' + running[host] +
+    ' — new runs queue behind it (watch the fleet panel, open its log when it starts).' +
+    (selUrl() ? ' Website targets cannot queue yet.' : '');
   const site = selUrl();
   el('go').textContent = sel
-    ? 'Run on ' + (site ? new URL(site).host : sel) + (host === 'local' ? '' : ' @ ' + host)
+    ? (queueMode ? 'Queue on ' + host : 'Run on ' + (site ? new URL(site).host : sel) + (host === 'local' ? '' : ' @ ' + host))
     : 'Run';
   // Grounding needs only a target — it explores the app, it does not perform a task.
-  el('ground').disabled = hostBusy || !sel || needsUrl;
+  // Queue mode leaves it enabled: a grounding pass stacks behind the current run too.
+  el('ground').disabled = localBusy || !sel || needsUrl || (queueMode && !!selUrl());
   // Stop follows the SELECTION: it ends the run whose output fills the pane on screen, so it
   // only shows when that pane has one. Other runs are stopped by selecting their app first.
   el('stop').style.display = paneRunHost() ? 'block' : 'none';
@@ -647,7 +652,7 @@ function check() {
   // reads "Ground" — that is the first pass on it.
   const key = site ? new URL(site).host : sel;
   const g = key ? apps.find(a => a.name === key) : null;
-  el('ground').textContent = g && g.grounded ? 'Reground' : 'Ground';
+  el('ground').textContent = queueMode ? 'Queue grounding on ' + host : (g && g.grounded ? 'Reground' : 'Ground');
 }
 
 // Startup diagnostics (17 scope-ambiguity lines on Yarn) pushed the actual steps off

@@ -22,6 +22,7 @@ import {
 	isRemoteHost,
 	readRemotePrefs,
 	RemoteRunController,
+	submitDetached,
 	saveModelKey,
 	writeRemotePrefs,
 } from "../src/ui/ui-remote.js";
@@ -559,9 +560,28 @@ function busyOn(host: string): string | undefined {
 /** `host` rides along with the local RunOptions; `local` (or absent) takes the original path. */
 type ShellRunOptions = RunOptions & { host?: string };
 
-ipcMain.handle("run", (_event, opts: ShellRunOptions) => {
+ipcMain.handle("run", async (_event, opts: ShellRunOptions) => {
 	const target = isRemoteHost(opts.host) ? String(opts.host).trim() : "local";
 	const busy = busyOn(target);
+	// A busy REMOTE host is no longer a refusal: the runner queues (one lease, any number
+	// of queued records), so the submit goes over detached — no second follow on the host
+	// this window already watches — and the fleet panel's ⏳ rows carry it from there.
+	// Local keeps the refusal: local runs never enter the runner registry, so there is no
+	// queue to feed and a second driver session would kill the first (LIMITATIONS §6).
+	if (busy && target !== "local") {
+		const r = await submitDetached({
+			host: target,
+			app: opts.app,
+			task: opts.task ?? "",
+			kind: "task",
+			record: opts.record === true,
+			noVision: opts.noVision === true,
+			...(opts.url ? { url: opts.url } : {}),
+		});
+		toRenderer("line", { text: r.message, app: opts.app, host: target });
+
+		return r.ok ? undefined : r.message;
+	}
 	if (busy) return busy;
 
 	// The task text is handed to whichever controller runs it and read by neither: the audit
@@ -585,9 +605,16 @@ ipcMain.handle("run", (_event, opts: ShellRunOptions) => {
 	return err;
 });
 
-ipcMain.handle("ground", (_event, { app, host, url }: { app: string; host?: string; url?: string }) => {
+ipcMain.handle("ground", async (_event, { app, host, url }: { app: string; host?: string; url?: string }) => {
 	const target = isRemoteHost(host) ? String(host).trim() : "local";
 	const busy = busyOn(target);
+	// Same queue path as "run": a grounding pass stacks behind whatever the Mac is doing.
+	if (busy && target !== "local") {
+		const r = await submitDetached({ host: target, app, task: "", kind: "explore", record: false, noVision: false, ...(url ? { url } : {}) });
+		toRenderer("line", { text: r.message, app, host: target });
+
+		return r.ok ? undefined : r.message;
+	}
 	if (busy) return busy;
 
 	let err: string | undefined;

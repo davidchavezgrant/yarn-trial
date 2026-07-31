@@ -683,6 +683,55 @@ export interface RemoteRunOptions {
 	url?: string;
 }
 
+export interface QueuedSubmit {
+	ok: boolean;
+	/** One line for the app's log pane, whatever happened. */
+	message: string;
+	jobId?: string;
+	host?: string;
+	queued?: boolean;
+	position?: number;
+}
+
+/**
+ * Submit a run to a Mac and DON'T follow it — the GUI's queue path.
+ *
+ * Exists because the shell's one-follow-per-host guard and the runner's queue answer
+ * different questions: the guard protects this window's log panes (one live stream per
+ * host), while the queue happily stacks jobs on a busy Mac. Submit-and-detach threads the
+ * needle — the job lands in the remote queue, the fleet panel's ⏳ rows pick it up on the
+ * next poll, and the attach offer is how it gets a pane once the drain starts it. Nothing
+ * here follows anything, so it works regardless of what this window already watches.
+ */
+export async function submitDetached(
+	opts: RemoteRunOptions,
+	send: (o: DispatchOptions) => Promise<DispatchResult> = dispatch,
+): Promise<QueuedSubmit> {
+	if (opts.url) return { ok: false, message: "website targets only run on this Mac for now — fleet dispatch does not carry the URL yet" };
+
+	let result: DispatchResult;
+	try {
+		result = await send({
+			host: opts.host,
+			app: opts.app,
+			kind: opts.kind,
+			task: opts.task,
+			record: opts.record,
+			noVision: opts.noVision,
+		});
+	} catch (e) {
+		return { ok: false, message: `✗ dispatch failed: ${(e as Error).message}` };
+	}
+	if (!result.ok) return { ok: false, message: `✗ ${result.error}` };
+
+	const where = result.host.name;
+	const line = result.queued
+		? `⏳ queued on ${where} at position ${result.position ?? "?"}${result.behind ? ` behind ${result.behind.operator ?? "?"}'s ${result.behind.kind ?? "run"}` : ""} — ${result.jobId}. It starts when the host frees; watch the fleet panel, then open its log.`
+		: `${result.jobId} started on ${where} — not followed here; open its log from the fleet panel.`;
+
+	return { ok: true, message: line, jobId: result.jobId, host: where, queued: result.queued === true, ...(result.position !== undefined ? { position: result.position } : {}) };
+}
+
 /** Every side effect the controller has, injected so tests never reach a Mac. */
 export interface RemoteDeps {
 	dispatch(opts: DispatchOptions): Promise<DispatchResult>;
