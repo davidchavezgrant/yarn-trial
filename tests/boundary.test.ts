@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { type Boundary, boundaryDescription, classifyBoundary, newElements } from "../src/backends/boundary.js";
+import { type Boundary, boundaryDescription, classifyBoundary, newElements } from "../src/core/boundary.js";
 import type { InteractiveElement, ObservationBundle } from "../src/core/harness.js";
 
 /**

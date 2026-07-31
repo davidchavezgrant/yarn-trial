@@ -1,4 +1,4 @@
-import type { InteractiveElement, ObservationBundle } from "../core/harness.js";
+import type { InteractiveElement, ObservationBundle } from "./harness.js";
 
 /**
  * Classify what a destructive-labelled press revealed, BEFORE anything else is decided.
@@ -15,6 +15,14 @@ import type { InteractiveElement, ObservationBundle } from "../core/harness.js";
  * presses nothing and sends Escape itself; the classifier only decides what gets RECORDED and
  * whether to flag a possible commit. And `no-modal` does NOT mean "nothing happened": a
  * mutation may have committed silently, so the caller pairs that verdict with detectMutation.
+ *
+ * WHY IT LIVES IN core/ AND NOT backends/. It was filed under backends/ during the 2026-07-31
+ * reorg by name association, and that made it the ONE static value-import from core into a
+ * directory the contract says is deletable — `src/core/explore/loop.ts` cannot run without it,
+ * so `npm run explore` broke at module load with backends/ removed (measured by deleting the
+ * directory and typechecking). Nothing here is backend-specific: the only import is a pair of
+ * core types, and it handles both the AX spelling of a role and cdp's (`AXButton`/`button`)
+ * precisely because it is agnostic to which one produced the observation.
  */
 
 /** External auth/consent hosts. A press that opened one of these is an OAuth hand-off, not a dialog. */

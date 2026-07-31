@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { boundaryDescription, classifyBoundary } from "../../backends/boundary.js";
+import { boundaryDescription, classifyBoundary } from "../boundary.js";
 import type { CdpBackend } from "../../backends/cdp.js";
 import type { Driver } from "../driver.js";
 import {
