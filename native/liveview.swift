@@ -390,9 +390,60 @@ func axWindowElement(pid: pid_t, matching bounds: CGRect) -> AXUIElement? {
 	return nil
 }
 
+/// The window minus the browser's own furniture, derived WITHOUT the page's accessibility tree.
+///
+/// This is the safety net under the page scan, and it works in the case the page scan cannot:
+/// Chromium's toolbar and tab strip are native AppKit views, present in the AX tree from the
+/// moment the window exists, while the web content tree is built lazily and may never arrive
+/// (see `wakeBrowserAX`). Measured on a real Chrome window 2026-07-31, both with the page tree
+/// awake and with it asleep: `AXToolbar` sits at y=95 h=46 and the content begins at y=141 — an
+/// 86pt inset off a 1040pt window, IDENTICAL in both states. So when the page scan finds
+/// nothing, this still removes the URL bar and the tab titles.
+///
+/// Only full-width chrome in the TOP HALF counts. A find bar, a bookmarks bar or a downloads
+/// shelf are legitimately part of the furniture; a sidebar or a page-level toolbar rendered by
+/// the site is not, and taking the lowest matching edge anywhere in the window could crop away
+/// the whole form. Returns nil when nothing qualifies, and nil means "keep withholding" — never
+/// "show it all".
+func chromeCrop(_ root: AXUIElement, window: CGRect) -> CGRect? {
+	guard window.width > 1, window.height > 1 else { return nil }
+	var contentTop = window.origin.y
+	var budget = 3000
+
+	func walk(_ el: AXUIElement, depth: Int) {
+		if depth > 12 || budget <= 0 { return }
+		budget -= 1
+		let role = axAttr(el, kAXRoleAttribute) as? String ?? ""
+		let cls = axAttr(el, "AXDOMClassList") as? String ?? ""
+		if role == "AXToolbar" || cls.contains("ToolbarView") || cls.contains("TabStrip") {
+			if let f = axFrame(el), f.width > window.width * 0.5 {
+				let bottom = f.origin.y + f.height
+				if bottom > contentTop, bottom < window.origin.y + window.height * 0.5 { contentTop = bottom }
+			}
+		}
+		guard let kids = axAttr(el, kAXChildrenAttribute) as? [AXUIElement] else { return }
+		for k in kids { walk(k, depth: depth + 1) }
+	}
+
+	walk(root, depth: 0)
+	// Nothing found means the furniture is not where we can see it, and guessing a fixed inset
+	// would be inventing geometry. Withholding is the honest answer.
+	guard contentTop > window.origin.y else { return nil }
+	let content = CGRect(x: window.origin.x, y: contentTop, width: window.width,
+	                     height: window.height - (contentTop - window.origin.y))
+
+	return content.width >= MIN_CROP_W && content.height >= MIN_CROP_H ? content : nil
+}
+
 struct ForeignScan {
 	/** Page-content rect in global points, when one was found. */
 	var webArea: CGRect?
+	/**
+	 * The window minus browser furniture — the fallback when no page content was located. Kept
+	 * separate from `webArea` so `applyScan` can prefer real page geometry and reach for this
+	 * only once the settle window has elapsed.
+	 */
+	var chrome: CGRect?
 	/** Bounding box of the page's visible ink — the login card. Preferred over webArea. */
 	var ink: CGRect?
 	/** How many ink elements were found. Reported so "no ink" is distinguishable from "no scan". */
@@ -443,8 +494,15 @@ let MIN_CROP_H: CGFloat = 160
 /// How long a foreign window may stay unshown while waiting for its first crop.
 ///
 /// 6s: Chromium's tree materializes ~2s after the wake and the scan cadence is 500ms, so a
-/// healthy page settles inside 3. The remainder is headroom for a slow page load; past it,
-/// showing the window uncropped beats showing nothing at all.
+/// healthy page settles inside 3. The remainder is headroom for a slow page load.
+///
+/// What happens at expiry changed on 2026-07-31 and the reason matters. It used to release the
+/// frames UNCROPPED, justified as "a stream that never starts is worse than a wide one". That
+/// was wrong: the wide one is the tab strip, the full OAuth URL, and the account chooser listing
+/// real people — precisely what constrained mode exists to hide, and it was observed happening.
+/// The rule is now **fail to chrome-less, never to chrome**: on expiry the crop falls back to
+/// `chromeCrop()`, which removes the browser's own furniture using frames that do not depend on
+/// the page tree at all. Only if even THAT is unreadable do frames stay withheld.
 let SETTLE_TIMEOUT: TimeInterval = 6.0
 
 /// Ink measured inside one subtree, clipped to the viewport.
@@ -593,6 +651,11 @@ func scanForeignWindow(_ root: AXUIElement, appName: String) -> ForeignScan {
 		if box.leaves >= 3 { out.ink = box.union }
 	}
 
+	// Always computed, even when the page scan succeeded: it costs one shallow walk of native
+	// views, and having it ready means the settle timeout has something to fall back TO rather
+	// than having to schedule another scan at the moment it gives up.
+	if let wf = axFrame(root) { out.chrome = chromeCrop(root, window: wf) }
+
 	return out
 }
 
@@ -659,6 +722,13 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 	/** When the CURRENT foreign window became foreign — the clock `framesAllowed()` bounds. */
 	private var foreignSince = Date.distantPast
 	private var lastSettlingSent: Bool?
+	/**
+	 * The most recent chrome-less rect for this window, kept so the settle deadline can adopt it
+	 * WITHOUT waiting for another scan. The deadline expires on a timer tick, not on a scan, and
+	 * making the operator wait up to another 500ms for a frame is the difference between "the
+	 * stream starts" and "the stream stutters at the worst moment".
+	 */
+	private var lastChrome: CGRect?
 
 	init(fps: Int) {
 		self.minInterval = 1.0 / Double(fps)
@@ -692,6 +762,8 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 		if want == currentWindowId {
 			refreshBounds(for: want)
 			scheduleForeignScan()
+			// Before syncSettling, so the settle state it reports already reflects the floor.
+			adoptChromeFloor()
 			syncSettling()
 			return
 		}
@@ -764,6 +836,10 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 		cropPoints.value = nil
 		boundsBox.value = scWindow.frame
 		lastCropSent = nil
+		// A rect measured against the PREVIOUS window is meaningless here, and adopting it would
+		// crop the new window to the old one's geometry — a wrong crop, which maps clicks onto
+		// the wrong pixels. Cleared with the window, re-measured by its first scan.
+		lastChrome = nil
 		// Restart the settle clock with the window. A handoff into a second browser window (the
 		// OAuth popup) must get its own grace period, not inherit an expired one and flash
 		// uncropped — which is the moment the URL bar and any autofill dropdown are on screen.
@@ -812,11 +888,33 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 	 * On expiry the frames flow uncropped, which is the pre-existing behavior, and the viewer is
 	 * told (`settling: false`) so it can stop saying "framing".
 	 */
+	/** Has this foreign window had its grace period to produce a page crop? */
+	func settleExpired() -> Bool {
+		Date().timeIntervalSince(foreignSince) >= SETTLE_TIMEOUT
+	}
+
 	func framesAllowed() -> Bool {
 		if !foreign.value { return true }
-		if cropFraction() != nil { return true }
 
-		return Date().timeIntervalSince(foreignSince) >= SETTLE_TIMEOUT
+		// Any crop at all — the login card, or the chrome-less floor adopted below — means the
+		// browser's own furniture is off the wire, which is the whole bar for showing a frame.
+		return cropFraction() != nil
+	}
+
+	/**
+	 * Adopt the chrome-less floor the moment the grace period ends.
+	 *
+	 * Called from the retarget tick rather than from a scan, because the deadline passes on a
+	 * clock and the next scan may be up to 500ms away — a visible stutter at exactly the moment
+	 * the operator is waiting for the stream. `lastChrome` was measured by the most recent scan,
+	 * so this is adopting a known rect, never inventing one.
+	 *
+	 * Deliberately one-way: it fills an EMPTY crop and never replaces a page crop, so a page
+	 * that finally resolves its card still wins on the next scan.
+	 */
+	private func adoptChromeFloor() {
+		guard foreign.value, settleExpired(), cropPoints.value == nil, let chrome = lastChrome else { return }
+		cropPoints.value = chrome
 	}
 
 	/** The window event, with the constrained-mode fields riding along for the log and tests. */
@@ -908,6 +1006,13 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 			let pad: CGFloat = 18
 			target = ink.insetBy(dx: -pad, dy: -pad).intersection(web)
 		}
+		// The chrome-less floor, applied ONLY once the settle window has passed. Ordering is the
+		// whole point: a page that is merely slow must still get its proper card crop, so the
+		// fallback may never pre-empt a page scan that is still coming. Past the deadline the
+		// choice is no longer "card or chrome-less" — it is "chrome-less or the entire browser",
+		// and the browser is the URL bar, the tab titles and the account chooser.
+		if target == nil, settleExpired() { target = scan.chrome }
+		lastChrome = scan.chrome
 		// Store in POINTS; cropFraction() re-derives fractions per use and applies the sanity
 		// gate against live geometry, so a resize between scans cannot leave a wrong crop.
 		cropPoints.value = target
@@ -926,12 +1031,16 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 		// Diagnostic, once per scan whose findings changed shape: which of the two rects the
 		// crop came from, and how much ink was found. "web area, 0 leaves" and "ink, 19 leaves"
 		// look identical downstream, and telling them apart is the whole debugging problem.
-		let shape = "\(scan.ink != nil ? "ink" : (scan.webArea != nil ? "webarea" : "none"))"
+		// "chrome" is its own source and not folded into "none": they are the difference between
+		// a stream showing the page without the URL bar and a stream showing nothing, and a
+		// transcript that cannot tell them apart cannot diagnose either.
+		let shape = scan.ink != nil ? "ink" : (scan.webArea != nil ? "webarea" : (target != nil ? "chrome" : "none"))
 		if shape != lastShapeSent {
 			lastShapeSent = shape
 			emitEvent(["ev": "scan", "source": shape, "leaves": scan.inkLeaves,
 			           "web": scan.webArea.map { "\(Int($0.width))x\(Int($0.height))" } ?? "nil",
-			           "ink": scan.ink.map { "\(Int($0.width))x\(Int($0.height))" } ?? "nil"])
+			           "ink": scan.ink.map { "\(Int($0.width))x\(Int($0.height))" } ?? "nil",
+			           "chrome": scan.chrome.map { "\(Int($0.width))x\(Int($0.height))" } ?? "nil"])
 		}
 
 		// The hands-free redirect. Debounced: the dialog outlives the press by a frame or two,

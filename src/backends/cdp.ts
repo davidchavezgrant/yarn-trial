@@ -645,27 +645,40 @@ export class CdpBackend {
 				return `${a.name} on [${ref}]`;
 			}
 			case "type_text": {
-				const ref = await this.resolveRef(a);
-				const loc = this.page.locator(`aria-ref=${ref}`);
 				const text = String(a.text ?? "");
 				if (this.demo) {
-					// Focus arrives by a visible click, then the text by real keystrokes —
-					// the plate shows the field being chosen and the characters landing.
-					// The click is SKIPPED when the field already has focus: a click
-					// collapses any selection, and the documented pre-filled recovery
-					// (click the field, cmd+a, type_text) depends on the selection
-					// surviving into the typing.
-					const focused = (await loc.evaluate("el => el === document.activeElement").catch(() => false)) as boolean;
-					if (!focused) await this.demoPointer(loc, "click");
-					// The locator timeout is tuned for stale-ref failures; typing time is
-					// real work proportional to the text, so it gets its own budget.
-					await loc.pressSequentially(text, { delay: DEMO_TYPE_DELAY_MS, timeout: ACTION_TIMEOUT_MS + text.length * DEMO_TYPE_DELAY_MS });
+					// Focus arrives by a visible click, then the text by real keystrokes.
+					// The keystrokes are page.keyboard events, NOT locator.pressSequentially:
+					// the locator form runs playwright's editability check, which rejects
+					// anything that is not an input/textarea/contenteditable HOST — and in a
+					// ProseMirror editor every addressable ref is an INNER node (paragraph,
+					// placeholder), so on Yarn every single typing attempt errored with zero
+					// pixels moved (mac1 run 2026-07-31T09-26-31). A human's keystrokes go to
+					// whatever holds focus; so do these.
+					//
+					// No ref means "type at the current caret" — the escape hatch for editors
+					// whose focus target is not addressable at all.
+					if (a.ref || a.query) {
+						const ref = await this.resolveRef(a);
+						const loc = this.page.locator(`aria-ref=${ref}`);
+						// The click is SKIPPED when focus is already inside the target (or the
+						// target is inside the focused element — an inner ProseMirror node vs
+						// its contenteditable host): a click collapses any selection, and the
+						// documented pre-filled recovery (click the field, cmd+a, type_text)
+						// depends on the selection surviving into the typing.
+						const focused = (await loc
+							.evaluate("el => el === document.activeElement || el.contains(document.activeElement) || (document.activeElement && document.activeElement.contains(el))")
+							.catch(() => false)) as boolean;
+						if (!focused) await this.demoPointer(loc, "click");
+					}
+					await this.page.keyboard.type(text, { delay: DEMO_TYPE_DELAY_MS });
 
-					return `typed into [${ref}] at the caret (existing content NOT replaced — cmd+a first if it must be cleared)`;
+					return `typed at the caret${a.ref ? ` after clicking [${a.ref}]` : ""} (existing content NOT replaced — cmd+a first if it must be cleared)`;
 				}
+				const ref = await this.resolveRef(a);
 				// fill() replaces — the pre-filled-field trap ("New YorkParis") cannot happen,
 				// so the rules stop telling the model to cmd+a first.
-				await loc.fill(text);
+				await this.page.locator(`aria-ref=${ref}`).fill(text);
 
 				return `typed into [${ref}] (replaced existing content)`;
 			}
@@ -804,7 +817,12 @@ export function cdpActTool(demo: boolean): Anthropic.Tool {
 					type: "object",
 					properties: {
 						name: { type: "string", enum: [...CDP_ACTIONS] },
-						ref: { type: "string", description: "Target ref from the current observation (click/right_click/double_click/hover/type_text, optional for scroll)." },
+						ref: {
+							type: "string",
+							description: demo
+								? "Target ref from the current observation (click/right_click/double_click/hover, optional for scroll). For type_text it names the field to click before typing — omit it to type at the CURRENT caret (useful in rich editors whose focused surface has no addressable ref)."
+								: "Target ref from the current observation (click/right_click/double_click/hover/type_text, optional for scroll).",
+						},
 						query: { type: "string", description: "Alternative to ref: resolve the target by name at action time. Refused if it matches more than one element." },
 						text: {
 							type: "string",
