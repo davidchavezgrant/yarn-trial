@@ -1,0 +1,385 @@
+import { pathToFileURL } from "node:url";
+import { auditTaskPrompt } from "../core/harness.js";
+import { outDir, relToData } from "../paths.js";
+import { AUTO_HOST, type DispatchOptions, dispatchNotes, type DispatchResult } from "../remote/control/dispatch.js";
+import { collect } from "./collect.js";
+import {
+	type Arm,
+	armById,
+	BENCH_APP,
+	flagsLine,
+	MATRIX,
+	type Phase,
+	phaseArms,
+	phaseRunCount,
+} from "./matrix.js";
+import {
+	entriesForArm,
+	type Manifest,
+	type ManifestEntry,
+	readManifest,
+	recordSubmissions,
+	submittedCount,
+	utcDate,
+	writeManifest,
+} from "./manifest.js";
+
+/**
+ * Phase dispatch, behind the human gate.
+ *
+ * HARD CONSTRAINT (David): no benchmark run ever fires without an explicit go. `runPhase`
+ * without `go: true` prints what WOULD run and returns exit 2 — the same shape either way,
+ * so the preview IS the plan that executes. With `--go` it submits every arm×n of the phase
+ * through the fleet queue and EXITS; the fleet drains, and `bench collect` gathers later.
+ * Nothing here follows a log or waits on a run.
+ *
+ * Submissions are interleaved across arms (sample 0 of every arm, then sample 1, …) rather
+ * than one arm's n back-to-back: `host: auto`'s idle walk then spreads concurrent arms over
+ * different Macs, and order-independent cells (grounded vs ungrounded) don't serialize on
+ * one machine while two sit idle.
+ *
+ * Top-up semantics: an arm with entries already in today's manifest only submits the
+ * difference up to its n. Re-running a phase after a partial submit (or for phase 3/4's
+ * second wave, where replays need a compiled recipe) is therefore safe and cheap.
+ */
+
+/**
+ * The wire contract (being built concurrently, 2026-07-31): DispatchOptions grows
+ * `backend`, `noAx`, `axdomOff`, `noGrounding`, `useRecipe`; kind `"replay"` with
+ * `recipe` (data-root-relative) + `noRescue`. Typed locally and cast at the dispatch()
+ * call site — after the wire branch merges the cast becomes a no-op. `url` and `env` are
+ * bench-side assumptions on the same wire, printed by `bench plan` for the integrating
+ * human; until the merged runner honours `env`, the manifest entry records it as a
+ * pre-run requirement.
+ */
+export type BenchDispatchOptions = Omit<DispatchOptions, "kind"> & {
+	// Omit, not intersection: intersecting `kind` with today's JobKind would narrow "replay"
+	// right back out — the whole point is that this checkout's union does not have it yet.
+	kind?: "task" | "explore" | "replay";
+	backend?: "ax" | "cdp";
+	noAx?: boolean;
+	axdomOff?: boolean;
+	noGrounding?: boolean;
+	useRecipe?: boolean;
+	recipe?: string;
+	noRescue?: boolean;
+	url?: string;
+	env?: Record<string, string>;
+};
+
+export type DispatchFn = (opts: BenchDispatchOptions) => Promise<DispatchResult>;
+export type CompileFn = (stamp: string) => { path: string };
+
+export interface PhaseOptions {
+	go?: boolean;
+	force?: boolean;
+	date?: string;
+	outRoot?: string;
+	/** Injected by tests. Production lazily loads the real dispatch/compile. */
+	dispatchFn?: DispatchFn;
+	compileFn?: CompileFn;
+	log?: (line: string) => void;
+}
+
+/** One planned submission: the arm, which sample it is, and the options that will cross. */
+export interface PlannedRun {
+	arm: Arm;
+	sample: number;
+}
+
+/** Exit codes: the preview exit is distinct so scripts can tell "refused" from "not confirmed". */
+export const EXIT_OK = 0;
+export const EXIT_REFUSED = 1;
+export const EXIT_NEEDS_GO = 2;
+
+/** Phase-1 arms whose collected maps gate phase 2 — the Yarn explores, not the web check. */
+const phase1GateArms = (): Arm[] => phaseArms(1).filter((a) => a.app === BENCH_APP);
+
+/**
+ * Interleaved submission order, minus samples the manifest already holds. Compile arms are
+ * excluded — they never dispatch; `runCompiles` handles them locally.
+ */
+export function plannedRuns(phase: Phase, manifest: Manifest): PlannedRun[] {
+	const arms = phaseArms(phase).filter((a) => a.kind !== "compile");
+	const remaining = arms.map((arm) => ({ arm, have: submittedCount(manifest, arm.id) }));
+	const out: PlannedRun[] = [];
+	const maxN = Math.max(0, ...arms.map((a) => a.n));
+	for (let sample = 0; sample < maxN; sample++)
+		for (const { arm, have } of remaining) if (sample >= have && sample < arm.n) out.push({ arm, sample });
+
+	return out;
+}
+
+/** The DispatchOptions a planned run crosses with. Task text goes over VERBATIM (property 1). */
+export function dispatchOptionsFor(arm: Arm, recipe?: string): BenchDispatchOptions {
+	const d = arm.dispatch;
+
+	return {
+		host: AUTO_HOST,
+		app: arm.app,
+		kind: arm.kind === "compile" ? "task" : arm.kind,
+		queue: true,
+		...(arm.task !== undefined ? { task: arm.task } : {}),
+		...(d.backend ? { backend: d.backend } : {}),
+		...(d.noVision ? { noVision: true } : {}),
+		...(d.noAx ? { noAx: true } : {}),
+		...(d.axdomOff ? { axdomOff: true } : {}),
+		...(d.noGrounding ? { noGrounding: true } : {}),
+		...(d.useRecipe ? { useRecipe: true } : {}),
+		...(d.noRescue ? { noRescue: true } : {}),
+		...(d.url ? { url: d.url } : {}),
+		...(recipe ? { recipe } : {}),
+		...(arm.env ? { env: arm.env } : {}),
+	};
+}
+
+/**
+ * The goal-only gate, re-checked here even though every task string lives in matrix.ts:
+ * auditTaskPrompt is the ONE authoritative rule (CLAUDE.md, "Measurement rule"), and the
+ * orchestrator must be unable to construct a hinted dispatch no matter what the matrix
+ * says. A hinted arm refuses the whole phase — there is no --force past this one.
+ */
+export function auditPhase(phase: Phase): string[] {
+	const problems: string[] = [];
+	for (const arm of phaseArms(phase)) {
+		if (arm.kind !== "task" || !arm.task) continue;
+		const audit = auditTaskPrompt(arm.task);
+		if (audit.hinted) problems.push(`${arm.id}: ${audit.reasons.join("; ")}`);
+	}
+
+	return problems;
+}
+
+/**
+ * A clean compile source: collected, successful, machine-checked. First match wins.
+ * `tried` excludes stamps a previous compile already refused — the manifest keys on
+ * (armId, jobId), so re-recording the same pair would be dropped, and re-compiling the
+ * same log would refuse identically anyway.
+ */
+export function findCompileSource(manifest: Manifest, sourceArmId: string, tried: Set<string> = new Set()): ManifestEntry | undefined {
+	return entriesForArm(manifest, sourceArmId).find(
+		(e) => !tried.has(e.jobId) && e.collected && e.metrics?.success === true && e.metrics?.finalCheckVerified !== false,
+	);
+}
+
+/**
+ * Phase 3/4 compiles, run LOCALLY: a compile is a pure file transform on a pulled run log
+ * (recipe-cli's compileFromStamp keeps every refusal gate). A refusal is recorded in the
+ * manifest as a failed-but-collected entry — "what the gate refuses" is a phase-3 datum,
+ * not an orchestrator error.
+ */
+async function runCompiles(phase: Phase, manifest: Manifest, opts: Required<Pick<PhaseOptions, "log">> & PhaseOptions): Promise<Manifest> {
+	const compileFn = opts.compileFn ?? (await defaultCompile());
+	let m = manifest;
+	for (const arm of phaseArms(phase).filter((a) => a.kind === "compile")) {
+		// A recipe on file is the done condition — a recorded REFUSAL does not retire the arm,
+		// so a later collect that lands a cleaner source run gets the compile retried.
+		if (entriesForArm(m, arm.id).some((e) => e.recipe)) {
+			opts.log(`${arm.id}: already compiled — skipping`);
+			continue;
+		}
+		const tried = new Set(entriesForArm(m, arm.id).map((e) => e.jobId));
+		const source = findCompileSource(m, arm.sourceArm ?? "", tried);
+		if (!source) {
+			opts.log(`${arm.id}: no clean collected run in ${arm.sourceArm} yet — run \`./run bench collect\` after those land, then re-run this phase`);
+			continue;
+		}
+
+		const entry: ManifestEntry = {
+			armId: arm.id,
+			jobId: source.jobId,
+			host: "local",
+			submittedAt: new Date().toISOString(),
+			state: "done",
+			collected: true,
+		};
+		try {
+			const { path } = compileFn(source.jobId);
+			m = recordSubmissions(m, [{ ...entry, recipe: relToData(path) }]);
+			opts.log(`${arm.id}: compiled ${source.jobId} -> ${relToData(path)}`);
+		} catch (e) {
+			m = recordSubmissions(m, [{ ...entry, state: "failed", note: `compile refused: ${(e as Error).message}` }]);
+			opts.log(`${arm.id}: compile refused — ${(e as Error).message}`);
+		}
+		writeManifest(m, opts.outRoot ?? outDir());
+	}
+
+	return m;
+}
+
+/** The recipe a replay arm replays: its compile arm's manifest entry, when the compile succeeded. */
+const recipeFor = (manifest: Manifest, arm: Arm): string | undefined =>
+	entriesForArm(manifest, arm.sourceArm ?? "").find((e) => e.recipe && e.state === "done")?.recipe;
+
+export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<number> {
+	const log = opts.log ?? console.log;
+	const outRoot = opts.outRoot ?? outDir();
+	const date = opts.date ?? utcDate();
+	let manifest = readManifest(date, outRoot);
+
+	const hinted = auditPhase(phase);
+	if (hinted.length) {
+		log(`REFUSED: hinted task prompt(s) in the matrix — fix matrix.ts, the task text is the measurement:`);
+		for (const p of hinted) log(`  ${p}`);
+
+		return EXIT_REFUSED;
+	}
+
+	// The gate refuses DISPATCH, not the preview: without --go nothing can fire anyway, and
+	// the preview is how an operator finds out what phase 2 needs before phase 1 has run.
+	const missingMaps =
+		phase === 2 && !opts.force
+			? phase1GateArms().filter((a) => !entriesForArm(manifest, a.id).some((e) => e.collected))
+			: [];
+	if (missingMaps.length && opts.go) {
+		log(`REFUSED: phase 2's grounded arms need phase-1 maps, and today's manifest has no collected explore for: ${missingMaps.map((a) => a.id).join(", ")}`);
+		log(`Run \`./run bench phase 1 --go\`, wait, \`./run bench collect\` — or \`--force\` to use maps from an earlier pass.`);
+
+		return EXIT_REFUSED;
+	}
+
+	// Compiles are local and cheap, but they are still phase work — gated like everything else.
+	if (opts.go && (phase === 3 || phase === 4)) manifest = await runCompiles(phase, manifest, { ...opts, log });
+
+	const planned = plannedRuns(phase, manifest);
+	// Resolve replay recipes AFTER compiles so a single --go does compile-then-replay when
+	// the sources are already collected; a missing recipe defers the replay to a later re-run.
+	const ready = planned.filter((p) => p.arm.kind !== "replay" || recipeFor(manifest, p.arm) !== undefined);
+	const deferred = planned.filter((p) => !ready.includes(p));
+
+	if (!opts.go) {
+		log(`phase ${phase}: ${planned.length} run(s) would be submitted (${phaseRunCount(phase)} total in phase, minus already-submitted):`);
+		for (const p of planned) {
+			const arm = p.arm;
+			log(`  ${arm.id} [${p.sample + 1}/${arm.n}] ${arm.kind} "${arm.app}"${arm.task ? ` — ${JSON.stringify(arm.task)}` : ""} | ${flagsLine(arm)}`);
+			if (arm.env) log(`    env prerequisite: ${Object.entries(arm.env).map(([k, v]) => `${k}=${v}`).join(" ")} (must reach the runner — verify after the wire merge)`);
+			if (arm.prereq) log(`    PREREQ: ${arm.prereq}`);
+		}
+		for (const arm of phaseArms(phase).filter((a) => a.kind === "compile"))
+			if (submittedCount(manifest, arm.id) < arm.n) log(`  ${arm.id} [local] compile from ${arm.sourceArm}`);
+		if (missingMaps.length) log(`NOTE: --go would currently refuse — no collected phase-1 explore for: ${missingMaps.map((a) => a.id).join(", ")}`);
+		log(`Nothing was dispatched. Re-run with --go to submit.`);
+
+		return EXIT_NEEDS_GO;
+	}
+
+	const dispatchFn = opts.dispatchFn ?? (await defaultDispatch());
+	let submitted = 0;
+	let refused = 0;
+	for (const p of ready) {
+		const recipe = p.arm.kind === "replay" ? recipeFor(manifest, p.arm) : undefined;
+		const result = await dispatchFn(dispatchOptionsFor(p.arm, recipe));
+		if (!result.ok) {
+			refused++;
+			log(`✗ ${p.arm.id} [${p.sample + 1}/${p.arm.n}]: ${result.error}`);
+			continue;
+		}
+
+		submitted++;
+		manifest = recordSubmissions(manifest, [
+			{
+				armId: p.arm.id,
+				jobId: result.jobId,
+				host: result.host.name,
+				submittedAt: new Date().toISOString(),
+				state: result.queued ? "queued" : "running",
+				collected: false,
+				...(p.arm.env ? { env: p.arm.env } : {}),
+				...(recipe ? { recipe } : {}),
+			},
+		]);
+		// After every accept, not at the end: a dead laptop mid-phase must not orphan the
+		// stamps of runs the fleet is already draining.
+		writeManifest(manifest, outRoot);
+		log(`✓ ${p.arm.id} [${p.sample + 1}/${p.arm.n}] -> ${result.jobId} on ${result.host.name}${result.queued ? ` (queued #${result.position ?? "?"})` : ""}`);
+		for (const note of dispatchNotes(result)) log(`    ${note}`);
+		log(`    follow: ./run dispatch ${result.host.name} follow ${result.jobId}`);
+	}
+
+	for (const p of deferred) log(`… ${p.arm.id}: waiting on ${p.arm.sourceArm} — collect its source runs, then re-run \`bench phase ${phase} --go\``);
+	log(`phase ${phase}: ${submitted} submitted, ${refused} refused, ${deferred.length} deferred. The fleet drains the queue; \`./run bench collect\` gathers results.`);
+
+	return refused ? EXIT_REFUSED : EXIT_OK;
+}
+
+/** `bench plan` — the whole resolved matrix, no side effects. */
+export function printPlan(log: (line: string) => void = console.log): void {
+	const total = MATRIX.reduce((sum, a) => sum + a.n, 0);
+	log(`benchmark matrix — ${MATRIX.length} arms, ${total} runs (plan doc as amended: dom cut ~11 runs, Notion Calendar slice +8)`);
+	for (const phase of [1, 2, 3, 4] as Phase[]) {
+		log(`\nphase ${phase} — ${phaseRunCount(phase)} runs${phase === 4 ? " (optional)" : ""}`);
+		for (const arm of phaseArms(phase)) {
+			log(`  ${arm.id}  n=${arm.n}  ${arm.kind}  "${arm.app}"  ${flagsLine(arm)}`);
+			if (arm.task) log(`      task: ${JSON.stringify(arm.task)}`);
+			if (arm.sourceArm) log(`      source: ${arm.sourceArm}`);
+			if (arm.env) log(`      env prerequisite: ${Object.entries(arm.env).map(([k, v]) => `${k}=${v}`).join(" ")} (APPMAP_VARIANT wire support pending — resolve at merge)`);
+			if (arm.prereq) log(`      PREREQ: ${arm.prereq}`);
+			if (arm.informs) log(`      informs: ${arm.informs}`);
+		}
+	}
+	log(`\nNo runs fire without \`./run bench phase <n> --go\` (David's gate).`);
+}
+
+async function defaultDispatch(): Promise<DispatchFn> {
+	const { dispatch } = await import("../remote/control/dispatch.js");
+
+	// The cast is the contract seam: extra fields ride through to the wire branch's
+	// dispatch() once merged, and are ignored (recorded in the manifest as prerequisites)
+	// until then.
+	return (opts) => dispatch(opts as DispatchOptions);
+}
+
+async function defaultCompile(): Promise<CompileFn> {
+	// Lazy: recipe-cli drags the driver + SDK at import time, which `bench plan` and every
+	// test must not pay for.
+	const { compileFromStamp } = await import("../core/recipe-cli.js");
+
+	return (stamp) => ({ path: compileFromStamp(stamp).path });
+}
+
+const USAGE = `usage: ./run bench plan
+       ./run bench phase <1|2|3|4> [--go] [--force]
+       ./run bench collect
+
+plan     print the resolved matrix — every arm, flags, n, phase. No side effects.
+phase    dispatch that phase's runs to the fleet queue. WITHOUT --go: preview and exit 2.
+         --force skips the phase-2 "phase-1 maps collected" gate (reuse earlier maps).
+collect  pull artifacts for every uncollected manifest entry, compute metrics, rewrite
+         the report skeleton. Idempotent; run it as often as you like while the queue drains.`;
+
+async function main(argv: string[]): Promise<number> {
+	const cmd = argv[0];
+	if (cmd === "plan") {
+		printPlan();
+
+		return EXIT_OK;
+	}
+	if (cmd === "phase") {
+		const phase = Number(argv[1]);
+		if (phase !== 1 && phase !== 2 && phase !== 3 && phase !== 4) {
+			console.error(USAGE);
+
+			return EXIT_REFUSED;
+		}
+
+		return runPhase(phase as Phase, { go: argv.includes("--go"), force: argv.includes("--force") });
+	}
+	if (cmd === "collect") {
+		const outcome = await collect();
+		console.log(`collected ${outcome.collected.length}, pending ${outcome.pending.length}${outcome.reportPath ? `; report: ${outcome.reportPath}` : ""}`);
+
+		return EXIT_OK;
+	}
+	console.error(USAGE);
+
+	return EXIT_REFUSED;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
+	main(process.argv.slice(2)).then(
+		(code) => process.exit(code),
+		(err) => {
+			console.error(`bench failed: ${(err as Error).message}`);
+			process.exit(1);
+		},
+	);
