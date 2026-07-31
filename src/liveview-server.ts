@@ -41,6 +41,25 @@ export interface ServerOptions {
 	bin?: string;
 	/** Bind beyond loopback. Off by default; a raw login stream on the LAN is a leak. */
 	lan?: boolean;
+	/**
+	 * Use this exact token instead of minting one. The runner supplies it so it can hand the
+	 * teammate a complete URL without a second round trip to read it back off the child's stdout.
+	 */
+	token?: string;
+	/**
+	 * Absolute ceiling on the server's lifetime, ms. The runner spawns this DETACHED, so nothing
+	 * else will reap it — a sign-in that is walked away from must not leave a capture-capable
+	 * server (and an injectable window) listening indefinitely. 0 disables (local dev, Ctrl-C).
+	 */
+	maxLifetimeMs?: number;
+	/**
+	 * After the viewer disconnects, exit if no new viewer connects within this window, ms. A closed
+	 * tab is the normal "I'm done" signal; lingering would hold the port and a live engine. 0
+	 * disables. Ignored until the first connection, so the operator has time to open the link.
+	 */
+	idleAfterCloseMs?: number;
+	/** Called just before the server self-terminates (maxLifetime or idle). Injected for tests. */
+	onExpire?: (reason: "max-lifetime" | "idle") => void;
 }
 
 export interface RunningServer {
@@ -52,12 +71,47 @@ export interface RunningServer {
 }
 
 /**
+ * The self-termination clock for a detached server, factored out as a pure state machine so its
+ * decisions are unit-testable without sockets or timers. It answers one question — "should the
+ * server exit now, and why" — from three facts: whether a viewer has ever connected, whether one
+ * is connected now, and how long since each relevant moment.
+ *
+ * Two independent deadlines, because they guard different failures:
+ *  - max-lifetime: a hard ceiling from START, so a server nobody ever opens (or a wedged one)
+ *    cannot listen forever with a capture-capable engine behind it.
+ *  - idle-after-close: once a viewer has connected and then left, a closed tab is the operator
+ *    saying "done"; linger briefly in case they reopen, then exit. Deliberately NOT armed before
+ *    the first connection — the operator needs time to click the link.
+ */
+export interface LifecycleState {
+	startedAtMs: number;
+	everConnected: boolean;
+	connectedNow: boolean;
+	lastCloseMs?: number;
+}
+
+export function lifecycleVerdict(
+	s: LifecycleState,
+	nowMs: number,
+	opts: { maxLifetimeMs?: number; idleAfterCloseMs?: number },
+): "run" | "max-lifetime" | "idle" {
+	if (opts.maxLifetimeMs && opts.maxLifetimeMs > 0 && nowMs - s.startedAtMs >= opts.maxLifetimeMs) return "max-lifetime";
+	// Idle only applies once a viewer has connected AND is not connected now AND we know when it left.
+	if (opts.idleAfterCloseMs && opts.idleAfterCloseMs > 0 && s.everConnected && !s.connectedNow && s.lastCloseMs !== undefined)
+		if (nowMs - s.lastCloseMs >= opts.idleAfterCloseMs) return "idle";
+
+	return "run";
+}
+
+/**
  * Start the viewer server. Resolves once it is listening, with the URL to hand to the teammate
  * (or to `ssh -L` against). One engine is spawned per WebSocket connection and killed when it
  * closes, so a dropped tab tears down the capture on the Mac rather than leaking a process.
  */
 export function startLiveViewServer(opts: ServerOptions = {}): Promise<RunningServer> {
-	const token = randomBytes(18).toString("base64url");
+	// A caller-supplied token (the runner) or a fresh one. Validated for shape either way — a
+	// token from the wire must never reach a header or the viewer HTML unchecked.
+	const token = opts.token && /^[A-Za-z0-9_-]{16,}$/.test(opts.token) ? opts.token : randomBytes(18).toString("base64url");
 	const host = opts.lan ? "0.0.0.0" : (opts.host ?? "127.0.0.1");
 
 	const server = createServer((req, res) => {
@@ -73,6 +127,26 @@ export function startLiveViewServer(opts: ServerOptions = {}): Promise<RunningSe
 		res.end("not found");
 	});
 
+	// Self-termination clock (see lifecycleVerdict). Tracks connection state and, on a 1s tick,
+	// exits the process when a deadline passes. Only armed if a deadline was actually set, so local
+	// `./run liveview` (Ctrl-C to stop) is unaffected.
+	const life: LifecycleState = { startedAtMs: Date.now(), everConnected: false, connectedNow: false };
+	let lifeTimer: NodeJS.Timeout | undefined;
+	const armLifecycle = () => {
+		if (!opts.maxLifetimeMs && !opts.idleAfterCloseMs) return;
+		lifeTimer = setInterval(() => {
+			const verdict = lifecycleVerdict(life, Date.now(), opts);
+			if (verdict === "run") return;
+			clearInterval(lifeTimer);
+			if (opts.onExpire) opts.onExpire(verdict);
+			else {
+				server.close();
+				process.exit(0);
+			}
+		}, 1000);
+		lifeTimer.unref();
+	};
+
 	server.on("upgrade", (req: IncomingMessage, socket: Duplex) => {
 		const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
 		const key = req.headers["sec-websocket-key"];
@@ -83,6 +157,12 @@ export function startLiveViewServer(opts: ServerOptions = {}): Promise<RunningSe
 			return;
 		}
 		socket.write(handshakeResponse(key));
+		life.everConnected = true;
+		life.connectedNow = true;
+		socket.once("close", () => {
+			life.connectedNow = false;
+			life.lastCloseMs = Date.now();
+		});
 		bridge(socket, opts);
 	});
 
@@ -92,6 +172,7 @@ export function startLiveViewServer(opts: ServerOptions = {}): Promise<RunningSe
 			const addr = server.address();
 			const port = typeof addr === "object" && addr ? addr.port : 0;
 			const shown = opts.lan ? hostAddress() : "127.0.0.1";
+			armLifecycle();
 			resolve({
 				url: `http://${shown}:${port}/?t=${token}`,
 				token,
@@ -99,6 +180,7 @@ export function startLiveViewServer(opts: ServerOptions = {}): Promise<RunningSe
 				server,
 				close: () =>
 					new Promise((r) => {
+						if (lifeTimer) clearInterval(lifeTimer);
 						server.close(() => r());
 					}),
 			});

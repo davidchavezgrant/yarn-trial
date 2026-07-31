@@ -146,7 +146,34 @@ teammate's browser  ──ws──►  Node server (liveview-server.ts)  ──s
 **The one architectural change the fleet run forced:** fleet mode cannot be "SSH in and run
 `./run liveview`" — the engine has to be launched by the runner (a new `serve.ts` verb, e.g.
 `liveview`, parallel to the existing `signin` verb) so TCC attributes correctly. Local mode is
-unaffected. This is now the first next step.
+unaffected.
+
+**That verb is now built** (2026-07-31):
+- `serve.ts` gains a `liveview` verb that mirrors `signin` — lease checked-not-taken, profile
+  swapped to the operator, app foregrounded — then spawns the liveview server as a
+  runner-descended detached child (via `resolveRunCommand`/`childEnv`, the same path the agent and
+  the `axdom` sidecar use to inherit the runner's TCC grants). It returns `{port, token, url,
+  maxLifetimeSec}`.
+- The server (`liveview-server.ts`) grew a detached-child lifecycle: a caller-pinned token, a
+  20-minute max-lifetime ceiling, and a 30s idle-after-close exit, so a walked-away sign-in cannot
+  leave a capture-capable server (and an injectable window) listening. The decision logic is the
+  pure, unit-tested `lifecycleVerdict`.
+- `ctl.ts` learns the verb; `liveview-cli.ts` fleet mode now actually calls it over SSH and prints
+  the real `ssh -L` tunnel + `http://127.0.0.1:PORT/?t=TOKEN` URL from the reply.
+- `openApp` was made injectable in `ServeOptions` so the verb (and, incidentally, `signin`) is
+  unit-testable without launching a real app.
+
+Tested: 4 new runner-verb tests (returns port+token and spawns the server; refuses when a run
+holds the lease; refuses + does not spawn when the profile swap fails; requires an app) + 8
+lifecycle tests. Full suite 664 pass / 0 fail; typecheck clean; native builds on mac1 (macOS 15.5).
+
+**The one thing still unverified, and why:** confirming a *runner-spawned* engine actually captures
+on the fleet requires restarting the live `com.yarn.runner` so it loads the new `serve.ts`. That is
+shared fleet state (a running Mac other people use), so it was NOT done without sign-off. Everything
+up to it is verified: the SSH-spawned engine is *denied* capture (measured), the runner is the
+grant-holder (measured), and a runner-spawned child inherits grants by the same mechanism the agent
+already relies on. The remaining step is: deploy via `./run provision`, restart the runner, and run
+one real login — a deploy + restart, not new code.
 
 ## How this composes with what exists
 
@@ -164,18 +191,16 @@ unaffected. This is now the first next step.
 
 ## Next steps to make it real
 
-1. **Add a `liveview` verb to `src/runner/serve.ts`**, parallel to the existing `signin` verb, so
-   the RUNNER (which holds the TCC grants) spawns the engine — the fleet run proved a bare
-   SSH-spawned engine is denied capture. This is the one blocker between "works locally" and
-   "works on the fleet". The verb should also take the lease-check path signin uses (checked, not
-   taken) — the `loginBlockedByRun` guard already added covers the local path.
-2. Drive one real login end-to-end over the `ssh -L` tunnel; confirm capture + input actuate under
-   the runner and the OAuth handoff is captured.
-3. Confirm the native `ASWebAuthenticationSession` case (a native app's "Sign in with Apple/Google"
+1. **Deploy + restart the runner on one fleet Mac** (`./run provision`, then
+   `launchctl kickstart -k gui/$(id -u)/com.yarn.runner`) so it loads the new `serve.ts` with the
+   `liveview` verb, and run one real login end-to-end over the `ssh -L` tunnel. This is the one
+   verification the code changes could not do here (restarting a shared Mac's runner is fleet
+   state). Confirm capture + input actuate under the runner and the OAuth handoff is captured.
+2. Confirm the native `ASWebAuthenticationSession` case (a native app's "Sign in with Apple/Google"
    sheet) is followed and captured.
-4. If injection latency at 15fps is poor over the tunnel, raise `--fps`/`--quality` or move to a
+3. If injection latency at 15fps is poor over the tunnel, raise `--fps`/`--quality` or move to a
    delta encoder (out of scope for the POC).
 
-Already done that these notes assumed as future work: `native/liveview` builds on the fleet
-(macOS 15.5), and the login/recording mutual-exclusion guard (`loginBlockedByRun`) is in with
-tests.
+Already built (these notes originally listed them as future work): the `liveview` runner verb, the
+detached-server lifecycle, the CLI fleet flow, the login/recording mutual-exclusion guard, and
+`native/liveview` building on the fleet (macOS 15.5) — all with tests.

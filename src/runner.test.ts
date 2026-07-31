@@ -458,6 +458,29 @@ function fakeSpawner(): { calls: Array<{ command: string; args: string[] }>; spa
 	};
 }
 
+/**
+ * Like fakeSpawner, but creates the log directory first — as the real spawnDetached does. The
+ * liveview verb spawns into out/jobs/liveview-<op>/, a dir that does not exist until the spawner
+ * makes it; fakeSpawner appends without mkdir (fine for submit, which reuses an existing job dir).
+ * The child exits on its own so nothing lingers after the test.
+ */
+function mkdirSpawner(): { calls: Array<{ command: string; args: string[] }>; spawn: any } {
+	const calls: Array<{ command: string; args: string[] }> = [];
+
+	return {
+		calls,
+		spawn: (cmd: { command: string; args: string[] }, opts: { logFile: string }) => {
+			calls.push(cmd);
+			fs.mkdirSync(path.dirname(opts.logFile), { recursive: true });
+			fs.appendFileSync(opts.logFile, "pretend liveview server\n");
+			const child = spawn("/bin/sh", ["-c", "sleep 1"], { detached: true, stdio: "ignore" });
+			child.unref();
+
+			return { pid: child.pid as number, child };
+		},
+	};
+}
+
 test("grant__AsksMacOSToRegisterTheApp__When__TheRunnerRunsUnderElectron", async () => {
 	await withTempAsync("yr-grant-", async (dir) => {
 		// Exists because of an asymmetry in System Settings: Accessibility has a `+` button and
@@ -783,6 +806,94 @@ test("submit__SaysNothingAboutSignin__When__TheOperatorAlreadyOwnsTheApp", async
 			pid = res.pid;
 		} finally {
 			if (pid) try { process.kill(-pid, "SIGKILL"); } catch {}
+			await runner.close();
+		}
+	});
+});
+
+/** open is injected wherever the liveview/signin verbs run, so the suite never launches a real app. */
+const noOpen = { open: async () => {} };
+
+/**
+ * The liveview verb foregrounds the app under the operator's profile and starts the capture server
+ * as a runner-spawned child — the whole point being that a bare SSH shell cannot capture (measured
+ * on mac1, 2026-07-30), so the grant-holding runner has to launch it. The reply must carry a port
+ * and a token, because the operator's `ssh -L` tunnel and viewer URL are built from them.
+ */
+test("liveview__StartsTheServerAndReturnsPortAndToken__When__TheHostIsFree", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		// The verb passes logFile: out/jobs/liveview-<op>/log.txt and relies on the spawner to
+		// create the directory, exactly as the real spawnDetached does (fakeSpawner appends without
+		// mkdir, which the real one never would).
+		const spawner = mkdirSpawner();
+		const runner = await startRunner(dir, { ...noSwap, ...noOpen, log: () => {}, spawn: spawner.spawn });
+		try {
+			const [res] = await request(runner.socketPath, "liveview", { app: "Yarn", operator: "dave" });
+			assert.equal(res.ok, true);
+			assert.equal(typeof res.port, "number");
+			assert.match(String(res.token), /^[A-Za-z0-9_-]{16,}$/);
+			assert.equal(res.url, `http://127.0.0.1:${res.port}/?t=${res.token}`);
+			// The server was actually spawned (as a child of the runner, which holds the grants).
+			assert.equal(spawner.calls.length, 1);
+		} finally {
+			await runner.close();
+		}
+	});
+});
+
+/** A run in flight means a recording is capturing; a login stream would capture over it. Refuse. */
+test("liveview__Refuses__When__ARunHoldsTheLease", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const spawner = fakeSpawner();
+		const runner = await startRunner(dir, { ...noSwap, ...noOpen, log: () => {}, spawn: spawner.spawn });
+		let pid = 0;
+		try {
+			const [run] = await request(runner.socketPath, "submit", { kind: "task", app: "Yarn", task: "show me how to change the cursor type", operator: "sam" });
+			pid = run.pid;
+			const [res] = await request(runner.socketPath, "liveview", { app: "Yarn", operator: "dave" });
+			assert.equal(res.ok, false);
+			assert.equal(res.busy, true);
+			assert.equal(res.operator, "sam");
+			// Only the run was spawned; no liveview server came up on top of it.
+			assert.equal(spawner.calls.length, 1);
+		} finally {
+			if (pid) try { process.kill(-pid, "SIGKILL"); } catch {}
+			await runner.close();
+		}
+	});
+});
+
+/** A swap that throws must not be followed by a launch — the sign-in would land in the wrong data. */
+test("liveview__RefusesAndDoesNotSpawn__When__TheProfileSwapFails", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const spawner = fakeSpawner();
+		const runner = await startRunner(dir, {
+			log: () => {},
+			...noOpen,
+			spawn: spawner.spawn,
+			swap: async () => {
+				throw new Error("could not move ~/Library/Application Support/Yarn");
+			},
+		});
+		try {
+			const [res] = await request(runner.socketPath, "liveview", { app: "Yarn", operator: "dave" });
+			assert.equal(res.ok, false);
+			assert.match(String(res.error), /could not give dave their own data/);
+			assert.equal(spawner.calls.length, 0);
+		} finally {
+			await runner.close();
+		}
+	});
+});
+
+test("liveview__RequiresAnApp__When__NoneGiven", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const runner = await startRunner(dir, { ...noSwap, ...noOpen, log: () => {} });
+		try {
+			const [res] = await request(runner.socketPath, "liveview", { operator: "dave" });
+			assert.equal(res.ok, false);
+			assert.match(String(res.error), /app is required/);
+		} finally {
 			await runner.close();
 		}
 	});

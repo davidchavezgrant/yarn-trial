@@ -16,8 +16,8 @@
 // to a model — a human drives, the session lands in the app's own storage.
 
 import { pathToFileURL } from "node:url";
-import { planSignin } from "./remote/signin.js";
 import { loadHosts, resolveHost } from "./remote/hosts.js";
+import { lastFrame, runnerArgv, runSsh } from "./remote/ssh.js";
 import { loginBlockedByRun } from "./liveview.js";
 import { startLiveViewServer } from "./liveview-server.js";
 
@@ -47,40 +47,32 @@ async function main(): Promise<void> {
 
 	const [mac, app] = positional;
 
-	// Fleet mode: we cannot capture a remote window from here — the engine runs where the window
-	// is. So resolve the host, optionally foreground the app, and print the tunnel + remote cmd.
-	//
-	// MEASURED CONSTRAINT (mac1, 2026-07-30): a liveview engine spawned from a bare SSH shell hits
-	// `no-screen-recording` — "The user declined TCCs for … capture". This is not a missing grant
-	// to add; it is the same rule the whole runner design turns on (provision.ts): macOS attributes
-	// Screen Recording and Accessibility to the RESPONSIBLE process, and an ssh-spawned child is not
-	// it. The recording capture already works only because the RUNNER (the Electron process,
-	// com.yarn.runner) spawns it and TCC attributes to that. So the engine must likewise be launched
-	// BY the runner, via a serve.ts verb (not yet built — see the design doc's next steps). CGEvent
-	// injection has the same requirement (Accessibility). The tunnel command below is therefore the
-	// TRANSPORT half only; the engine-launch half has to move under the runner before capture works
-	// on the fleet. Printed with that caveat rather than as a working recipe.
+	// Fleet mode: ask the host's RUNNER to start the liveview server. It must be the runner, not a
+	// bare SSH shell — measured on mac1 (2026-07-30), an ssh-spawned engine is denied screen capture
+	// because macOS attributes the grant to the responsible process, and the runner (Electron) is
+	// the one that holds it. The verb foregrounds the app under the operator's profile and returns a
+	// port + token; we print the `ssh -L` tunnel that maps that port to localhost and the URL to open.
 	if (mac) {
 		const host = resolveHost(mac, loadHosts());
-		if (app) {
-			const plan = await planSignin(host, app);
-			if (plan.launch)
-				console.log(`${plan.launch.ok ? "" : "COULD NOT OPEN "}${plan.launch.app} on ${host.name} — ${plan.launch.detail}`);
+		if (!app) {
+			console.error("fleet mode needs an app name: ./run liveview <mac> \"<App Name>\"");
+			process.exit(2);
 		}
-		const port = 7682; // fixed so the printed tunnel and the remote server agree
-		console.log(`
-Window-scoped sign-in for ${host.name}${app ? ` (${app})` : ""}.
-
-The engine has to run on ${host.name} (capture + input are local to that Mac), and — measured on
-the fleet — it must be spawned by the RUNNER, not a bare SSH shell, or macOS denies screen capture
-(TCC attributes to the responsible process). That runner verb is not built yet; until it is, this
-prints the transport half so the flow is ready to complete:
-
-  ssh -L ${port}:127.0.0.1:${port} ${host.ssh.user}@${host.vnc.host} \\
-    'cd ~/yarn-trial && PORT=${port} ./run liveview --fps ${fps ?? 15}'   # capture works only once the runner launches the engine
-
-Then open the http://127.0.0.1:${port}/?t=… URL it prints, here in your browser. The stream stays
-inside the SSH tunnel; close the tab when the app reaches its home screen.`);
+		const operator = process.env.YARN_OPERATOR || undefined;
+		const res = await runSsh(host, runnerArgv("liveview", { app, ...(operator ? { operator } : {}) }), { timeoutMs: 60_000 });
+		const frame = lastFrame(res.stdout);
+		if (!frame?.ok) {
+			// A refusal is the runner's answer (busy, swap failed, no grant): report it, do not retry.
+			console.error(`could not start liveview on ${host.name}: ${frame?.error ?? (res.stderr.trim() || `runnerctl exited ${res.code}`)}`);
+			process.exit(1);
+		}
+		const port = Number(frame.port);
+		console.log(`liveview started on ${host.name} for ${frame.app} (${frame.profile ?? "profile unchanged"}).`);
+		console.log(`\nOpen the tunnel, then the URL:\n`);
+		console.log(`  ssh -L ${port}:127.0.0.1:${port} ${host.ssh.user}@${host.vnc.host} -N &`);
+		console.log(`  open 'http://127.0.0.1:${port}/?t=${frame.token}'\n`);
+		console.log(`You'll see only ${frame.app}'s window. Sign in, then close the tab — the server exits on its own`);
+		console.log(`(idle after you close it, or ${Math.round(Number(frame.maxLifetimeSec) / 60)} min max).`);
 
 		return;
 	}
@@ -93,8 +85,15 @@ inside the SSH tunnel; close the tab when the app reaches its home screen.`);
 		console.error(blocked);
 		process.exit(1);
 	}
+	// The runner spawns this detached and passes a pinned token + lifetime deadlines by env, so it
+	// can hand out a complete URL and so a walked-away sign-in cannot leave a capture server
+	// listening forever. Absent (a human running it by hand) the server mints its own token and
+	// runs until Ctrl-C.
 	const port = process.env.PORT ? Number(process.env.PORT) : undefined;
-	const srv = await startLiveViewServer({ lan, fps, port });
+	const token = process.env.LIVEVIEW_TOKEN || undefined;
+	const maxLifetimeMs = process.env.LIVEVIEW_MAX_LIFETIME_MS ? Number(process.env.LIVEVIEW_MAX_LIFETIME_MS) : undefined;
+	const idleAfterCloseMs = process.env.LIVEVIEW_IDLE_AFTER_CLOSE_MS ? Number(process.env.LIVEVIEW_IDLE_AFTER_CLOSE_MS) : undefined;
+	const srv = await startLiveViewServer({ lan, fps, port, token, maxLifetimeMs, idleAfterCloseMs });
 	console.log(`\nviewer ready — open this in your browser:\n\n  ${srv.url}\n`);
 	console.log("it shows the frontmost window on this Mac. click it, sign in, close the tab when done.");
 	console.log("(Ctrl-C to stop the server.)");
