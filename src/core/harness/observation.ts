@@ -103,13 +103,59 @@ export interface ObservationBundle {
 	frames: Map<string, { x: number; y: number }>;
 }
 
+/** One row of `list_windows` output, the fields pickWindow consults. Verified live 2026-07-31. */
+export interface WindowCandidate {
+	app_name: string;
+	pid: number;
+	window_id: number;
+	title: string;
+	is_on_screen: boolean;
+	z_index: number;
+	bounds: { x: number; y: number; width: number; height: number };
+}
+
+/**
+ * Which of the app's windows should a run be reading RIGHT NOW?
+ *
+ * The old selection sorted on (has-title, then area) — and on a multi-document app that is
+ * a coin flip: in run 2026-07-31T10-29-05-036 the stale document and the actual front
+ * window were both titled at identical 603x505 bounds, the tie broke arbitrarily, and the
+ * run read the wrong window for 11 straight steps (0/11 verified, pixels 0.0%).
+ *
+ * The keys that DO distinguish them, probe-verified against TextEdit with 22 windows open:
+ * - `is_on_screen` was true only for the actually-composited front window. It leads the
+ *   sort but is deliberately NOT a filter — a backgrounded-but-composited window can
+ *   report false, and filtering would then find nothing where a preference still picks
+ *   the best available.
+ * - `z_index` is the window server's front order (front window 361, the stale one 344,
+ *   the junk placeholders lower still). Highest wins.
+ * - titled-over-untitled and area survive from the old sort as the remaining tiebreakers;
+ *   the >50k-pixel area guard still drops tooltips, panels and TextEdit's 30px offscreen
+ *   placeholder rows before any key is consulted.
+ *
+ * `pid`, when given, pins the follow to the process we launched — two instances of an app
+ * share an app_name, and a follow that drifted across processes would be worse than the
+ * stale-window bug it replaces.
+ */
+export function pickWindow(windows: WindowCandidate[], app: string, pid?: number): WindowCandidate | undefined {
+	const area = (w: WindowCandidate) => (w.bounds?.width ?? 0) * (w.bounds?.height ?? 0);
+
+	return windows
+		.filter((w) => w.app_name === app && (pid === undefined || w.pid === pid) && area(w) > 50_000)
+		.sort(
+			(a, b) =>
+				(b.is_on_screen ? 1 : 0) - (a.is_on_screen ? 1 : 0)
+				|| (b.z_index ?? 0) - (a.z_index ?? 0)
+				|| (b.title ? 1 : 0) - (a.title ? 1 : 0)
+				|| area(b) - area(a),
+		)[0];
+}
+
 export async function findWindow(driver: Driver, app: string): Promise<WindowRef> {
 	const windows = await driver.act({ kind: "tool", name: "list_windows", args: {} });
 	const parsed = JSON.parse(windows.structuredJson ?? "{}");
-	const area = (w: any) => (w.bounds?.width ?? 0) * (w.bounds?.height ?? 0);
-	const win = (parsed.windows ?? [])
-		.filter((w: any) => w.app_name === app && area(w) > 50_000) // skip tooltips/panels
-		.sort((a: any, b: any) => (b.title ? 1 : 0) - (a.title ? 1 : 0) || area(b) - area(a))[0];
+	// No pid: first acquisition has no process to pin to yet — the pick names it.
+	const win = pickWindow(parsed.windows ?? [], app);
 	if (!win) throw new Error(`no window found for app "${app}"`);
 
 	return { pid: win.pid, windowId: win.window_id, bounds: win.bounds };
