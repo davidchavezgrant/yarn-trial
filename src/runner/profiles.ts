@@ -294,6 +294,99 @@ export async function swapProfile(opts: SwapOptions): Promise<ProfileSwap> {
 	return { action: "swapped", app: opts.app, operator, previousOwner, stashed, restored, fresh: !restored.length };
 }
 
+export interface AuthClearOptions {
+	app: string;
+	operator: string;
+	/** Injected in tests. Production resolves it through LaunchServices. */
+	bundleId?: string;
+	home?: string;
+	/** Profile store root. Defaults to `<runnerDir>/profiles`. */
+	root?: string;
+	/** Stop the app before its files are deleted. Injected in tests; must resolve only once it is gone. */
+	quit?: (app: string) => Promise<void>;
+}
+
+export interface AuthClear {
+	app: string;
+	operator: string;
+	/** Home-relative live paths deleted from under `$HOME`. Empty unless the requester owned the live copy. */
+	removedLive: string[];
+	/** Store-relative path of the parked profile that was deleted (`<operator>/<slug>`), when one existed. */
+	removedProfile?: string;
+	/** True when the requester owned the live data and the owners.json entry was cleared. */
+	ownershipCleared: boolean;
+	/** Who owns the live copy when it is NOT the requester — named so the reply can say why it was left alone. */
+	liveOwner?: string;
+}
+
+/**
+ * Sign one operator out of one app on this Mac, by deleting their data for it — the inverse of
+ * what `swapProfile` preserves. Both stores are covered: the LIVE copy under `$HOME`, but only
+ * if owners.json says this operator owns it, and their PARKED profile under the store, if one
+ * exists. Another operator's live session is never touched — that is the same isolation promise
+ * the swap makes, applied to deletion, where getting it wrong is unrecoverable rather than
+ * merely embarrassing.
+ *
+ * The app is quit only when live data is about to go. A running app holds its cookie jar open
+ * and writes it back out on quit — delete the directory first and the session this verb exists
+ * to destroy is resurrected a second later (the same failure ordering `swapProfile` documents).
+ * When only a parked profile is deleted the app never had those files open, and quitting it
+ * would disrupt whoever's session is currently live for no benefit.
+ *
+ * Every path deleted comes from `livePaths()` (traversal-constrained at construction) or
+ * `profileDir()` (operator sanitised, slug checked below). Nothing arriving over the wire is
+ * ever joined into a path directly.
+ */
+export async function clearOperatorData(opts: AuthClearOptions): Promise<AuthClear> {
+	const home = opts.home ?? os.homedir();
+	const root = opts.root ?? profilesRoot();
+	const slug = appSlug(opts.app);
+	// appSlug folds separators into dashes, so a slug cannot traverse — except as a bare dot
+	// segment, which it passes through: an app named ".." would make profileDir() resolve to
+	// the operator's whole profile directory, and this function deletes what that names.
+	if (!slug || slug === "." || slug === "..") throw new Error(`refusing app name ${JSON.stringify(opts.app)}: its slug would not name a directory of its own`);
+	const operator = sanitise(opts.operator);
+	const owners = readOwners(root);
+	const owner = owners[slug];
+	const out: AuthClear = { app: opts.app, operator, removedLive: [], ownershipCleared: false };
+
+	if (owner === operator) {
+		await (opts.quit ?? quitApp)(opts.app);
+		const id: AppIdentity = { name: opts.app, ...(opts.bundleId ? { bundleId: opts.bundleId } : {}) };
+		for (const rel of capturePaths(id, home)) {
+			fs.rmSync(path.join(home, rel), { recursive: true, force: true });
+			out.removedLive.push(rel);
+		}
+		delete owners[slug];
+		writeOwners(root, owners);
+		out.ownershipCleared = true;
+	} else if (owner !== undefined) {
+		out.liveOwner = owner;
+	}
+
+	// The parked profile goes either way: it is this operator's own store entry, and the whole
+	// point of signing out is that nothing brings the session back on their next swap.
+	const mine = profileDir(root, operator, slug);
+	if (fs.existsSync(mine)) {
+		fs.rmSync(mine, { recursive: true, force: true });
+		out.removedProfile = `${operator}/${slug}`;
+	}
+
+	return out;
+}
+
+/** One line for the job log and the CLI, same shape as `describeSwap`. */
+export function describeAuthClear(c: AuthClear): string {
+	const bits = [
+		c.removedLive.length ? `deleted ${c.removedLive.length} live path(s)` : "",
+		c.removedProfile ? `deleted parked profile ${c.removedProfile}` : "",
+		c.ownershipCleared ? "cleared live ownership" : "",
+		c.liveOwner ? `live data left alone (${c.liveOwner} owns it)` : "",
+	].filter(Boolean);
+
+	return `authclear: ${c.operator} signed out of ${c.app} — ${bits.join(", ") || "nothing was stored for them"}`;
+}
+
 /** One line for the job log and the dispatch reply. */
 export function describeSwap(s: ProfileSwap): string {
 	if (s.action === "kept") return `profile: ${s.operator} already owns ${s.app}`;

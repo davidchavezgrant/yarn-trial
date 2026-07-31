@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { capturePaths, describeSwap, livePaths, profileDir, readOwners, swapProfile } from "./runner/profiles.js";
+import { capturePaths, clearOperatorData, describeAuthClear, describeSwap, livePaths, profileDir, readOwners, swapProfile } from "./runner/profiles.js";
 
 /**
  * Per-operator app data, entirely on temp directories.
@@ -281,4 +281,70 @@ test("describeSwap__NamesBothOperatorsAndTheSignin__When__AFreshOperatorTookOver
 	const line = describeSwap({ action: "swapped", app: "Yarn", operator: "bob", previousOwner: "alice", stashed: ["a"], restored: [], fresh: true });
 	assert.match(line, /alice → bob/);
 	assert.match(line, /signing in/);
+});
+
+// ── signing out ──────────────────────────────────────────────────────────────────────────
+
+test("clearOperatorData__DeletesLiveDataAndOwnership__When__TheRequesterOwnsTheLiveCopy", async () => {
+	const root = tmp();
+	const h = home("alice-session");
+	// alice adopts the live data — the ordinary first-use-on-this-Mac path.
+	await swapProfile({ app: "Yarn", operator: "alice", home: h, root, quit: quitter().quit });
+
+	const q = quitter();
+	const cleared = await clearOperatorData({ app: "Yarn", operator: "alice", home: h, root, quit: q.quit });
+
+	// Quit BEFORE the delete: a running app writes its cookie jar back out on exit, which
+	// resurrects the exact session this verb exists to destroy.
+	assert.deepEqual(q.log, ["Yarn"]);
+	assert.deepEqual(cleared.removedLive, [HOME_REL]);
+	assert.equal(cleared.ownershipCleared, true);
+	assert.equal(liveSession(h), undefined, "the live session is gone");
+	assert.equal(readOwners(root).yarn, undefined, "nobody owns the app any more");
+});
+
+test("clearOperatorData__LeavesTheLiveCopyAlone__When__AnotherOperatorOwnsIt", async () => {
+	const root = tmp();
+	const h = home("alice-session");
+	await swapProfile({ app: "Yarn", operator: "alice", home: h, root, quit: quitter().quit });
+	// bob has only a parked profile — the state a previous swap leaves behind.
+	const parked = profileDir(root, "bob", "yarn");
+	fs.mkdirSync(path.join(parked, HOME_REL), { recursive: true });
+	fs.writeFileSync(path.join(parked, HOME_REL, "session.json"), "bob-parked");
+
+	const q = quitter();
+	const cleared = await clearOperatorData({ app: "Yarn", operator: "bob", home: h, root, quit: q.quit });
+
+	// This is the isolation promise applied to deletion: bob signing out must not sign alice out.
+	assert.equal(liveSession(h), "alice-session", "alice's live session is untouched");
+	assert.equal(readOwners(root).yarn, "alice");
+	assert.deepEqual(cleared.removedLive, []);
+	assert.equal(cleared.liveOwner, "alice");
+	assert.equal(cleared.ownershipCleared, false);
+	assert.equal(cleared.removedProfile, "bob/yarn");
+	assert.equal(fs.existsSync(parked), false, "bob's parked profile is gone");
+	// No live data goes, so nothing needed quitting — the app may be mid-use by alice.
+	assert.deepEqual(q.log, []);
+});
+
+test("clearOperatorData__LeavesUnownedLiveData__When__NobodyHasClaimedIt", async () => {
+	// Pre-feature sign-ins live as unowned data until someone adopts them. Deleting them on a
+	// sign-out from someone who never owned anything would destroy a session that is not theirs.
+	const root = tmp();
+	const h = home("somebody-was-here");
+	const cleared = await clearOperatorData({ app: "Yarn", operator: "carol", home: h, root, quit: quitter().quit });
+
+	assert.equal(liveSession(h), "somebody-was-here");
+	assert.deepEqual(cleared.removedLive, []);
+	assert.equal(cleared.liveOwner, undefined, "there is no owner to name");
+	assert.match(describeAuthClear(cleared), /nothing was stored/);
+});
+
+test("clearOperatorData__Refuses__When__TheAppSlugCannotNameADirectory", async () => {
+	// appSlug folds separators, but passes bare dot segments through — and profileDir(root, op, "..")
+	// resolves to the operator's whole profile tree, which this function deletes.
+	await assert.rejects(
+		() => clearOperatorData({ app: "..", operator: "alice", home: tmp(), root: tmp(), quit: quitter().quit }),
+		/slug/,
+	);
 });

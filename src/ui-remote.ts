@@ -22,7 +22,9 @@ import {
 import { type FleetRow, fleetStatus } from "./remote/fleet.js";
 import { type HostEntry, hostsPath, type Inventory, loadHosts, resolveHost } from "./remote/hosts.js";
 import { autoSync, type SyncOptions } from "./remote/appmaps.js";
-import { closeScreenShare, planSignin, waitForHome } from "./remote/signin.js";
+import { installApp, resolveAppSource } from "./remote/install.js";
+import { clearAppAuth, deleteRemoteApp } from "./remote/manage.js";
+import { closeScreenShare, forgetScreenShareLogin, planSignin, waitForHome } from "./remote/signin.js";
 import { describeCredentials, setModelKey } from "./remote/team.js";
 import type { JobKind } from "./runner/jobs.js";
 import { UNREADY_EXIT } from "./harness.js";
@@ -393,6 +395,155 @@ export async function completeSignin(
 			? `${app} is signed in on ${host.name} — ${closed.detail}.`
 			: `${app} is signed in on ${host.name}. Close the screen share when you are ready — ${closed.detail}`,
 	};
+}
+
+/**
+ * The fleet panel's overflow actions, each reduced to `{ok, message}` — the same shape
+ * `beginSignin` answers with, because they all land in the same transient message slot and the
+ * renderer must not need to know which verb produced the text.
+ *
+ * All four share the host discipline `beginSignin` established: `local` and `auto` are
+ * selectable in this window and neither names a machine, so each refuses them in words rather
+ * than resolving them to something the operator did not pick. (`forgetLoginView` still needs a
+ * concrete host too — the keychain item it deletes is keyed on that Mac's address.)
+ */
+function namedHost(hostName: string, load: () => Inventory): HostEntry | { ok: false; message: string } {
+	const name = (hostName ?? "").trim();
+	if (!isRemoteHost(name)) return { ok: false, message: "Pick one of the colo Macs — this action is about a machine in the fleet." };
+	if (name === AUTO_HOST) return { ok: false, message: "Pick a specific Mac — auto chooses a host per run." };
+	try {
+		return resolveHost(name, load());
+	} catch (e) {
+		return { ok: false, message: (e as Error).message };
+	}
+}
+
+export interface ActionView {
+	ok: boolean;
+	message: string;
+}
+
+/**
+ * Sign the current operator out of an app on a Mac. The runner decides everything — whose
+ * data is live, what is parked — and reports what it deleted; this turns that report into one
+ * sentence, because "removed 3 paths" with no paths is unauditable and the full list belongs
+ * in the CLI, not a panel cell.
+ */
+export async function clearAuthView(
+	hostName: string,
+	app: string | undefined,
+	load: () => Inventory = loadHosts,
+	clear: typeof clearAppAuth = clearAppAuth,
+): Promise<ActionView> {
+	const host = namedHost(hostName, load);
+	if ("ok" in host) return host;
+	const target = (app ?? "").trim();
+	if (!target) return { ok: false, message: "Pick an app first — sign-out needs a target." };
+
+	let res;
+	try {
+		res = await clear(host, target);
+	} catch (e) {
+		return { ok: false, message: (e as Error).message };
+	}
+	if (!res.ok) return { ok: false, message: `${host.name}: ${res.error ?? "the runner refused"}` };
+
+	const bits = [
+		res.removedLive.length ? `${res.removedLive.length} live path(s)` : "",
+		res.removedProfile ? "the parked profile" : "",
+	].filter(Boolean);
+	const what = bits.length ? `deleted ${bits.join(" and ")}` : "nothing was stored for you there";
+	const tail = res.liveOwner ? ` Live ${target} data was left alone — ${res.liveOwner} owns it.` : "";
+
+	return { ok: true, message: `Signed out of ${target} on ${host.name}: ${what}.${tail}` };
+}
+
+/** Uninstall an app from a Mac: the bundle plus every operator's parked profile for it. */
+export async function deleteAppView(
+	hostName: string,
+	app: string | undefined,
+	load: () => Inventory = loadHosts,
+	del: typeof deleteRemoteApp = deleteRemoteApp,
+): Promise<ActionView> {
+	const host = namedHost(hostName, load);
+	if ("ok" in host) return host;
+	const target = (app ?? "").trim();
+	if (!target) return { ok: false, message: "Pick an app first — delete needs a target." };
+
+	let res;
+	try {
+		res = await del(host, target);
+	} catch (e) {
+		return { ok: false, message: (e as Error).message };
+	}
+	if (!res.ok) return { ok: false, message: `${host.name}: ${res.error ?? "the runner refused"}` };
+
+	const profiles = res.removedProfiles.length ? ` and ${res.removedProfiles.length} parked profile(s)` : "";
+
+	return { ok: true, message: `Deleted ${res.bundle ?? `${target}.app`}${profiles} on ${host.name}.` };
+}
+
+/**
+ * Install an app on a Mac from a release URL — the same path `./run install` takes, wired to
+ * the panel: `resolveAppSource` decides what the link is, `installApp` stages, fetches on the
+ * far side and verifies by a fresh presence probe. The grants note rides along on success
+ * because a freshly installed bundle holds no TCC grant and the operator must hear that HERE,
+ * before the demo, not from an empty AX tree during it.
+ */
+export async function installAppView(
+	hostName: string,
+	app: string | undefined,
+	spec: string | undefined,
+	load: () => Inventory = loadHosts,
+	resolve: typeof resolveAppSource = resolveAppSource,
+	install: typeof installApp = installApp,
+): Promise<ActionView> {
+	const host = namedHost(hostName, load);
+	if ("ok" in host) return host;
+	const target = (app ?? "").trim();
+	if (!target) return { ok: false, message: "Name the app to install — the presence check needs it." };
+	if (!(spec ?? "").trim()) return { ok: false, message: "Give an https URL to a .dmg or .zip." };
+
+	try {
+		const source = await resolve(target, spec as string);
+		const res = await install(host, source);
+		if (res.ok)
+			return { ok: true, message: `Installed ${res.app} on ${host.name} at ${res.presence?.path ?? "an unknown path"}. ${res.grants}` };
+
+		// The first failed step is the actionable one; everything after it never ran.
+		const failed = res.steps.find((s) => !s.ok);
+
+		return { ok: false, message: `${host.name}: install failed at ${failed?.step ?? "?"} — ${failed?.detail ?? "no detail"}` };
+	} catch (e) {
+		return { ok: false, message: (e as Error).message };
+	}
+}
+
+/**
+ * Forget the saved Screen Sharing password for a Mac. Local by nature — the item lives in THIS
+ * operator's login keychain — so unlike its siblings above, nothing here crosses ssh.
+ */
+export async function forgetLoginView(
+	hostName: string,
+	load: () => Inventory = loadHosts,
+	forget: typeof forgetScreenShareLogin = forgetScreenShareLogin,
+): Promise<ActionView> {
+	const host = namedHost(hostName, load);
+	if ("ok" in host) return host;
+
+	try {
+		const res = await forget(host);
+
+		// Zero removed is the wanted end state reached earlier, not a failure.
+		return {
+			ok: true,
+			message: res.removed
+				? `Forgot ${res.removed} saved screen-share login${res.removed === 1 ? "" : "s"} for ${host.name} — the next connection will ask again.`
+				: `No screen-share login was saved for ${host.name}.`,
+		};
+	} catch (e) {
+		return { ok: false, message: (e as Error).message };
+	}
 }
 
 export interface AttachOffer {

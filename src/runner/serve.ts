@@ -31,7 +31,16 @@ import {
 	sweepOrphans,
 	updateJob,
 } from "./jobs.js";
-import { describeSwap, type ProfileSwap, resolveBundleId, swapProfile } from "./profiles.js";
+import {
+	type AuthClear,
+	clearOperatorData,
+	describeAuthClear,
+	describeSwap,
+	type ProfileSwap,
+	resolveBundleId,
+	swapProfile,
+} from "./profiles.js";
+import { type AppDelete, deleteAppBundle, describeAppDelete } from "./uninstall.js";
 import {
 	childEnv,
 	isPackaged,
@@ -186,6 +195,14 @@ export interface ServeOptions {
 	 * already up" branch is testable without binding a real socket.
 	 */
 	portInUse?: (port: number) => Promise<boolean>;
+	/**
+	 * Sign an operator out of an app: quit it and delete their data. Injected for the same
+	 * reason as `swap` — the real one quits applications and deletes `~/Library` directories,
+	 * which a test on a developer's machine must never do.
+	 */
+	clearAuth?: (app: string, operator: string) => Promise<AuthClear>;
+	/** Uninstall an app bundle plus its parked profiles. Injected: the real one rm -rf's under /Applications. */
+	deleteApp?: (app: string) => Promise<AppDelete>;
 	log?: (line: string) => void;
 }
 
@@ -307,6 +324,14 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 
 	/** Foreground the app, injectable so the suite does not launch real applications. */
 	const openAppFor = opts.open ?? openApp;
+
+	/** Sign an operator out, injectable so the suite deletes nothing real. */
+	const clearAuthFor =
+		opts.clearAuth ??
+		(async (app: string, operator: string) => clearOperatorData({ app, operator, bundleId: await resolveBundleId(app) }));
+
+	/** Uninstall an app, injectable for the same reason. */
+	const deleteAppFor = opts.deleteApp ?? ((app: string) => deleteAppBundle({ app }));
 
 	/**
 	 * Is the liveview port already taken? A connect that succeeds means a server is up; ECONNREFUSED
@@ -615,6 +640,96 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 	}
 
 	/**
+	 * Sign an app out for one operator on this Mac: quit it and delete THEIR data — the live
+	 * copy only if owners.json says they own it, plus their parked profile. Another operator's
+	 * live session is never touched; `clearOperatorData` documents the split.
+	 *
+	 * Refused outright while a run holds the lease (same busy shape as `signin`): the target
+	 * app may be the one being driven, and quitting it — or deleting the profile a swap is
+	 * about to restore — corrupts the run. Under the profile lock like every other call that
+	 * moves app data, because a clear racing a submit's swap would interleave a delete with a
+	 * set of directory moves over the same paths.
+	 */
+	async function authClear(params: Params): Promise<RunnerResponse> {
+		const app = String(params.app ?? "").trim();
+		const operator = String(params.operator ?? "").trim();
+		if (!app) return { ok: false, error: "app is required" };
+		if (!operator) return { ok: false, error: "operator is required" };
+
+		const { holder } = inspect(runnerDir);
+		if (holder)
+			return {
+				ok: false,
+				error: `${holder.lease.operator} is running ${holder.lease.app} here (${holder.heldSec}s) — signing out would pull app data out from under their run`,
+				busy: true,
+				operator: holder.lease.operator,
+				app: holder.lease.app,
+				kind: holder.lease.kind,
+				jobId: holder.lease.jobId,
+				elapsedSec: holder.heldSec,
+			};
+
+		let cleared: AuthClear;
+		try {
+			cleared = await withProfileLock(() => clearAuthFor(app, operator));
+		} catch (e) {
+			return { ok: false, error: `could not sign ${operator} out of ${app}: ${(e as Error).message}` };
+		}
+		log(describeAuthClear(cleared));
+
+		// The reply names exactly what went, path by path: `removedLive` is home-relative,
+		// `removedProfile` is store-relative. A delete that reports only "ok" is one nobody can
+		// audit after the fact.
+		return {
+			ok: true,
+			app,
+			operator: cleared.operator,
+			removedLive: cleared.removedLive,
+			ownershipCleared: cleared.ownershipCleared,
+			...(cleared.removedProfile ? { removedProfile: cleared.removedProfile } : {}),
+			...(cleared.liveOwner ? { liveOwner: cleared.liveOwner } : {}),
+		};
+	}
+
+	/**
+	 * Uninstall an app from this Mac: the bundle out of /Applications (or ~/Applications), and
+	 * every operator's parked profile for it — an app that is gone must not leave orphaned
+	 * session data to be restored over a future reinstall. `deleteAppBundle` owns the strict
+	 * name resolution; no path ever crosses the wire, only the bare bundle name.
+	 *
+	 * Refused while the lease is held: deleting the app being driven kills the run. Under the
+	 * profile lock because the parked-profile sweep must not interleave with a swap parking
+	 * data into the very directories being deleted.
+	 */
+	async function appDelete(params: Params): Promise<RunnerResponse> {
+		const app = String(params.app ?? "").trim();
+		if (!app) return { ok: false, error: "app is required" };
+
+		const { holder } = inspect(runnerDir);
+		if (holder)
+			return {
+				ok: false,
+				error: `${holder.lease.operator} is running ${holder.lease.app} here (${holder.heldSec}s) — deleting an app mid-run would kill it`,
+				busy: true,
+				operator: holder.lease.operator,
+				app: holder.lease.app,
+				kind: holder.lease.kind,
+				jobId: holder.lease.jobId,
+				elapsedSec: holder.heldSec,
+			};
+
+		let deleted: AppDelete;
+		try {
+			deleted = await withProfileLock(() => deleteAppFor(app));
+		} catch (e) {
+			return { ok: false, error: `could not delete ${app}: ${(e as Error).message}` };
+		}
+		log(describeAppDelete(deleted));
+
+		return { ok: true, app: deleted.app, bundle: deleted.bundle, removedProfiles: deleted.removedProfiles };
+	}
+
+	/**
 	 * Whether an app is at its declared home — the signal that a sign-in took.
 	 *
 	 * Delegated to a child process rather than answered here; `src/ready.ts` documents why at
@@ -898,6 +1013,10 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			signin: () => signin(params),
 			liveview: () => liveview(params),
 			ready: () => ready(params),
+			// Lowercase on the wire: `runnerArgv` only carries bare [a-z0-9-] subcommands, so the
+			// method name IS the subcommand and cannot carry a capital.
+			authclear: () => authClear(params),
+			appdelete: () => appDelete(params),
 		};
 		const async = handlers[String(req.method)];
 		if (async) {

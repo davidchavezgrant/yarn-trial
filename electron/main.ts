@@ -8,9 +8,13 @@ import {
 	annotateRuns,
 	appChoices,
 	beginSignin,
+	clearAuthView,
 	completeSignin,
+	deleteAppView,
 	fleetView,
+	forgetLoginView,
 	hostChoices,
+	installAppView,
 	isRemoteHost,
 	readRemotePrefs,
 	RemoteRunController,
@@ -96,6 +100,11 @@ window.__bus = {
   attach: (host, jobId, app) => ipcRenderer.invoke('attach', { host, jobId, app }),
   signin: (host, app) => ipcRenderer.invoke('signin', { host, app }),
   signinWait: (host, app) => ipcRenderer.invoke('signin:wait', { host, app }),
+  // Fleet-panel overflow actions. All answer {ok, message} for the same transient slot.
+  authClear: (host, app) => ipcRenderer.invoke('auth:clear', { host, app }),
+  appDelete: (host, app) => ipcRenderer.invoke('app:delete', { host, app }),
+  appInstall: (host, app, url) => ipcRenderer.invoke('app:install', { host, app, url }),
+  forgetVnc: (host) => ipcRenderer.invoke('vnc:forget', host),
   loadCreds: () => ipcRenderer.invoke('creds'),
   saveKey: (key) => ipcRenderer.invoke('creds:save', key),
   loadHostPref: () => ipcRenderer.invoke('host:load'),
@@ -512,6 +521,31 @@ ipcMain.handle("signin", async (_event, { host, app }: { host: string; app?: str
 ipcMain.handle("signin:wait", (_event, { host, app }: { host: string; app: string }) =>
 	completeSignin(String(host ?? ""), String(app ?? "")),
 );
+
+/**
+ * Fleet-panel overflow actions. The confirm() dialogs live in the renderer — the destructive
+ * verbs must never fire from a single click — and by the time these handlers run, the question
+ * has been asked and answered. Each resolves to {ok, message} for the panel's transient slot;
+ * `auth:clear` acts for the CURRENT operator, decided on the far side of clearAppAuth by the
+ * same defaultOperator() every dispatch uses, so the sign-out hits the same profile a run would.
+ */
+ipcMain.handle("auth:clear", (_event, { host, app }: { host: string; app?: string }) =>
+	clearAuthView(String(host ?? ""), typeof app === "string" ? app : undefined),
+);
+
+ipcMain.handle("app:delete", (_event, { host, app }: { host: string; app?: string }) =>
+	deleteAppView(String(host ?? ""), typeof app === "string" ? app : undefined),
+);
+
+// Long-running by design: the download happens on the far Mac and can take minutes. The
+// renderer paints its own "installing…" note and lets this reply land whenever it lands —
+// the same shape signin:wait already has.
+ipcMain.handle("app:install", (_event, { host, app, url }: { host: string; app?: string; url?: string }) =>
+	installAppView(String(host ?? ""), typeof app === "string" ? app : undefined, typeof url === "string" ? url : undefined),
+);
+
+// Local by nature: the saved credential lives in THIS operator's login keychain, not on the Mac.
+ipcMain.handle("vnc:forget", (_event, host: unknown) => forgetLoginView(String(host ?? "")));
 
 ipcMain.handle("creds", () => describeCredentials());
 

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import type { HostEntry } from "./remote/hosts.js";
-import { explainCloseFailure, launchCommand, planSignin, vncUrl, waitForHome } from "./remote/signin.js";
+import { explainCloseFailure, forgetScreenShareLogin, launchCommand, planSignin, vncUrl, waitForHome } from "./remote/signin.js";
 import type { SshResult } from "./remote/ssh.js";
 
 /**
@@ -274,4 +274,55 @@ test("explainCloseFailure__AddsNothing__When__TheFailureIsSomethingElse", () => 
 	// A timeout is System Events wedged behind a modal, and a grant will not fix it. The old
 	// message asserted Accessibility for every failure, which is how a real cause stays hidden.
 	assert.equal(explainCloseFailure("osascript timed out after 10s"), "osascript timed out after 10s");
+});
+
+/**
+ * forgetScreenShareLogin: the operator's own keychain, so the `security` call is injected and
+ * only its argv and the loop's shape are under test — a real invocation would delete whatever
+ * credential the developer running this suite has saved for their own fleet.
+ */
+
+test("forgetScreenShareLogin__DeletesUntilNoneMatch__When__SeveralItemsExist", async () => {
+	// `security delete-internet-password` removes ONE item per call; a Mac whose password was
+	// re-saved after a change carries several. Two answer yes here, then the not-found exit.
+	const calls: string[][] = [];
+	let remaining = 2;
+	const res = await forgetScreenShareLogin(host(), async (args) => {
+		calls.push(args);
+		if (remaining > 0) {
+			remaining--;
+
+			return { code: 0 };
+		}
+
+		return { code: 44 };
+	});
+
+	assert.equal(res.removed, 2);
+	// The argv is data, never a shell string: the server and account ride as separate entries,
+	// and the protocol code keeps its trailing space — it IS the four-character code.
+	assert.deepEqual(calls[0], ["delete-internet-password", "-s", "10.0.0.1", "-r", "vnc "]);
+	// Both variants ended on a not-found answer: the broad match first, then the one keyed on
+	// the ssh account — the shape vncUrl files the item under.
+	assert.deepEqual(calls.at(-1), ["delete-internet-password", "-s", "10.0.0.1", "-a", "administrator", "-r", "vnc "]);
+	assert.equal(calls.length, 4, "two deletions, then one miss per variant");
+});
+
+test("forgetScreenShareLogin__ReportsZero__When__NothingWasSaved", async () => {
+	// Not-found is the wanted end state reached earlier — a success shape, not an error.
+	const res = await forgetScreenShareLogin(host(), async () => ({ code: 44 }));
+	assert.deepEqual(res, { removed: 0 });
+});
+
+test("forgetScreenShareLogin__StopsAtTheCap__When__SecurityKeepsAnsweringSuccess", async () => {
+	// A `security` that reports success without deleting would otherwise loop forever.
+	let calls = 0;
+	const res = await forgetScreenShareLogin(host(), async () => {
+		calls++;
+
+		return { code: 0 };
+	});
+
+	assert.equal(res.removed, 20);
+	assert.equal(calls, 20);
 });

@@ -24,6 +24,8 @@
 #   ./run install "App" <https://…|path>    put a target app on the Macs, presence-verified
 #   ./run install "App" --check             is it installed on each Mac, and where
 #   ./run signin <mac> ["App"]              screen-share to a Mac to sign an app in by hand
+#   ./run signout <mac> "App"               sign YOU out of an app on that Mac (deletes your data there)
+#   ./run uninstall <mac> "App"             remove an app from that Mac, plus all parked profiles for it
 #   ./run liveview [<mac>] ["App"]          window-scoped sign-in: drive just one window in a browser
 #
 # Teammates run none of that: drop team-credentials.json beside this script (or in
@@ -154,6 +156,14 @@ signin)
 	# No have_key: this never talks to a model.
 	shift
 	exec npx tsx src/remote/signin.ts "$@"
+	;;
+
+signout | uninstall)
+	# The destructive half of remote app/auth management. Both go through the runner verbs
+	# (authclear/appdelete), which refuse while a run holds the lease and derive every path
+	# they delete on the far side — nothing variable crosses as argv text. No have_key: no
+	# model involved. The verb itself is passed through, so no shift.
+	exec npx tsx src/remote/manage.ts "$@"
 	;;
 
 browser-login)

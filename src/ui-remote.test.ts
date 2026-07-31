@@ -12,10 +12,14 @@ import {
 	appChoices,
 	attachOffers,
 	beginSignin,
+	clearAuthView,
 	completeSignin,
+	deleteAppView,
 	describeFleetRow,
 	fleetView,
+	forgetLoginView,
 	hostChoices,
+	installAppView,
 	LineSplitter,
 	readRemotePrefs,
 	type RemoteDeps,
@@ -943,4 +947,155 @@ test("completeSignin__ReportsTheReason__When__TheHostIsNotInTheInventory", async
 
 	assert.equal(out.ok, false);
 	assert.match(out.message, /unknown host "mac9"/);
+});
+
+/**
+ * The fleet panel's overflow actions. Everything destructive is injected — these tests are
+ * about the part the CLI gets from its argv for free: refusing `local` and `auto`, requiring a
+ * target, and turning the runner's audit trail into one honest sentence.
+ */
+
+test("clearAuthView__Refuses__When__TheSelectorNamesNoMachine", async () => {
+	const noCall = (async () => {
+		throw new Error("must not reach the fleet");
+	}) as never;
+
+	assert.equal((await clearAuthView("local", "Yarn", () => FLEET, noCall)).ok, false);
+	assert.equal((await clearAuthView("auto", "Yarn", () => FLEET, noCall)).ok, false);
+	assert.equal((await deleteAppView("auto", "Yarn", () => FLEET, noCall)).ok, false);
+	assert.equal((await forgetLoginView("local", () => FLEET, noCall)).ok, false);
+	// And a target-less sign-out or delete has nothing to act on.
+	assert.match((await clearAuthView("mac1", "  ", () => FLEET, noCall)).message, /Pick an app/);
+	assert.match((await deleteAppView("mac1", undefined, () => FLEET, noCall)).message, /Pick an app/);
+});
+
+test("clearAuthView__NamesWhatWasRemoved__When__TheRunnerClears", async () => {
+	const view = await clearAuthView("mac1", "Yarn", () => FLEET, async (h, app) => ({
+		ok: true,
+		host: typeof h === "string" ? h : h.name,
+		app,
+		operator: "dg",
+		removedLive: ["Library/Application Support/Yarn", "Library/Caches/Yarn"],
+		removedProfile: "dg/yarn",
+		ownershipCleared: true,
+	}));
+
+	assert.equal(view.ok, true);
+	assert.match(view.message, /2 live path/);
+	assert.match(view.message, /parked profile/);
+});
+
+test("clearAuthView__SaysWhoOwnsTheLiveCopy__When__ItWasLeftAlone", async () => {
+	// "Signed out, but the app still shows a session" is the state this sentence pre-explains:
+	// the live data belongs to someone else and was deliberately untouched.
+	const view = await clearAuthView("mac2", "Yarn", () => FLEET, async (h, app) => ({
+		ok: true,
+		host: "mac2",
+		app,
+		operator: "bob",
+		removedLive: [],
+		removedProfile: "bob/yarn",
+		ownershipCleared: false,
+		liveOwner: "alice",
+	}));
+
+	assert.equal(view.ok, true);
+	assert.match(view.message, /alice owns it/);
+});
+
+test("clearAuthView__RelaysTheRefusal__When__TheHostIsBusy", async () => {
+	const view = await clearAuthView("mac1", "Yarn", () => FLEET, async () => ({
+		ok: false,
+		host: "mac1",
+		app: "Yarn",
+		operator: "bob",
+		removedLive: [],
+		ownershipCleared: false,
+		busy: true,
+		error: "sam is running Yarn here (42s) — signing out would pull app data out from under their run",
+	}));
+
+	assert.equal(view.ok, false);
+	assert.match(view.message, /mac1: sam is running Yarn/);
+});
+
+test("deleteAppView__NamesTheBundleAndProfiles__When__TheRunnerDeletes", async () => {
+	const view = await deleteAppView("mac1", "Yarn", () => FLEET, async () => ({
+		ok: true,
+		host: "mac1",
+		app: "Yarn",
+		bundle: "/Applications/Yarn.app",
+		removedProfiles: ["alice/yarn", "bob/yarn"],
+	}));
+
+	assert.equal(view.ok, true);
+	assert.match(view.message, /\/Applications\/Yarn\.app/);
+	assert.match(view.message, /2 parked profile/);
+});
+
+test("installAppView__CarriesTheGrantsNote__When__TheInstallSucceeds", async () => {
+	// The note is the point of reporting here: a bundle installed a minute ago holds no TCC
+	// grant, and the operator must hear that before the demo, not from an empty AX tree during it.
+	const view = await installAppView(
+		"mac1",
+		"Yarn",
+		"https://dl.yarn.so/download/mac_arm64",
+		() => FLEET,
+		async (app, spec) => ({ app, kind: "dmg", url: spec }),
+		async (h, source) => ({
+			host: h.name,
+			app: source.app,
+			ok: true,
+			steps: [{ step: "verify", ok: true, detail: "/Applications/Yarn.app" }],
+			presence: { host: h.name, app: source.app, present: true, path: "/Applications/Yarn.app", near: [], scanned: 40 },
+			grants: "installing cannot grant Accessibility or Screen Recording",
+		}),
+	);
+
+	assert.equal(view.ok, true);
+	assert.match(view.message, /\/Applications\/Yarn\.app/);
+	assert.match(view.message, /cannot grant Accessibility/);
+});
+
+test("installAppView__NamesTheFirstFailedStep__When__TheInstallStops", async () => {
+	const view = await installAppView(
+		"mac1",
+		"Yarn",
+		"https://dl.yarn.so/download/mac_arm64",
+		() => FLEET,
+		async (app, spec) => ({ app, kind: "dmg", url: spec }),
+		async (h, source) => ({
+			host: h.name,
+			app: source.app,
+			ok: false,
+			steps: [
+				{ step: "reach", ok: true },
+				{ step: "check", ok: false, detail: "no pinned host key — pin it before probing" },
+			],
+			grants: "installing cannot grant Accessibility or Screen Recording",
+		}),
+	);
+
+	assert.equal(view.ok, false);
+	assert.match(view.message, /failed at check/);
+	assert.match(view.message, /no pinned host key/);
+});
+
+test("installAppView__Refuses__When__NoUrlWasGiven", async () => {
+	const view = await installAppView("mac1", "Yarn", "  ", () => FLEET);
+	assert.equal(view.ok, false);
+	assert.match(view.message, /https URL/);
+});
+
+test("forgetLoginView__CountsTheRemovals__When__ItemsExisted", async () => {
+	const view = await forgetLoginView("mac1", () => FLEET, async () => ({ removed: 2 }));
+	assert.equal(view.ok, true);
+	assert.match(view.message, /Forgot 2 saved screen-share logins for mac1/);
+});
+
+test("forgetLoginView__StillSucceeds__When__NothingWasSaved", async () => {
+	// Not-found is the wanted end state, reached earlier — a success shape, not an error.
+	const view = await forgetLoginView("mac2", () => FLEET, async () => ({ removed: 0 }));
+	assert.equal(view.ok, true);
+	assert.match(view.message, /No screen-share login was saved/);
 });

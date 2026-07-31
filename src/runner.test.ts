@@ -1077,6 +1077,180 @@ test("submit__IsRejected__When__AppIsMissing", async () => {
 	});
 });
 
+/**
+ * The management verbs, driven through the socket with the destructive halves injected —
+ * `clearAuth` and `deleteApp` on ServeOptions exist for exactly this suite, the way `swap`
+ * does: the real ones quit applications and delete directories.
+ */
+
+test("authclear__Refuses__When__ARunHoldsTheLease", async () => {
+	await withTempAsync("yr-mgmt-", async (dir) => {
+		let cleared = 0;
+		const spawner = fakeSpawner();
+		const runner = await startRunner(dir, {
+			...noSwap,
+			log: () => {},
+			spawn: spawner.spawn,
+			clearAuth: async () => {
+				cleared++;
+
+				return { app: "Yarn", operator: "bob", removedLive: [], ownershipCleared: false };
+			},
+		});
+		let pid = 0;
+		try {
+			const [run] = await request(runner.socketPath, "submit", { kind: "task", app: "Yarn", task: "t", operator: "dave" });
+			pid = run.pid;
+
+			const [res] = await request(runner.socketPath, "authclear", { app: "Yarn", operator: "bob" });
+			// Same busy shape as signin, so the fleet client renders both refusals with one parser.
+			assert.equal(res.ok, false);
+			assert.equal(res.busy, true);
+			assert.equal(res.operator, "dave");
+			assert.equal(res.jobId, run.jobId);
+			assert.equal(cleared, 0, "nothing may be deleted out from under a run");
+		} finally {
+			if (pid) try { process.kill(-pid, "SIGKILL"); } catch {}
+			await runner.close();
+		}
+	});
+});
+
+test("authclear__ReportsExactlyWhatWent__When__TheHostIsIdle", async () => {
+	await withTempAsync("yr-mgmt-", async (dir) => {
+		const seen: Array<[string, string]> = [];
+		const runner = await startRunner(dir, {
+			...noSwap,
+			log: () => {},
+			clearAuth: async (app, operator) => {
+				seen.push([app, operator]);
+
+				return {
+					app,
+					operator,
+					removedLive: ["Library/Application Support/Yarn", "Library/Caches/Yarn"],
+					removedProfile: "bob/yarn",
+					ownershipCleared: true,
+				};
+			},
+		});
+		try {
+			const [res] = await request(runner.socketPath, "authclear", { app: "Yarn", operator: "bob" });
+			assert.equal(res.ok, true);
+			assert.deepEqual(seen, [["Yarn", "bob"]]);
+			// The reply is the audit trail: relative paths, per store, never a bare "ok".
+			assert.deepEqual(res.removedLive, ["Library/Application Support/Yarn", "Library/Caches/Yarn"]);
+			assert.equal(res.removedProfile, "bob/yarn");
+			assert.equal(res.ownershipCleared, true);
+
+			// Both parameters are required — an operator-less sign-out has nobody to sign out.
+			const [noApp] = await request(runner.socketPath, "authclear", { operator: "bob" });
+			assert.match(String(noApp.error), /app is required/);
+			const [noOp] = await request(runner.socketPath, "authclear", { app: "Yarn" });
+			assert.match(String(noOp.error), /operator is required/);
+			assert.equal(seen.length, 1);
+		} finally {
+			await runner.close();
+		}
+	});
+});
+
+test("authclear__RelaysTheFailure__When__TheClearThrows", async () => {
+	await withTempAsync("yr-mgmt-", async (dir) => {
+		const runner = await startRunner(dir, {
+			...noSwap,
+			log: () => {},
+			clearAuth: async () => {
+				throw new Error(`"Yarn" would not quit`);
+			},
+		});
+		try {
+			const [res] = await request(runner.socketPath, "authclear", { app: "Yarn", operator: "bob" });
+			assert.equal(res.ok, false);
+			assert.match(String(res.error), /could not sign bob out of Yarn.*would not quit/);
+		} finally {
+			await runner.close();
+		}
+	});
+});
+
+test("appdelete__Refuses__When__ARunHoldsTheLease", async () => {
+	await withTempAsync("yr-mgmt-", async (dir) => {
+		let deleted = 0;
+		const spawner = fakeSpawner();
+		const runner = await startRunner(dir, {
+			...noSwap,
+			log: () => {},
+			spawn: spawner.spawn,
+			deleteApp: async (app) => {
+				deleted++;
+
+				return { app, bundle: `/Applications/${app}.app`, removedProfiles: [] };
+			},
+		});
+		let pid = 0;
+		try {
+			const [run] = await request(runner.socketPath, "submit", { kind: "task", app: "Yarn", task: "t", operator: "dave" });
+			pid = run.pid;
+
+			const [res] = await request(runner.socketPath, "appdelete", { app: "Yarn" });
+			assert.equal(res.ok, false);
+			assert.equal(res.busy, true);
+			assert.equal(res.operator, "dave");
+			assert.equal(deleted, 0, "the app being driven must not vanish mid-run");
+		} finally {
+			if (pid) try { process.kill(-pid, "SIGKILL"); } catch {}
+			await runner.close();
+		}
+	});
+});
+
+test("appdelete__ReportsBundleAndProfiles__When__TheHostIsIdle", async () => {
+	await withTempAsync("yr-mgmt-", async (dir) => {
+		const runner = await startRunner(dir, {
+			...noSwap,
+			log: () => {},
+			deleteApp: async (app) => ({ app, bundle: `/Applications/${app}.app`, removedProfiles: ["alice/yarn", "bob/yarn"] }),
+		});
+		try {
+			const [res] = await request(runner.socketPath, "appdelete", { app: "Yarn" });
+			assert.equal(res.ok, true);
+			assert.equal(res.bundle, "/Applications/Yarn.app");
+			assert.deepEqual(res.removedProfiles, ["alice/yarn", "bob/yarn"]);
+
+			const [noApp] = await request(runner.socketPath, "appdelete", {});
+			assert.match(String(noApp.error), /app is required/);
+		} finally {
+			await runner.close();
+		}
+	});
+});
+
+test("appdelete__RelaysTheRefusal__When__TheDeleteThrows", async () => {
+	await withTempAsync("yr-mgmt-", async (dir) => {
+		const runner = await startRunner(dir, {
+			...noSwap,
+			log: () => {},
+			deleteApp: async () => {
+				throw new Error("Ghost.app is not in /Applications or /Users/x/Applications");
+			},
+		});
+		try {
+			const [res] = await request(runner.socketPath, "appdelete", { app: "Ghost" });
+			assert.equal(res.ok, false);
+			assert.match(String(res.error), /could not delete Ghost.*is not in/);
+		} finally {
+			await runner.close();
+		}
+	});
+});
+
+test("parseArgs__AcceptsTheManagementVerbs__When__TheyArriveAsSubcommands", () => {
+	// runnerctl's vocabulary and the serve handlers must not drift: a verb the runner answers
+	// that ctl refuses is unreachable over ssh, which is the only way anything reaches it.
+	for (const m of ["authclear", "appdelete"]) assert.ok(!("error" in parseArgs([m], "/tmp/x")), m);
+});
+
 test("parseArgs__DecodesSpec__When__TaskTextWouldBeShellSyntax", () => {
 	// The exact hazard --spec exists for: sshd joins remote argv into one string and the login
 	// shell re-splits it, so this task text as an argument would be three commands.

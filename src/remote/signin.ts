@@ -210,6 +210,68 @@ export async function waitForHome(
 }
 
 /**
+ * How macOS files a remembered screen-sharing credential: an internet-password keychain item
+ * whose protocol field is the four-character code `vnc ` — trailing space included, it IS the
+ * code. execFile argv carries it exactly; there is no shell to eat the space.
+ */
+const VNC_PROTOCOL = "vnc ";
+
+/**
+ * Ceiling on deletions per invocation. `security` deletes ONE matching item per call, which is
+ * why the loop exists — but a `security` that answered success without deleting (or a keychain
+ * writer racing this) must cost a bounded number of subprocesses, not an infinite loop.
+ */
+const MAX_KEYCHAIN_DELETIONS = 20;
+
+/** One `security` invocation reduced to its exit code. Injected in tests; argv only, never a shell. */
+export type SecurityRunner = (args: string[]) => Promise<{ code: number }>;
+
+const runSecurity: SecurityRunner = (args) =>
+	new Promise((resolve) => {
+		execFile("security", args, { timeout: OSASCRIPT_TIMEOUT_MS }, (err) => {
+			const e = err as (Error & { code?: number | string }) | null;
+			resolve({ code: e ? (typeof e.code === "number" ? e.code : 1) : 0 });
+		});
+	});
+
+/**
+ * Forget the remembered Screen Sharing password for one Mac, from the OPERATOR's own keychain.
+ *
+ * This is the local complement of `authclear`: signing an app out on the colo Mac does nothing
+ * about the credential the operator's own machine saved when they ticked "Remember this
+ * password" in Screen Sharing — that lives in their login keychain, keyed on (server, account,
+ * protocol `vnc `), and macOS will keep replaying it into every future `vnc://` connection.
+ *
+ * `security delete-internet-password` removes ONE matching item per call and there can be
+ * several (per-account entries, re-saves after a password change), so each variant is invoked
+ * until it reports no matching item. Two variants: unconstrained by account — the broad match —
+ * and explicitly keyed on the ssh user, because `vncUrl` puts that account in the URL and the
+ * item is filed under it. The second usually finds nothing after the first, which is fine.
+ *
+ * Both outcomes are success shapes: `{removed: n}` says n items went, and `{removed: 0}` says
+ * there was nothing to forget — the wanted end state, reached earlier.
+ */
+export async function forgetScreenShareLogin(host: HostEntry, exec: SecurityRunner = runSecurity): Promise<{ removed: number }> {
+	const variants: string[][] = [
+		["delete-internet-password", "-s", host.vnc.host, "-r", VNC_PROTOCOL],
+		...(host.ssh.user ? [["delete-internet-password", "-s", host.vnc.host, "-a", host.ssh.user, "-r", VNC_PROTOCOL]] : []),
+	];
+
+	let removed = 0;
+	for (const args of variants) {
+		while (removed < MAX_KEYCHAIN_DELETIONS) {
+			const { code } = await exec(args);
+			// Nonzero is "no matching item" (or a keychain refusal, which repeating cannot fix
+			// either) — the loop's exit, not an error.
+			if (code !== 0) break;
+			removed++;
+		}
+	}
+
+	return { removed };
+}
+
+/**
  * Close the screen-sharing window for one host, and quit the viewer if that was its last.
  *
  * Window-by-window rather than `quit`, because an operator signing into mac2 may well have mac1

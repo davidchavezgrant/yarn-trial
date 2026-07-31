@@ -64,6 +64,17 @@ export interface UiBus {
 	 * viewer-opening reply is not held for all of it.
 	 */
 	signinWait(host: string, app: string): Promise<{ ok: boolean; message: string }>;
+	/**
+	 * Fleet-panel overflow actions, all answering {ok, message} for the same transient slot the
+	 * sign-in outcome uses. The renderer owns the confirm()/prompt() step — the host side fires
+	 * unconditionally, so nothing may call the destructive pair without asking first.
+	 */
+	authClear(host: string, app: string): Promise<{ ok: boolean; message: string }>;
+	appDelete(host: string, app: string): Promise<{ ok: boolean; message: string }>;
+	/** Long-running: the archive downloads on the far Mac. The reply lands whenever it lands. */
+	appInstall(host: string, app: string, url: string): Promise<{ ok: boolean; message: string }>;
+	/** Local: deletes the remembered Screen Sharing password from THIS operator's keychain. */
+	forgetVnc(host: string): Promise<{ ok: boolean; message: string }>;
 	/** `modelKey` is a boolean by construction — the key itself never crosses this seam. */
 	loadCreds(): Promise<{ present: boolean; fingerprint?: string; path: string; modelKey: boolean }>;
 	saveKey(key: string): Promise<{ ok: true; credentials: { modelKey: boolean } } | { ok: false; error: string }>;
@@ -839,6 +850,18 @@ async function loadFleet() {
         // Screen sharing, not a run: safe while the host is busy, and the only way past an app
         // that wants a human to type a password into it.
         '<button class="mini" data-signin="' + esc(r.name) + '"' + (signinBusy === r.name ? ' disabled' : '') + ' title="Open this Mac over screen sharing to sign in by hand">Sign in</button>' +
+        // Overflow of app/auth management actions. A <select> rather than buttons because the
+        // row is rebuilt every probe and four more buttons per host would drown the state the
+        // panel exists to show. The destructive entries confirm() before firing — see onchange.
+        // Disabled while ANY action is mid-flight: these quit and delete things, and two at
+        // once on different Macs is not worth the ambiguity in the one shared message slot.
+        '<select class="mini" data-act="' + esc(r.name) + '"' + (signinBusy ? ' disabled' : '') + ' title="App and sign-in management on this Mac">' +
+          '<option value="">⋯</option>' +
+          '<option value="signout">Sign out of ' + esc(sel || 'app') + '…</option>' +
+          '<option value="forget">Forget screen-share login</option>' +
+          '<option value="install">Install app…</option>' +
+          '<option value="delete">Delete ' + esc(sel || 'app') + '…</option>' +
+        '</select>' +
       '</div>' +
       (r.detail ? '<div class="fdetail">' + esc(r.detail) + '</div>' : '') +
       (r.reason ? '<div class="freason">' + esc(r.reason) + '</div>' : '') +
@@ -1219,6 +1242,50 @@ el('fleet').onclick = async (e) => {
   signinBusy = null;
   signinMsg = { ok: r.ok, text: r.message, paints: 0 };
   loadFleet();
+};
+// The overflow menu beside Sign in. Delegated 'change' for the same reason the click handler
+// above is delegated: the rows are rebuilt on every probe. The select resets itself first so
+// the same action can be picked twice in a row. Outcomes land in signinMsg — the transient
+// slot that retires after a few repaints — and signinBusy gates re-entry exactly as it does
+// for Sign in, because these actions quit and delete things.
+//
+// The destructive pair (signout, delete) go through confirm() naming exactly what will be
+// removed: picking the option opens the dialog, and only the dialog fires the verb — nothing
+// destructive happens from a single interaction.
+el('fleet').onchange = async (e) => {
+  const s = e.target && e.target.dataset && e.target.dataset.act !== undefined ? e.target : null;
+  if (!s) return;
+  const mac = s.dataset.act, act = s.value;
+  s.value = '';
+  if (!act || signinBusy) return;
+  const say = (ok, text) => { signinMsg = { ok: ok, text: text, paints: 0 }; loadFleet(); };
+  const ask = async (progress, send) => {
+    signinBusy = mac;
+    say(true, progress);
+    let r;
+    try { r = await send(); } catch (err) { r = { ok: false, message: errText(err) }; }
+    signinBusy = null;
+    say(r.ok, r.message);
+  };
+  if (act === 'forget') return ask('forgetting the saved screen-share login for ' + mac + '…', () => bus.forgetVnc(mac));
+  if (act === 'install') {
+    const name = prompt('App to install on ' + mac + ' (bundle name):', sel || el('q').value.trim());
+    if (!name || !name.trim()) return;
+    const url = prompt('https URL of its .dmg or .zip (it downloads on ' + mac + '):');
+    if (!url || !url.trim()) return;
+    return ask('installing ' + name.trim() + ' on ' + mac + ' — the download happens over there and can take minutes…', () => bus.appInstall(mac, name.trim(), url.trim()));
+  }
+  // The two destructive verbs need a target, and the selection is it — same source of truth
+  // the Sign in button rides along.
+  if (!sel) return say(false, 'pick an app in the list first — ' + (act === 'signout' ? 'sign-out' : 'delete') + ' needs a target');
+  if (act === 'signout') {
+    if (!confirm('Sign out of ' + sel + ' on ' + mac + '?\n\nDeletes YOUR ' + sel + ' data on that Mac: the live copy if you own it, plus your parked profile. Other operators keep theirs.')) return;
+    return ask('signing out of ' + sel + ' on ' + mac + '…', () => bus.authClear(mac, sel));
+  }
+  if (act === 'delete') {
+    if (!confirm("Delete " + sel + ".app from " + mac + "?\n\nRemoves the app bundle and EVERY operator's parked " + sel + " profile on that Mac. Live app data under ~/Library stays.")) return;
+    return ask('deleting ' + sel + ' from ' + mac + '…', () => bus.appDelete(mac, sel));
+  }
 };
 // Same two-step as the fleet row's Sign in — open the screen share, then wait for the app to
 // reach home and close it — but keyed to the app the refused run was against rather than to
