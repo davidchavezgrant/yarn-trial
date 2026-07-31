@@ -21,7 +21,12 @@ export const CHROME = String.raw`<meta charset="utf-8">
      the gallery), never on the document. */
   html, body { height:100%; }
   body { margin:0; overflow:hidden; display:flex; flex-direction:column; font:14px/1.5 ui-sans-serif,-apple-system,system-ui,sans-serif; background:var(--bg); color:var(--fg); }
-  header { flex:0 0 auto; padding:10px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; }
+  /* 88px of left padding clears the macOS traffic lights: the window uses hiddenInset, so
+     they are drawn OVER the page's top-left corner. The header doubles as the drag region
+     the hidden title bar no longer provides; its controls opt back out or they stop being
+     clickable. */
+  header { flex:0 0 auto; padding:10px 20px 10px 88px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; -webkit-app-region:drag; }
+  header button, header select { -webkit-app-region:no-drag; }
   h1 { font-size:15px; margin:0; font-weight:600; }
   header span { color:var(--dim); font-size:12px; }
   /* The left column sizes to its content (bounded, so a pathological app name cannot eat the
