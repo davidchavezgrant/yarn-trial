@@ -111,6 +111,9 @@ export async function main(): Promise<void> {
 	 * and the run log is written from the finally — the same reason homeReset above lives at this level.
 	 */
 	let windowGeometry: Record<string, unknown> | undefined;
+	// The ax backend's run-start activation outcome (src/backends/ax.ts). Hoisted for the
+	// same reason as windowGeometry; absent on cdp runs.
+	let activation: { applied: boolean; error?: string } | undefined;
 	let expectationRejections = 0;
 	let findCalls = 0;
 	let malformedStreak = 0;
@@ -169,6 +172,7 @@ export async function main(): Promise<void> {
 					homeReset,
 					domEnrichment,
 					windowGeometry,
+					...(activation ? { activation } : {}),
 					sessionRevivals: driver?.revivals ?? 0,
 					expectationRejections,
 					findCalls,
@@ -267,6 +271,7 @@ export async function main(): Promise<void> {
 			throw new Error("web targets run on the cdp backend — pass --backend cdp (or omit it; web targets default there)");
 		} else {
 			ax = await axMod!.AxBackend.acquire(target, driver!, app);
+			activation = ax.activation;
 		}
 		// Last chance to take your hands off before the run owns the pointer.
 		await overlay.countdown();
