@@ -63,8 +63,11 @@ export interface InteractiveElement {
 	/** Nearest named ancestor: which panel or menu this sits in. "" at top level. */
 	surface: string;
 	/**
-	 * The control's current value — what a combobox reads, what a text field holds. "" when
-	 * it has none, or when it duplicates `name` (a button labelled by its own value).
+	 * The control's current value — what a combobox reads, what a text field holds. ""
+	 * only when it has none. A value that merely duplicates `name` is suppressed in the
+	 * RENDERED line, never here: the mutation journal restores from this field, and a text
+	 * field whose content equals its label recorded as "" would make teardown "restore" it
+	 * by clearing a field that had text.
 	 *
 	 * Rendered into `elementsText` for the model long before it was carried here. Pulling it
 	 * into the struct is what lets code diff two observations and say which control CHANGED,
@@ -184,9 +187,16 @@ export function mintRunKey(prefix: string, app: string): string {
  * several seconds. At that deadline the session is closed directly and the process exits —
  * the value sits below the runner's own SIGINT→SIGKILL interval so that this, and not
  * SIGKILL, is what ends the run.
+ *
+ * The backstop stands down the moment the checker reports the signal: a loop that has read
+ * the flag owns cleanup from then on, and cleanup legitimately outlives the grace window —
+ * ffmpeg assembly alone can take longer than 8s, and force-killing it mid-write destroys the
+ * run log this function exists to preserve. The timer only ever fires when nothing polls the
+ * flag at all; a second signal still exits immediately.
  */
 export function onInterrupt(closeDriver: () => Promise<void>, graceMs = 8000): () => boolean {
 	let interrupted = false;
+	let backstop: NodeJS.Timeout | undefined;
 
 	for (const sig of ["SIGINT", "SIGTERM"] as const) {
 		process.on(sig, () => {
@@ -194,14 +204,24 @@ export function onInterrupt(closeDriver: () => Promise<void>, graceMs = 8000): (
 			if (interrupted) process.exit(130);
 			interrupted = true;
 			console.log(`\n=== ${sig} received — finishing the current action and stopping ===`);
-			setTimeout(() => {
+			backstop = setTimeout(() => {
 				console.log("=== cleanup did not finish in time; closing the driver session ===");
 				closeDriver().finally(() => process.exit(130));
-			}, graceMs).unref();
+			}, graceMs);
+			backstop.unref();
 		});
 	}
 
-	return () => interrupted;
+	return () => {
+		// The caller reading a true flag IS the acknowledgement: cleanup is now in hands that
+		// keep the run log, so the backstop would only destroy what it exists to protect.
+		if (interrupted && backstop) {
+			clearTimeout(backstop);
+			backstop = undefined;
+		}
+
+		return interrupted;
+	};
 }
 
 /**
@@ -557,9 +577,11 @@ export async function observe(
 		if (!interesting) continue;
 		const f = e.frame ? ` @(${e.frame.x},${e.frame.y} ${e.frame.w}x${e.frame.h})` : "";
 		const val = value && value !== label ? ` value="${value.slice(0, 80)}"` : "";
-		// The DOM descriptor is the only naming an unlabeled control has, so it goes in
-		// the haystack too — verification can then check for it like any other evidence.
-		if (descriptor && !label) haystackParts.push(descriptor);
+		// Whatever descriptor is RENDERED must be greppable: the model quotes evidence from
+		// what it was shown, and a descriptor beside a labelled control used to reach
+		// elementsText while staying out of the haystack — verification then failed on text
+		// the model was literally given.
+		if (descriptor) haystackParts.push(descriptor);
 		const dsc = descriptor ? ` ${descriptor}` : "";
 		// An icon inside a button repeats the button's name; the containment only informs
 		// when it names a DIFFERENT surface than the element's own label. Compare on the
@@ -582,7 +604,7 @@ export async function observe(
 				name: key ?? "",
 				namedBy: label ? "ax" : descriptor ? "dom" : "none",
 				surface: parent,
-				value: val ? value : "",
+				value,
 				...toPixels(e.frame),
 			});
 		const inWhat = parent && !label.slice(0, 40).startsWith(parent) ? ` in="${parent}"` : "";
@@ -649,7 +671,11 @@ export function framesShifted(
 		const wanted = Math.hypot(dragDx, dragDy), got = Math.hypot(dx, dy);
 		const sameDirection = dragDx * dx + dragDy * dy > 0;
 		const ratio = got / wanted;
-		if (sameDirection && ratio > 0.5 && ratio < 1.6) movers.push({ name, dx, dy });
+		// Inclusive of 0.5 with margin: frames are logical points and drags are screenshot
+		// pixels, so at 2x backing scale — the common macOS case — an honest mover sits at
+		// EXACTLY half the requested distance, and a strict > 0.5 rejected it, silently
+		// killing this channel on that display class.
+		if (sameDirection && ratio >= 0.45 && ratio < 1.6) movers.push({ name, dx, dy });
 	}
 
 	return { shifted: movers.length > 0, movers };
@@ -1614,7 +1640,11 @@ else {
 }
 `;
 	try {
-		const out = execFileSync("osascript", ["-l", "JavaScript", "-e", script], { encoding: "utf8" }).trim();
+		// The script drives System Events AX calls, which block indefinitely against a
+		// beachballing app (the hang class the src/axdom.ts rationale documents). Without a
+		// deadline the run hangs before its first action with nothing on the console; with
+		// one, the catch below degrades to staged:false and the run proceeds unstaged.
+		const out = execFileSync("osascript", ["-l", "JavaScript", "-e", script], { encoding: "utf8", timeout: 10_000 }).trim();
 		const r = JSON.parse(out);
 		if (r.action === "left-fullscreen")
 			return { staged: true, detail: `window is native-fullscreen — left as is (${r.reason})` };
@@ -1704,14 +1734,17 @@ export function scopeWarnings(map: AppMap): string {
 	for (const a of ambiguities) {
 		const surfaceOf = (id: string) =>
 			map.nodes.find((n) => n.id === id)?.kind === "control" ? id.split("/").slice(0, -1).join("/") : id;
-		const pair = a.nodes
-			.map((n) => `${n.scope}:${surfaceOf(n.id)}`)
+		// Deduped by scope+surface: a setting with two editors on the SAME surface is one
+		// bullet, not two — and the dedup must reach the group key too, or the duplicate
+		// spelling splits an identical surface pair into two groups.
+		const entries = [
+			...new Map(a.nodes.map((n) => [`${n.scope}:${surfaceOf(n.id)}`, { id: surfaceOf(n.id), scope: n.scope }])).values(),
+		];
+		const pair = entries
+			.map((n) => `${n.scope}:${n.id}`)
 			.sort()
 			.join(" | ");
-		const g = groups.get(pair) ?? {
-			nodes: a.nodes.map((n) => ({ id: surfaceOf(n.id), scope: n.scope })),
-			settings: [],
-		};
+		const g = groups.get(pair) ?? { nodes: entries, settings: [] };
 		g.settings.push(a.settingKey);
 		groups.set(pair, g);
 	}
@@ -1720,9 +1753,12 @@ export function scopeWarnings(map: AppMap): string {
 		const options = g.nodes
 			.map((n) => `    · ${n.scope} scope — ${n.id}\n      route: ${routeTo(map, n.id)}`)
 			.join("\n");
+		// SCOPES, not nodes: two same-scope editors of one setting are one store, and this
+		// sentence exists to say how many independent stores there are.
+		const scopeCount = new Set(g.nodes.map((n) => n.scope)).size;
 
 		return (
-			`- These settings exist at ${g.nodes.length} scopes — SEPARATE stores, changing one does NOT change the other:\n` +
+			`- These settings exist at ${scopeCount} scopes — SEPARATE stores, changing one does NOT change the other:\n` +
 			`  ${g.settings.join(", ")}\n${options}`
 		);
 	});
@@ -1894,7 +1930,12 @@ export async function visualJudge(
 	claim?: string,
 ): Promise<VisualVerdict | undefined> {
 	try {
-		const r = await client.messages.create({
+		// retryTransient like every other model call in the run path: the catch below turns
+		// an unreachable judge into `undefined`, and under VISUAL_JUDGE=block a missing
+		// verdict waves the success claim through — a transient 429/529 degraded the gate to
+		// "off" exactly when the operator opted into "block".
+		const r = await retryTransient(() =>
+			client.messages.create({
 			model,
 			// 700 was not enough: the model spends output tokens on reasoning before it writes
 			// the verdict, and on a busy frame with a long claim it hit the cap having emitted
@@ -1929,7 +1970,8 @@ export async function visualJudge(
 					],
 				},
 			],
-		});
+		}),
+		);
 		const text = r.content
 			.filter((b): b is Anthropic.TextBlock => b.type === "text")
 			.map((b) => b.text)
@@ -1995,8 +2037,22 @@ export interface VerifyResult {
  *   proving nothing about the action (e.g. text the agent itself typed two steps ago).
  *   When `prevHaystack` is supplied, at least one check must discriminate: an include
  *   absent before, or an exclude present before. Final-state checks (done) pass no
- *   prevHaystack — there the claim is about state, not change.
+ *   prevHaystack — there the claim is about state, not change — and must therefore name
+ *   text that should be PRESENT: with nothing before to compare against, an exclude alone
+ *   is satisfied by any screen that never showed the string, so excludes-only evidence is
+ *   rejected as unverifiable.
  */
+/**
+ * The non-blank strings in a model-supplied substring list, whatever actually arrived.
+ *
+ * Tool input is model output and OpenRouter does not enforce schemas, so `textIncludes` can
+ * arrive as a number, a bare string, or an array with non-string entries. A malformed call
+ * used to throw out of `.filter((t) => t.trim())` and abort an hours-long run; coercing here
+ * makes it cost one turn instead — the empty result reads as "nothing checkable" downstream.
+ */
+const checkableStrings = (x: unknown): string[] =>
+	Array.isArray(x) ? x.filter((t): t is string => typeof t === "string" && t.trim() !== "") : [];
+
 /**
  * How many checkable substrings an expectation actually carries, blanks excluded.
  *
@@ -2008,8 +2064,7 @@ export interface VerifyResult {
 export function checkableCount(expectation: Expectation | undefined): number {
 	if (!expectation) return 0;
 
-	return (expectation.textIncludes ?? []).filter((t) => t.trim() !== "").length
-		+ (expectation.textExcludes ?? []).filter((t) => t.trim() !== "").length;
+	return checkableStrings(expectation.textIncludes).length + checkableStrings(expectation.textExcludes).length;
 }
 
 export function verify(expectation: Expectation, haystack: string, prevHaystack?: string): VerifyResult {
@@ -2021,8 +2076,8 @@ export function verify(expectation: Expectation, haystack: string, prevHaystack?
 	// observation, and `wait` + `textIncludes: [""]` a free "verified" step. A check the whole
 	// screen satisfies is not a check; strip these, then treat "nothing left to check" exactly
 	// as an empty expectation.
-	const includes = (expectation.textIncludes ?? []).filter((t) => t.trim() !== "");
-	const excludes = (expectation.textExcludes ?? []).filter((t) => t.trim() !== "");
+	const includes = checkableStrings(expectation.textIncludes);
+	const excludes = checkableStrings(expectation.textExcludes);
 	if (includes.length === 0 && excludes.length === 0)
 		return { verified: false, note: "no checkable expectation (non-empty textIncludes/textExcludes)" };
 
@@ -2035,6 +2090,18 @@ export function verify(expectation: Expectation, haystack: string, prevHaystack?
 
 		return { verified: false, note: parts.join("; ") };
 	}
+
+	// The excludes-only twin of the blank-substring hole above, caught at the point it would
+	// otherwise PASS: with no prevHaystack the discrimination guard below never runs, so an
+	// exclude naming a string that was never on ANY screen verifies against every final
+	// observation. Against a prior haystack an exclude can discriminate (present before, gone
+	// now); against a single final observation it cannot prove anything. An exclude that is
+	// genuinely present still fails above with the note that says what was found.
+	if (prevHaystack === undefined && includes.length === 0)
+		return {
+			verified: false,
+			note: "excludes-only evidence cannot prove a final state — name text that should be PRESENT",
+		};
 
 	if (prevHaystack !== undefined) {
 		const discriminating =
@@ -2064,8 +2131,13 @@ export function verify(expectation: Expectation, haystack: string, prevHaystack?
  * Script tab") are legitimate task specification and do not trip it.
  */
 // `i` flag: a hinted prompt written with capitalised snake_case tool names ("Set_Value") is
-// still a hinted prompt. The AX alternate carries its own case in the class.
-const DRIVER_VOCAB = /\b(set_value|type_text|press_key|right_click|double_click|element_index|delivery_mode|axpress|ax[A-Za-z]\w+)\b/gi;
+// still a hinted prompt. AX role names are NOT in here: under /i an ax- prefix swallowed
+// ordinary words — "axis", "axes", "axiom" — and hard-refused goal-only prompts a video tool
+// will genuinely see. They get their own case-sensitive pattern below.
+const DRIVER_VOCAB = /\b(set_value|type_text|press_key|right_click|double_click|element_index|delivery_mode|axpress)\b/gi;
+// Real AX role names carry their case (AXButton, AXTextField): matching AX-then-letter
+// case-sensitively keeps them flagged without reading "axis" as a driver internal.
+const AX_ROLE = /\bAX[A-Za-z]\w*\b/g;
 // Every verb bounded on BOTH sides, so "clickable" and "pressure" no longer read as method
 // hints and refuse a legitimate goal-only prompt. These are the AMBIGUOUS mechanics — one may
 // be incidental ("...the Save button"), so the threshold is two.
@@ -2094,7 +2166,7 @@ export interface PromptAudit {
 
 export function auditTaskPrompt(task: string): PromptAudit {
 	const reasons: string[] = [];
-	const vocab = [...new Set((task.match(DRIVER_VOCAB) ?? []).map((m) => m.toLowerCase()))];
+	const vocab = [...new Set([...(task.match(DRIVER_VOCAB) ?? []), ...(task.match(AX_ROLE) ?? [])].map((m) => m.toLowerCase()))];
 	// OCCURRENCES, not unique spellings. A dictated click-path — "click Brand Kit, click
 	// Screen Clips, click Cursor Style" — is four hints that all spell "click", and deduping
 	// them to one collapsed a complete method recipe below the ≥2 threshold and passed it as

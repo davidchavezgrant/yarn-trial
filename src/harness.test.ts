@@ -5,6 +5,7 @@ import { test } from "node:test";
 import { Driver } from "./driver.js";
 import {
 	auditTaskPrompt,
+	checkableCount,
 	checkHome,
 	actionTarget,
 	destructiveTarget,
@@ -28,6 +29,7 @@ import {
 	mergeGraph,
 	newFrontier,
 	observationBlocks,
+	onInterrupt,
 	observe,
 	pixelDelta,
 	providerRouting,
@@ -124,6 +126,20 @@ test("auditTaskPrompt__Passes__When__GoalContainsClickableOrPressure", () => {
 	assert.equal(auditTaskPrompt("Make the header clickable and fix the pressure warning").hinted, false);
 });
 
+test("auditTaskPrompt__Allows__When__TaskNamesAnAxis", () => {
+	// Under /i the ax- prefix read ordinary words as driver internals and hard-refused
+	// goal-only prompts — and a video tool WILL see "axis" in a legitimate goal.
+	for (const task of ["Flip the clip on its vertical axis", "Rotate both axes of the chart"])
+		assert.equal(auditTaskPrompt(task).hinted, false, task);
+});
+
+test("auditTaskPrompt__Flags__When__TaskNamesAnAXRole", () => {
+	// Real AX role names carry their case; the case-sensitive pattern keeps them flagged.
+	const audit = auditTaskPrompt("Open the toolbar and pick the AXButton next to the title");
+	assert.equal(audit.hinted, true);
+	assert.match(audit.reasons.join(" "), /driver\/AX internals/);
+});
+
 // verify(): historical run logs showed 2-6 steps per run "verified" by expectations
 // that checked nothing, so an empty expectation must now FAIL, and a satisfied check
 // must discriminate pre-action state from post-action state.
@@ -185,6 +201,44 @@ test("verify__Passes__When__NoPrevHaystackGiven", () => {
 	// Final-state checks (done evidence) assert state, not change — no discrimination demand.
 	const result = verify({ description: "", textIncludes: ["cassidy"] }, "select voice: cassidy");
 	assert.equal(result.verified, true);
+});
+
+test("verify__RejectsExcludesOnlyEvidence__When__ThereIsNoPriorHaystack", () => {
+	// With no prevHaystack the discrimination guard never runs, so an exclude naming a string
+	// that was never on ANY screen used to verify against every final observation — the
+	// excludes-only twin of the blank-substring hole. done() passes no prev; this is its gate.
+	const result = verify({ description: "", textExcludes: ["flurble"] }, "a totally unrelated screen");
+	assert.equal(result.verified, false);
+	assert.match(result.note, /excludes-only/);
+});
+
+test("verify__AcceptsExcludesOnlyEvidence__When__PriorHaystackMakesItDiscriminating", () => {
+	// The act path always passes prev, and there an exclude proves a change: present before,
+	// gone now. The done-boundary gate must key on the MISSING prev, not on excludes-only.
+	const result = verify({ description: "", textExcludes: ["Loading"] }, "library view", "loading your drafts");
+	assert.equal(result.verified, true);
+	assert.equal(result.channel, "text");
+});
+
+test("checkableCount__ReturnsZero__When__IncludesIsNotAnArray", () => {
+	// Tool input is model output and OpenRouter does not enforce schemas; a malformed call
+	// must read as "nothing checkable" and cost a turn, not throw out of the gate.
+	for (const bad of ["Paris", 42, { 0: "x" }, null])
+		assert.equal(checkableCount({ description: "", textIncludes: bad as unknown as string[] }), 0, String(bad));
+});
+
+test("verify__DoesNotThrow__When__EvidenceEntriesAreNumbers", () => {
+	// Non-string entries are dropped, the real one still checks.
+	const result = verify(
+		{ description: "", textIncludes: [1080, "paris"] as unknown as string[] },
+		"timezone: paris",
+		"timezone: new york",
+	);
+	assert.equal(result.verified, true);
+	// All-malformed leaves nothing checkable, which is the same failure an empty list gets.
+	const allBad = verify({ description: "", textIncludes: [1, 2] as unknown as string[] }, "anything");
+	assert.equal(allBad.verified, false);
+	assert.match(allBad.note, /no checkable expectation/);
 });
 
 // --- painted targets. A canvas draws its contents instead of building them from controls,
@@ -317,6 +371,15 @@ test("framesShifted__ReportsNothing__When__DragWasNegligible", () => {
 	assert.equal(r.shifted, false);
 });
 
+test("framesShifted__ReportsMover__When__DisplayScaleHalvesTheDelta", () => {
+	// Frames are logical points and drags are screenshot pixels: at 2x backing scale — the
+	// common macOS case — an honest mover sits at EXACTLY half the requested distance, and a
+	// strict > 0.5 bound rejected it on every Retina display.
+	const r = framesShifted(at([["Clip", 500, 0]]), at([["Clip", 550, 0]]), 100, 0);
+	assert.equal(r.shifted, true);
+	assert.deepEqual(r.movers.map((m) => m.name), ["Clip"]);
+});
+
 test("auditTaskPrompt__Passes__When__NumbersAreGoalNotPosition", () => {
 	// The coordinate rule must not swallow numbers that specify the outcome. A resolution,
 	// a duration, and a count all read as digits and none of them is a hint.
@@ -401,6 +464,22 @@ test("scopeWarnings__GroupsBySurfacePair__When__ManySettingsShareTwoPanels", () 
 test("scopeWarnings__IncludesNavigationRoute__When__EdgesRecorded", () => {
 	// A scope choice is only actionable if the agent can reach the one it picks.
 	assert.match(scopeWarnings(yarnish), /route: click "Brand Kit"/);
+});
+
+test("scopeWarnings__CountsScopesNotNodes__When__ASettingHasTwoSameScopeEditors", () => {
+	// Two editors of one setting on the same document surface are ONE store and one bullet;
+	// counting nodes said "exist at 3 scopes" for a two-store setting and printed the same
+	// scope—surface line twice.
+	const twoEditors: AppMap = {
+		...yarnish,
+		nodes: [
+			...yarnish.nodes,
+			{ id: "editor/screen-clip-settings/cursor-style-quick", title: "Cursor Style (quick)", kind: "control", scope: "document", settingKey: "cursor-style" },
+		],
+	};
+	const w = scopeWarnings(twoEditors);
+	assert.match(w, /exist at 2 scopes/);
+	assert.equal(w.match(/document scope — editor\/screen-clip-settings/g)?.length, 1, "duplicate scope—surface bullets must dedupe");
 });
 
 test("scopeWarnings__ReturnsEmpty__When__NoAmbiguities", () => {
@@ -726,6 +805,19 @@ test("observe__ReportsZeroGeometry__When__WindowFrameIsUnavailable", async () =>
 	// containment test MISS rather than match wrongly.
 	const obs = await observeFixture([{ element_index: 1, role: "AXButton", label: "Save", frame: { x: 10, y: 20, w: 30, h: 40 } }]);
 	assert.deepEqual([obs.interactive[0].x, obs.interactive[0].y, obs.interactive[0].w, obs.interactive[0].h], [0, 0, 0, 0]);
+});
+
+test("observe__KeepsTheTrueValue__When__ValueDuplicatesTheLabel", async () => {
+	// The rendered line suppresses a value that repeats the label; the STRUCT must not. The
+	// mutation journal restores from this field, and a text field whose content equals its
+	// label used to reach it as before:"" — teardown then "restored" a field that had text
+	// by clearing it.
+	const obs = await observeFixture([
+		axWindow,
+		{ element_index: 1, role: "AXTextField", label: "Untitled", value: "Untitled", parent_index: 0, frame: { x: -2181, y: 763, w: 100, h: 20 } },
+	]);
+	assert.equal(obs.interactive[0].value, "Untitled");
+	assert.doesNotMatch(obs.elementsText, /value="Untitled"/);
 });
 
 // --- resetToHome(). Two tiers, because the strong one needs a map that declares a home and the
@@ -1309,6 +1401,36 @@ test("unpaintedStreak__CountsNothing__When__DeltaIsUnknown", () => {
 test("unpaintedStreak__CountsFromTheEnd__When__TheFreezeStartedMidRun", () => {
 	const steps = [paintStep(true, 0.5), paintStep(false, 0.2), paintStep(false, 0), paintStep(false, 0)];
 	assert.equal(unpaintedStreak(steps), 2);
+});
+
+test("onInterrupt__CancelsTheGraceBackstop__When__TheCheckerAcknowledgesTheSignal", async () => {
+	// The backstop exists for a signal nothing polls. Once the loop has READ the flag it owns
+	// cleanup — which legitimately outlives the grace window (ffmpeg assembly alone can) — so
+	// the timer must stand down, or it force-kills the run mid-cleanup and destroys the run
+	// log the function exists to preserve.
+	const beforeInt = process.listeners("SIGINT");
+	const beforeTerm = process.listeners("SIGTERM");
+	let closed = 0;
+	const log = console.log; // the handler prints banners; keep the child-IPC channel quiet
+	console.log = () => {};
+	try {
+		const check = onInterrupt(async () => {
+			closed++;
+			// Never resolves: even a regression cannot reach the process.exit in the timer's
+			// .finally and kill the test runner — the count above is the failure signal.
+			await new Promise<void>(() => {});
+		}, 30);
+		const added = process.listeners("SIGINT").filter((l) => !beforeInt.includes(l));
+		assert.equal(added.length, 1);
+		(added[0] as () => void)(); // the signal arrives; the backstop is armed
+		assert.equal(check(), true); // the loop reads the flag — cleanup is its responsibility now
+		await new Promise((r) => setTimeout(r, 120)); // well past graceMs
+		assert.equal(closed, 0, "the backstop fired despite the acknowledgement");
+	} finally {
+		console.log = log;
+		for (const l of process.listeners("SIGINT")) if (!beforeInt.includes(l)) process.removeListener("SIGINT", l);
+		for (const l of process.listeners("SIGTERM")) if (!beforeTerm.includes(l)) process.removeListener("SIGTERM", l);
+	}
 });
 
 function withRunStamp(value: string | undefined, fn: () => void): void {
