@@ -36,7 +36,10 @@ export function parseCli(argv: string[]): CliConfig {
 	// direction is worse than no verdict until we have a measured error rate for it.
 	const judgeMode = process.env.VISUAL_JUDGE ?? "advisory";
 	const backendIdx = argv.indexOf("--backend");
-	const backendKind = backendIdx >= 0 ? (argv[backendIdx + 1] ?? "ax") : "ax";
+	// Explicit override if present; otherwise the default is target-dependent and computed
+	// below, once the target is known. "" (a bare trailing --backend) stays invalid so it
+	// trips the usage check rather than silently taking a default.
+	const backendExplicit = backendIdx >= 0 ? (argv[backendIdx + 1] ?? "") : undefined;
 	const args = argv.filter(
 		(a, i) =>
 			!["--record", "--hinted", "--no-reset", "--no-vision", "--no-ax", "--allow-unready"].includes(a) &&
@@ -63,8 +66,17 @@ export function parseCli(argv: string[]): CliConfig {
 	// drove the app named on the command line, grounding it with the wrong appmap and recording
 	// a run log that lies about which map it used. Rebuild the target from the resolved name.
 	if (target.kind === "app") target = { kind: "app", name: app };
+	// Target-dependent default (2026-07-31): web targets go to the CDP-direct backend — it
+	// launches its own persistent-profile Chrome and needs no cua, matching the productization
+	// direction in docs/research/2026-07-30-cua-learnings-for-real-implementation.md. App
+	// (Electron) targets stay on the cua `ax` backend by default: cdp can only ATTACH to an
+	// Electron app already launched with --remote-debugging-port (src/backends/cdp.ts), so a
+	// bare app run has nothing to attach to. Pass --backend cdp explicitly once the app is
+	// flag-launched. An explicit --backend always wins.
+	const backendKind = backendExplicit ?? (target.kind === "web" ? "cdp" : "ax");
 	if (!task || !["ax", "dom", "cdp"].includes(backendKind)) {
 		console.error('usage: tsx src/core/agent.ts "<task>" ["App Name"] [--record] [--backend ax|dom|cdp] [--no-vision] [--no-ax]');
+		console.error("default backend: cdp for --url web targets, ax (cua) for app targets. Pass --backend to override.");
 		console.error("--backend dom drives an Electron/browser target over CDP via cua's browser_* tools; launch it with --remote-debugging-port first.");
 		console.error("--backend cdp drives it over CDP directly (playwright-core) with NO cua in the loop; web targets get their own Chrome, Electron targets need --remote-debugging-port.");
 		process.exit(1);
