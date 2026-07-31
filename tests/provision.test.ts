@@ -285,14 +285,29 @@ test("stageProvisioningFiles__CarriesTheModelKeyAsA0600File__When__ProvisionerHa
 		assert.ok(stageProvisioningFiles(dir, "sk-or-v1-abc123").includes("env"));
 		const staged = path.join(dir, "env");
 		assert.match(fs.readFileSync(staged, "utf8"), /^OPENROUTER_API_KEY='sk-or-v1-abc123'\n$/);
+
+		// Both providers ship when both are present — one line each, still one 0600 file. The
+		// far side merges per NAME, so this cannot clobber a hand-set host key.
+		stageProvisioningFiles(dir, "sk-or-v1-abc123", "sk-ant-xyz");
+		assert.equal(fs.readFileSync(staged, "utf8"), "OPENROUTER_API_KEY='sk-or-v1-abc123'\nANTHROPIC_API_KEY='sk-ant-xyz'\n");
+
+		// Anthropic alone works too — a fleet keyed for one provider is not required to have
+		// the other.
+		fs.rmSync(staged);
+		stageProvisioningFiles(dir, undefined, "sk-ant-xyz");
+		assert.equal(fs.readFileSync(staged, "utf8"), "ANTHROPIC_API_KEY='sk-ant-xyz'\n");
+		assert.equal(fs.statSync(staged).mode & 0o777, 0o600);
 		// 0600 on the LOCAL staging copy too — it sits in /tmp, and rsync --archive is what
 		// carries the mode to the far side, so a loose bit here is a loose bit everywhere.
 		assert.equal(fs.statSync(staged).mode & 0o777, 0o600);
 
 		// A file, never an argv. Anything in an ssh argv is reassembled into a command line on
 		// the remote, where `ps` shows it to every local account for as long as it runs.
+		// Merged per key NAME now, not installed whole — the append is how a second provider's
+		// key reaches a fleet keyed before that provider existed.
 		const install = fs.readFileSync(path.join(dir, "install-launchagent.sh"), "utf8");
-		assert.match(install, /install -m 600 "\$PROV\/env" "\$HOME\/\.yarn-runner\/env"/);
+		assert.match(install, /printf '%s\\n' "\$LINE" >> "\$HOME\/\.yarn-runner\/env"/);
+		assert.match(install, /chmod 600 "\$HOME\/\.yarn-runner\/env"/);
 		// Kept, not clobbered: a host given a deliberate per-host key by hand must not lose it to
 		// whoever re-provisions next. The GUI is the deliberate-overwrite path.
 		assert.match(install, /KEY=kept/);

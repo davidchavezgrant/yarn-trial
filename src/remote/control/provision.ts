@@ -175,7 +175,7 @@ export async function provisionHost(host: HostEntry, opts: ProvisionOptions = {}
 		// Same source as every other entry point: `run` sources ../yarn/.env before exec'ing
 		// node, so the key is in the environment or it does not exist. Absent is not an error —
 		// a host can be provisioned by someone who has no key and get one later from the GUI.
-		stageProvisioningFiles(stage, process.env.OPENROUTER_API_KEY);
+		stageProvisioningFiles(stage, process.env.OPENROUTER_API_KEY, process.env.ANTHROPIC_API_KEY);
 		synced = await attempt(() => rsync(rsyncArgv(host, source, REMOTE_CHECKOUT), { timeoutMs: opts.syncTimeoutMs ?? SYNC_TIMEOUT_MS }));
 		if (synced.ok) synced = await attempt(() => rsync(rsyncArgv(host, stage, `${REMOTE_CHECKOUT}/${STAGE_DIR}`), { timeoutMs }));
 	} catch (e) {
@@ -397,7 +397,7 @@ export function doctorProblems(report: RemoteDoctor): string[] {
 	const problems: string[] = [];
 
 	if (report.apiKey === undefined || report.apiKey === "MISSING")
-		problems.push(`no model API key — put OPENROUTER_API_KEY in ${report.runnerDir ?? "~/.yarn-runner"}/env`);
+		problems.push(`no model API key — put OPENROUTER_API_KEY or ANTHROPIC_API_KEY in ${report.runnerDir ?? "~/.yarn-runner"}/env`);
 	if (report.envFile?.warning) problems.push(report.envFile.warning);
 	if (report.tools?.ffmpeg === false) problems.push("ffmpeg missing — --record cannot assemble an mp4");
 	if (report.tools?.python3 === false) problems.push("python3 missing — pixel-delta verification degrades");
@@ -477,7 +477,7 @@ export function rsyncArgv(host: HostEntry, source: string, remoteDir: string): s
  * because their content is multi-line shell and XML — the one thing that must never be
  * interpolated into an argv sshd is about to flatten into a shell string.
  */
-export function stageProvisioningFiles(dir: string, modelKey?: string): string[] {
+export function stageProvisioningFiles(dir: string, modelKey?: string, anthropicKey?: string): string[] {
 	const files: [name: string, body: string, mode: number][] = [
 		["runnerctl", RUNNERCTL_SHIM, 0o755],
 		["yarn-runner-serve", SERVE_SHIM, 0o755],
@@ -488,14 +488,20 @@ export function stageProvisioningFiles(dir: string, modelKey?: string): string[]
 		["install-default-browser.sh", installDefaultBrowserScript(), 0o755],
 	];
 
-	// The key rides along as a FILE for the same reason the shims do, only more so. Anything in
+	// The keys ride along as a FILE for the same reason the shims do, only more so. Anything in
 	// an ssh argv is reassembled into a command line on the far side, where it is visible in
 	// `ps` to every local account for as long as the command runs — a secret in an argv is a
-	// secret published. Staged and rsync'd, it only ever exists as 0600 bytes on disk.
+	// secret published. Staged and rsync'd, they only ever exist as 0600 bytes on disk.
 	//
 	// 0600 here as well as on the far side: rsync --archive carries the mode across, and the
-	// local staging dir sits in /tmp.
-	if (modelKey) files.push(["env", `OPENROUTER_API_KEY='${checkModelKey(modelKey)}'\n`, 0o600]);
+	// local staging dir sits in /tmp. Both providers ship when both are present — the far
+	// side merges PER NAME (a name the host lacks is appended; one it has keeps the host's
+	// value), so shipping a second provider's key cannot clobber a hand-set first one.
+	const envLines = [
+		...(modelKey ? [`OPENROUTER_API_KEY='${checkModelKey(modelKey)}'`] : []),
+		...(anthropicKey ? [`ANTHROPIC_API_KEY='${checkModelKey(anthropicKey)}'`] : []),
+	];
+	if (envLines.length) files.push(["env", `${envLines.join("\n")}\n`, 0o600]);
 
 	fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 	for (const [name, body, mode] of files) {
@@ -724,16 +730,25 @@ install -m 755 "$PROV/yarn-runner-serve" "$HOME/.local/bin/yarn-runner-serve"
 # (nothing sent, host already has one), absent (nothing sent, host has none — the only
 # state that needs action).
 KEY=absent
-if grep -qE '^[[:space:]]*(export[[:space:]]+)?OPENROUTER_API_KEY[[:space:]]*=' "$HOME/.yarn-runner/env" 2>/dev/null; then
+if grep -qE '^[[:space:]]*(export[[:space:]]+)?(OPENROUTER|ANTHROPIC)_API_KEY[[:space:]]*=' "$HOME/.yarn-runner/env" 2>/dev/null; then
 	KEY=present
 fi
 if [ -f "$PROV/env" ]; then
-	if [ "$KEY" = present ]; then
-		KEY=kept
-	else
-		install -m 600 "$PROV/env" "$HOME/.yarn-runner/env"
-		KEY=written
-	fi
+	# Merged PER KEY NAME, not installed whole: a name the host already has keeps the
+	# host's value (a deliberate per-host key must not lose to whoever re-provisions
+	# next), while a name it lacks is appended — which is how a second provider's key
+	# reaches a fleet that was keyed before that provider existed.
+	APPENDED=0
+	while IFS= read -r LINE; do
+		NAME="\${LINE%%=*}"
+		[ -n "$NAME" ] || continue
+		if ! grep -qE "^[[:space:]]*(export[[:space:]]+)?$NAME[[:space:]]*=" "$HOME/.yarn-runner/env" 2>/dev/null; then
+			printf '%s\\n' "$LINE" >> "$HOME/.yarn-runner/env"
+			chmod 600 "$HOME/.yarn-runner/env"
+			APPENDED=1
+		fi
+	done < "$PROV/env"
+	if [ "$APPENDED" = 1 ]; then KEY=written; elif [ "$KEY" = present ]; then KEY=kept; fi
 	rm -f "$PROV/env"
 fi
 
