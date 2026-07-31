@@ -36,6 +36,7 @@ import {
 	verify,
 	visualJudge,
 } from "./harness.js";
+import { CDP_ACT_TOOL, CDP_FIND_TOOL, CDP_RULES, CdpBackend } from "./cdp.js";
 import { DOM_ACT_TOOL, DOM_RULES, DomBackend, FIND_TOOL } from "./dom.js";
 import { appendMutation, detectMutation, readJournal } from "./journal.js";
 import { runTeardown } from "./teardown.js";
@@ -44,7 +45,7 @@ import { appmapsDir, recipesDir, relToData } from "./paths.js";
 import { ensureBrowser } from "./browser.js";
 import { parseTarget, type Target, targetLabel, targetSlug, type TargetVocabulary, targetVocabulary } from "./target.js";
 import type { ActionRequest, Expectation, StepRecord } from "./types.js";
-import type { ObservationBundle, VerifyResult, VisualVerdict, WindowRef } from "./harness.js";
+import type { HomeResetResult, ObservationBundle, VerifyResult, VisualVerdict, WindowRef } from "./harness.js";
 
 const MAX_STEPS = Number(process.env.AGENT_STEPS ?? 15);
 /**
@@ -305,9 +306,10 @@ async function main(): Promise<void> {
 	// Yarn is the canonical target for all runs (set by David, 2026-07-29); Notion
 	// Calendar remains available by passing it explicitly.
 	const app = target.kind === "web" ? targetLabel(target) : (afterUrl[1] ?? "Yarn");
-	if (!task || !["ax", "dom"].includes(backendKind)) {
-		console.error('usage: tsx src/agent.ts "<task>" ["App Name"] [--record] [--backend ax|dom] [--no-vision]');
-		console.error("--backend dom drives an Electron/browser target over CDP; launch it with --remote-debugging-port first.");
+	if (!task || !["ax", "dom", "cdp"].includes(backendKind)) {
+		console.error('usage: tsx src/agent.ts "<task>" ["App Name"] [--record] [--backend ax|dom|cdp] [--no-vision]');
+		console.error("--backend dom drives an Electron/browser target over CDP via cua's browser_* tools; launch it with --remote-debugging-port first.");
+		console.error("--backend cdp drives it over CDP directly (playwright-core) with NO cua in the loop; web targets get their own Chrome, Electron targets need --remote-debugging-port.");
 		process.exit(1);
 	}
 
@@ -337,8 +339,15 @@ async function main(): Promise<void> {
 	// front of it cannot tell when it is safe to type. OVERLAY=0 suppresses it for takes
 	// where the banner would be in frame.
 	const overlay = startOverlay("drive", `Agent driving ${app} — do not touch`);
-	const driver = await Driver.start("agent");
-	const interrupted = onInterrupt(() => driver.close());
+	// The CDP backend runs with NO cua driver at all — that absence is its reason to exist
+	// (no session TTL, no shared daemon, no consent gate; see src/cdp.ts). Everything below
+	// that needs the driver is therefore conditional on this being set.
+	const driver = backendKind === "cdp" ? undefined : await Driver.start("agent");
+	let cdp: CdpBackend | undefined;
+	const interrupted = onInterrupt(async () => {
+		await driver?.close();
+		await cdp?.close();
+	});
 	const records: StepRecord[] = [];
 	const startedAt = Date.now();
 	const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, modelCalls: 0 };
@@ -413,7 +422,7 @@ async function main(): Promise<void> {
 					homeReset,
 					domEnrichment,
 					windowGeometry,
-					sessionRevivals: driver.revivals,
+					sessionRevivals: driver?.revivals ?? 0,
 					expectationRejections,
 					findCalls,
 					elapsedSec: Math.round((Date.now() - startedAt) / 1000),
@@ -465,7 +474,11 @@ async function main(): Promise<void> {
 	const warnings = graph ? scopeWarnings(graph) : "";
 	const ambiguities = graph ? findScopeAmbiguities(graph) : [];
 
-	const basePrompt = systemPrompt(backendKind === "dom" ? DOM_RULES : DRIVER_RULES, vision, targetVocabulary(target));
+	const basePrompt = systemPrompt(
+		backendKind === "cdp" ? CDP_RULES : backendKind === "dom" ? DOM_RULES : DRIVER_RULES,
+		vision,
+		targetVocabulary(target),
+	);
 	const system = grounding.notes
 		? `${basePrompt}\n\n# App grounding notes for ${app} (from a prior exploration pass — trust these to skip dead ends)\n${grounding.notes}${warnings}`
 		: basePrompt;
@@ -476,9 +489,15 @@ async function main(): Promise<void> {
 		for (const a of ambiguities)
 			console.log(`  scope ambiguity: ${a.settingKey} — ${a.nodes.map((n) => `${n.id} [${n.scope}]`).join(" vs ")}`);
 	}
-	// find is DOM-only: it is the escape hatch from the semantic_v2 node budget, and the
-	// AX path has no budget to escape (get_window_state returns the whole tree).
-	const tools: Anthropic.Tool[] = backendKind === "dom" ? [DOM_ACT_TOOL, FIND_TOOL, CLAIM_TOOL, DONE_TOOL] : [ACT_TOOL, CLAIM_TOOL, DONE_TOOL];
+	// find is DOM/CDP-only: on cua's DOM path it is the escape hatch from the semantic_v2
+	// node budget; on the direct CDP path the tree is complete and find is just search. The
+	// AX path has neither need (get_window_state returns the whole tree).
+	const tools: Anthropic.Tool[] =
+		backendKind === "cdp"
+			? [CDP_ACT_TOOL, CDP_FIND_TOOL, CLAIM_TOOL, DONE_TOOL]
+			: backendKind === "dom"
+				? [DOM_ACT_TOOL, FIND_TOOL, CLAIM_TOOL, DONE_TOOL]
+				: [ACT_TOOL, CLAIM_TOOL, DONE_TOOL];
 
 	try {
 		// A web target has no app to launch: the driver brings up its own Chromium against a
@@ -486,26 +505,35 @@ async function main(): Promise<void> {
 		// not the operator's own Chrome.
 		// Reassigned by ensureObservable: recovering an unobservable target can relaunch it
 		// onto a new window, and every later call must use that one.
-		let win: WindowRef;
-		if (target.kind === "web") {
-			({ win } = await ensureBrowser(driver, target, { cdp: backendKind === "dom" }));
+		// On the CDP backend there is no driver and no window: the page is the target, and
+		// acquisition (launch-or-attach, tab pick, navigate) lives in CdpBackend.acquire.
+		let win: WindowRef | undefined;
+		if (backendKind === "cdp") {
+			cdp = await CdpBackend.acquire(target);
+		} else if (target.kind === "web") {
+			({ win } = await ensureBrowser(driver!, target, { cdp: backendKind === "dom" }));
 		} else {
-			await driver.act({ kind: "tool", name: "launch_app", args: { name: app } });
+			await driver!.act({ kind: "tool", name: "launch_app", args: { name: app } });
 			await new Promise((r) => setTimeout(r, 1500));
-			win = await findWindow(driver, app);
+			win = await findWindow(driver!, app);
 		}
 		// Last chance to take your hands off before the run owns the pointer.
 		await overlay.countdown();
 		// For the DOM backend the CDP bind is the observability gate; AX darkness is fine.
 		const dom =
 			backendKind === "dom"
-				? await DomBackend.bind(driver, win, undefined, target.kind === "web" ? target.origin : undefined)
+				? await DomBackend.bind(driver!, win!, undefined, target.kind === "web" ? target.origin : undefined)
 				: undefined;
-		if (!dom) win = await ensureObservable(driver, win, app);
+		if (!dom && !cdp) win = await ensureObservable(driver!, win!, app);
 		// See the same call in src/explore.ts: page content only, on the AX fallback.
 		const webAreaOnly = target.kind === "web";
-		const doObserve = (name: string) => (dom ? dom.observe(name) : observe(driver, win, name, { webAreaOnly }));
-		console.log(`target: ${app} pid=${win.pid} window=${win.windowId} backend=${backendKind}`);
+		const doObserve = (name: string) =>
+			cdp ? cdp.observe(name) : dom ? dom.observe(name) : observe(driver!, win!, name, { webAreaOnly });
+		console.log(
+			cdp
+				? `target: ${app} url=${target.kind === "web" ? target.url : "(attached)"} backend=cdp`
+				: `target: ${app} pid=${win!.pid} window=${win!.windowId} backend=${backendKind}`,
+		);
 
 		// Start from a declared home state, so a run never inherits the previous run's
 		// navigation. --no-reset opts out (e.g. deliberately resuming mid-flow).
@@ -515,7 +543,16 @@ async function main(): Promise<void> {
 		if (!noReset) {
 			// The reset clicks, so it is actuation like any step.
 			overlay.setDriving(true);
-			const reset = await resetToHome(driver, win, app);
+			// A web target's home state is its URL, so the CDP reset is a navigation — the
+			// declared-home machinery below exists because a Mac app has no such address.
+			const reset = cdp
+				? await cdp.goHome().then(
+						(detail): { result: HomeResetResult; detail: string } => ({
+							result: detail.startsWith("none") ? "none" : "reset",
+							detail,
+						}),
+					)
+				: await resetToHome(driver!, win!, app);
 			overlay.setDriving(false);
 			homeReset = reset.result;
 			console.log(`home reset: ${reset.result} — ${reset.detail}`);
@@ -549,14 +586,44 @@ async function main(): Promise<void> {
 		}
 		console.log(`task: ${task}\n`);
 
-		if (record) {
+		if (record && cdp) {
+			// No staging and no settle dance: the recording surface is the page viewport,
+			// which playwright screenshots at CSS scale regardless of what covers the window —
+			// the same occlusion-proof property the window-snapshot path has, and a viewport
+			// does not resize when nobody resizes it. The trajectory feed (cua's
+			// turn-NNNNN/action.json) has no equivalent here yet; StepRecords carry the same
+			// click points and timestamps for the humanize pass.
+			fs.mkdirSync(framesDir, { recursive: true });
+			recordingActive = true;
+			fs.writeFileSync(`${recordingDir}/recording-started.json`, JSON.stringify({ epochMs: Date.now() }));
+			frameLoop = (async () => {
+				while (recordingActive) {
+					if (!driverBusy) {
+						driverBusy = true;
+						const framePath = `${framesDir}/f-${String(frameTimes.length).padStart(5, "0")}.png`;
+						try {
+							await cdp!.screenshot(framePath);
+							frameTimes.push(Date.now());
+						} catch (err) {
+							frameDrops.push(`error: ${err instanceof Error ? err.message.slice(0, 120) : String(err)}`);
+							fs.rmSync(framePath, { force: true });
+						} finally {
+							driverBusy = false;
+						}
+					}
+					const sinceAction = Date.now() - lastActionAt;
+					await new Promise((r) => setTimeout(r, sinceAction < RESPONSE_WINDOW_MS ? RESPONSE_POLL_MS : IDLE_POLL_MS));
+				}
+			})();
+			console.log(`recording viewport frames -> ${framesDir}\n`);
+		} else if (record) {
 			// Staging raises the window and resizes it to fill the display — as intrusive as
 			// any click, and the one moment an operator is most likely to reach for the mouse.
 			overlay.setDriving(true);
 			try {
 				const stage = stageWindowForRecording(app);
 				console.log(`recording stage: ${stage.detail}`);
-				windowGeometry = { ...(win.bounds ? { bounds: win.bounds } : {}), ...(stage.geometry ? { staged: stage.geometry } : {}) };
+				windowGeometry = { ...(win!.bounds ? { bounds: win!.bounds } : {}), ...(stage.geometry ? { staged: stage.geometry } : {}) };
 				await new Promise((r) => setTimeout(r, 1500));
 			} catch {
 				console.log("could not stage window for recording; recording may be degraded");
@@ -578,10 +645,10 @@ async function main(): Promise<void> {
 			while (Date.now() - settleStart < STAGE_SETTLE_MAX_MS && stable < STAGE_SETTLE_HITS) {
 				const probe = `${framesDir}/.settle.png`;
 				try {
-					await driver.act({
+					await driver!.act({
 						kind: "tool",
 						name: "get_window_state",
-						args: { pid: win.pid, window_id: win.windowId, screenshot_out_file: probe },
+						args: { pid: win!.pid, window_id: win!.windowId, screenshot_out_file: probe },
 					});
 					const s = pngSize(probe);
 					const key = `${s.w}x${s.h}`;
@@ -598,7 +665,7 @@ async function main(): Promise<void> {
 					? `window settled at ${lastSize} after ${((Date.now() - settleStart) / 1000).toFixed(1)}s`
 					: `window never settled (last ${lastSize || "unknown"}); recording anyway`,
 			);
-			await driver.act({ kind: "tool", name: "start_recording", args: { output_dir: `${recordingDir}/trajectory` } });
+			await driver!.act({ kind: "tool", name: "start_recording", args: { output_dir: `${recordingDir}/trajectory` } });
 			recordingActive = true;
 			// Record the run, not the setup. start_recording backfills turns from earlier in the
 			// driver session — the home reset's own clicks land in trajectory/ as turn-00001 and
@@ -615,10 +682,10 @@ async function main(): Promise<void> {
 							// Capture everything; malformed frames are filtered at assembly by
 							// majority vote on frame size (self-consistent — no external reference
 							// that can go stale when the window resizes or the AX tree goes dark).
-							await driver.act({
+							await driver!.act({
 								kind: "tool",
 								name: "get_window_state",
-								args: { pid: win.pid, window_id: win.windowId, screenshot_out_file: framePath },
+								args: { pid: win!.pid, window_id: win!.windowId, screenshot_out_file: framePath },
 							});
 							frameTimes.push(Date.now());
 						} catch (err) {
@@ -752,7 +819,7 @@ async function main(): Promise<void> {
 				try {
 					while (driverBusy) await new Promise((r) => setTimeout(r, 50));
 					driverBusy = true;
-					const hits = await dom!.find(q);
+					const hits = await (cdp ?? dom!).find(q);
 					driverBusy = false;
 					text = hits.length
 						? `find("${q}") matched ${hits.length}:\n` +
@@ -974,7 +1041,13 @@ async function main(): Promise<void> {
 			let isError = false;
 			let request: ActionRequest | null = null;
 			try {
-				request = dom ? await dom.toRequest(input.action) : toActionRequest(input.action, win);
+				// The CDP backend acts directly (no driver dispatch), so its "request" is
+				// only what the run log records; the unsupported-verb check still runs here
+				// so a bad name is rejected before anything executes, same as the others.
+				if (cdp) {
+					cdp.assertSupported(input.action.name);
+					request = input.action.name === "wait" ? null : cdp.requestForLog(input.action);
+				} else request = dom ? await dom.toRequest(input.action) : toActionRequest(input.action, win!);
 			} catch (err) {
 				// Unsupported action: report it back so the model can pick a real one.
 				resultText = `ACTION REJECTED: ${err instanceof Error ? err.message : String(err)}`;
@@ -1001,9 +1074,11 @@ async function main(): Promise<void> {
 			try {
 				if (!isError) {
 					try {
-						resultText = request
-							? (await driver.act(request)).text.slice(0, 400)
-							: "waited (no driver action)";
+						resultText = cdp
+							? (await cdp.act(input.action)).slice(0, 400)
+							: request
+								? (await driver!.act(request)).text.slice(0, 400)
+								: "waited (no driver action)";
 					} catch (err) {
 						resultText = `ACTION FAILED: ${err instanceof Error ? err.message : String(err)}`;
 						isError = true;
@@ -1149,7 +1224,7 @@ async function main(): Promise<void> {
 				for (const [reason, n] of counts) console.log(`frame drops x${n}: ${reason}`);
 			}
 			try {
-				await driver.act({ kind: "tool", name: "stop_recording", args: {} });
+				await driver?.act({ kind: "tool", name: "stop_recording", args: {} });
 			} catch {}
 			// Before assembly, so a failed encode still leaves usable timing. These are the only
 			// record of WHEN each frame was captured: list.txt clamps every gap to five seconds,
@@ -1183,13 +1258,25 @@ async function main(): Promise<void> {
 		 * as a success does, and those are the ones nobody is watching. The driver is still
 		 * open here — `driver.close()` is deliberately below.
 		 */
-		if (cleanupMode !== "off" && !interrupted()) {
+		if (cleanupMode !== "off" && !interrupted() && !driver) {
+			// The teardown loop replays restores through the AX path (observe/toActionRequest
+			// against a WindowRef), which this backend does not have. The journal is still on
+			// disk with everything a restore needs — reported as unattempted, not hidden.
+			const journal = readJournal(journalPath);
+			if (journal.length || claimed.length)
+				cleanupReport = {
+					mode: cleanupMode,
+					skipped: "cdp backend has no teardown loop yet",
+					journalEntries: journal.length,
+					claimed: claimed.length,
+				};
+		} else if (cleanupMode !== "off" && !interrupted()) {
 			try {
 				const journal = readJournal(journalPath);
 				if (journal.length || claimed.length) {
 					overlay.setDriving(true);
 					cleanupReport = await runTeardown({
-						driver,
+						driver: driver!,
 						client,
 						model,
 						app,
@@ -1213,7 +1300,9 @@ async function main(): Promise<void> {
 			}
 		}
 
-		await driver.close();
+		await driver?.close();
+		// Disconnects only — the browser stays up holding the signed-in profile (src/cdp.ts).
+		await cdp?.close();
 		overlay.stop();
 
 		/**

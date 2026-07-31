@@ -24,7 +24,8 @@
   "type": "module",
   "dependencies": {
     "@anthropic-ai/sdk": "0.115.0",
-    "@trycua/cua-driver": "0.12.5"
+    "@trycua/cua-driver": "0.12.5",
+    "playwright-core": "^1.62.1"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
