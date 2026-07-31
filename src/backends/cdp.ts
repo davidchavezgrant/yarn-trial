@@ -319,8 +319,8 @@ export class CdpBackend {
 		// envNum already treats as unset), the kinds keep their separate defaults: 9777 for
 		// the Chrome this backend launches, 9222 for the documented `open -a` example.
 		const portConfigured = (process.env.CDP_PORT ?? "").trim() !== "";
-		const port = target.kind === "app" && !portConfigured ? 9222 : DEFAULT_PORT;
-		const endpoint = process.env.CDP_URL ?? `http://127.0.0.1:${port}`;
+		let port = target.kind === "app" && !portConfigured ? 9222 : DEFAULT_PORT;
+		let endpoint = process.env.CDP_URL ?? `http://127.0.0.1:${port}`;
 
 		if (target.kind === "web" && !process.env.CDP_URL && !(await endpointAlive(endpoint, 1, 0))) {
 			fs.mkdirSync(PROFILE_DIR, { recursive: true });
@@ -344,10 +344,13 @@ export class CdpBackend {
 		}
 
 		// Electron attach: when the target asked for it (and no CDP_URL points elsewhere),
-		// bring the endpoint up ourselves — attach to a listening instance, launch the app
-		// with the port when nothing runs, refuse with the fix when it runs portless.
+		// bring the endpoint up ourselves and attach WHERE IT LANDED — the app's own argv
+		// decides the port when it is already flag-launched, and a launch scans past ports
+		// held by other apps (the first live run attached to Notion Calendar squatting on
+		// 9222 and drove the wrong app). A live endpoint on the preferred port proves
+		// nothing; ensureElectronEndpoint works from process truth.
 		if (target.kind === "app" && target.cdpAttach && !process.env.CDP_URL)
-			await ensureElectronEndpoint(target.name, endpoint, port);
+			({ endpoint, port } = await ensureElectronEndpoint(target.name, port));
 
 		if (!(await endpointAlive(endpoint, 1, 0)))
 			throw new Error(

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { appExecutable, pickMainPage } from "../src/backends/electron-attach.js";
+import { appExecutable, debugPortFromArgv, pickMainPage } from "../src/backends/electron-attach.js";
 
 // The shape a real Electron endpoint presents: the app's window is NOT alone — its
 // devtools, extension machinery and hidden background window are all page targets too,
@@ -84,4 +84,15 @@ test("appExecutable__FallsBackToTheAppName__When__ThePlistIsMissing", () => {
 	fs.mkdirSync(macos, { recursive: true });
 	fs.writeFileSync(path.join(macos, "Plain"), "");
 	assert.equal(appExecutable("Plain", [dir]), path.join(macos, "Plain"));
+});
+
+test("debugPortFromArgv__ReadsThePort__When__TheFlagIsPresent", () => {
+	assert.equal(
+		debugPortFromArgv("/Applications/Notion Calendar.app/Contents/MacOS/Notion Calendar --remote-debugging-port=9222 --soft-quit-relaunch"),
+		9222,
+	);
+});
+
+test("debugPortFromArgv__ReturnsUndefined__When__TheFlagIsAbsent", () => {
+	assert.equal(debugPortFromArgv("/Applications/Yarn.app/Contents/MacOS/Yarn --disable-renderer-backgrounding"), undefined);
 });

@@ -75,40 +75,96 @@ export function appExecutable(appName: string, dirs: string[] = APP_DIRS): strin
 }
 
 /**
- * Is any process of the bundle up? Matched on the bundle path so the app's Helper
- * processes (which live under Contents/Frameworks/) count too — a half-quit app whose
- * main process died but whose helpers linger still holds the single-instance lock, and
- * relaunching under it produces a silent no-op instead of a debug port.
+ * The app's MAIN process command line, if it is running. Main process only — argv[0] is
+ * the bundle's MacOS binary — because that is the process that owns the debug flag and
+ * Chromium's single-instance lock. Helper processes (crashpad, recordkit, renderers under
+ * Contents/Frameworks/) routinely outlive a cmd+Q by design and hold neither; counting
+ * them as "running" made a cleanly-quit app refuse to relaunch (observed with Yarn's
+ * lingering crashpad handler, 2026-07-31).
  */
-function bundleRunning(executable: string): boolean {
-	const bundle = executable.replace(/\/Contents\/MacOS\/[^/]+$/, "");
+function mainProcessArgv(executable: string): string | undefined {
+	let pids: string[];
 	try {
-		// pgrep -f takes a regex; the path's dots widen the match only trivially.
-		execFileSync("pgrep", ["-f", `${bundle}/`], { stdio: "ignore" });
-
-		return true;
+		// pgrep -f takes a regex; escape the path's regex metacharacters (dots, spaces are fine).
+		pids = execFileSync("pgrep", ["-f", executable.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")], { encoding: "utf8" })
+			.trim()
+			.split("\n");
 	} catch {
-		return false; // exit 1: no match
+		return undefined; // exit 1: no match at all, helpers included
+	}
+	for (const pid of pids) {
+		try {
+			const argv = execFileSync("ps", ["-o", "command=", "-p", pid], { encoding: "utf8" }).trim();
+			if (argv === executable || argv.startsWith(`${executable} `)) return argv;
+		} catch {}
+	}
+
+	return undefined;
+}
+
+/** The debug port an argv declares, if any. Pure, for tests. */
+export function debugPortFromArgv(argv: string): number | undefined {
+	const m = argv.match(/--remote-debugging-port=(\d+)/);
+
+	return m ? Number(m[1]) : undefined;
+}
+
+/** Executable path of whatever is LISTENING on the port, or undefined when it is free. */
+function portOwnerPath(port: number): string | undefined {
+	try {
+		const pid = execFileSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], { encoding: "utf8" }).trim().split("\n")[0];
+		if (!pid) return undefined;
+
+		return execFileSync("ps", ["-o", "comm=", "-p", pid], { encoding: "utf8" }).trim() || `pid ${pid}`;
+	} catch {
+		return undefined; // lsof exit 1: nothing listening
 	}
 }
 
+/** Tries past ports squatted by other apps when picking a launch port. */
+const PORT_SCAN_SPAN = 20;
+
 /**
- * Bring up a CDP endpoint for the app: attach if one is already listening, launch the
- * app with the debug flag when it is not running at all, and refuse — with the fix in
- * the message — when it is running WITHOUT the flag. Quitting the user's app is the
- * operator's call, not this code's.
+ * Bring up a CDP endpoint for the app and return where it landed. Process truth first,
+ * endpoint second — the port number proves nothing about who owns it: the first live run
+ * of this path attached to Notion Calendar (which happened to hold the default 9222) and
+ * drove the wrong app. So:
+ *
+ *   app running WITH the flag    -> attach to the port ITS argv declares (CDP_PORT need not match)
+ *   app running WITHOUT the flag -> refuse with the fix; quitting the user's app is not this code's call
+ *   app not running              -> launch it on a port nothing else is listening on
+ *
+ * Lingering helper processes after a cmd+Q count as "not running" — see mainProcessArgv.
  */
-export async function ensureElectronEndpoint(appName: string, endpoint: string, port: number): Promise<void> {
-	if (await endpointAlive(endpoint, 1, 0)) return; // already running WITH the port
-
+export async function ensureElectronEndpoint(appName: string, preferredPort: number): Promise<{ endpoint: string; port: number }> {
 	const bin = appExecutable(appName);
-	if (bundleRunning(bin))
-		throw new Error(
-			`${appName} is already running WITHOUT a debug port, and one cannot be added to a live process. ` +
-				`Quit ${appName} (cmd+Q) and re-run — the run relaunches it with --remote-debugging-port=${port}. ` +
-				`If you launched it with a debug port on another number, set CDP_PORT to match instead.`,
-		);
 
+	const argv = mainProcessArgv(bin);
+	if (argv) {
+		const declared = debugPortFromArgv(argv);
+		if (declared === undefined)
+			throw new Error(
+				`${appName} is already running WITHOUT a debug port, and one cannot be added to a live process. ` +
+					`Quit ${appName} (cmd+Q) and re-run — the run relaunches it with --remote-debugging-port=${preferredPort}.`,
+			);
+		const endpoint = `http://127.0.0.1:${declared}`;
+		if (!(await endpointAlive(endpoint, 8, 250)))
+			throw new Error(`${appName} is running with --remote-debugging-port=${declared} but ${endpoint} is not answering`);
+		if (declared !== preferredPort) console.log(`${appName} already exposes its own debug port ${declared} — attaching there`);
+
+		return { endpoint, port: declared };
+	}
+
+	let port = preferredPort;
+	for (let tries = 0; ; port++, tries++) {
+		if (tries >= PORT_SCAN_SPAN)
+			throw new Error(`no free debug port in ${preferredPort}..${port - 1} — every one has a listener already`);
+		const owner = portOwnerPath(port);
+		if (owner === undefined) break;
+		console.log(`port ${port} is held by ${owner} — trying ${port + 1}`);
+	}
+
+	const endpoint = `http://127.0.0.1:${port}`;
 	console.log(`launching ${appName} with --remote-debugging-port=${port}`);
 	// Detached and left running on close, same as the Chrome launch in cdp.ts: the app is
 	// the session holder, and the next run reattaches in milliseconds.
@@ -122,6 +178,13 @@ export async function ensureElectronEndpoint(appName: string, endpoint: string, 
 			`${appName} launched but exposed no debugging endpoint at ${endpoint} within ${LAUNCH_TIMEOUT_MS / 1000}s — ` +
 				`it may ignore Chromium switches, or an updater relaunched it without them`,
 		);
+	// The scan-then-launch above races anything else binding ports; one owner check after
+	// the endpoint answers turns a lost race into an error instead of a wrong-app attach.
+	const owner = portOwnerPath(port);
+	if (owner && owner !== bin && !owner.startsWith(bin.replace(/\/Contents\/MacOS\/[^/]+$/, "")))
+		throw new Error(`endpoint on ${port} answered but belongs to ${owner}, not ${appName} — re-run to retry on a fresh port`);
+
+	return { endpoint, port };
 }
 
 /** One CDP page target, reduced to what the chooser needs. viewport is window.innerWidth/
