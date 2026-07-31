@@ -194,6 +194,28 @@ test("encodeSpec__RoundTripsVerbatim__When__TaskContainsShellMetacharacters", ()
 	assert.equal(argv.includes(encoded), true);
 });
 
+test("encodeSpec__RoundTripsTheArmFields__When__ABenchmarkSubmitCrosses", () => {
+	// The benchmark arms cross the wire as typed spec fields — booleans stay booleans (the
+	// runner's flag() gate refuses strings), and the recipe path is a plain relative string
+	// the runner validates on its side. Nothing of it may surface on an argv position.
+	const spec = {
+		kind: "replay",
+		app: "Yarn",
+		backend: "cdp",
+		noAx: true,
+		axdomOff: false,
+		noGrounding: true,
+		useRecipe: false,
+		noRescue: true,
+		recipe: "docs/recipes/yarn.abc123.recipe.json",
+	};
+	assert.deepEqual(decodeSpec(encodeSpec(spec)), spec);
+
+	const argv = sshArgv(host("mac1", "10.0.0.1"), runnerArgv("submit", spec));
+	for (const token of ["--backend", "cdp", "--no-ax", "AXDOM", "NO_GROUNDING", "USE_RECIPE", "--no-rescue", "docs/recipes"])
+		assert.equal(argv.some((a) => a.includes(token) && !/^[A-Za-z0-9+/=]+$/.test(a)), false, `${token} leaked onto the argv`);
+});
+
 test("tunnelArgv__CarriesTheSamePinning__When__ForwardingThePortalPort", () => {
 	// A forwarded viewer stream through an unpinned tunnel would be the one unauthenticated
 	// hop in an otherwise key-checked fleet, so the tunnel shares sshArgv's option block by

@@ -8,11 +8,11 @@ import {
 	findWindow,
 	loadAppMapGraph,
 	makeClient,
-	mintRunKey,
 	observe,
 	onInterrupt,
 	OUT,
 	resetToHome,
+	runKey,
 } from "./harness.js";
 import { readJournal } from "./journal.js";
 import { startOverlay } from "./overlay.js";
@@ -109,7 +109,10 @@ async function main(): Promise<void> {
 	if (recipe.backend === "cdp" && !url && recipe.app.includes("."))
 		throw new RecipeCompileError(`this recipe was recorded on a web target — pass --url https://${recipe.app}`);
 	const target = url ? parseTarget(["--url", url], recipe.app).target : parseTarget([], recipe.app).target;
-	const stamp = mintRunKey("replay-", recipe.slug);
+	// runKey, not mintRunKey: a dispatched replay is handed RUN_STAMP by the runner, and the
+	// job id must be the key the run log and journal land under — the same contract task and
+	// explore runs already honour (see src/core/harness/run.ts).
+	const stamp = runKey("replay-", recipe.slug);
 	const journalPath = `${OUT}/runs/${stamp}.journal.jsonl`;
 
 	console.log(`=== replay: ${recipe.task} (${recipe.app}, ${recipe.steps.length} steps, from ${recipe.compiledFrom}) ===`);

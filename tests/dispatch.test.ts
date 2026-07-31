@@ -99,6 +99,120 @@ test("dispatch__SendsTaskVerbatim__When__TaskContainsShellMetacharacters", async
 			assert.equal(arg.includes(meta), false, `argv entry ${JSON.stringify(arg)} carries ${meta}`);
 });
 
+test("dispatch__CarriesEveryArmFlagInTheSpec__When__BenchmarkOptionsAreSet", async () => {
+	// The bench orchestrator's contract: these exact option names, crossing as base64 spec
+	// fields — never argv text — and reaching the runner as typed booleans/strings.
+	const { run, calls } = recorder(() => ok({ jobId: "j-arm", pid: 7, artifacts: { log: "out/jobs/j-arm/log.txt" } }));
+	const result = await dispatch({
+		host: "mac2",
+		app: "Yarn",
+		task: "show me how to change the cursor type",
+		backend: "cdp",
+		noAx: true,
+		axdomOff: true,
+		noGrounding: true,
+		useRecipe: true,
+		inventory: FLEET,
+		run,
+		...noSync,
+	});
+
+	assert.equal(result.ok, true);
+	const spec = specOf(calls[0].argv);
+	assert.equal(spec.backend, "cdp");
+	assert.equal(spec.noAx, true);
+	assert.equal(spec.axdomOff, true);
+	assert.equal(spec.noGrounding, true);
+	assert.equal(spec.useRecipe, true);
+	// Booleans, not strings: the runner's flag() gate refuses "true"/"false" by design.
+	for (const key of ["noAx", "axdomOff", "noGrounding", "useRecipe", "record", "noVision", "noRescue"]) assert.equal(typeof spec[key], "boolean", key);
+	// And none of it landed on an argv position.
+	assert.equal(calls[0].argv.includes("--backend"), false);
+	assert.equal(calls[0].argv.includes("cdp"), false);
+});
+
+test("dispatch__SendsAbsentFlagsAsFalse__When__NoArmIsAsked", async () => {
+	const { run, calls } = recorder(() => ok({ jobId: "j-plain", pid: 7, artifacts: { log: "out/jobs/j-plain/log.txt" } }));
+	const result = await dispatch({ host: "mac2", app: "Yarn", task: "t", inventory: FLEET, run, ...noSync });
+
+	assert.equal(result.ok, true);
+	const spec = specOf(calls[0].argv);
+	// `backend` stays off the wire entirely, so the child CLI's own default decides.
+	assert.equal("backend" in spec, false);
+	assert.equal("recipe" in spec, false);
+	assert.equal(spec.noAx, false);
+	assert.equal(spec.axdomOff, false);
+	assert.equal(spec.noGrounding, false);
+	assert.equal(spec.useRecipe, false);
+});
+
+test("dispatch__SyncsRecipesBeforeTheSubmit__When__TheKindIsReplay", async () => {
+	// The runner refuses a replay whose recipe file is absent, so the fan-out must land the
+	// file before the submit asks — order is the property under test.
+	const order: string[] = [];
+	const { run } = recorder((_h, argv) => {
+		order.push(subcommand(argv));
+
+		return ok({ jobId: "replay-j1", pid: 7, artifacts: { log: "out/jobs/replay-j1/log.txt" } });
+	});
+	const result = await dispatch({
+		host: "mac2",
+		kind: "replay",
+		app: "Yarn",
+		recipe: "docs/recipes/yarn.abc123.recipe.json",
+		noRescue: true,
+		inventory: FLEET,
+		run,
+		sync: async () => {
+			order.push("appmap-sync");
+
+			return undefined;
+		},
+		syncRecipes: async () => {
+			order.push("recipe-sync");
+
+			return "recipes: yarn.abc123.recipe local → mac2 (missing)";
+		},
+	});
+
+	assert.equal(result.ok, true);
+	if (!result.ok) return;
+	assert.deepEqual(order, ["recipe-sync", "appmap-sync", "submit"]);
+	// The fan-out's note reaches the operator like the appmap one does.
+	assert.equal(result.syncNote, "recipes: yarn.abc123.recipe local → mac2 (missing)");
+});
+
+test("dispatch__PutsRecipeAndNoRescueInTheSpec__When__TheKindIsReplay", async () => {
+	const { run, calls } = recorder(() => ok({ jobId: "replay-j1", pid: 7, artifacts: { log: "out/jobs/replay-j1/log.txt" } }));
+	const result = await dispatch({
+		host: "mac2",
+		kind: "replay",
+		app: "Yarn",
+		recipe: "docs/recipes/yarn.abc123.recipe.json",
+		noRescue: true,
+		inventory: FLEET,
+		run,
+		...noSync,
+		syncRecipes: async () => undefined,
+	});
+
+	assert.equal(result.ok, true);
+	assert.equal(result.ok && result.kind, "replay");
+	const spec = specOf(calls[0].argv);
+	assert.equal(spec.kind, "replay");
+	// Relative, exactly as given: the runner resolves it against ITS data root and owns the
+	// path-discipline check — nothing here rewrites or absolutises it.
+	assert.equal(spec.recipe, "docs/recipes/yarn.abc123.recipe.json");
+	assert.equal(spec.noRescue, true);
+});
+
+test("dispatch__RefusesLocally__When__AReplayNamesNoRecipe", async () => {
+	await assert.rejects(
+		() => dispatch({ host: "mac1", kind: "replay", app: "Yarn", inventory: FLEET, run: async () => ok({}), ...noSync, syncRecipes: async () => undefined }),
+		/needs a recipe path/,
+	);
+});
+
 test("dispatch__RelaysTheProfileSwapAndPredictsASignin__When__TheOperatorIsNewToTheApp", async () => {
 	// The moment a teammate learns they have to sign in. The runner knows at submit time —
 	// it just swapped in a profile with nothing in it — and saying so here saves them watching
@@ -506,6 +620,40 @@ test("pull__FetchesBothAppmapHalves__When__JobWasAGroundingPass", async () => {
 		// An absent source is a fact about the run, not a broken pull: a task run has no
 		// appmap and an explore run has no run log, every single time.
 		assert.equal(result.artifacts.find((a) => a.key === "appmapGraph")?.state, "missing");
+		assert.equal(result.ok, true);
+	} finally {
+		fs.rmSync(dest, { recursive: true, force: true });
+	}
+});
+
+test("pull__FetchesTheJournal__When__TheJobWasAReplay", async () => {
+	// The journal is what `npm run cleanup` replays after a crashed replay; leaving it on the
+	// Mac brings home a run log that says what happened and nothing that says what to undo.
+	const dest = tempDir("yarn-dispatch-");
+	try {
+		const run: SshRunner = async (_h, argv) =>
+			subcommand(argv) === "job"
+				? jobFrame({
+						id: "replay-2026-07-31T12-00-00-000-yarn",
+						kind: "replay",
+						artifacts: {
+							log: "out/jobs/replay-2026-07-31T12-00-00-000-yarn/log.txt",
+							runLog: "out/runs/replay-2026-07-31T12-00-00-000-yarn.json",
+							journal: "out/runs/replay-2026-07-31T12-00-00-000-yarn.journal.jsonl",
+						},
+					})
+				: ok({ dataRoot: "/Users/administrator/yarn-trial" });
+
+		const result = await pull(host("mac1", "10.0.0.1"), "replay-2026-07-31T12-00-00-000-yarn", {
+			run,
+			dest,
+			// A replay that mutated nothing writes no journal; that is a `missing`, not a failure.
+			rsync: async (_f, argv) => (argv.some((a) => a.endsWith(".journal.jsonl")) ? { code: 23, stdout: "", stderr: 'rsync: link_stat "...journal.jsonl" failed: No such file or directory (2)\n' } : { code: 0, stdout: "", stderr: "" }),
+		});
+
+		assert.deepEqual(result.artifacts.map((a) => a.key), ["job", "runLog", "journal"]);
+		assert.equal(result.artifacts.find((a) => a.key === "journal")?.rel, "out/runs/replay-2026-07-31T12-00-00-000-yarn.journal.jsonl");
+		assert.equal(result.artifacts.find((a) => a.key === "journal")?.state, "missing");
 		assert.equal(result.ok, true);
 	} finally {
 		fs.rmSync(dest, { recursive: true, force: true });

@@ -3,10 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
-import { dataRoot } from "../../paths.js";
+import { compileRecipe, readRecipe, recipeFileFor } from "../../core/recipe.js";
+import { dataRoot, recipesDir } from "../../paths.js";
 import { EXIT_REFUSED as CTL_REFUSED, EXIT_UNREACHABLE as CTL_UNREACHABLE } from "../runner/ctl.js";
 import type { JobArtifacts, JobKind, JobRecord } from "../runner/jobs.js";
-import { autoSync, type SyncOptions } from "./appmaps.js";
+import { autoSync, autoSyncRecipes, type SyncOptions } from "./appmaps.js";
 import { type FleetRow, type FleetState, fleetStatus, pickIdleHost, pickShortestQueue } from "./fleet.js";
 import { defaultOperator, type HostEntry, type Inventory, loadHosts, resolveHost } from "./hosts.js";
 import { assertSafeRemotePath, DEFAULT_SSH_TIMEOUT_MS, firstLine, lastFrame, remoteDataRoot, runnerArgv, runnerHome, runSsh, runTransport, rsyncShell, SPAWN_FAILED_EXIT, type SshResult, type SshRunner, sshArgv } from "./ssh.js";
@@ -82,6 +83,20 @@ export interface DispatchOptions {
 	task?: string;
 	record?: boolean;
 	noVision?: boolean;
+	/** `--backend <kind>` on the child argv, task and explore alike. Absent = the child's default. */
+	backend?: "ax" | "cdp";
+	/** Vision-only arm: `--no-ax` (task only). Invalid combinations are the child CLI's to refuse. */
+	noAx?: boolean;
+	/** `AXDOM=0` on the child: run without the DOM-enrichment sidecar. */
+	axdomOff?: boolean;
+	/** `NO_GROUNDING=1`: the ungrounded arm — the child ignores its appmap. */
+	noGrounding?: boolean;
+	/** `USE_RECIPE=1`: ground from the curated docs/recipes/<app>.md notes instead. */
+	useRecipe?: boolean;
+	/** Replay only: recipe file path RELATIVE to the data root — the same key on both machines. */
+	recipe?: string;
+	/** Replay only: `--no-rescue`, the unattended posture — a broken step fails instead of calling the model. */
+	noRescue?: boolean;
 	/**
 	 * Wait in line instead of being refused when the host is busy. Default true — the queue is
 	 * why an operator can dispatch five runs and close the lid. `false` restores the old
@@ -97,6 +112,12 @@ export interface DispatchOptions {
 	 * real Macs. Its note reaches the caller as `syncNote`; it never blocks a dispatch.
 	 */
 	sync?: (opts: SyncOptions) => Promise<string | undefined>;
+	/**
+	 * The recipe fan-out, run before a replay submit only — the runner refuses a replay whose
+	 * recipe is not already on its disk, and this is what puts it there. Injected for the same
+	 * reason as `sync`.
+	 */
+	syncRecipes?: (opts: SyncOptions) => Promise<string | undefined>;
 	timeoutMs?: number;
 }
 
@@ -185,8 +206,9 @@ export function dispatchNotes(r: DispatchAccepted): string[] {
 export async function dispatch(opts: DispatchOptions): Promise<DispatchResult> {
 	const inv = opts.inventory ?? loadHosts();
 	const run = opts.run ?? runSsh;
-	const kind: JobKind = opts.kind === "explore" ? "explore" : "task";
+	const kind: JobKind = opts.kind === "explore" || opts.kind === "replay" ? opts.kind : "task";
 	if (!opts.app?.trim()) throw new Error("dispatch needs an app");
+	if (kind === "replay" && !opts.recipe?.trim()) throw new Error("a replay dispatch needs a recipe path (relative to the data root)");
 
 	const spec = {
 		kind,
@@ -196,6 +218,18 @@ export async function dispatch(opts: DispatchOptions): Promise<DispatchResult> {
 		task: opts.task ?? "",
 		record: Boolean(opts.record),
 		noVision: Boolean(opts.noVision),
+		// The arm flags cross as booleans exactly like record/noVision. No combination is
+		// screened here — the child CLI refuses invalid ones itself, and a second copy of its
+		// rules on the wire is the same mistake as a second copy of the task-text rule.
+		noAx: Boolean(opts.noAx),
+		axdomOff: Boolean(opts.axdomOff),
+		noGrounding: Boolean(opts.noGrounding),
+		useRecipe: Boolean(opts.useRecipe),
+		noRescue: Boolean(opts.noRescue),
+		...(opts.backend ? { backend: opts.backend } : {}),
+		// The path is data-root-relative — the one key both machines share. The runner owns
+		// its validation (path discipline, file presence); nothing here second-guesses it.
+		...(kind === "replay" ? { recipe: opts.recipe } : {}),
 		operator: opts.operator ?? defaultOperator(),
 	};
 	const wantQueue = opts.queue !== false;
@@ -229,7 +263,14 @@ export async function dispatch(opts: DispatchOptions): Promise<DispatchResult> {
 	// what the hub already holds, and the case this feature exists for is a pass someone else
 	// ran on another Mac — which reaches the target only if that Mac is collected from too.
 	// Measured at ~3s for three Macs, against runs that last minutes.
-	const syncNote = await (opts.sync ?? autoSync)({ inventory: inv });
+	//
+	// A replay adds the recipe fan-out on top (a replay still reads its appmap graph for the
+	// teardown's scope resolution, so the appmap sync is not skipped for it). The recipe sync
+	// runs first because the runner REFUSES a replay whose recipe file is absent — this is the
+	// step that makes the submit below admissible.
+	const recipeNote = kind === "replay" ? await (opts.syncRecipes ?? autoSyncRecipes)({ inventory: inv }) : undefined;
+	const appmapNote = await (opts.sync ?? autoSync)({ inventory: inv });
+	const syncNote = [recipeNote, appmapNote].filter(Boolean).join("\n") || undefined;
 
 	for (const { host, queue } of targets) {
 		const res = await run(host, runnerArgv("submit", queue ? { ...spec, queue: true } : spec), { timeoutMs: opts.timeoutMs ?? SUBMIT_TIMEOUT_MS });
@@ -503,7 +544,7 @@ export interface PullOptions {
 export type PullState = "pulled" | "missing" | "failed";
 
 export interface PulledArtifact {
-	/** Which artifact this is: `job`, `runLog`, `recording`, `appmap`, `appmapGraph`, `checkpoint`. */
+	/** Which artifact this is: `job`, `runLog`, `journal`, `recording`, `appmap`, `appmapGraph`, `checkpoint`. */
 	key: string;
 	/** Path relative to either data root — the same string on both machines. */
 	rel: string;
@@ -600,6 +641,9 @@ function sourcesFor(job: JobRecord): Source[] {
 	// and what it exited with, and reading a pulled log without it is guesswork.
 	const out: Source[] = [{ key: "job", rel: `out/jobs/${job.id}`, dir: true }];
 	if (a.runLog) out.push({ key: "runLog", rel: a.runLog, dir: false });
+	// A replay's mutation journal. Absent from the disk when the replay changed nothing, which
+	// classifyRsync reads as `missing` — the ordinary per-file outcome, not a failed pull.
+	if (a.journal) out.push({ key: "journal", rel: a.journal, dir: false });
 	if (a.checkpoint) out.push({ key: "checkpoint", rel: a.checkpoint, dir: false });
 	// `recording` is minted as `out/recording/<id>/window.mp4` (jobs.ts), so dirname is safe.
 	if (a.recording) out.push({ key: "recording", rel: path.posix.dirname(a.recording), dir: true });
@@ -719,14 +763,46 @@ function toHost(host: HostEntry | string, inv?: Inventory): HostEntry {
 
 const USAGE = `usage: dispatch <host|auto> "<task>" "<App>" [--record] [--no-vision]
        dispatch <host|auto> explore "<App>"
+       dispatch <host|auto> replay <recipe-file-or-stamp> [--no-rescue]
        dispatch <host> follow <jobId> [--from <byte>]
        dispatch <host> pull <jobId>
 
 Submits the run to a Mac in the fleet, streams its log, and pulls the artifacts back.
 Ctrl-C detaches; the run keeps going and \`follow\` re-attaches to it.
 
-\`explore\`, \`follow\` and \`pull\` in the second position are subcommands, so a task whose
-text is exactly one of those three words has to be dispatched through the API instead.`;
+\`explore\`, \`replay\`, \`follow\` and \`pull\` in the second position are subcommands, so a task
+whose text is exactly one of those four words has to be dispatched through the API instead.`;
+
+/**
+ * What a `dispatch … replay <arg>` argument means: a recipe file, or a run stamp whose
+ * compiled recipe already exists. The same resolution recipe-cli's replay verb applies,
+ * MINUS compilation — dispatch never compiles, because compileRecipe is a gate (it refuses
+ * failed/unverified/hinted runs) and minting a recipe as a side effect of a dispatch would
+ * bury that refusal inside a submit error.
+ *
+ * The wire path is `docs/recipes/<basename>` regardless of where the local file sits: that
+ * is where the fan-out lands recipes on every Mac, and the runner resolves the relative path
+ * against ITS data root.
+ */
+function resolveReplayArg(arg: string): { app: string; recipe: string } {
+	let file: string | undefined;
+	if (fs.existsSync(arg)) file = arg;
+	else {
+		const logPath = path.join(dataRoot(), "out", "runs", `${arg}.json`);
+		if (fs.existsSync(logPath)) {
+			const runLog = JSON.parse(fs.readFileSync(logPath, "utf8"));
+			const candidate = recipeFileFor(recipesDir(), compileRecipe(runLog, arg).slug, runLog.task);
+			if (!fs.existsSync(candidate)) throw new Error(`no compiled recipe for ${arg} — run: ./run recipe compile ${arg}`);
+			file = candidate;
+		}
+	}
+	if (!file) throw new Error(`${arg} is neither a recipe file nor a run stamp`);
+
+	// The app comes out of the recipe itself — the runner needs it for the profile swap and
+	// the job key, and asking the operator to retype what the artifact already records is how
+	// a replay ends up leased under the wrong app name.
+	return { app: readRecipe(file).app, recipe: `docs/recipes/${path.basename(file)}` };
+}
 
 /**
  * The operator loop, end to end. Ctrl-C detaches rather than stopping the run — a grounding
@@ -744,21 +820,30 @@ async function main(argv: string[]): Promise<number> {
 	if (argv[1] === "follow") return attach(host, argv[2], Number(argv[argv.indexOf("--from") + 1]) || 0);
 	if (argv[1] === "pull") return report(await pull(host, argv[2]));
 
-	// argv[1] is the task and reaches the spec untouched. No trimming, no unquoting: the
-	// shell already did its splitting, and anything further would be this file editing a
-	// measurement input.
-	const result = await dispatch(
-		argv[1] === "explore"
-			? { host, kind: "explore", app: argv[2] ?? "" }
-			: {
-					host,
-					kind: "task",
-					task: argv[1],
-					app: argv[2] ?? "Yarn",
-					record: argv.includes("--record"),
-					noVision: argv.includes("--no-vision"),
-				},
-	);
+	let opts: DispatchOptions;
+	if (argv[1] === "explore") opts = { host, kind: "explore", app: argv[2] ?? "" };
+	else if (argv[1] === "replay") {
+		if (!argv[2]) {
+			console.error(USAGE);
+
+			return 2;
+		}
+		const { app, recipe } = resolveReplayArg(argv[2]);
+		opts = { host, kind: "replay", app, recipe, noRescue: argv.includes("--no-rescue") };
+	} else
+		// argv[1] is the task and reaches the spec untouched. No trimming, no unquoting: the
+		// shell already did its splitting, and anything further would be this file editing a
+		// measurement input.
+		opts = {
+			host,
+			kind: "task",
+			task: argv[1],
+			app: argv[2] ?? "Yarn",
+			record: argv.includes("--record"),
+			noVision: argv.includes("--no-vision"),
+		};
+
+	const result = await dispatch(opts);
 
 	if (!result.ok) {
 		console.error(`dispatch refused: ${result.error}`);
