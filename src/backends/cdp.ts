@@ -7,7 +7,7 @@ import { MAX_WAIT_MS, OUT, type ObservationBundle } from "../core/harness.js";
 import type { Target } from "../core/target.js";
 import { webTarget } from "../core/target.js";
 import type { ActionRequest } from "../types.js";
-import { endpointAlive, ensureElectronEndpoint, type PageCandidate, pickMainPage } from "./electron-attach.js";
+import { endpointAlive, ensureElectronEndpoint, KEEP_RENDERING_FLAGS, type PageCandidate, pickMainPage } from "./electron-attach.js";
 
 /**
  * CDP-direct backend: drives a Chromium target through playwright-core attached over
@@ -329,11 +329,17 @@ export class CdpBackend {
 			console.log(`launching Chrome (profile ${PROFILE_DIR}, port ${port})`);
 			// Detached and left running on close: the browser is the session holder, and a
 			// signed-in session that dies with the run defeats the reason the profile exists.
+			// KEEP_RENDERING_FLAGS: same anti-throttle pair the Electron launch carries — a
+			// covered or backgrounded Chrome otherwise throttles rendering and flips page
+			// visibility while the operator multitasks, which reads as flicker on film and
+			// stalls the frame poller. bringToFront() below still matters for the case where
+			// this launch is skipped because a flagless-but-alive Chrome already held the port.
 			const child = spawn(CHROME_BIN, [
 				`--remote-debugging-port=${port}`,
 				`--user-data-dir=${PROFILE_DIR}`,
 				"--no-first-run",
 				"--no-default-browser-check",
+				...KEEP_RENDERING_FLAGS,
 			], { stdio: "ignore", detached: true });
 			// A missing CHROME_BIN emits an async ENOENT that would otherwise be an uncaught
 			// exception, killing the process before agent.ts's finally writes the run log.

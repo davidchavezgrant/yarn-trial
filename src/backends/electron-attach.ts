@@ -27,8 +27,10 @@ const APP_DIRS = ["/Applications", `${os.homedir()}/Applications`];
  * for occluded and backgrounded windows; a recorded run screenshots the page while the
  * operator works elsewhere, so throttling would freeze the exact frames the recording
  * needs. These two switches keep the renderer painting with the app fully hidden.
+ * Exported because cdp.ts's web-target Chrome launch needs the same pair for the same
+ * reason — an occluded Chrome otherwise throttles and flaps page visibility mid-run.
  */
-const KEEP_RENDERING_FLAGS = ["--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding"];
+export const KEEP_RENDERING_FLAGS = ["--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding"];
 
 /** How long a cold app launch gets to expose its endpoint. Electron boots slower than
  *  Chrome (updaters, single-instance locks), so this is double the Chrome budget. */
