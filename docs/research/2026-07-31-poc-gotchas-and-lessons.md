@@ -235,6 +235,41 @@ Each of these cost real time because none of them reports an error.
   activation reports success and does nothing** across Spaces — macOS refuses
   background-initiated Space switches. Foregrounding does fix the look-alike causes (no
   window, hidden, minimized), so attempt it once, then fail with an honest message.
+- **Chromium builds its web-content accessibility tree lazily, and READING it is not what
+  wakes it.** A freshly-launched Chrome exposes no `AXWebArea` at all — 37 chrome-only nodes —
+  no matter how many times an AX-trusted client walks it. The wake is an app-element attribute
+  WRITE: `AXEnhancedUserInterface` (what VoiceOver sets; the one Google Chrome honours) or
+  `AXManualAccessibility` (the CEF/Electron equivalent, which Chrome ignores). Measured on
+  virgin `--user-data-dir` Chromes: no wake after 8s of reads, none with `AXManualAccessibility`
+  alone, web area up 2s after `AXEnhancedUserInterface`. Chrome answers `-25208 notImplemented`
+  to the set **and wakes anyway**, so never gate on the return code. This cost three separate
+  debugging attempts that each blamed TCC attribution: the wake latches for the process
+  lifetime, so a developer's daily-driven Chrome is always already awake, and only a fleet Mac
+  launching a fresh browser per sign-in shows the bug.
+- **`defaults` cannot see managed preferences, and `pgrep -x` cannot see another session's
+  apps.** Three verification tools lied in three different directions on the same afternoon:
+  `defaults read com.google.Chrome SyncDisabled` reported "does not exist" while the policy was
+  demonstrably in force (it reads the user domain only); `profiles list` reported no profiles
+  while a System-scope one was installed (without root it lists user-scope only); `pgrep -x
+  "Google Chrome"` found nothing while Chrome was running in the console session (`ps -axo`
+  found it). The rule that survives: **verify with the API the consumer actually uses.** For
+  Chrome policy that is `CFPreferencesCopyAppValue` + `CFPreferencesAppValueIsForced`, which is
+  what `policy_loader_mac.mm` calls.
+- **macOS 26 changed how Chrome policy is delivered, and the failure is invisible.** On macOS
+  15 a root-written plist in `/Library/Managed Preferences` is honoured. On 26 the identical
+  file — same md5, same `root:wheel 644` — is ignored: it reads back perfectly from disk while
+  `CFPreferencesAppValueIsForced` returns false, because that directory belongs to the MDM
+  subsystem and a loose file there manages nothing. `profiles install` is gone too ("profiles
+  tool no longer supports installs. Use System Settings Profiles"). The working route is a
+  configuration profile (`fleet/chrome-policy.mobileconfig`) installed by a human once per Mac;
+  no MDM enrolment required, but no unattended path either. **Run `sw_vers` before comparing
+  two machines** — an hour went into diffing byte-identical plists across a major OS difference
+  nobody had checked for.
+- **`sudo defaults write` to a managed-preferences path silently writes nothing.** `defaults`
+  routes through `cfprefsd`, which owns that location and declines to create files there, then
+  exits 0. The plist has to be written as a file (`tee`). Combined with the trap above, this
+  manufactures the worst state available: a policy that looks set, reads back, and enforces
+  nothing.
 - **Natively-fullscreen apps report zero windows to AppleScript/System Events.** Absence
   of windows *is* the fullscreen signal. Also: setting a position on a fullscreen window
   demotes it out of fullscreen. This silently broke recording staging on every run for a
@@ -405,6 +440,37 @@ constraint list is LIMITATIONS §12; the shape-setting facts:
   operator's session into the incoming operator's directory. Serialize the swaps; two
   interleaved swaps destroyed a stashed profile. Known limit: apps keeping sessions in
   the login keychain aren't isolated by this.
+- **A shared machine signed into a personal account leaks that account's whole vault.**
+  Found the hard way: a live-view sign-in put Chrome's autofill dropdown on screen for the
+  watching teammate, listing colleagues' email addresses. Behind it, all three Macs had THREE
+  people's personal Google accounts in one shared Chrome profile — two `@gmail.com` — with sync
+  on and **801 saved credentials each**. The identical count across three machines is sync
+  working as designed: one vault, replicated. The app was incidental; the cause is a personal
+  identity on shared infrastructure, and it leaks through whatever that identity syncs to.
+- **Clearing synced passwords is only safe with the browser CLOSED.** Deleting through a
+  running, signed-in Chrome emits `PasswordStoreChange::REMOVE`, a sync **tombstone** that
+  removes the credential from the person's Google vault and every device they own —
+  irreversible, and not a thing automation should do. With Chrome closed nothing is connected
+  to Google to report the deletion, so removing the profile directory is purely local: the
+  accounts keep their vaults, the machine forgets them. Automating it is therefore *safer* than
+  the manual UI route, provided the tool quits the browser first and **refuses if it will not
+  exit** (a delete underneath a live Chrome is written back on quit). Remove whole profile
+  directories, not selected files: deleting `Login Data` alone leaves `sync_model_metadata`, and
+  the next launch re-downloads everything — a deletion that appears to work and silently
+  reverses itself. `./run browser-wipe` implements this.
+- **A wipe is not a fix; policy is.** Sign the same account back in with sync and the vault
+  returns. `SyncDisabled` and `BrowserSignin: 0` close it permanently — the second is stronger,
+  since a browser that cannot be signed into a profile has no vault to download, and **website
+  OAuth is unaffected** (verified: the Google sign-in page loads normally under both). Note
+  `PasswordManagerEnabled: false` does NOT hide already-saved passwords — Chromium reads it only
+  in `IsSavingAndFillingEnabled()`, never in `IsFillingEnabled()`, and no Chrome policy disables
+  filling. Both keys are mandatory-only, hence the configuration profile above.
+- **The OAuth handoff stops on browser chrome the page-scoped stream cannot show.** A sign-in
+  ends with the page launching the app's URL scheme, and Chrome interposes "Open <App>?". A CDP
+  live view streams the page only, so the flow just halts on a button the remote human cannot
+  see. `AutoLaunchProtocolsFromOrigins` skips it for a named scheme from named origins. Read the
+  scheme from the app's `CFBundleURLTypes` and the origin from its bundle rather than guessing:
+  a wrong value grades the host clean while every handoff still stalls.
 - **Never let variable text cross SSH as command text.** sshd joins remote arguments
   into one string for a login shell, so anything reaching it as text is shell input on
   the far side no matter how carefully quoted here. Task names carry spaces; URLs carry

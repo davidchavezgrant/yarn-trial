@@ -582,6 +582,21 @@ needs an MDM configuration profile.
 running Chrome commits a sync tombstone, which deletes the credential from the real Google
 account's vault and every other device that person owns. Deleting the file instead destroys
 `sync_model_metadata`, so the next launch re-runs initial sync and downloads everything back
-from the server. Neither is a provisioning script's decision to make. The safe procedure is
-to sign the profile out of Chrome FIRST (choosing to keep local data), confirm sync has
-stopped, and only then clear — with a human at the machine.
+from the server.
+
+**RESOLVED 2026-07-31, and the reasoning above was half wrong.** The tombstone is a property
+of deleting THROUGH A RUNNING, SIGNED-IN CHROME — the manual UI route this paragraph
+recommended. With the browser closed, no process is connected to Google to report the
+deletion, so removing the profile directory is purely local: the accounts keep their vaults
+and the machine forgets them. Automating it is therefore *safer* than doing it by hand.
+
+`./run browser-wipe [<mac>|all] [--go]` does it: quits Chrome, VERIFIES it exited (refusing
+with nothing touched otherwise, since a delete underneath a live Chrome is written back on
+quit), and removes whole profile directories rather than selected files — which is what
+avoids the `sync_model_metadata` trap above. Run with consent 2026-07-31: 6 profiles, 801
+credentials each on three Macs, verified empty afterwards.
+
+A wipe is not a fix on its own — signing the same account back in with sync restores the
+vault. `SyncDisabled` + `BrowserSignin: 0` now close that permanently at mandatory policy
+level on all three Macs. Full operational detail, including why this needs a configuration
+profile rather than a plist on macOS 26: `docs/research/2026-07-31-fleet-chrome-lockdown.md`.
