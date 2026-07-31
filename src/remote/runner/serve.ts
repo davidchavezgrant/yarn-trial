@@ -11,7 +11,7 @@ import { screenIsLocked } from "../../core/harness.js";
 import { dataRoot, resourcesRoot } from "../../paths.js";
 import { type ChromePolicyState, inspectChromePolicy } from "../chrome-policy.js";
 import { firstLine } from "../control/ssh.js";
-import { listApps } from "../../ui/ui-core.js";
+import { listApps } from "../../core/apps.js";
 import {
 	acquire,
 	adopt,

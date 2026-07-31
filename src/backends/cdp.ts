@@ -707,15 +707,32 @@ export class CdpBackend {
 							// clicked, so containment reads false forever), and focus can arrive a
 							// beat after mouseup. So poll briefly, and accept EITHER containment
 							// OR focus having MOVED onto something editable since before the click.
+							// Editable + WHERE: focus moving to "some editable" is not enough — a
+							// click that spawned Yarn's canvas comment composer moved focus to a
+							// perfectly editable element on the far side of the screen, and the
+							// narration followed it (round 7). The caret's container must contain
+							// the point that was clicked.
 							const MOVED_CHECK =
-								"(() => { const a = document.activeElement; if (!a) return ''; const editable = a.isContentEditable || a.tagName === 'INPUT' || a.tagName === 'TEXTAREA'; return editable ? a.tagName.toLowerCase() + (a.className ? '.' + String(a.className).trim().split(/\\s+/)[0] : '') : ''; })()";
+								"(() => { const a = document.activeElement; if (!a) return null; const editable = a.isContentEditable || a.tagName === 'INPUT' || a.tagName === 'TEXTAREA'; if (!editable) return null; const r = a.getBoundingClientRect(); return { desc: a.tagName.toLowerCase() + (a.className ? '.' + String(a.className).trim().split(/\\s+/)[0] : ''), x: r.x, y: r.y, w: r.width, h: r.height }; })()";
 							let took = false;
 							for (let tries = 0; tries < 6 && !took; tries++) {
 								await new Promise((r) => setTimeout(r, 200));
 								if ((await loc.evaluate(FOCUS_CHECK).catch(() => false)) as boolean) took = true;
 								else {
-									const now = (await this.page.evaluate(MOVED_CHECK).catch(() => "")) as string;
-									if (now && now !== before) took = true;
+									const active = (await this.page.evaluate(MOVED_CHECK).catch(() => null)) as
+										| { desc: string; x: number; y: number; w: number; h: number }
+										| null;
+									const p = (this.lastActuation as { point: { x: number; y: number } } | undefined)?.point;
+									if (
+										active
+										&& active.desc !== before
+										&& p
+										&& p.x >= active.x - 8
+										&& p.x <= active.x + active.w + 8
+										&& p.y >= active.y - 8
+										&& p.y <= active.y + active.h + 8
+									)
+										took = true;
 								}
 							}
 							if (!took) {

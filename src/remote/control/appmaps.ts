@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { appmapsDir, outDir, recipesDir } from "../../paths.js";
 
 import { readJsonOr } from "../../fsutil.js";
+import { readCapturedAt } from "../../core/apps.js";
 import { type HostEntry, type Inventory, loadHosts } from "./hosts.js";
 import { assertSafeRemotePath, firstLine, remoteDataRoot, type RsyncRunner, runRsync, runSsh, rsyncShell, type SshRunner } from "./ssh.js";
 
@@ -93,16 +94,17 @@ export function readAppmaps(dir: string): Map<string, MapVersion> {
 }
 
 /**
- * `capturedAt` out of one appmap graph, or undefined when the file is absent, mid-write, or
- * unstamped. Exported because the shell's app list shows the stamp too (`listApps` in
- * ui-core.ts): one reader means "what counts as stamped" cannot drift between the sync's
- * comparisons and what the operator is looking at.
+ * `capturedAt` out of one appmap graph — DEFINED in `src/core/apps.ts`, re-exported here.
+ *
+ * Two callers need it and they sit on opposite sides of the fleet boundary: this module's
+ * sync comparisons, and the app list the runner and the shell both serve. One reader is the
+ * point — "what counts as stamped" must not drift between what the sync compares and what
+ * the operator is looking at — but the definition had to move DOWN to core, because importing
+ * it from here dragged this module's `ssh.js` import into the runner daemon (see the header
+ * of core/apps.ts). Re-exported rather than relocated-and-rewired so every call site here is
+ * untouched.
  */
-export function readCapturedAt(file: string): string | undefined {
-	const parsed = readJsonOr<{ capturedAt?: unknown } | undefined>(file, undefined);
-
-	return typeof parsed?.capturedAt === "string" && parsed.capturedAt ? parsed.capturedAt : undefined;
-}
+export { readCapturedAt };
 
 /**
  * Read a directory's compiled recipes, one entry per `.recipe.json` file.
