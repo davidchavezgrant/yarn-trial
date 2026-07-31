@@ -14,15 +14,26 @@ export const CHROME = String.raw`<meta charset="utf-8">
 <style>
   :root { color-scheme: dark; --bg:#16181d; --panel:#1e2128; --line:#2e323c; --fg:#e6e8ec; --dim:#9aa1ad; --accent:#6c8cff; --ok:#57c98a; --bad:#e5736a; }
   * { box-sizing: border-box; }
-  body { margin:0; font:14px/1.5 ui-sans-serif,-apple-system,system-ui,sans-serif; background:var(--bg); color:var(--fg); }
-  header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:12px; }
+  /* The window never scrolls as a whole: the page is a fixed header over a grid that takes
+     exactly the remaining height. Flex, not height:calc(100vh - Npx) — the calc pinned the
+     header at an assumed 51px, and the moment a header control made it taller the difference
+     became a window-level scrollbar. Scrolling lives INSIDE panes (the app list, the log,
+     the gallery), never on the document. */
+  html, body { height:100%; }
+  body { margin:0; overflow:hidden; display:flex; flex-direction:column; font:14px/1.5 ui-sans-serif,-apple-system,system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  header { flex:0 0 auto; padding:10px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; }
   h1 { font-size:15px; margin:0; font-weight:600; }
   header span { color:var(--dim); font-size:12px; }
   /* The left column sizes to its content (bounded, so a pathological app name cannot eat the
      window) — a fixed 250px put horizontal scrollbars under ordinary badge rows. */
-  main { display:grid; grid-template-columns:fit-content(420px) 1fr 330px; gap:0; height:calc(100vh - 51px); }
+  main { flex:1 1 0; min-height:0; display:grid; grid-template-columns:fit-content(420px) 1fr 330px; gap:0; }
   .col { padding:16px; overflow:auto; }
   .col + .col { border-left:1px solid var(--line); }
+  /* The left column never scrolls as a unit — its list does. Everything around the list
+     (host row, search, Run/Ground) stays put; the list flexes into whatever height remains. */
+  .col.left { display:flex; flex-direction:column; overflow:hidden; }
+  .col.left > * { flex:0 0 auto; }
+  .col.left ul { flex:1 1 0; min-height:0; }
   /* The middle column is a flex stack so #log can be its own scrollbox. The autoscroll pin
      reads and writes the LOG's scroll geometry; if the log merely grows and the column does
      the scrolling, scrollTop clamps to 0, scroll events fire on the column and never bubble,
@@ -34,7 +45,9 @@ export const CHROME = String.raw`<meta charset="utf-8">
   input:focus, textarea:focus, select:focus { outline:none; border-color:var(--accent); }
   textarea { resize:vertical; min-height:74px; }
   /* 240px, not the old 190px: the Run/Ground pair now sits under the list and needs its row. */
-  ul { list-style:none; margin:8px 0 0; padding:0; max-height:calc(100vh - 240px); overflow:auto; }
+  /* No viewport-math cap: the left column's flex layout hands the list its height, and the
+     old calc() guess was exactly what put a second scrollbar around the panel above it. */
+  ul { list-style:none; margin:8px 0 0; padding:0; overflow:auto; }
   li { padding:7px 10px; border-radius:6px; cursor:pointer; display:flex; align-items:center; gap:8px; }
   /* Fixed box whether or not the icon has arrived, so rows do not shift when one lands. */
   .appicon { width:16px; height:16px; flex:0 0 16px; border-radius:3px; display:inline-block; }
@@ -122,7 +135,7 @@ export const CHROME = String.raw`<meta charset="utf-8">
   <button id="cancelsignin" class="mini" style="display:none;margin-left:auto" title="Close the sign-in view and stop its server">✕ cancel sign-in</button>
 </header>
 <main>
-  <div class="col">
+  <div class="col left">
     <!-- The host decides everything below it — which apps are listed, where Run lands — so
          it sits above the search rather than buried in the middle column. -->
     <div class="hostrow" style="margin:0 0 12px">

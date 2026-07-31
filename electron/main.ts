@@ -124,12 +124,21 @@ const portal = new SigninPortal({
 				// password into — it gets no node access on principle.
 				webPreferences: { nodeIntegration: false, contextIsolation: true },
 			});
+			// Measured, not assumed: a hardcoded offset drifted the first time a header control
+			// changed its height, leaving the view overlapping the cancel button it depends on.
+			let headerPx = 52;
 			const layout = (): void => {
 				if (owner.isDestroyed()) return;
 				const b = owner.getContentBounds();
-				// Below the page's 51px header, so the title/status/cancel strip stays usable.
-				view.setBounds({ x: 0, y: 52, width: b.width, height: Math.max(0, b.height - 52) });
+				view.setBounds({ x: 0, y: headerPx, width: b.width, height: Math.max(0, b.height - headerPx) });
 			};
+			void owner.webContents
+				.executeJavaScript(`(document.querySelector("header") || { offsetHeight: 51 }).offsetHeight`)
+				.then((h) => {
+					if (typeof h === "number" && h > 0) headerPx = Math.ceil(h) + 1;
+					layout();
+				})
+				.catch(() => undefined);
 			owner.contentView.addChildView(view);
 			layout();
 			owner.on("resize", layout);
