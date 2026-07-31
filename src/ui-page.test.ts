@@ -549,16 +549,19 @@ test("agoLabel__PicksTheReadableUnit__When__StampsAgeAcrossTheScale", () => {
 	assert.equal(ui.agoLabel(new Date().toISOString()), "just now");
 	assert.equal(ui.agoLabel(new Date(Date.now() - 20 * 60_000).toISOString()), "20m ago");
 	assert.equal(ui.agoLabel(new Date(Date.now() - 5 * 3_600_000).toISOString()), "5h ago");
-	assert.equal(ui.agoLabel(new Date(Date.now() - 3 * 86_400_000).toISOString()), "3d ago");
+	// Beyond a day the label is a calendar date ("Jul 28"-shaped), not a day count — one
+	// implementation serves both the grounded badge and the gallery's recorded-at label.
+	const old = new Date(Date.now() - 3 * 86_400_000);
+	assert.equal(ui.agoLabel(old.toISOString()), old.toLocaleDateString(undefined, { month: "short", day: "numeric" }));
 	assert.equal(ui.agoLabel("not a date"), "", "an unparseable stamp must render as nothing");
 });
 
 test("render__ShowsHowOldTheGroundingIs__When__TheEntryCarriesAStamp", () => {
 	const ui = mount();
-	const stamp = new Date(Date.now() - 3 * 86_400_000).toISOString();
+	const stamp = new Date(Date.now() - 5 * 3_600_000).toISOString();
 	ui.apps = [{ name: "Yarn", grounded: true, groundedAt: stamp }];
 	ui.render();
-	assert.match(ui.nodes.apps.innerHTML, /grounded 3d ago/);
+	assert.match(ui.nodes.apps.innerHTML, /grounded 5h ago/);
 	// The full date survives in the tooltip for when the day itself matters.
 	assert.ok(ui.nodes.apps.innerHTML.includes(`title="grounded ${stamp}"`));
 });
@@ -743,12 +746,11 @@ test("onHost__RekeysTheRun__When__AutoResolvesToAMac", () => {
 	assert.equal(ui.nodes.status.textContent, "running: Yarn @ mac2");
 	ui.sel = "Yarn";
 	assert.equal(ui.paneRunHost(), "mac2");
-/**
- * The boot script fires its own loadRuns() as the module loads; its awaits are microtasks, so
- * draining one macrotask lets it settle before a test drives loadRuns deterministically —
- * otherwise the runsBusy guard silently swallows the test's call.
- */
-const settle = (): Promise<void> => new Promise((r) => setImmediate(r));
+});
+
+// The gallery tests below drain a macrotask (the shared settle above) before driving
+// loadRuns: the boot script fires its own loadRuns() as the module loads, and the runsBusy
+// guard would otherwise silently swallow the test's call.
 
 /** A recorded run as the host lists it, minus `humanized` — each test decides that part. */
 const RUN = {
@@ -800,6 +802,24 @@ test("loadRuns__ShowsTheFailureLine__When__TheRenderFailed", async () => {
 	await ui.loadRuns(true);
 	assert.match(ui.nodes.runs.innerHTML, /no frames in out\/recording\/x\/frames/);
 	assert.match(ui.nodes.runs.innerHTML, /Retry human cursor/);
+});
+
+test("loadRuns__ShowsWhenTheRunHappened__When__StartedAtIsKnown", async () => {
+	// Two hours plus a margin, so the floor cannot land back on "1h" while the test runs.
+	const startedAt = new Date(Date.now() - (2 * 3600 + 120) * 1000).toISOString();
+	const ui = mount({ loadRuns: async () => [{ ...RUN, startedAt }] });
+	await settle();
+	await ui.loadRuns(true);
+	// The label rides in the meta row with the full local datetime as its tooltip.
+	assert.match(ui.nodes.runs.innerHTML, /<span title="[^"]+">2h ago<\/span>/);
+});
+
+test("loadRuns__OmitsTheTimeLabel__When__StartedAtIsUnknown", async () => {
+	// No label beats "Invalid Date" in every card whose log predates the field.
+	const ui = mount({ loadRuns: async () => [{ ...RUN, startedAt: "" }] });
+	await settle();
+	await ui.loadRuns(true);
+	assert.doesNotMatch(ui.nodes.runs.innerHTML, /ago|Invalid/);
 });
 
 test("loadRuns__RepaintsTheCard__When__TheHumanizedRenderAppears", async () => {

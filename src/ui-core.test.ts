@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { appmapsDir, dataRoot, outDir } from "./paths.js";
-import { appBundlePath, HumanizeController, listApps, listRecordedRuns, parseByteRange, pruneUiState, readUiState, resolveVideo, RunController, streamPump, writeUiState } from "./ui-core.js";
+import { appBundlePath, HumanizeController, listApps, listRecordedRuns, parseByteRange, pruneUiState, readUiState, resolveVideo, RunController, stampTime, streamPump, writeUiState } from "./ui-core.js";
 
 /**
  * Each test gets its own data root rather than writing out/ui-state.json into the checkout.
@@ -153,6 +153,39 @@ test("listRecordedRuns__OmitsHumanized__When__NoRenderHasBeenMade", () => {
 	inTempRoot(() => {
 		fakeRun("2026-07-30T05-00-00-yarn", { app: "Yarn", success: true, steps: [] });
 		assert.equal(listRecordedRuns()[0].humanized, undefined);
+	});
+});
+
+test("stampTime__RecoversTheUtcInstant__When__TheStampHasSecondsPrecision", () => {
+	// The old stamp shape, minted before the millisecond bump. The trailing Z is the point:
+	// the stamp came from toISOString(), and reading it as local time would shift every
+	// gallery label by the timezone offset.
+	assert.equal(stampTime("2026-07-30T17-31-22-yarn"), "2026-07-30T17:31:22Z");
+});
+
+test("stampTime__KeepsTheMillis__When__TheStampCarriesThem", () => {
+	assert.equal(stampTime("2026-07-30T23-19-59-123-notion-calendar"), "2026-07-30T23:19:59.123Z");
+});
+
+test("stampTime__ReturnsUndefined__When__TheIdCarriesNoTimestamp", () => {
+	assert.equal(stampTime("not-a-stamp"), undefined);
+	assert.equal(stampTime(""), undefined);
+});
+
+test("listRecordedRuns__FallsBackToTheStamp__When__TheLogHasNoStepTimestamp", () => {
+	// A run that crashed before writing step 0 still has WHEN it happened encoded in its own
+	// id, so the card's time label must not depend on the run having gotten anywhere.
+	inTempRoot(() => {
+		fakeRun("2026-07-30T17-31-22-yarn", { app: "Yarn", success: false, steps: [] });
+		assert.equal(listRecordedRuns()[0].startedAt, "2026-07-30T17:31:22Z");
+	});
+});
+
+test("listRecordedRuns__PrefersTheStepTimestamp__When__TheLogHasOne", () => {
+	// The step timestamp is the authoritative instant; the stamp is only its stand-in.
+	inTempRoot(() => {
+		fakeRun("2026-07-30T17-31-22-yarn", { app: "Yarn", success: true, steps: [{ timestamp: "2026-07-30T17:31:25.000Z" }] });
+		assert.equal(listRecordedRuns()[0].startedAt, "2026-07-30T17:31:25.000Z");
 	});
 });
 

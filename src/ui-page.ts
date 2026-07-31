@@ -502,20 +502,6 @@ function selectApp(name, url) {
   flush();
 }
 
-// "3d ago", not a timestamp: the question the label answers is "is this map stale enough to
-// reground", and the operator was doing that subtraction by hand. The exact stamp survives in
-// the badge's tooltip for when the day itself matters.
-function agoLabel(iso) {
-  const t = Date.parse(iso);
-  if (!isFinite(t)) return '';
-  const s = Math.max(0, Date.now() - t) / 1000;
-  if (s < 90) return 'just now';
-  if (s < 90 * 60) return Math.round(s / 60) + 'm ago';
-  if (s < 36 * 3600) return Math.round(s / 3600) + 'h ago';
-
-  return Math.round(s / 86400) + 'd ago';
-}
-
 // groundedAt is the pass's own capturedAt out of the appmap graph — never file mtime, which
 // git restamps on every checkout. Prose-only maps predate the stamp and keep the plain badge.
 function groundedBadge(a) {
@@ -989,6 +975,37 @@ async function startHumanize(stamp, btn) {
   loadRuns(true);
 }
 
+/**
+ * When a run happened, as people say it: "2h ago", "yesterday", "Jul 28". Full precision
+ * lives in the card's tooltip; this label is for scanning a column of cards. Null when the
+ * input is empty or unparseable — no label beats "Invalid Date" in every card that predates
+ * the field.
+ *
+ * The label goes deliberately stale between repaints: a redraw tears down any <video> mid-
+ * playback, so "2h ago" ticking to "3h ago" is not worth interrupting the recording someone
+ * is watching. It corrects itself whenever the gallery repaints for a real reason.
+ */
+function agoLabel(iso) {
+  // '' rather than null on the empty/invalid path: both call sites — the grounded badge and
+  // the gallery's recorded-at label — compose the result into markup strings.
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  // Fleet Macs' clocks can disagree by a little; a run "from the future" reads as fresh, not
+  // as a negative number.
+  const s = Math.max(0, (Date.now() - d.getTime()) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  // Calendar days from local midnight, not 24h buckets: at 9am, "yesterday" has to mean
+  // yesterday, and a run from 30 hours ago was.
+  const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
+  if (Math.ceil((midnight.getTime() - d.getTime()) / 86400000) <= 1) return 'yesterday';
+  return d.toLocaleDateString(undefined, d.getFullYear() === new Date().getFullYear()
+    ? { month: 'short', day: 'numeric' }
+    : { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
 async function loadRuns(force) {
   // Three callers race here — the 4s timer, the refresh button, onDone — and the host walks
   // every run log on disk to answer. Overlapping passes can resolve out of order and repaint
@@ -1027,6 +1044,7 @@ async function loadRuns(force) {
 
   box.innerHTML = runs.map((r, i) => {
     const hs = hstates[r.id];
+    const when = agoLabel(r.startedAt);
     // esc() everywhere, not a bare '<' swap: the task text is arbitrary user input landing in
     // markup, and data-id sits inside a quoted attribute where an unescaped quote breaks out.
     return '<div class="run" data-i="' + i + '" data-id="' + esc(r.id) + '">' +
@@ -1040,6 +1058,10 @@ async function loadRuns(force) {
         '<span>' + r.elapsedSec + 's</span>' +
         '<span>' + r.grounding + '</span>' +
         (r.visual ? '<span>judge ' + r.visual + '</span>' : '') +
+        // NOT part of the redraw signature: ids are stable and a run's start time never
+        // changes, so its arrival cannot be what a repaint waits on. See agoLabel for why
+        // the label is allowed to go stale between repaints.
+        (when ? '<span title="' + esc(new Date(r.startedAt).toLocaleString()) + '">' + esc(when) + '</span>' : '') +
       '</div>' +
       // A card with a humanized render offers it in the player (see attach); one without
       // offers to make it. Both never at once — the button's absence IS the "done" signal.

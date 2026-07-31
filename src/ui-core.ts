@@ -172,7 +172,35 @@ export interface PastRun {
 	 * the "Render human cursor" button at all.
 	 */
 	humanized?: string;
+	/**
+	 * ISO instant the run began: the first step's timestamp when the log has one, else the
+	 * instant recovered from the stamp itself (see stampTime), else "". The renderer turns it
+	 * into the card's "2h ago" label, so "" simply means no label.
+	 */
 	startedAt: string;
+}
+
+/**
+ * The instant encoded in a run stamp, as a real ISO string — or undefined for an id that
+ * carries none.
+ *
+ * mintRunKey builds the stamp by folding `new Date().toISOString()`'s `:` and `.` into `-`,
+ * so the prefix of every run id is a UTC datetime wearing filename-safe punctuation. Undoing
+ * the fold recovers it exactly. Both stamp generations are handled: millisecond precision
+ * (`2026-07-30T23-19-59-123-yarn`, minted after the precision bump) and the older
+ * seconds-only shape (`2026-07-30T17-31-22-yarn`). The trailing `Z` matters — the stamp is
+ * UTC, and without it Date() would read the time as local and shift every label by the
+ * timezone offset.
+ *
+ * The optional millis group must be followed by `-` or end-of-string so a three-digit
+ * fragment inside an app slug cannot be mistaken for it; an app slug that itself starts with
+ * three digits is misread as millis, which errs by under a second and is accepted.
+ */
+export function stampTime(id: string): string | undefined {
+	const m = /(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})(?:-(\d{3}))?(?=-|$)/.exec(id);
+	if (!m) return undefined;
+
+	return `${m[1]}T${m[2]}:${m[3]}:${m[4]}${m[5] ? `.${m[5]}` : ""}Z`;
 }
 
 /**
@@ -202,8 +230,9 @@ export function listRecordedRuns(limit = 40): PastRun[] {
 		// where a run's recording lives. Existence is checked per scan, not cached: the file
 		// appears when a render finishes and the next gallery poll must see it.
 		const humanized = `${path.posix.dirname(d.video)}/humanized.mp4`;
+		const id = f.replace(/\.json$/, "");
 		out.push({
-			id: f.replace(/\.json$/, ""),
+			id,
 			app: d.app ?? "",
 			task: d.task ?? "",
 			success: !!d.success,
@@ -214,7 +243,9 @@ export function listRecordedRuns(limit = 40): PastRun[] {
 			visual: d.visualCheck?.verdict,
 			video: d.video,
 			...(fs.existsSync(`${dataRoot()}/${humanized}`) ? { humanized } : {}),
-			startedAt: d.steps?.[0]?.timestamp ?? "",
+			// `||`, not `??`: an empty-string timestamp on step 0 must fall through to the stamp,
+			// which encodes the same instant for every run that crashed before writing a step.
+			startedAt: d.steps?.[0]?.timestamp || stampTime(id) || "",
 		});
 	}
 
