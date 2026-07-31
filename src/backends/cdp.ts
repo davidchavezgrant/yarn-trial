@@ -633,7 +633,7 @@ export class CdpBackend {
 				const loc = this.page.locator(`aria-ref=${ref}`);
 				if (a.name === "hover") await loc.hover();
 				else if (this.demo) {
-					const p = await this.demoPointer(loc, a.name);
+					const p = await this.demoPointer(loc, a.name, ref);
 
 					return `${a.name} on [${ref}] at (${Math.round(p.x)}, ${Math.round(p.y)})`;
 				} else
@@ -669,7 +669,7 @@ export class CdpBackend {
 						const focused = (await loc
 							.evaluate("el => el === document.activeElement || el.contains(document.activeElement) || (document.activeElement && document.activeElement.contains(el))")
 							.catch(() => false)) as boolean;
-						if (!focused) await this.demoPointer(loc, "click");
+						if (!focused) await this.demoPointer(loc, "click", ref);
 					}
 					await this.page.keyboard.type(text, { delay: DEMO_TYPE_DELAY_MS });
 
@@ -725,11 +725,22 @@ export class CdpBackend {
 	 * Throws when the element has no visible box: pressing at a guessed point would be
 	 * exactly the invisible-actuation this mode exists to kill.
 	 */
-	private async demoPointer(loc: Locator, verb: "click" | "right_click" | "double_click"): Promise<{ x: number; y: number }> {
+	private async demoPointer(loc: Locator, verb: "click" | "right_click" | "double_click", ref?: string): Promise<{ x: number; y: number }> {
 		// The scroll a locator click would have done implicitly; without it the box below
-		// can sit outside the viewport and the mouse events land on nothing.
-		await loc.scrollIntoViewIfNeeded();
-		const box = await loc.boundingBox();
+		// can sit outside the viewport and the mouse events land on nothing. Best-effort:
+		// the row-box fallback below still needs a chance when the node cannot scroll.
+		await loc.scrollIntoViewIfNeeded().catch(() => {});
+		let box = await loc.boundingBox().catch(() => null);
+		if (!box || box.width <= 0 || box.height <= 0) {
+			// boundingBox() is null for the nodes rich editors expose — ProseMirror's
+			// placeholder line has a ref and painted pixels but no box playwright will
+			// report, and clicking it was the ONLY way to focus Yarn's script editor. The
+			// snapshot row recorded the box the renderer painted ([box=…]); a human clicks
+			// what they see, so click that. Observation-time geometry — verification
+			// downstream catches a layout that moved since.
+			const row = ref ? this.lastRows.find((r) => r.ref === ref) : undefined;
+			if (row && row.w > 0 && row.h > 0) box = { x: row.x, y: row.y, width: row.w, height: row.h };
+		}
 		if (!box || box.width <= 0 || box.height <= 0)
 			throw new Error("target resolved but has no visible box to click — it may have just closed; re-observe");
 		const plan = demoClickPlan(box, verb);

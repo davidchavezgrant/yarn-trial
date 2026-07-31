@@ -388,7 +388,7 @@ export async function executeAction(
 				: {}),
 		// CDP demo typing is one pressSequentially call — real keystrokes, real frames —
 		// so it is `typedLive` without chunk records; the humanizer spans the turn instead.
-		...(plan?.typedLive || (demoMode && cdp && input.action.name === "type_text") ? { typedLive: true } : {}),
+		...(plan?.typedLive || (ctx.demo === true && cdp && input.action.name === "type_text") ? { typedLive: true } : {}),
 		...(typedChunks.length ? { typedChunks } : {}),
 		...(driverWarning ? { driverWarning } : {}),
 		...(chord ? { chord: true as const } : {}),
