@@ -400,6 +400,46 @@ function sameOrigin(pageUrl: string, targetUrl: string): boolean {
 }
 
 /**
+ * Decides when the home watch may announce "signed in": on a TRANSITION, never a level.
+ *
+ * The level check ("is a home label on screen right now?") closed every sign-in session on the
+ * fleet, 2026-07-31. Two ways it fired without a sign-in, both seen live:
+ *
+ *  - **The cached flash.** The runner's `signin` verb restores the operator's parked profile
+ *    and launches the app, which boots into a cached render of the signed-in Library before
+ *    its dead token redirects it to /login. "Library" was on screen at the first poll, the
+ *    session died ~3.5s in, and the operator never got to click anything.
+ *  - **The provider's pages ARE the primary page.** Yarn's "Continue with Google" navigates
+ *    the app's own window to accounts.google.com, so the primary-only guard never kept the
+ *    watch off OAuth pages; a label collision there was one Google product name away.
+ *
+ * So: a hit only counts on the app's OWN origin (anchored to where the session started), and
+ * only after at least one poll where it did NOT count — the label coming BACK is what a
+ * completed sign-in looks like, because /login, the OAuth detour, or the flash expiring all
+ * register as absence first. A session anchored somewhere unparseable (about:blank, an app
+ * still booting) never fires and keeps the pre-auto-close behaviour: the 20-minute clock and
+ * the operator closing the tab, which is an idle session, not a broken one.
+ *
+ * Known residual: an app that RELAUNCHES mid-session replays its cached flash after absence
+ * has been recorded, and that would fire. The runner launches the app before the viewer link
+ * goes out, so a mid-session relaunch is operator-driven and rare; accepted.
+ */
+export function homeTransitionGate(sessionStartUrl: string | undefined): (pageUrl: string, hit: string | undefined) => boolean {
+	let sawAbsent = false;
+
+	return (pageUrl, hit) => {
+		const atHome = hit !== undefined && sessionStartUrl !== undefined && sameOrigin(pageUrl, sessionStartUrl);
+		if (!atHome) {
+			sawAbsent = true;
+
+			return false;
+		}
+
+		return sawAbsent;
+	};
+}
+
+/**
  * Connect to a Chromium debug endpoint and return an EngineHandle streaming the chosen page.
  *
  * Death handling mirrors spawnEngine's: nothing here throws to the caller. A failure —
@@ -720,20 +760,28 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 	 * cheap enough to poll. An app with no appmap yields no labels, and then this never fires:
 	 * the session keeps its old behaviour rather than guessing that some page means "done".
 	 *
+	 * A hit alone is not the announcement — `homeTransitionGate` requires the label to have been
+	 * ABSENT first and the page to be on the app's own origin, because a level check fired on
+	 * the cached-Library flash at app launch and closed every sign-in session on the fleet
+	 * (2026-07-31; the gate's own comment has the full account).
+	 *
 	 * Emitted ONCE, as an event. Whether it ends the session is the server's call, not the
 	 * engine's — the engine reports what it sees.
 	 */
 	const armHomeWatch = () => {
 		const labels = appName ? homeLabels(appName) : [];
 		if (!labels.length) return undefined;
+		const gate = homeTransitionGate(first.url());
 		let fired = false;
 
 		return setInterval(() => {
 			if (closed || fired) return;
 			const active = stack.active;
-			// Primary only: the OAuth provider's pages are not the app, and a label collision
-			// there ("Library" is not a rare word) would end the session mid-sign-in.
+			// Primary only: a detour streaming a browser leg is by definition not home. The
+			// origin anchor inside the gate covers the case this guard cannot — OAuth pages
+			// loading in the primary window itself.
 			if (!active || active.origin !== "primary") return;
+			const url = active.page.url();
 			void active.page
 				.evaluate((want: string[]) => {
 					const text = document.body?.innerText ?? "";
@@ -741,9 +789,10 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 					return want.find((w) => text.includes(w));
 				}, labels)
 				.then((hit) => {
-					if (!hit || fired || closed) return;
+					if (fired || closed) return;
+					if (!gate(url, hit ?? undefined)) return;
 					fired = true;
-					emit({ ev: "home", detail: `"${hit}" is on screen — ${appName} is signed in` });
+					emit({ ev: "home", detail: `"${hit}" is back on screen — ${appName} is signed in` });
 				})
 				.catch(() => {}); // a navigating page throws; the next tick asks again
 		}, HOME_POLL_MS);

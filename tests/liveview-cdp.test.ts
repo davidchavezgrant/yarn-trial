@@ -6,6 +6,7 @@ import {
 	FollowStack,
 	fractionToCss,
 	type FrameMeta,
+	homeTransitionGate,
 	isIdlePage,
 	keyEventParams,
 	titleFor,
@@ -251,6 +252,53 @@ test("cdpQuality__ReturnsDefault__When__UnsetOrUnusable", () => {
 	assert.equal(cdpQuality(undefined), 80);
 	assert.equal(cdpQuality(0), 80);
 	assert.equal(cdpQuality(Number.NaN), 80);
+});
+
+// ---- homeTransitionGate: "signed in" means the home label RETURNED, not that it is there ----
+// The false-fire this guards against was live on all three Macs, 2026-07-31: the runner's
+// signin verb restores the operator's parked profile and launches the app, which boots into a
+// CACHED render of the signed-in Library before its dead token redirects it to /login. A level
+// check ("is 'Library' on screen?") caught that flash on the first poll and closed every
+// sign-in session ~3.5s in — the operator could no longer sign in at all.
+
+const APP = "https://y-prod-react.onrender.com/login";
+const HOME = "https://y-prod-react.onrender.com/library/ag";
+
+test("homeTransitionGate__DoesNotFire__When__TheLabelIsAlreadyVisibleOnTheFirstPoll", () => {
+	// The cached-Library flash at app launch: visible from tick one is the baseline, not a win.
+	const fire = homeTransitionGate(APP);
+	assert.equal(fire(HOME, "Library"), false);
+});
+
+test("homeTransitionGate__Fires__When__TheLabelAppearsAfterBeingAbsent", () => {
+	// The real sign-in: /login (absent) → OAuth → the app lands on its home route.
+	const fire = homeTransitionGate(APP);
+	assert.equal(fire(APP, undefined), false);
+	assert.equal(fire(HOME, "Library"), true);
+});
+
+test("homeTransitionGate__DoesNotFire__When__TheLabelAppearsOnAForeignOrigin", () => {
+	// Yarn's "Continue with Google" navigates the PRIMARY window to accounts.google.com, so
+	// "primary-page-only" does not keep the watch off the provider's pages — the origin must.
+	const fire = homeTransitionGate(APP);
+	assert.equal(fire(APP, undefined), false);
+	assert.equal(fire("https://accounts.google.com/v3/signin/identifier", "Library"), false);
+});
+
+test("homeTransitionGate__TreatsAForeignOriginAsAbsence__When__TheFlowDetoursThroughOAuth", () => {
+	// Flash → OAuth in the same window → home. The detour IS the going-away; the return fires.
+	const fire = homeTransitionGate(APP);
+	assert.equal(fire(HOME, "Library"), false);
+	assert.equal(fire("https://accounts.google.com/signin/challenge", "Library"), false);
+	assert.equal(fire(HOME, "Library"), true);
+});
+
+test("homeTransitionGate__NeverFires__When__TheSessionStartUrlIsUnparseable", () => {
+	// A session anchored to about:blank (app still booting) has no origin to trust — the watch
+	// stays off and the session keeps its pre-auto-close behaviour rather than guessing.
+	const fire = homeTransitionGate("about:blank");
+	assert.equal(fire(HOME, undefined), false);
+	assert.equal(fire(HOME, "Library"), false);
 });
 
 // ---- FollowStack: newest page wins, pop on close -------------------------------------------
