@@ -72,12 +72,19 @@ export interface AxEvent {
 /** Foreign-window scan diagnostic, emitted when the scan's findings change shape. */
 export interface ScanEvent {
 	ev: "scan";
-	/** Which rect the crop came from: the ink union, the whole web area, or nothing. */
-	source: "ink" | "webarea" | "none";
+	/**
+	 * Which rect the crop came from, tightest first: the login card's own container (`ink`), the
+	 * whole page (`webarea`), the window minus the browser's furniture (`chrome` — the floor
+	 * adopted when no page geometry resolved before the settle deadline), or `none`, which means
+	 * frames are being WITHHELD rather than shown wide.
+	 */
+	source: "ink" | "webarea" | "chrome" | "none";
 	leaves: number;
 	/** "WxH" or "nil". */
 	web: string;
 	ink: string;
+	/** The chrome-less floor, whether or not it was the one used. "WxH" or "nil". */
+	chrome?: string;
 }
 
 /** A Cmd-shortcut was dropped by the constrained-browser key guard. */

@@ -345,6 +345,26 @@ test("EventParser__CarriesTheDiagnosticEvents__When__TheEngineEmitsThem", () => 
 	assert.equal(events[2].ev === "scan" && events[2].ink, "800x351");
 });
 
+test("EventParser__CarriesTheChromeFloor__When__NoPageGeometryResolved", () => {
+	// The rule this encodes: fail to chrome-less, never to chrome. `source:"none"` means frames
+	// are WITHHELD; `source:"chrome"` means the settle deadline passed and the crop fell back to
+	// the window minus its toolbar — measured 2026-07-31 as an 86pt inset that is present whether
+	// or not the page's AX tree ever woke. Releasing the whole browser instead is what put a tab
+	// strip, an OAuth URL and an account chooser into a stream someone else was watching.
+	const parser = new EventParser();
+	const events = parser.push(
+		'{"ev":"scan","source":"none","leaves":0,"web":"nil","ink":"nil","chrome":"1200x954"}\n' +
+		'{"ev":"scan","source":"chrome","leaves":0,"web":"nil","ink":"nil","chrome":"1200x954"}\n',
+	);
+
+	assert.equal(events.length, 2);
+	// Withheld first — the floor is measured but not yet adopted, so a slow page still gets its
+	// full grace period to produce a proper card crop.
+	assert.equal(events[0].ev === "scan" && events[0].source, "none");
+	assert.equal(events[0].ev === "scan" && events[0].chrome, "1200x954");
+	assert.equal(events[1].ev === "scan" && events[1].source, "chrome");
+});
+
 test("EventParser__CarriesSettling__When__TheEngineWithholdsFrames", () => {
 	// `settling` is how the viewer tells "frames withheld until the crop lands" apart from a
 	// dead stream. Withholding exists because an uncropped foreign window shows the URL bar and,
