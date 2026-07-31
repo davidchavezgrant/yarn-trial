@@ -55,7 +55,6 @@ export const CHROME = String.raw`<meta charset="utf-8">
   ul { list-style:none; margin:8px 0 0; padding:0; overflow:auto; }
   li { padding:7px 10px; border-radius:6px; cursor:pointer; display:flex; align-items:center; gap:8px; }
   /* Fixed box whether or not the icon has arrived, so rows do not shift when one lands. */
-  .appicon { width:16px; height:16px; flex:0 0 16px; border-radius:3px; display:inline-block; }
   li:hover { background:var(--panel); }
   li.sel { background:#2b3550; }
   .badge { font-size:10px; padding:1px 6px; border-radius:99px; border:1px solid var(--line); color:var(--dim); }
@@ -92,8 +91,11 @@ export const CHROME = String.raw`<meta charset="utf-8">
   .hrow span { font-size:11px; color:var(--dim); }
   .hfail { font-size:11px; color:var(--bad); margin-top:4px; word-break:break-word; }
   .panehead { display:flex; align-items:center; justify-content:space-between; }
-  .mini { width:auto; padding:2px 8px; font-size:13px; line-height:1.2; color:var(--dim); cursor:pointer; }
-  .mini:hover { color:var(--fg); border-color:var(--accent); }
+  /* Buttons must read as buttons: dim text on the panel background made every .mini look
+     like a passive chip. Full-strength text, a visible raised fill, and a pressed state. */
+  .mini { width:auto; padding:3px 10px; font-size:13px; line-height:1.3; color:var(--fg); background:#2a2f3a; border-color:#454c5c; cursor:pointer; }
+  .mini:hover { border-color:var(--accent); background:#323950; }
+  .mini:active { background:#262b36; transform:translateY(1px); }
   .btnrow { display:flex; gap:8px; margin-top:14px; }
   .btnrow button { margin-top:0; }
   button.ground { width:auto; padding-left:16px; padding-right:16px; background:transparent; color:var(--fg); cursor:pointer; }
@@ -102,10 +104,12 @@ export const CHROME = String.raw`<meta charset="utf-8">
   .fold summary { color:var(--dim); cursor:pointer; padding:2px 0; }
   .fold > div { border-left:2px solid var(--line); margin-left:4px; padding-left:8px; }
   .hostrow { display:flex; gap:8px; align-items:center; margin-top:12px; }
-  /* One action per line, full width: four abbreviated buttons crammed on one row were
-     unreadable, and the label IS the safety feature on a destructive action. */
+  /* One action per line, full width with centered labels: four abbreviated buttons crammed
+     on one row were unreadable, and the label IS the safety feature on a destructive action. */
   .factions { display:flex; flex-direction:column; gap:4px; margin:4px 0 6px; }
-  .factions button { width:100%; text-align:left; }
+  .factions button { width:100%; }
+  .iform { display:flex; flex-direction:column; gap:4px; margin-top:2px; }
+  .iform input { padding:4px 8px; font-size:12.5px; }
   .hostrow span { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); white-space:nowrap; }
   .hostrow select { width:auto; padding:5px 8px; }
   #attach { display:none; margin-top:12px; padding:8px 10px; border-radius:6px; background:#1d2a44; border:1px solid #3a4a7a; font-size:12.5px; }
@@ -156,6 +160,9 @@ export const CHROME = String.raw`<meta charset="utf-8">
       <button class="go" id="go" disabled>Run</button>
       <button class="ground" id="ground" disabled title="Autonomous exploration pass — writes docs/appmaps/">Ground</button>
     </div>
+    <!-- Fills the space Run/Ground vacate while their host is mid-run: hidden controls with
+         no explanation read as a broken page. -->
+    <div id="busyhint" class="hint" style="display:none"></div>
   </div>
   <div class="col mid">
     <div id="urlrow" style="display:none">
@@ -165,11 +172,13 @@ export const CHROME = String.raw`<meta charset="utf-8">
     </div>
     <label for="task">Task (state the GOAL only — not the steps)</label>
     <textarea id="task" placeholder="show me how to change the cursor type"></textarea>
+    <select id="examples" style="display:none;margin-top:6px"><option value="">Canonical examples…</option></select>
     <div id="warn"></div>
     <div class="row">
-      <label><input type="checkbox" id="record"> Record video</label>
-      <label title="Render the humanized cursor over the recording when the run finishes"><input type="checkbox" id="human"> Human cursor</label>
-      <label><input type="checkbox" id="novision"> No screenshots</label>
+      <!-- Both on by default: the recorded, cursor-rendered take IS the product — running
+           without one is the exception someone opts into, not the other way round. -->
+      <label><input type="checkbox" id="record" checked> Record video</label>
+      <label title="Render the humanized cursor over the recording when the run finishes"><input type="checkbox" id="human" checked> Render cursor</label>
     </div>
     <button class="stop" id="stop" style="display:none">Stop run</button>
     <div id="attach"></div>
@@ -182,10 +191,13 @@ export const CHROME = String.raw`<meta charset="utf-8">
            which is the column's actual deliverable. Closed by default; the state a person
            needs mid-run (busy/unready) surfaces through the attach offers and unready panel. -->
       <details class="fold" id="fleetfold">
-        <summary>Fleet <button id="fleetrefresh" class="mini" title="Probe every host now">↻</button></summary>
+        <!-- The badge keeps a folded panel honest: a busy Mac stays visible without the fold
+             having to be open. Credentials is a SIBLING fold — nesting it in here meant
+             finding your API key required knowing it lived "inside the fleet". -->
+        <summary>Remote Macs <span id="fleetsum" class="badge r" style="display:none"></span> <button id="fleetrefresh" class="mini" title="Probe every Mac now">↻</button></summary>
         <div id="fleet"><span class="empty">probing…</span></div>
-        <details class="fold" style="margin-top:10px"><summary>Credentials</summary><div id="creds"></div></details>
       </details>
+      <details class="fold" style="margin-top:10px"><summary>Credentials</summary><div id="creds"></div></details>
     </div>
     <div class="panehead"><label>Recorded runs</label><button id="refresh" class="mini" title="Rescan out/runs">↻</button></div>
     <div id="runs"><span class="empty">No recordings yet — tick “Record video”.</span></div>
@@ -214,6 +226,11 @@ let offers = [], fleetRows = {}, dismissed = new Set(), probing = false;
 // read. 'paints' counts repaints so the message can also retire: without that it outlived its
 // moment, and "opening mac2…" sat under the panel for the rest of the session.
 let signinMsg = null;
+// The last fleet probe, so interactions can repaint rows instantly without a fresh fan-out.
+let lastFleetView = null;
+// {mac, name, url} while the inline install form is open. Module state, not DOM state: the
+// probe repaints the rows every 15s and would wipe anything typed into a bare input.
+let installForm = null;
 // The host whose sign-in is mid-flight. Disabling the clicked button was not enough: the very
 // repaint that shows "opening mac2…" rebuilds the row from markup with the button enabled
 // again, and a second click double-opens screen shares. The rebuild consults this instead.
@@ -376,7 +393,9 @@ async function loadApps() {
   if (asked !== host) return;
 
   apps = (res && res.apps) || [];
-  el('q').placeholder = asked === 'local' ? 'Search apps…' : 'Search apps on ' + asked + '…';
+  el('q').placeholder = asked === 'local' ? 'Search apps…'
+    : asked === 'auto' ? 'Search apps installed on every Mac…'
+    : 'Search apps on ' + asked + '…';
   // Owner is the SELECTION: this note is about the list on screen, and defaulting would file
   // it into the running app's terminal whenever a run is in flight.
   if (res && res.note) line('· ' + res.note, sel);
@@ -401,6 +420,7 @@ async function restore() {
   renderLog(sel);
   render();
   check();
+  renderExamples();
 }
 
 // The saved selection can name an app that no longer exists on the selected host — deleted
@@ -443,6 +463,8 @@ function selectApp(name, url) {
   renderLog(name);
   render();
   check();
+  renderFleet();
+  renderExamples();
   flush();
 }
 
@@ -458,33 +480,6 @@ function groundedBadge(a) {
 
 // Bundle icons, local host only. A colo Mac's bundles are not on this disk and shipping icons
 // over ssh is more plumbing than a list nicety earns; a web entry has no bundle at all. Both
-// are skipped in silence.
-const icons = new Map();       // name -> data URL, '' once the host has answered "none"
-const iconPending = new Set(); // in flight, so every repaint does not re-ask
-
-function appIconHtml(a) {
-  if (host !== 'local' || a.kind === 'web') return '';
-  const url = icons.get(a.name);
-
-  // The empty span is a fixed-size placeholder so rows do not shift when the icon lands.
-  return url ? '<img class="appicon" src="' + esc(url) + '" alt="">' : '<span class="appicon"></span>';
-}
-
-// Lazy, after the list paints: the lookup is one IPC per app and the first paint must not
-// wait on sixty of them. Every outcome caches — a failure as "no icon" — so each name is
-// asked about at most once per session and a missing icon can never break the list.
-function requestIcons(entries) {
-  if (host !== 'local' || !bus.appIcon) return;
-  for (const a of entries) {
-    if (a.kind === 'web' || icons.has(a.name) || iconPending.has(a.name)) continue;
-    iconPending.add(a.name);
-    bus.appIcon(a.name).then(
-      (url) => { iconPending.delete(a.name); icons.set(a.name, url || ''); if (url) render(); },
-      () => { iconPending.delete(a.name); icons.set(a.name, ''); },
-    );
-  }
-}
-
 function render() {
   const q = el('q').value.toLowerCase();
   const hits = apps.filter(a => a.name.toLowerCase().includes(q)).slice(0, 60);
@@ -496,22 +491,58 @@ function render() {
   const fresh = typedHost && !apps.some(a => a.name === typedHost)
     ? [{ name: typedHost, grounded: false, running: false, kind: 'web', url: typed }]
     : [];
-  el('apps').innerHTML = [...fresh, ...hits].map(a =>
-    // data-u rides along for web entries so the URL is captured AT the click. The fresh entry
-    // exists only in this markup — nothing else remembers what was typed once the box changes.
-    '<li data-n="' + encodeURIComponent(a.name) + '"' + (a.kind === 'web' && a.url ? ' data-u="' + encodeURIComponent(a.url) + '"' : '') +
-    ' class="' + (a.name === sel ? 'sel' : '') + '">' +
-    appIconHtml(a) +
-    '<span style="flex:1">' + esc(a.name) + '</span>' +
-    (a.kind === 'web' ? '<span class="badge w">web</span>' : '') +
-    groundedBadge(a) +
-    (a.running ? '<span class="badge r">open</span>' : '') + '</li>').join('');
+  const entries = [...fresh, ...hits];
+  // An empty result explains itself: a silently blank list reads as "no apps installed",
+  // which sends people to the wrong problem (the Mac) instead of the right one (the filter).
+  el('apps').innerHTML = entries.length
+    ? entries.map(a =>
+      // data-u rides along for web entries so the URL is captured AT the click. The fresh entry
+      // exists only in this markup — nothing else remembers what was typed once the box changes.
+      '<li data-n="' + encodeURIComponent(a.name) + '"' + (a.kind === 'web' && a.url ? ' data-u="' + encodeURIComponent(a.url) + '"' : '') +
+      ' class="' + (a.name === sel ? 'sel' : '') + '">' +
+      '<span style="flex:1">' + esc(a.name) + '</span>' +
+      (a.kind === 'web' ? '<span class="badge w">web</span>' : '') +
+      groundedBadge(a) +
+      (a.running ? '<span class="badge r">open</span>' : '') + '</li>').join('')
+    : '<li style="cursor:default"><span class="empty">' + (q ? 'nothing matches “' + esc(el('q').value.trim()) + '”' : 'no apps found') + '</span></li>';
   for (const li of el('apps').children) {
-    li.onclick = () => selectApp(decodeURIComponent(li.dataset.n), li.dataset.u ? decodeURIComponent(li.dataset.u) : undefined);
+    // The empty-state row carries no name and must not be clickable-into-selection.
+    if (li.dataset.n !== undefined) li.onclick = () => selectApp(decodeURIComponent(li.dataset.n), li.dataset.u ? decodeURIComponent(li.dataset.u) : undefined);
   }
-  // Only what is on screen: names outside the filter are asked about when they first paint.
-  requestIcons(hits);
 }
+
+// The measured canonical prompts from docs/research — the tasks every A/B and demo take has
+// used. A dropdown, not documentation: the first thing anyone asks in front of this window
+// is "what do I type", and these are known-good, goal-only answers.
+const EXAMPLES = {
+  'Yarn': [
+    'show me how to change the cursor type',
+    'show me how to change the cursor type for just this one project, without affecting other projects',
+    'show me how to delete a draft',
+    'Create a new draft, then open the Script tab and write a two-scene script introducing a coffee ordering app called Brew, then set the voice to Cassidy. Do not rename the draft. Do not publish, export, or record anything.',
+  ],
+  'Notion Calendar': [
+    'Show me how to change my timezone to Paris',
+  ],
+};
+
+function renderExamples() {
+  const list = (sel && EXAMPLES[sel]) || [];
+  const box = el('examples');
+  box.style.display = list.length ? 'block' : 'none';
+  // Index-valued options so the task text never has to survive an attribute round trip.
+  box.innerHTML = '<option value="">Canonical examples…</option>' +
+    list.map((t, i) => '<option value="' + i + '">' + esc(t) + '</option>').join('');
+}
+el('examples').onchange = () => {
+  const list = (sel && EXAMPLES[sel]) || [];
+  const i = Number(el('examples').value);
+  if (el('examples').value === '' || !list[i]) return;
+  el('task').value = list[i];
+  el('examples').value = '';
+  check();
+  saveSoon();
+};
 
 // Mirror auditTaskPrompt() in the browser so a hinted prompt is explained before the run
 // starts, not after the process exits. The server re-checks; this is UX, not enforcement.
@@ -537,6 +568,17 @@ function check() {
   // the far side's lease to refuse; this only gates what this shell can already see.
   const hostBusy = !!running[host];
   el('go').disabled = hostBusy || !sel || !t || !!w || needsUrl;
+  // Hidden, not merely disabled, while the host is mid-run: a control that cannot be used
+  // until something else finishes is noise, and Stop — the control that CAN — takes its
+  // place. Disabled stays for the form-shaped cases (no target, no task), where the button
+  // is the prompt for what is missing.
+  el('go').style.display = hostBusy ? 'none' : '';
+  el('ground').style.display = hostBusy ? 'none' : '';
+  // …but a void where buttons were reads as breakage, so the hint says what owns the host
+  // and where the Stop control lives (it follows the running app's pane).
+  el('busyhint').style.display = hostBusy ? 'block' : 'none';
+  if (hostBusy) el('busyhint').textContent = (host === 'local' ? 'This Mac' : host) + ' is running ' + running[host] +
+    (running[host] === sel ? ' — Stop is beside its log.' : ' — select ' + running[host] + ' to stop it, or pick another Mac.');
   const site = selUrl();
   el('go').textContent = sel
     ? 'Run on ' + (site ? new URL(site).host : sel) + (host === 'local' ? '' : ' @ ' + host)
@@ -790,10 +832,25 @@ async function loadFleet() {
     if (watchdog !== null) clearTimeout(watchdog);
     probing = false;
   }
+  lastFleetView = view;
+  renderFleet();
+}
+
+/**
+ * Paint the panel from the last probe. Split from loadFleet so interactions that change what
+ * the rows OFFER — opening the install form, a selection change — repaint instantly from the
+ * cached view instead of waiting seconds on a fresh ssh fan-out.
+ */
+function renderFleet() {
+  const view = lastFleetView;
+  if (!view) return;
   const box = el('fleet');
   if (view.error) { box.innerHTML = '<div class="frow"><span class="bad">' + esc(view.error) + '</span></div>'; return; }
   if (!view.rows.length) { box.innerHTML = '<span class="empty">No hosts configured.</span>'; return; }
 
+  // The app-scoped actions need a MAC APP to name: a web target has no bundle to delete and
+  // no ~/Library data to sign out of, so for one the pair simply does not exist.
+  const appTarget = sel && !selUrl() ? sel : null;
   fleetRows = {};
   for (const r of view.rows) fleetRows[r.name] = r;
   box.innerHTML = view.rows.map(r =>
@@ -803,20 +860,30 @@ async function loadFleet() {
         (r.staleGrants && r.staleGrants.length
           ? '<span class="bad" title="' + esc(r.staleGrants.join(' and ')) + ' was granted after the runner started, so it is not in effect. Run: ./run provision --restart">stale TCC</span>'
           : r.tccOk === false ? '<span class="bad" title="Accessibility / Screen Recording not granted">no TCC</span>' : '') +
-        // A sign-in, not a run: safe while the host is busy, and the only way past an app
-        // that wants a human to type a password into it.
-        '<button class="mini" data-signin="' + esc(r.name) + '"' + (signinBusy === r.name ? ' disabled' : '') + ' title="Open a sign-in window for this Mac">Sign in</button>' +
       '</div>' +
       // Management actions as plain buttons on their own line — a dropdown hid them behind a
-      // click and an unlabeled ⋯. The destructive pair still confirm() before firing, and all
-      // four disable while ANY action is mid-flight: they quit and delete things, and two at
-      // once on different Macs is not worth the ambiguity in the one shared message slot.
-      '<div class="factions">' +
-        '<button class="mini" data-fact="signout" data-mac="' + esc(r.name) + '"' + (signinBusy ? ' disabled' : '') + '>Sign out' + (sel ? ' of ' + esc(sel) : '') + '…</button>' +
-        '<button class="mini" data-fact="forget" data-mac="' + esc(r.name) + '"' + (signinBusy ? ' disabled' : '') + ' title="Forget the saved Screen Sharing password for this Mac (your local keychain)">Forget login</button>' +
-        '<button class="mini" data-fact="install" data-mac="' + esc(r.name) + '"' + (signinBusy ? ' disabled' : '') + '>Install…</button>' +
-        '<button class="mini" data-fact="delete" data-mac="' + esc(r.name) + '"' + (signinBusy ? ' disabled' : '') + '>Delete' + (sel ? ' ' + esc(sel) : '') + '…</button>' +
-      '</div>' +
+      // click and an unlabeled ⋯. Each button exists only when it could actually complete:
+      // nothing renders mid-flight (the shared transient narrates), the app-scoped pair needs
+      // a selected Mac app to name, and everything that touches the far Mac hides while a run
+      // is recording there — the runner would refuse anyway, and a button whose only outcome
+      // is an error teaches people to stop reading outcomes.
+      (signinBusy ? '' :
+        '<div class="factions">' +
+          (r.state !== 'busy' && appTarget ? '<button class="mini" data-fact="signout" data-mac="' + esc(r.name) + '">Sign out of ' + esc(appTarget) + '…</button>' : '') +
+          // Electron has no window.prompt, so Install is an inline form, not a dialog — the
+          // repaint-safe state lives in installForm and survives the 15s probe repaint.
+          (installForm && installForm.mac === r.name
+            ? '<div class="iform">' +
+                '<input id="iname" placeholder="App name (e.g. Yarn)" value="' + esc(installForm.name) + '" autocomplete="off" spellcheck="false">' +
+                '<input id="iurl" placeholder="https URL of its .dmg or .zip" value="' + esc(installForm.url) + '" autocomplete="off" spellcheck="false">' +
+                '<div style="display:flex;gap:4px">' +
+                  '<button class="mini" data-fact="install-go" data-mac="' + esc(r.name) + '">Install</button>' +
+                  '<button class="mini" data-fact="install-cancel" data-mac="' + esc(r.name) + '">Cancel</button>' +
+                '</div>' +
+              '</div>'
+            : (r.state !== 'busy' && !installForm ? '<button class="mini" data-fact="install" data-mac="' + esc(r.name) + '">Install…</button>' : '')) +
+          (r.state !== 'busy' && appTarget ? '<button class="mini" data-fact="delete" data-mac="' + esc(r.name) + '">Delete ' + esc(appTarget) + '…</button>' : '') +
+        '</div>') +
       (r.detail ? '<div class="fdetail">' + esc(r.detail) + '</div>' : '') +
       (r.reason ? '<div class="freason">' + esc(r.reason) + '</div>' : '') +
     '</div>').join('') +
@@ -826,6 +893,11 @@ async function loadFleet() {
   if (signinMsg && ++signinMsg.paints >= 3) signinMsg = null;
 
   offers = view.offers || [];
+  // The fold's badge: a busy Mac must stay visible while the panel is closed, or folding it
+  // hides the one state that explains why a dispatch was refused.
+  const busy = view.rows.filter((r) => r.state === 'busy').length;
+  el('fleetsum').style.display = busy ? 'inline-block' : 'none';
+  el('fleetsum').textContent = busy ? busy + ' busy' : '';
   renderAttach();
 }
 
@@ -871,10 +943,10 @@ function renderUnready() {
     '<div class="umsg">' + esc(unready.app || 'The app') + ' was not at its home screen' + where +
       ', so the run stopped before touching anything. Put it back at its home screen — signing in, if that is what it is asking for — then run again.</div>' +
     (unready.msg ? '<div class="fdetail">' + esc(unready.msg) + '</div>' : '') +
-    (unready.host && unready.host !== 'local'
-      // Disabled while its own flow is in flight: renderUnready() rebuilds this button on
-      // every progress message, and a rebuilt-enabled button double-opens screen shares.
-      ? '<button class="mini" data-fix="1"' + (unready.busy ? ' disabled' : '') + '>Open ' + esc(unready.host) + '</button>'
+    (unready.host && unready.host !== 'local' && !unready.busy
+      // Gone, not disabled, while its own flow is in flight: the panel's message narrates
+      // the progress, and a visible-but-dead button reads as something else to fix.
+      ? '<button class="mini" data-fix="1">Open ' + esc(unready.host) + '</button>'
       : '');
 }
 
@@ -898,7 +970,7 @@ async function loadCreds() {
     '<input id="key" type="password" placeholder="Paste your own OpenRouter key" autocomplete="off" spellcheck="false">' +
     '<button class="mini" id="savekey">Save key</button>' +
     '<div class="crow" id="keymsg"></div>';
-  paintKeyState(c.modelKey);
+  paintKeyState(c.modelKey, c.modelKeySource);
   el('savekey').onclick = async () => {
     let r;
     try {
@@ -911,15 +983,19 @@ async function loadCreds() {
     el('key').value = '';
     // r.credentials is the host re-reading the file it just wrote, so repainting from it means
     // 'saved' asserts the next run will find the key, not merely that a write did not throw.
-    if (r.ok) paintKeyState(r.credentials.modelKey);
+    if (r.ok) paintKeyState(r.credentials.modelKey, r.credentials.modelKeySource);
     el('keymsg').innerHTML = r.ok
       ? (r.credentials.modelKey ? '<span class="ok">saved</span>' : '<span class="bad">saved, but nothing readable landed</span>')
       : '<span class="bad">' + esc(r.error) + '</span>';
   };
 }
 
-function paintKeyState(present) {
-  el('keystate').innerHTML = 'model key ' + (present ? '<span class="ok">present</span>' : '<span class="bad">absent</span>');
+function paintKeyState(present, source) {
+  // "built-in" over "environment": the common case is the key shipped with the app bundle,
+  // and "absent" while every run authenticates fine sent people hunting a non-problem.
+  el('keystate').innerHTML = 'model key ' + (present
+    ? '<span class="ok">' + (source === 'environment' ? 'present (built-in)' : 'present') + '</span>'
+    : '<span class="bad">absent</span>');
 }
 
 let runSig = '';
@@ -1040,13 +1116,17 @@ async function loadRuns(force) {
         // the label is allowed to go stale between repaints.
         (when ? '<span title="' + esc(new Date(r.startedAt).toLocaleString()) + '">' + esc(when) + '</span>' : '') +
       '</div>' +
-      // A card with a humanized render offers it in the player (see attach); one without
-      // offers to make it. Both never at once — the button's absence IS the "done" signal.
-      (!r.humanized
+      '<button class="mini" data-reveal="1" title="Show the video file in Finder">Reveal in Finder</button>' +
+      // A card with a humanized render offers it in the player (see attach); one whose source
+      // artifacts are actually on this Mac offers to make it. A card with neither shows
+      // nothing — a render button whose only possible outcome is "no frames" would be an
+      // error taught as a feature. In-flight and failed states still render regardless, so a
+      // render started before the artifacts were pruned can finish telling its story.
+      (!r.humanized && (r.renderable || (hs && hs.state))
         ? '<div class="hrow">' +
             (hs && hs.state === 'rendering'
-              ? '<span>rendering human cursor…</span>'
-              : '<button class="mini" data-render="1">' + (hs && hs.state === 'failed' ? 'Retry human cursor' : 'Render human cursor') + '</button>') +
+              ? '<span>rendering cursor…</span>'
+              : '<button class="mini" data-render="1">' + (hs && hs.state === 'failed' ? 'Retry render' : 'Render cursor') + '</button>') +
             // The one line the controller kept from the child's output — the diagnosis
             // (missing motion constants, no trajectory turns, no frames), not a stack trace.
             (hs && hs.state === 'failed' ? '<div class="hfail">' + esc(hs.error || 'render failed') + '</div>' : '') +
@@ -1067,8 +1147,8 @@ async function loadRuns(force) {
     const t = document.createElement('div');
     t.className = 'vtoggle';
     const paint = () => {
-      t.innerHTML = '<button class="mini' + (showing === 'h' ? ' on' : '') + '" data-v="h">Humanized</button>' +
-        '<button class="mini' + (showing === 'raw' ? ' on' : '') + '" data-v="raw">Raw</button>';
+      t.innerHTML = '<button class="mini' + (showing === 'h' ? ' on' : '') + '" data-v="h">Cursor</button>' +
+        '<button class="mini' + (showing === 'raw' ? ' on' : '') + '" data-v="raw">No cursor</button>';
     };
     paint();
     t.onclick = (e) => {
@@ -1091,6 +1171,10 @@ async function loadRuns(force) {
     if (open.has(card.dataset.id)) attach(card, r, false);
     const rb = card.querySelector('button[data-render]');
     if (rb) rb.onclick = () => startHumanize(r.id, rb);
+    const sf = card.querySelector('button[data-reveal]');
+    // The best take on screen: reveal the humanized render when one exists, else the raw
+    // capture — the same precedence the player uses.
+    if (sf) sf.onclick = () => { if (bus.reveal) bus.reveal(r.humanized || r.video); };
     card.onclick = (e) => {
       if (e.target.tagName === 'VIDEO') return;   // clicking the player is not a toggle
       // Buttons inside the card (Render, Humanized/Raw) act on the run, not on whether the
@@ -1155,7 +1239,9 @@ async function dispatchOnce(id, send) {
 }
 
 el('go').onclick = () => dispatchOnce('go', () =>
-  bus.run({ app: sel, task: el('task').value.trim(), record: el('record').checked, humanize: el('human').checked, noVision: el('novision').checked, host: host, url: selUrl() }));
+  // noVision is pinned false from the GUI: it exists as an A/B measurement arm, and the
+  // checkbox for it read as a feature. The CLI's --no-vision remains for measurements.
+  bus.run({ app: sel, task: el('task').value.trim(), record: el('record').checked, humanize: el('human').checked, noVision: false, host: host, url: selUrl() }));
 // A humanized render is a render OF the recording, so the pair moves together: ticking Human
 // cursor turns recording on, and turning recording off takes the render request with it.
 el('human').addEventListener('change', () => { if (el('human').checked) el('record').checked = true; });
@@ -1182,39 +1268,12 @@ el('host').onchange = () => { host = el('host').value; bus.saveHostPref(host); c
 // The refresh lives inside the fold's <summary>; without the preventDefault every probe
 // click would also toggle the fold shut.
 el('fleetrefresh').onclick = (e) => { if (e && e.preventDefault) { e.preventDefault(); e.stopPropagation(); } loadFleet(); };
-// Delegated for the same reason the offer list is: these buttons are rebuilt on every probe.
-// The selected app rides along so the Mac opens with it already in front of you.
-el('fleet').onclick = async (e) => {
-  const b = e.target.closest ? e.target.closest('button[data-signin]') : null;
-  if (!b || signinBusy) return;
-  // b.disabled alone does not survive the repaint two lines down — the row is rebuilt from
-  // markup. signinBusy is what keeps the rebuilt button disabled until the flow settles.
-  b.disabled = true;
-  signinBusy = b.dataset.signin;
-  signinMsg = { ok: true, text: 'opening ' + b.dataset.signin + '…', paints: 0 };
-  loadFleet();
-  let r;
-  try {
-    r = await bus.signin(b.dataset.signin, sel || undefined);
-  } catch (err) {
-    r = { ok: false, message: errText(err) };
-  }
-  signinBusy = null;
-  signinMsg = { ok: r.ok, text: r.message, paints: 0 };
-  loadFleet();
-  if (!r.watch) return;
-  // The wait leg, fire-and-forget: it resolves when a person finishes an SSO round trip —
-  // minutes — and closes the sign-in window (the portal, or the screen share) for them.
-  // Without it a portal opened from this button would sit open until its lifetime lapsed.
-  let done;
-  try {
-    done = await bus.signinWait(r.watch.host, r.watch.app);
-  } catch (err) {
-    done = { ok: false, message: errText(err) };
-  }
-  signinMsg = { ok: done.ok, text: done.message, paints: 0 };
-  loadFleet();
-};
+// The install form's fields live in module state so the probe repaint cannot wipe them.
+el('fleet').addEventListener('input', (e) => {
+  if (!installForm || !e.target) return;
+  if (e.target.id === 'iname') installForm.name = e.target.value;
+  if (e.target.id === 'iurl') installForm.url = e.target.value;
+});
 // The management buttons under each Mac. Delegated for the same reason the Sign in handler
 // is: the rows are rebuilt on every probe. Outcomes land TWICE on purpose — the ✓/✗-prefixed
 // transient under the panel (which retires after a few repaints), and a durable copy in the
@@ -1241,17 +1300,19 @@ el('fleet').addEventListener('click', async (e) => {
     say(r.ok, (r.ok ? '✓ ' : '✗ ') + r.message);
     line((r.ok ? '✓ ' : '✗ ') + r.message, null);
   };
-  if (act === 'forget') return ask('forgetting the saved screen-share login for ' + mac + '…', () => bus.forgetVnc(mac));
-  if (act === 'install') {
-    const name = prompt('App to install on ' + mac + ' (bundle name):', sel || el('q').value.trim());
-    if (!name || !name.trim()) return;
-    const url = prompt('https URL of its .dmg or .zip (it downloads on ' + mac + '):');
-    if (!url || !url.trim()) return;
-    return ask('installing ' + name.trim() + ' on ' + mac + ' — the download happens over there and can take minutes…', () => bus.appInstall(mac, name.trim(), url.trim()));
+  if (act === 'install') { installForm = { mac: mac, name: sel && !selUrl() ? sel : el('q').value.trim(), url: '' }; renderFleet(); return; }
+  if (act === 'install-cancel') { installForm = null; renderFleet(); return; }
+  if (act === 'install-go') {
+    const f = installForm;
+    if (!f) return;
+    const name = f.name.trim(), url = f.url.trim();
+    if (!name || !url) return say(false, '✗ the install needs both an app name and a download URL');
+    installForm = null;
+    return ask('installing ' + name + ' on ' + mac + ' — the download happens over there and can take minutes…', () => bus.appInstall(mac, name, url));
   }
-  // The two destructive verbs need a target, and the selection is it — same source of truth
-  // the Sign in button rides along.
-  if (!sel) return say(false, '✗ pick an app in the list first — ' + (act === 'signout' ? 'sign-out' : 'delete') + ' needs a target');
+  // The two destructive verbs need a MAC APP target; the buttons only render with one, and
+  // this guard is the backstop for a stale row.
+  if (!sel || selUrl()) return say(false, '✗ pick a Mac app in the list first — ' + (act === 'signout' ? 'sign-out' : 'delete') + ' needs one');
   if (act === 'signout') {
     if (!confirm('Sign out of ' + sel + ' on ' + mac + '?\n\nDeletes YOUR ' + sel + ' data on that Mac: the live copy if you own it, plus your parked profile. Other operators keep theirs.')) return;
     return ask('signing out of ' + sel + ' on ' + mac + '…', () => bus.authClear(mac, sel));

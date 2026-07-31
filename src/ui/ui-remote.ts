@@ -190,7 +190,10 @@ async function autoAppChoices(fetchRemote: typeof remoteApps, load: () => Invent
 		.filter((a) => everywhere(a.name, () => true))
 		.map((a) => ({
 			name: a.name,
-			running: a.running && everywhere(a.name, (b) => b.running),
+			// Never "open" under auto: the run lands on whichever Mac wins the pick, so the
+			// badge would describe a machine the run may not touch. Grounded is different —
+			// appmaps converge across the fleet, so ANDed grounding is a real property.
+			running: false,
 			grounded: a.grounded && everywhere(a.name, (b) => b.grounded),
 		}));
 

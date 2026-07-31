@@ -71,7 +71,7 @@ const el = (): FakeEl => ({
 
 const IDS = [
 	"q", "apps", "url", "urlrow", "urlhint", "task", "warn", "go", "ground", "stop", "human", "cancelsignin",
-	"record", "novision", "host", "log", "runs", "refresh", "status", "attach", "fleet",
+	"record", "host", "log", "runs", "refresh", "status", "attach", "fleet", "busyhint", "fleetsum", "examples",
 	"creds", "key", "savekey",
 ];
 
@@ -93,6 +93,7 @@ interface Harness {
 	agoLabel(iso: string): string;
 	stateFor(app: string): { task: string; log: string[]; url?: string };
 	loadRuns(force?: boolean): Promise<void>;
+	loadFleet(): Promise<void>;
 	pinned: boolean;
 	host: string;
 	/** Fire the host's `started` echo, as captured off bus.onStarted at mount. */
@@ -122,7 +123,7 @@ interface Harness {
  * markup, not code, and `new Function` rightly refuses it.
  *
  * `busOverrides` swaps individual bus methods so a test can stub the host side — a `run`
- * that records its options, an `appIcon` that rejects, a gallery feed (loadRuns,
+ * that records its options, a gallery feed (loadRuns,
  * humanizeStatus) — without re-declaring the whole bus.
  */
 function mount(busOverrides: Record<string, unknown> = {}): Harness {
@@ -135,7 +136,6 @@ function mount(busOverrides: Record<string, unknown> = {}): Harness {
 	const stops: unknown[] = [];
 	const bus = {
 		loadApps: async () => [],
-		appIcon: async () => "",
 		loadRuns: async () => [],
 		loadState: async () => ({ byApp: {} }),
 		saveState() {},
@@ -197,7 +197,7 @@ function mount(busOverrides: Record<string, unknown> = {}): Harness {
 			get pinned(){return pinned}, set pinned(v){pinned=v},
 			get running(){return running}, set offers(v){offers=v},
 			check, syncUrlRow, selUrl, isBrowser, appendLine, line, errText, dropStaleSelection, selectApp, notePin,
-			render, agoLabel, renderAttach, paneRunHost, stateFor, loadRuns };`,
+			render, agoLabel, renderAttach, paneRunHost, stateFor, loadRuns, loadFleet };`,
 	);
 	const noTimer = () => 0;
 	const api = fn({ __bus: bus, addEventListener() {} }, document, noTimer, noTimer) as Harness;
@@ -584,63 +584,6 @@ test("render__KeepsThePlainBadge__When__TheMapIsProseOnly", () => {
 	assert.ok(!ui.nodes.apps.innerHTML.includes("title="));
 });
 
-test("render__RequestsIconsLazily__When__LocalAppsPaint", async () => {
-	const asked: string[] = [];
-	const ui = mount({
-		appIcon: async (name: string) => {
-			asked.push(name);
-
-			return "data:image/png;base64,AAA";
-		},
-	});
-	await settle();
-	ui.apps = [{ name: "Yarn" }, { name: "www.notion.so", kind: "web", url: "https://www.notion.so" }];
-	ui.render();
-	await settle();
-	// Web entries have no bundle to ask about; the local app is asked exactly once even
-	// though the resolved icon triggers a repaint (which re-enters requestIcons).
-	assert.deepEqual(asked, ["Yarn"]);
-	assert.ok(ui.nodes.apps.innerHTML.includes('img class="appicon"'), "the resolved icon did not paint");
-});
-
-test("render__SkipsIcons__When__TheListIsAnotherMacs", async () => {
-	const asked: string[] = [];
-	const ui = mount({
-		appIcon: async (name: string) => {
-			asked.push(name);
-
-			return "";
-		},
-	});
-	await settle();
-	ui.host = "mac1";
-	ui.apps = [{ name: "Yarn" }];
-	ui.render();
-	await settle();
-	assert.deepEqual(asked, [], "a remote list must not be asked about this Mac's bundles");
-	assert.ok(!ui.nodes.apps.innerHTML.includes("appicon"));
-});
-
-test("render__SurvivesTheLookup__When__TheIconIpcRejects", async () => {
-	// A missing icon must never break the list — the name still paints, nothing rejects
-	// unhandled, and the failure caches so the next repaint does not re-ask.
-	let asks = 0;
-	const ui = mount({
-		appIcon: async () => {
-			asks++;
-			throw new Error("no icon for you");
-		},
-	});
-	await settle();
-	ui.apps = [{ name: "Yarn" }];
-	assert.doesNotThrow(() => ui.render());
-	await settle();
-	assert.match(ui.nodes.apps.innerHTML, /Yarn/);
-	ui.render();
-	await settle();
-	assert.equal(asks, 1, "a failed lookup must cache as 'none', not retry per paint");
-});
-
 /**
  * One run per HOST. The events below arrive tagged {app, host}, and everything the tests
  * assert — which pane a line lands in, which host Run is gated on, which run Stop ends —
@@ -774,6 +717,62 @@ test("onPortal__TogglesTheCancelControl__When__TheSigninViewOpensAndCloses", () 
 	assert.equal(ui.nodes.cancelsignin.style.display, "none");
 });
 
+test("check__SwapsRunForAnExplanation__When__TheSelectedHostIsBusy", () => {
+	// Hidden, not disabled: a control that cannot be used until something else finishes is
+	// noise — but a silent void where buttons were reads as breakage, so the hint fills it.
+	const ui = mount();
+	ui.apps = [{ name: "Yarn" }];
+	ui.sel = "Yarn";
+	ui.events.started!({ app: "Yarn", task: "t", host: "local" });
+	assert.equal(ui.nodes.go.style.display, "none");
+	assert.equal(ui.nodes.ground.style.display, "none");
+	assert.equal(ui.nodes.busyhint.style.display, "block");
+	assert.match(ui.nodes.busyhint.textContent, /This Mac is running Yarn/);
+
+	ui.events.done!({ code: 0, elapsed: 5, app: "Yarn", host: "local" });
+	assert.equal(ui.nodes.go.style.display, "");
+	assert.equal(ui.nodes.busyhint.style.display, "none");
+});
+
+test("loadFleet__OffersOnlyUsableActions__When__RowsAndSelectionDiffer", async () => {
+	// A button whose only possible outcome is a refusal teaches people to stop reading
+	// outcomes: busy rows offer nothing, and the app-scoped pair needs an app to name.
+	const rows = [
+		{ name: "mac1", state: "idle", detail: "" },
+		{ name: "mac2", state: "busy", detail: "aman · Yarn · 63s" },
+	];
+	const ui = mount({ loadFleet: async () => ({ rows, offers: [] }) });
+	await settle();
+	ui.sel = "Yarn";
+	await ui.loadFleet();
+	const html = ui.nodes.fleet.innerHTML;
+	assert.ok(html.includes('data-fact="signout" data-mac="mac1"'), "an idle row with a selection offers sign-out");
+	assert.ok(html.includes('data-fact="install" data-mac="mac1"'));
+	assert.ok(!html.includes('data-mac="mac2"'), "a busy row offers no far-side actions");
+	assert.equal(ui.nodes.fleetsum.textContent, "1 busy", "the folded panel's badge must count busy Macs");
+
+	ui.sel = null;
+	await ui.loadFleet();
+	assert.ok(!ui.nodes.fleet.innerHTML.includes('data-fact="signout"'), "sign-out needs an app to name");
+	assert.ok(ui.nodes.fleet.innerHTML.includes('data-fact="install"'), "install has no app dependency");
+});
+
+test("loadRuns__OffersTheRender__When__TheSourceArtifactsExistLocally", async () => {
+	// A render button on a card whose frames were never pulled is an error taught as a
+	// feature — it exists only when the render could actually complete.
+	let renderable = false;
+	// RUN itself is renderable (the older render tests need it); strip that here so the
+	// no-artifacts branch is actually exercised.
+	const { renderable: _always, ...bare } = RUN as { renderable?: boolean } & typeof RUN;
+	const ui = mount({ loadRuns: async () => [{ ...bare, ...(renderable ? { renderable: true } : {}) }] });
+	await settle();
+	await ui.loadRuns(true);
+	assert.ok(!ui.nodes.runs.innerHTML.includes("Render cursor"), "no artifacts, no button");
+	renderable = true;
+	await ui.loadRuns(true);
+	assert.ok(ui.nodes.runs.innerHTML.includes("Render cursor"));
+});
+
 test("onLine__TagsLinesWithTheHost__When__TheSameAppRunsOnTwoHosts", () => {
 	const ui = mount();
 	ui.events.started!({ app: "Yarn", task: "t1", host: "mac1" });
@@ -891,6 +890,7 @@ test("onHost__RekeysTheRun__When__AutoResolvesToAMac", () => {
 /** A recorded run as the host lists it, minus `humanized` — each test decides that part. */
 const RUN = {
 	id: "2026-07-30T01-00-00-yarn",
+	renderable: true,
 	app: "Yarn",
 	task: "show me how to change the cursor type",
 	success: true,
@@ -905,7 +905,7 @@ test("loadRuns__OffersTheRenderButton__When__ARunHasNoHumanizedVideo", async () 
 	const ui = mount({ loadRuns: async () => [RUN] });
 	await settle();
 	await ui.loadRuns(true);
-	assert.match(ui.nodes.runs.innerHTML, /Render human cursor/);
+	assert.match(ui.nodes.runs.innerHTML, /Render cursor/);
 });
 
 test("loadRuns__DropsTheRenderButton__When__TheHumanizedRenderExists", async () => {
@@ -914,7 +914,7 @@ test("loadRuns__DropsTheRenderButton__When__TheHumanizedRenderExists", async () 
 	const ui = mount({ loadRuns: async () => [{ ...RUN, humanized: "out/recording/2026-07-30T01-00-00-yarn/humanized.mp4" }] });
 	await settle();
 	await ui.loadRuns(true);
-	assert.doesNotMatch(ui.nodes.runs.innerHTML, /Render human cursor/);
+	assert.doesNotMatch(ui.nodes.runs.innerHTML, /Render cursor/);
 });
 
 test("loadRuns__ShowsRendering__When__TheHostReportsARenderInFlight", async () => {
@@ -924,7 +924,7 @@ test("loadRuns__ShowsRendering__When__TheHostReportsARenderInFlight", async () =
 	});
 	await settle();
 	await ui.loadRuns(true);
-	assert.match(ui.nodes.runs.innerHTML, /rendering human cursor/);
+	assert.match(ui.nodes.runs.innerHTML, /rendering cursor/);
 	// No button while it renders: a second click on the same stamp would only earn a refusal.
 	assert.doesNotMatch(ui.nodes.runs.innerHTML, /data-render/);
 });
@@ -937,7 +937,7 @@ test("loadRuns__ShowsTheFailureLine__When__TheRenderFailed", async () => {
 	await settle();
 	await ui.loadRuns(true);
 	assert.match(ui.nodes.runs.innerHTML, /no frames in out\/recording\/x\/frames/);
-	assert.match(ui.nodes.runs.innerHTML, /Retry human cursor/);
+	assert.match(ui.nodes.runs.innerHTML, /Retry render/);
 });
 
 test("loadRuns__ShowsWhenTheRunHappened__When__StartedAtIsKnown", async () => {
@@ -965,10 +965,10 @@ test("loadRuns__RepaintsTheCard__When__TheHumanizedRenderAppears", async () => {
 	const ui = mount({ loadRuns: async () => [{ ...RUN, ...(humanized ? { humanized } : {}) }] });
 	await settle();
 	await ui.loadRuns(true);
-	assert.match(ui.nodes.runs.innerHTML, /Render human cursor/);
+	assert.match(ui.nodes.runs.innerHTML, /Render cursor/);
 	humanized = "out/recording/2026-07-30T01-00-00-yarn/humanized.mp4";
 	await ui.loadRuns(false); // the 4s tick, unforced — the signature alone must trigger the repaint
-	assert.doesNotMatch(ui.nodes.runs.innerHTML, /Render human cursor/);
+	assert.doesNotMatch(ui.nodes.runs.innerHTML, /Render cursor/);
 });
 
 test("appendLine__StillCapsTheDom__When__NoAnimationFrameEverFires", () => {

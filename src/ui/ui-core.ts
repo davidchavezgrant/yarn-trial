@@ -78,7 +78,7 @@ function groundedWebTargets(): AppEntry[] {
 	}
 }
 
-/** Directories `listApps` enumerates. Shared with `appBundlePath` so the two cannot drift. */
+/** Directories `listApps` enumerates. */
 function appDirectories(): string[] {
 	return [
 		"/Applications",
@@ -86,24 +86,6 @@ function appDirectories(): string[] {
 		"/System/Applications/Utilities",
 		`${process.env.HOME}/Applications`,
 	];
-}
-
-/**
- * The .app bundle behind a name from `listApps`, for the shell's icon lookup.
- *
- * The name arrives over IPC, so it is screened the way `resolveVideo` screens its path: a
- * separator in it is a path, not an app, and could walk out of the application directories.
- * A running-but-not-installed app simply has no bundle here — `undefined`, never a throw,
- * because a missing icon must cost the list nothing.
- */
-export function appBundlePath(name: string, dirs: string[] = appDirectories()): string | undefined {
-	if (!name || /[/\\]/.test(name)) return undefined;
-	for (const dir of dirs) {
-		const bundle = `${dir}/${name}.app`;
-		if (fs.existsSync(bundle)) return bundle;
-	}
-
-	return undefined;
 }
 
 /**
@@ -174,6 +156,12 @@ export interface PastRun {
 	 */
 	humanized?: string;
 	/**
+	 * Whether the source artifacts a render needs (frames/, trajectory/) exist locally. The
+	 * gallery offers "render cursor" only when they do — a button whose only possible outcome
+	 * is "no frames" is an error taught as a feature.
+	 */
+	renderable?: boolean;
+	/**
 	 * ISO instant the run began: the first step's timestamp when the log has one, else the
 	 * instant recovered from the stamp itself (see stampTime), else "". The renderer turns it
 	 * into the card's "2h ago" label, so "" simply means no label.
@@ -226,7 +214,10 @@ export function listRecordedRuns(limit = 40): PastRun[] {
 		// the video's own directory rather than rebuilt from the id — one source of truth for
 		// where a run's recording lives. Existence is checked per scan, not cached: the file
 		// appears when a render finishes and the next gallery poll must see it.
-		const humanized = `${path.posix.dirname(d.video)}/humanized.mp4`;
+		const recordingDir = path.posix.dirname(d.video);
+		const humanized = `${recordingDir}/humanized.mp4`;
+		const renderable =
+			fs.existsSync(`${dataRoot()}/${recordingDir}/frames`) && fs.existsSync(`${dataRoot()}/${recordingDir}/trajectory`);
 		const id = f.replace(/\.json$/, "");
 		out.push({
 			id,
@@ -240,6 +231,7 @@ export function listRecordedRuns(limit = 40): PastRun[] {
 			visual: d.visualCheck?.verdict,
 			video: d.video,
 			...(fs.existsSync(`${dataRoot()}/${humanized}`) ? { humanized } : {}),
+			...(renderable ? { renderable } : {}),
 			// `||`, not `??`: an empty-string timestamp on step 0 must fall through to the stamp,
 			// which encodes the same instant for every run that crashed before writing a step.
 			startedAt: d.steps?.[0]?.timestamp || stampTime(id) || "",

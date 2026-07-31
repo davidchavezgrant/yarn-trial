@@ -358,12 +358,24 @@ export function exportCredentials(target: string, openrouterKey?: string, vncPas
  * and the moment this returns even a prefix of the key it becomes something that can be
  * screenshotted.
  */
-export function describeCredentials(): { present: boolean; fingerprint?: string; path: string; modelKey: boolean } {
+export function describeCredentials(): { present: boolean; fingerprint?: string; path: string; modelKey: boolean; modelKeySource?: "saved" | "environment" } {
 	const key = identityFile();
 	const envFile = path.join(defaultRunnerDir(), "env");
-	const modelKey = fs.existsSync(envFile) && /^\s*(export\s+)?(OPENROUTER|ANTHROPIC)_API_KEY\s*=\s*\S/m.test(fs.readFileSync(envFile, "utf8"));
+	const saved = fs.existsSync(envFile) && /^\s*(export\s+)?(OPENROUTER|ANTHROPIC)_API_KEY\s*=\s*\S/m.test(fs.readFileSync(envFile, "utf8"));
+	// The saved file is not the only way a run gets a key: local runs inherit this process's
+	// environment (a team bundle, a shell export, ../yarn/.env sourced at launch). Reporting
+	// "absent" while every run authenticates fine sent people hunting for a problem that did
+	// not exist — presence is presence, and the source rides along for the panel to name.
+	const inherited = !!(process.env.OPENROUTER_API_KEY || process.env.ANTHROPIC_API_KEY);
+	const modelKey = saved || inherited;
 
-	return { present: fs.existsSync(key), ...(fs.existsSync(key) ? { fingerprint: fingerprintOf(key) } : {}), path: key, modelKey };
+	return {
+		present: fs.existsSync(key),
+		...(fs.existsSync(key) ? { fingerprint: fingerprintOf(key) } : {}),
+		path: key,
+		modelKey,
+		...(modelKey ? { modelKeySource: saved ? ("saved" as const) : ("environment" as const) } : {}),
+	};
 }
 
 function publicHalf(keyFile: string): string {

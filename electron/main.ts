@@ -8,7 +8,7 @@ import { Readable } from "node:stream";
 import { defaultOperator, loadHosts, resolveHost, type HostEntry } from "../src/remote/control/hosts.js";
 import { lastFrame, runnerArgv, runSsh, tunnelArgv } from "../src/remote/control/ssh.js";
 import { SigninPortal } from "../src/ui/ui-signin.js";
-import { appBundlePath, HumanizeController, listApps, listRecordedRuns, parseByteRange, readUiState, resolveVideo, RunController, writeUiState, type RunHandlers, type RunOptions } from "../src/ui/ui-core.js";
+import { HumanizeController, listApps, listRecordedRuns, parseByteRange, readUiState, resolveVideo, RunController, writeUiState, type RunHandlers, type RunOptions } from "../src/ui/ui-core.js";
 import { page } from "../src/ui/ui-page.js";
 import { describeCredentials, provisionFromBundle } from "../src/remote/control/team.js";
 import {
@@ -19,7 +19,6 @@ import {
 	completeSignin,
 	deleteAppView,
 	fleetView,
-	forgetLoginView,
 	hostChoices,
 	installAppView,
 	isRemoteHost,
@@ -195,7 +194,9 @@ const { ipcRenderer } = require('electron');
 window.__videoBase = 'agentvideo:///';
 window.__bus = {
   loadApps: (host) => ipcRenderer.invoke('apps', host),
-  appIcon: (name) => ipcRenderer.invoke('appIcon', name),
+  // Reveal a recording in Finder — the mp4 is the deliverable, and the gallery is where
+  // people go looking for the file they are about to send.
+  reveal: (rel) => ipcRenderer.invoke('reveal', rel),
   loadRuns: () => ipcRenderer.invoke('runs'),
   // Encode per SEGMENT: encodeURIComponent on the whole path turns every "/" into %2F,
   // leaving a standard-scheme URL with no path to route, so the request never reaches the
@@ -225,7 +226,6 @@ window.__bus = {
   authClear: (host, app) => ipcRenderer.invoke('auth:clear', { host, app }),
   appDelete: (host, app) => ipcRenderer.invoke('app:delete', { host, app }),
   appInstall: (host, app, url) => ipcRenderer.invoke('app:install', { host, app, url }),
-  forgetVnc: (host) => ipcRenderer.invoke('vnc:forget', host),
   loadCreds: () => ipcRenderer.invoke('creds'),
   saveKey: (key) => ipcRenderer.invoke('creds:save', key),
   loadHostPref: () => ipcRenderer.invoke('host:load'),
@@ -369,30 +369,12 @@ function withHumanize(handlers: RunHandlers, wanted: boolean, stamp: () => strin
 ipcMain.handle("apps", (_event, host?: string) => appChoices(host, listApps));
 
 /**
- * A local app's bundle icon as a data URL, "" when there is none to give.
- *
- * Cached per name for the life of the process: `getFileIcon` decodes the bundle's .icns on
- * every call and the list repaints on every keystroke. Failures cache as "" too — a missing
- * icon must never break the list, and re-statting a known-absent bundle buys nothing. Local
- * host only by construction: the renderer never asks for a remote list's entries, and a colo
- * Mac's bundles are not on this disk anyway.
+ * Reveal a recording in Finder. `resolveVideo` is the gate: it rejects anything outside
+ * out/recording, so the renderer cannot point Finder at an arbitrary path.
  */
-const appIcons = new Map<string, string>();
-ipcMain.handle("appIcon", async (_event, name: unknown) => {
-	const key = String(name ?? "");
-	const cached = appIcons.get(key);
-	if (cached !== undefined) return cached;
-
-	let url = "";
-	try {
-		const bundle = appBundlePath(key);
-		if (bundle) url = (await app.getFileIcon(bundle, { size: "small" })).toDataURL();
-	} catch {
-		// No icon is a fine answer; the renderer shows the name alone.
-	}
-	appIcons.set(key, url);
-
-	return url;
+ipcMain.handle("reveal", (_event, rel: unknown) => {
+	const full = resolveVideo(String(rel ?? ""));
+	if (full) shell.showItemInFolder(full);
 });
 
 /** Gallery entries, tagged with the Mac each one was pulled from. Local runs carry no tag. */
@@ -749,7 +731,6 @@ ipcMain.handle("app:install", (_event, { host, app, url }: { host: string; app?:
 );
 
 // Local by nature: the saved credential lives in THIS operator's login keychain, not on the Mac.
-ipcMain.handle("vnc:forget", (_event, host: unknown) => forgetLoginView(String(host ?? "")));
 
 ipcMain.handle("creds", () => describeCredentials());
 

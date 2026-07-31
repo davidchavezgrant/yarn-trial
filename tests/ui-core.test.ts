@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { appmapsDir, dataRoot, outDir } from "../src/paths.js";
-import { appBundlePath, HumanizeController, listApps, listRecordedRuns, parseByteRange, pruneUiState, readUiState, resolveVideo, RunController, stampTime, streamPump, writeUiState } from "../src/ui/ui-core.js";
+import { HumanizeController, listApps, listRecordedRuns, parseByteRange, pruneUiState, readUiState, resolveVideo, RunController, stampTime, streamPump, writeUiState } from "../src/ui/ui-core.js";
 
 /**
  * Each test gets its own data root rather than writing out/ui-state.json into the checkout.
@@ -327,24 +327,6 @@ test("listApps__StampsTheInstalledApp__When__ItsGraphCarriesCapturedAt", () => {
 			fs.rmSync(home, { recursive: true, force: true });
 		}
 	});
-});
-
-test("appBundlePath__FindsTheBundle__When__TheAppIsInstalled", () => {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "apps-"));
-	try {
-		fs.mkdirSync(path.join(dir, "Yarn.app"));
-		assert.equal(appBundlePath("Yarn", [dir]), path.join(dir, "Yarn.app"));
-		assert.equal(appBundlePath("Missing", [dir]), undefined);
-	} finally {
-		fs.rmSync(dir, { recursive: true, force: true });
-	}
-});
-
-test("appBundlePath__Refuses__When__TheNameCouldWalkOutOfTheDirectory", () => {
-	// The name arrives over IPC; a separator in it is a path, not an app.
-	assert.equal(appBundlePath("../../tmp/Evil", ["/Applications"]), undefined);
-	assert.equal(appBundlePath("Sub\\Dir", ["/Applications"]), undefined);
-	assert.equal(appBundlePath("", ["/Applications"]), undefined);
 });
 
 test("streamPump__ReassemblesTheLine__When__AChunkBoundaryFallsMidLine", () => {

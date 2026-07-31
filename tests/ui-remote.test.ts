@@ -724,8 +724,8 @@ const NO_LOCAL = (): never => {
 test("appChoices__OffersTheFleetIntersection__When__TheHostIsAuto", async () => {
 	// A run dispatched to `auto` can land on ANY fleet host, so only an app present on all of
 	// them is safe to offer — and the local list is exactly wrong, because dispatch walks the
-	// inventory and only the inventory. The badges AND together for the same reason: "open" on
-	// one host says nothing about the host the scheduler actually picks.
+	// inventory and only the inventory. "open" is never shown under auto — it would describe a
+	// machine the scheduler may not pick — while grounded ANDs, since appmaps converge fleet-wide.
 	const asked: string[] = [];
 	const res = await appChoices(
 		"auto",
@@ -742,9 +742,10 @@ test("appChoices__OffersTheFleetIntersection__When__TheHostIsAuto", async () => 
 	);
 
 	assert.deepEqual(asked.sort(), ["mac1", "mac2"], "auto must ask every fleet host, and nothing else");
-	// Hex Fiend is only on mac1, so it is not offerable; flags survive only when true everywhere.
+	// Hex Fiend is only on mac1, so it is not offerable; grounded survives only when true
+	// everywhere, and running is never claimed at all.
 	assert.deepEqual(res.apps, [
-		{ name: "Yarn", running: true, grounded: true },
+		{ name: "Yarn", running: false, grounded: true },
 		{ name: "Notion Calendar", running: false, grounded: false },
 	]);
 	assert.equal(res.host, "auto");
