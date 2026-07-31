@@ -73,6 +73,7 @@ export function viewerHtml(token: string): string {
 
   function handleEvent(ev) {
     if (ev.ev === 'window') { titleEl.textContent = (ev.app || 'window') + (ev.title ? ' — ' + ev.title : ''); setStatus('live'); }
+    else if (ev.ev === 'auto') { setStatus('pressed \u201c' + ev.pressed + '\u201d for you'); }
     else if (ev.ev === 'error') { setStatus(ev.remedy || ev.detail || ev.kind, true); }
   }
 

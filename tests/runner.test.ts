@@ -441,13 +441,16 @@ function fakeSpawner(): { calls: Array<{ command: string; args: string[] }>; spa
  * makes it; fakeSpawner appends without mkdir (fine for submit, which reuses an existing job dir).
  * The child exits on its own so nothing lingers after the test.
  */
-function mkdirSpawner(): { calls: Array<{ command: string; args: string[] }>; spawn: any } {
+function mkdirSpawner(): { calls: Array<{ command: string; args: string[] }>; envs: Array<Record<string, string | undefined>>; spawn: any } {
 	const calls: Array<{ command: string; args: string[] }> = [];
+	const envs: Array<Record<string, string | undefined>> = [];
 
 	return {
 		calls,
-		spawn: (cmd: { command: string; args: string[] }, opts: { logFile: string }) => {
+		envs,
+		spawn: (cmd: { command: string; args: string[] }, opts: { logFile: string; env?: Record<string, string | undefined> }) => {
 			calls.push(cmd);
+			envs.push(opts.env ?? {});
 			fs.mkdirSync(path.dirname(opts.logFile), { recursive: true });
 			fs.appendFileSync(opts.logFile, "pretend liveview server\n");
 			const child = spawn("/bin/sh", ["-c", "sleep 1"], { detached: true, stdio: "ignore" });
@@ -816,6 +819,8 @@ test("liveview__StartsTheServerAndReturnsPortAndToken__When__TheHostIsFree", asy
 			assert.equal(res.url, `http://127.0.0.1:${res.port}/?t=${res.token}`);
 			// The server was actually spawned (as a child of the runner, which holds the grants).
 			assert.equal(spawner.calls.length, 1);
+			// The target's name rides the env so the engine can crop/guard the OAuth browser leg.
+			assert.equal(spawner.envs[0].LIVEVIEW_APP, "Yarn");
 		} finally {
 			await runner.close();
 		}

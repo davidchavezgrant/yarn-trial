@@ -41,6 +41,23 @@ export interface WindowEvent {
 	w: number;
 	h: number;
 	scale: number;
+	/** The followed window belongs to some OTHER app than the sign-in target (the browser leg). */
+	foreign?: boolean;
+	/** Active page-content crop, as fractions of the window. Present only in constrained mode. */
+	crop?: { x: number; y: number; w: number; h: number };
+}
+
+/** The engine pressed the external-protocol confirmation ("Open Yarn.app") itself. */
+export interface AutoEvent {
+	ev: "auto";
+	pressed: string;
+}
+
+/** A Cmd-shortcut was dropped by the constrained-browser key guard. */
+export interface BlockedEvent {
+	ev: "blocked";
+	what: "key";
+	code: number;
 }
 
 export interface ErrorEvent {
@@ -50,7 +67,7 @@ export interface ErrorEvent {
 	detail: string;
 }
 
-export type EngineEvent = WindowEvent | ErrorEvent;
+export type EngineEvent = WindowEvent | AutoEvent | BlockedEvent | ErrorEvent;
 
 /** A command the viewer/server sends to the engine. `x`/`y` are 0..1 fractions of the window. */
 export type EngineCommand =
@@ -241,12 +258,33 @@ export interface EngineHandle {
 	readonly child: ChildProcess;
 }
 
-export function spawnEngine(opts: { fps?: number; quality?: number; maxWidth?: number; bin?: string } = {}): EngineHandle {
-	const bin = opts.bin ?? `${nativeDir()}/liveview`;
+export interface EngineOptions {
+	fps?: number;
+	quality?: number;
+	maxWidth?: number;
+	bin?: string;
+	/**
+	 * The sign-in target's name. Naming it is what arms the engine's constrained-browser mode
+	 * (crop to the page content, Cmd-key guard, hands-free "Open <App>" press) whenever the
+	 * followed window belongs to any OTHER app. Absent, the engine streams windows whole.
+	 */
+	app?: string;
+}
+
+/** The argv for the engine binary — split out so the flag wiring is testable without a spawn. */
+export function engineArgs(opts: EngineOptions): string[] {
 	const args: string[] = [];
 	if (opts.fps) args.push("--fps", String(opts.fps));
 	if (opts.quality) args.push("--quality", String(opts.quality));
 	if (opts.maxWidth) args.push("--max-width", String(opts.maxWidth));
+	if (opts.app?.trim()) args.push("--app", opts.app.trim());
+
+	return args;
+}
+
+export function spawnEngine(opts: EngineOptions = {}): EngineHandle {
+	const bin = opts.bin ?? `${nativeDir()}/liveview`;
+	const args = engineArgs(opts);
 
 	// stdio: [stdin pipe, stdout pipe, stderr inherit, fd3 pipe for frames].
 	const child = spawn(bin, args, { stdio: ["pipe", "pipe", "inherit", "pipe"] });

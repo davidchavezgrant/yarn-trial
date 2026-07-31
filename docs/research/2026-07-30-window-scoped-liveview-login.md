@@ -230,3 +230,33 @@ job logs removed, no stray processes.
 Built and fleet-deployed: the `liveview` runner verb (with port-in-use guard), the detached-server
 lifecycle, the CLI fleet flow, the login/recording mutual-exclusion guard, and `native/liveview`
 on all three Macs (macOS 15.5) — all with tests. Runner-spawned capture verified on mac1.
+
+## Constrained browser mode (2026-07-31)
+
+Naming the sign-in target (`--app` / `LIVEVIEW_APP`, threaded runner → CLI → server → engine)
+arms three behaviors whenever the followed window belongs to any OTHER app (the OAuth browser
+leg). All three enforce at the engine, the funnel every input path already goes through:
+
+- **Crop to the page content.** The engine reads the followed window's AXWebArea (Chromium and
+  WebKit both expose it; the grant is inherited from the runner, same as axdom) and crops
+  frames to it at encode — the login form fills the viewer, and the browser chrome, URL bar
+  included, never leaves the process. Incoming fractions are remapped onto the crop, so a
+  click cannot land on the toolbar even from a crafted client. Sanity-gated: a crop under 25%
+  of the window is ignored (mid-load collapse), since uncropped is merely the old behavior.
+- **Cmd-key guard.** Cmd+L reaches the address bar with no click for the crop to stop, so
+  Cmd-modified keys are dropped over a foreign window except A/C/V/X/Z (paste must survive —
+  passwords and 2FA codes arrive by paste). Dropped keys emit a `blocked` event. The official
+  viewer never sends Cmd shortcuts at all; the guard exists for whoever else holds the token.
+- **Hands-free redirect.** A bounded AX scan (500ms cadence, depth/node capped, on its own
+  queue because AX calls block) watches for the external-protocol confirmation — an AXButton
+  titled "Open <App>…" whose title contains the target's name — and presses it, debounced to
+  once per 3s. Emits an `auto` event; the viewer shows it. English-localized browsers assumed
+  (true of the fleet); Safari's Allow-button variant is not matched.
+
+Stated trade: hiding the URL bar removes the operator's ability to eyeball the page origin.
+Over a JPEG stream that was weak verification anyway; trust anchors in the runner having
+launched the flow on a machine we control. The target app's own window is never cropped or
+filtered, and without `--app` nothing changes.
+
+Also: encode ceilings raised for text legibility (quality 0.6 → 0.78, max width 1280 → 1920);
+the server's backpressure drop means a slow tunnel costs fps, never sharpness.

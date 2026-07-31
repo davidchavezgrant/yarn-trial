@@ -50,10 +50,29 @@
 //     the engine clamps them, so out-of-range input cannot reach past the window.
 //
 //   fd 3   (binary frames): each frame is  "F" <uint32 length BE> <jpeg bytes>.
-//   stdout (JSONL events):  {"ev":"window","id":..,"title":..,"app":..,"x":..,"y":..,"w":..,"h":..,"scale":..}
+//   stdout (JSONL events):  {"ev":"window","id":..,"title":..,"app":..,"x":..,"y":..,"w":..,"h":..,"scale":..,
+//                            "foreign":<bool>,"crop":{"x":..,"y":..,"w":..,"h":..}?}
+//                           {"ev":"auto","pressed":"Open Yarn.app"}
+//                           {"ev":"blocked","what":"key","code":<i>}
 //                           {"ev":"error","kind":"no-screen-recording|no-window|..","detail":".."}
 //
-// Usage: liveview [--fps N] [--quality Q] [--max-width W]
+// CONSTRAINED BROWSER MODE (--app / LIVEVIEW_APP). A sign-in hands off to an external browser,
+// and streaming that browser whole hands the operator its URL bar — visually (they see the
+// address) and operationally (a click, or Cmd+L, reaches it and can navigate the Mac anywhere).
+// When the target app is named and the followed window belongs to a DIFFERENT app, the engine:
+//   - crops frames to the window's AXWebArea (the page content below the toolbar), which both
+//     fills the viewer with the login form and removes the browser chrome from the stream;
+//   - remaps incoming fractions onto that crop, so clicks cannot land on the toolbar at all;
+//   - drops Cmd-modified keys except A/C/V/X/Z (paste must survive — passwords and 2FA codes
+//     arrive by paste), so Cmd+L/T/N cannot reach the chrome either;
+//   - watches for the external-protocol confirmation ("Open <App>.app") and presses it, so the
+//     redirect back to the app is hands-free.
+// The trade, stated plainly: hiding the URL bar removes the operator's ability to eyeball the
+// page origin. Over a JPEG stream that was weak verification anyway; trust is anchored in the
+// runner having launched the flow on a machine we control. The target app's own window is
+// never cropped or filtered. Without --app, nothing changes.
+//
+// Usage: liveview [--fps N] [--quality Q] [--max-width W] [--app "Name"]
 //
 // Durable exit: this is trial tooling. If Yarn ships its own capture pipeline, this is deleted.
 import AppKit
@@ -64,9 +83,16 @@ import VideoToolbox
 
 // ---- args -------------------------------------------------------------------------------
 
+// Encode ceilings sized for legible TEXT, which is what a login form is: 1280px across a
+// retina window halved every glyph, and q0.6 put JPEG ringing exactly where the characters
+// are. The server already drops frames under backpressure, so a slow tunnel costs fps — the
+// degradation that does not matter for a form — never sharpness.
 var fps = 15
-var quality: Float = 0.6
-var maxWidth = 1280
+var quality: Float = 0.78
+var maxWidth = 1920
+// The sign-in target. Env first (the runner passes LIVEVIEW_APP through the CLI), argv wins.
+// Empty means no constrained mode — plain window streaming, exactly as before.
+var targetApp = ProcessInfo.processInfo.environment["LIVEVIEW_APP"] ?? ""
 do {
 	var it = CommandLine.arguments.dropFirst().makeIterator()
 	while let a = it.next() {
@@ -74,9 +100,22 @@ do {
 			case "--fps": if let v = it.next(), let n = Int(v) { fps = max(1, min(60, n)) }
 			case "--quality": if let v = it.next(), let q = Float(v) { quality = max(0.1, min(1.0, q)) }
 			case "--max-width": if let v = it.next(), let w = Int(v) { maxWidth = max(320, w) }
+			case "--app": if let v = it.next() { targetApp = v }
 			default: break
 		}
 	}
+}
+
+// "Yarn", "Yarn.app" and "yarn" are the same app. Everything that compares app names goes
+// through this, so the follow decision and the button match cannot disagree.
+func normalizedAppName(_ s: String) -> String {
+	var n = s.trimmingCharacters(in: .whitespaces).lowercased()
+	if n.hasSuffix(".app") { n = String(n.dropLast(4)) }
+	return n
+}
+
+func isForeign(app: String) -> Bool {
+	!targetApp.isEmpty && normalizedAppName(app) != normalizedAppName(targetApp)
 }
 
 // ---- typed stderr/stdout so the parent can react rather than parse prose -----------------
@@ -183,6 +222,87 @@ func backingScale(for cgFrame: CGRect) -> CGFloat {
 	return fallback
 }
 
+// ---- AX inspection of a foreign (browser) window ------------------------------------------
+//
+// Two questions, one bounded tree walk: where is the page content (AXWebArea — Chromium and
+// WebKit both expose it), and is the external-protocol confirmation on screen (an AXButton
+// titled "Open <App>…"). Runs on its own serial queue because AX calls BLOCK on the target
+// app — a browser wedged on a modal must stall the scan, never the capture or the input loop.
+// The engine inherits the runner's Accessibility grant, the same inheritance axdom relies on.
+
+let axQueue = DispatchQueue(label: "liveview.ax")
+
+func axAttr(_ el: AXUIElement, _ name: String) -> CFTypeRef? {
+	var ref: CFTypeRef?
+	guard AXUIElementCopyAttributeValue(el, name as CFString, &ref) == .success else { return nil }
+	return ref
+}
+
+func axFrame(_ el: AXUIElement) -> CGRect? {
+	guard let posRef = axAttr(el, kAXPositionAttribute), let sizeRef = axAttr(el, kAXSizeAttribute) else { return nil }
+	var p = CGPoint.zero
+	var s = CGSize.zero
+	guard AXValueGetValue(posRef as! AXValue, .cgPoint, &p), AXValueGetValue(sizeRef as! AXValue, .cgSize, &s) else { return nil }
+	// AX speaks the same top-left-origin global coordinates CGWindowList does.
+	return CGRect(origin: p, size: s)
+}
+
+// The AX window element matching the tracked CGWindow, by geometry: element ids and window ids
+// live in different namespaces, and frame agreement (±4pt) is the only join available.
+func axWindowElement(pid: pid_t, matching bounds: CGRect) -> AXUIElement? {
+	let app = AXUIElementCreateApplication(pid)
+	guard let wins = axAttr(app, kAXWindowsAttribute) as? [AXUIElement] else { return nil }
+	for w in wins {
+		if let f = axFrame(w),
+		   abs(f.origin.x - bounds.origin.x) < 4, abs(f.origin.y - bounds.origin.y) < 4,
+		   abs(f.width - bounds.width) < 4, abs(f.height - bounds.height) < 4 { return w }
+	}
+	return wins.first
+}
+
+struct ForeignScan {
+	/** Page-content rect in global points, when one was found. */
+	var webArea: CGRect?
+	/** The "Open <App>" confirmation button, when it is on screen. */
+	var openButton: AXUIElement?
+	var openTitle: String = ""
+}
+
+// One bounded DFS answering both questions. Depth and node caps keep a pathological tree from
+// wedging the 500ms cadence; Chromium keeps the web area and its dialogs within a few levels.
+func scanForeignWindow(_ root: AXUIElement, appName: String) -> ForeignScan {
+	var out = ForeignScan()
+	var budget = 900
+	let wanted = normalizedAppName(appName)
+
+	func walk(_ el: AXUIElement, depth: Int) {
+		if depth > 14 || budget <= 0 { return }
+		budget -= 1
+		let role = axAttr(el, kAXRoleAttribute) as? String ?? ""
+		if role == "AXWebArea", out.webArea == nil {
+			out.webArea = axFrame(el)
+		}
+		if role == "AXButton", out.openButton == nil {
+			let title = axAttr(el, kAXTitleAttribute) as? String ?? ""
+			// Chrome's external-protocol dialog: a button literally titled "Open <App>.app".
+			// The app name must appear, or a page's own "Open settings" button would be pressed.
+			if title.lowercased().hasPrefix("open "), normalizedAppName(title).contains(wanted) {
+				out.openButton = el
+				out.openTitle = title
+			}
+		}
+		if out.webArea != nil && out.openButton != nil { return }
+		guard let kids = axAttr(el, kAXChildrenAttribute) as? [AXUIElement] else { return }
+		for k in kids {
+			walk(k, depth: depth + 1)
+			if out.webArea != nil && out.openButton != nil { return }
+		}
+	}
+
+	walk(root, depth: 0)
+	return out
+}
+
 // ---- JPEG encode ------------------------------------------------------------------------
 
 func encodeJPEG(_ image: CGImage, quality: Float) -> Data? {
@@ -200,6 +320,19 @@ func encodeJPEG(_ image: CGImage, quality: Float) -> Data? {
 // other window's pixels are ever in a frame we could encode. We re-resolve the target every
 // tick in follow mode; when the frontmost CGWindowID changes we rebuild the filter.
 
+/// A value shared across the main loop, the AX queue and SCK's frame queue. The lock is the
+/// whole point: a torn read of a CGRect mid-update would map one click against half-updated
+/// crop geometry.
+final class Shared<T> {
+	private var v: T
+	private let lock = NSLock()
+	init(_ v: T) { self.v = v }
+	var value: T {
+		get { lock.lock(); defer { lock.unlock() }; return v }
+		set { lock.lock(); v = newValue; lock.unlock() }
+	}
+}
+
 final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 	enum Mode { case follow; case pinned(CGWindowID) }
 
@@ -209,10 +342,22 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 	private var currentWindowId: CGWindowID?
 	private var currentBounds: CGRect = .zero      // points, global (for input mapping)
 	private var currentScale: CGFloat = 2.0
+	private var currentApp = ""
+	private var currentPid: pid_t = 0
 	private let queue = DispatchQueue(label: "liveview.frames")
 	private var shareable: SCShareableContent?
 	private var lastEmit = Date.distantPast
 	private let minInterval: TimeInterval
+
+	// Constrained-browser state (see the header). `crop` is in FRACTIONS of the tracked window,
+	// which is the one coordinate space that survives the window moving or resizing between the
+	// scan and the frame/click it applies to. Shared boxes because three queues read them.
+	let foreign = Shared<Bool>(false)
+	let crop = Shared<CGRect?>(nil)
+	private var lastScanAt = Date.distantPast
+	private var scanInFlight = false
+	private var lastPressAt = Date.distantPast
+	private var lastCropSent: CGRect?
 
 	init(fps: Int) {
 		self.minInterval = 1.0 / Double(fps)
@@ -245,6 +390,7 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 		}
 		if want == currentWindowId {
 			refreshBounds(for: want)
+			scheduleForeignScan()
 			return
 		}
 
@@ -303,12 +449,100 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 		currentWindowId = id
 		currentBounds = scWindow.frame     // global points
 		currentScale = scale
-		emitEvent([
+		currentApp = scWindow.owningApplication?.applicationName ?? ""
+		currentPid = scWindow.owningApplication?.processID ?? 0
+		// A window switch resets the constrained state: the new window's own scan re-derives it,
+		// and stale crop fractions from the browser must never map clicks inside the app.
+		foreign.value = isForeign(app: currentApp)
+		crop.value = nil
+		lastCropSent = nil
+		emitWindowEvent(id: id, title: scWindow.title ?? "", app: currentApp)
+		scheduleForeignScan()
+	}
+
+	/** The window event, with the constrained-mode fields riding along for the log and tests. */
+	private func emitWindowEvent(id: CGWindowID, title: String, app: String) {
+		var ev: [String: Any] = [
 			"ev": "window", "id": Int(id),
-			"title": scWindow.title ?? "", "app": scWindow.owningApplication?.applicationName ?? "",
-			"x": scWindow.frame.origin.x, "y": scWindow.frame.origin.y,
-			"w": scWindow.frame.width, "h": scWindow.frame.height, "scale": scale,
-		])
+			"title": title, "app": app,
+			"x": currentBounds.origin.x, "y": currentBounds.origin.y,
+			"w": currentBounds.width, "h": currentBounds.height, "scale": currentScale,
+			"foreign": foreign.value,
+		]
+		if let c = crop.value {
+			ev["crop"] = ["x": c.origin.x, "y": c.origin.y, "w": c.width, "h": c.height]
+		}
+		emitEvent(ev)
+	}
+
+	/**
+	 * Re-derive the constrained-browser facts for the CURRENT window, off the main loop. Every
+	 * 500ms while a target app is named: the web area appears only once the page loads, and the
+	 * "Open <App>" dialog appears at the END of the flow — one scan at window-switch would miss
+	 * both. Results are applied on main only if the window has not changed underneath the scan.
+	 */
+	private func scheduleForeignScan() {
+		guard !targetApp.isEmpty, let id = currentWindowId, foreign.value else { return }
+		guard !scanInFlight, Date().timeIntervalSince(lastScanAt) >= 0.5 else { return }
+		scanInFlight = true
+		lastScanAt = Date()
+		let pid = currentPid
+		let bounds = currentBounds
+		let app = targetApp
+
+		axQueue.async { [weak self] in
+			var scan = ForeignScan()
+			if let winEl = axWindowElement(pid: pid, matching: bounds) {
+				scan = scanForeignWindow(winEl, appName: app)
+			}
+			DispatchQueue.main.async {
+				guard let self, self.currentWindowId == id else { self?.scanInFlight = false; return }
+				self.scanInFlight = false
+				self.applyScan(scan, windowId: id)
+			}
+		}
+	}
+
+	private func applyScan(_ scan: ForeignScan, windowId: CGWindowID) {
+		// Web area → crop, as fractions of the window. Sanity-gated: a mid-load web area can
+		// report a collapsed rect, and cropping to a sliver would blank the stream — no crop
+		// beats a wrong crop, since uncropped is merely the old behavior.
+		var next: CGRect?
+		if let wa = scan.webArea, currentBounds.width > 0, currentBounds.height > 0 {
+			let inter = wa.intersection(currentBounds)
+			let areaOk = inter.width * inter.height >= 0.25 * currentBounds.width * currentBounds.height
+			if areaOk {
+				next = CGRect(
+					x: (inter.origin.x - currentBounds.origin.x) / currentBounds.width,
+					y: (inter.origin.y - currentBounds.origin.y) / currentBounds.height,
+					width: inter.width / currentBounds.width,
+					height: inter.height / currentBounds.height)
+			}
+		}
+		crop.value = next
+		// Say so when the crop meaningfully changes — the parent's log is how a mis-crop gets
+		// diagnosed from a transcript — but not on every 500ms tick of an unchanged one.
+		let moved: Bool = {
+			guard let a = lastCropSent, let b = next else { return (lastCropSent == nil) != (next == nil) }
+			return abs(a.origin.x - b.origin.x) > 0.02 || abs(a.origin.y - b.origin.y) > 0.02 ||
+				abs(a.width - b.width) > 0.02 || abs(a.height - b.height) > 0.02
+		}()
+		if moved {
+			lastCropSent = next
+			emitWindowEvent(id: windowId, title: "", app: currentApp)
+		}
+
+		// The hands-free redirect. Debounced: the dialog outlives the press by a frame or two,
+		// and pressing "Open Yarn.app" twice opens the app twice.
+		if let btn = scan.openButton, Date().timeIntervalSince(lastPressAt) >= 3.0 {
+			lastPressAt = Date()
+			let title = scan.openTitle
+			axQueue.async {
+				if AXUIElementPerformAction(btn, kAXPressAction as CFString) == .success {
+					emitEvent(["ev": "auto", "pressed": title])
+				}
+			}
+		}
 	}
 
 	// The tracked window can move or resize WITHOUT changing identity — an OAuth popup resizing
@@ -320,12 +554,10 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 	private func refreshBounds(for id: CGWindowID) {
 		guard let w = windowById(id), w.bounds != currentBounds else { return }
 		currentBounds = w.bounds
-		emitEvent([
-			"ev": "window", "id": Int(id),
-			"title": w.title, "app": w.app,
-			"x": w.bounds.origin.x, "y": w.bounds.origin.y,
-			"w": w.bounds.width, "h": w.bounds.height, "scale": currentScale,
-		])
+		currentApp = w.app
+		currentPid = w.pid
+		foreign.value = isForeign(app: w.app)
+		emitWindowEvent(id: id, title: w.title, app: w.app)
 	}
 
 	// Map a 0..1 fraction of the tracked window to a global screen point for CGEvent. Clamped
@@ -333,8 +565,15 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 	// the TS helpers are optional for callers — so an unvalidated x:3 from the wire cannot
 	// click three window-widths into whatever app happens to sit there.
 	func globalPoint(fx: Double, fy: Double) -> CGPoint {
-		let cx = min(max(fx.isFinite ? fx : 0, 0.0), 1.0)
-		let cy = min(max(fy.isFinite ? fy : 0, 0.0), 1.0)
+		var cx = min(max(fx.isFinite ? fx : 0, 0.0), 1.0)
+		var cy = min(max(fy.isFinite ? fy : 0, 0.0), 1.0)
+		// The viewer only ever SEES the crop, so its fractions are fractions OF the crop — the
+		// remap is what makes the toolbar physically unreachable, not just invisible: even a
+		// crafted x:0 y:0 lands on the crop's own corner, inside the page content.
+		if let c = crop.value {
+			cx = Double(c.origin.x) + cx * Double(c.width)
+			cy = Double(c.origin.y) + cy * Double(c.height)
+		}
 
 		return CGPoint(x: currentBounds.origin.x + CGFloat(cx) * currentBounds.width,
 		               y: currentBounds.origin.y + CGFloat(cy) * currentBounds.height)
@@ -349,7 +588,16 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 		lastEmit = now
 		var cg: CGImage?
 		VTCreateCGImageFromCVPixelBuffer(pixel, options: nil, imageOut: &cg)
-		guard let cg, let jpeg = encodeJPEG(cg, quality: quality) else { return }
+		guard var image = cg else { return }
+		// The crop applies at encode: only the page content's pixels ever leave the process, so
+		// the URL bar is absent from the stream itself, not merely hidden by the viewer. Crop
+		// fractions and CGImage.cropping both speak top-left-origin, same as CGWindowList.
+		if let c = crop.value {
+			let rect = CGRect(x: c.origin.x * CGFloat(image.width), y: c.origin.y * CGFloat(image.height),
+			                  width: c.width * CGFloat(image.width), height: c.height * CGFloat(image.height)).integral
+			if rect.width >= 64, rect.height >= 64, let cropped = image.cropping(to: rect) { image = cropped }
+		}
+		guard let jpeg = encodeJPEG(image, quality: quality) else { return }
 		emitFrame(jpeg)
 	}
 
@@ -455,9 +703,17 @@ func handle(_ obj: [String: Any]) {
 			injector.scroll(dy: Int32(clamping: obj["dy"] as? Int ?? 0), dx: Int32(clamping: obj["dx"] as? Int ?? 0))
 		case "key":
 			guard let code = CGKeyCode(exactly: obj["code"] as? Int ?? 0) else { break }
-			injector.key(down: obj["down"] as? Bool ?? true,
-			             code: code,
-			             flags: CGEventFlags(rawValue: UInt64(clamping: obj["flags"] as? Int ?? 0)))
+			let flags = CGEventFlags(rawValue: UInt64(clamping: obj["flags"] as? Int ?? 0))
+			// The keyboard half of the URL-bar guard: over a browser, Cmd+L focuses the address
+			// bar with no click for the crop to stop, and Cmd+T/N mint fresh chrome. Cmd passes
+			// only for the edit set — paste MUST survive, because passwords and 2FA codes arrive
+			// by paste. ANSI codes: A=0, Z=6, X=7, C=8, V=9. Dropped keys are reported, not
+			// swallowed: a teammate whose shortcut does nothing needs the log to say why.
+			if engine.foreign.value, flags.contains(.maskCommand), ![0, 6, 7, 8, 9].contains(Int(code)) {
+				if obj["down"] as? Bool ?? true { emitEvent(["ev": "blocked", "what": "key", "code": Int(code)]) }
+				break
+			}
+			injector.key(down: obj["down"] as? Bool ?? true, code: code, flags: flags)
 		case "text":
 			if let s = obj["s"] as? String { injector.text(s) }
 		case "quit": exit(0)

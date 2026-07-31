@@ -71,7 +71,7 @@ const el = (): FakeEl => ({
 
 const IDS = [
 	"q", "apps", "url", "urlrow", "urlhint", "task", "warn", "go", "ground", "stop", "human", "cancelsignin",
-	"record", "host", "log", "runs", "refresh", "status", "attach", "fleet", "busyhint", "fleetsum", "examples",
+	"record", "host", "log", "runs", "refresh", "status", "attach", "fleet", "busyhint", "fleetsum", "examples", "jobs", "jobswrap",
 	"creds", "key", "savekey",
 ];
 
@@ -771,6 +771,37 @@ test("loadRuns__OffersTheRender__When__TheSourceArtifactsExistLocally", async ()
 	renderable = true;
 	await ui.loadRuns(true);
 	assert.ok(ui.nodes.runs.innerHTML.includes("Render cursor"));
+});
+
+test("renderJobs__ListsAndClearsTheRun__When__ItStartsAndEnds", () => {
+	// The panel is the one place every in-flight thing is visible; it must appear with the
+	// first job and vanish with the last, because an empty "Jobs" header is dead weight.
+	const ui = mount();
+	ui.events.started!({ app: "Yarn", task: "t", host: "mac1" });
+	assert.equal(ui.nodes.jobswrap.style.display, "block");
+	assert.match(ui.nodes.jobs.innerHTML, /Yarn @ mac1/);
+	ui.events.done!({ code: 0, elapsed: 5, app: "Yarn", host: "mac1" });
+	assert.equal(ui.nodes.jobswrap.style.display, "none");
+});
+
+test("renderJobs__ListsAnotherOperatorsRun__When__TheFleetProbeSeesOne", async () => {
+	const rows = [{ name: "mac2", state: "busy", detail: "aman · Yarn · 12m 03s" }];
+	const ui = mount({ loadFleet: async () => ({ rows, offers: [] }) });
+	await settle();
+	await ui.loadFleet();
+	assert.equal(ui.nodes.jobswrap.style.display, "block");
+	assert.match(ui.nodes.jobs.innerHTML, /mac2 — aman · Yarn/);
+	assert.match(ui.nodes.jobs.innerHTML, /theirs/, "another operator's run must be labeled as not ours");
+});
+
+test("renderJobs__ListsTheRender__When__AHumanizeIsInFlight", async () => {
+	const ui = mount({
+		loadRuns: async () => [RUN],
+		humanizeStatus: async () => ({ "2026-07-30T01-00-00-yarn": { state: "rendering" } }),
+	});
+	await settle();
+	await ui.loadRuns(true);
+	assert.match(ui.nodes.jobs.innerHTML, /rendering cursor — 2026-07-30T01-00-00-yarn/);
 });
 
 test("onLine__TagsLinesWithTheHost__When__TheSameAppRunsOnTwoHosts", () => {

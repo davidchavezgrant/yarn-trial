@@ -108,6 +108,10 @@ export const CHROME = String.raw`<meta charset="utf-8">
      on one row were unreadable, and the label IS the safety feature on a destructive action. */
   .factions { display:flex; flex-direction:column; gap:4px; margin:4px 0 6px; }
   .factions button { width:100%; }
+  .job { padding:6px 9px; border:1px solid var(--line); border-radius:6px; margin-bottom:6px; font-size:12.5px; display:flex; gap:8px; align-items:center; }
+  .job.mine { cursor:pointer; }
+  .job.mine:hover { border-color:var(--accent); }
+  .job .jmeta { color:var(--dim); margin-left:auto; white-space:nowrap; }
   .iform { display:flex; flex-direction:column; gap:4px; margin-top:2px; }
   .iform input { padding:4px 8px; font-size:12.5px; }
   .hostrow span { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); white-space:nowrap; }
@@ -199,6 +203,12 @@ export const CHROME = String.raw`<meta charset="utf-8">
       </details>
       <details class="fold" style="margin-top:10px"><summary>Credentials</summary><div id="creds"></div></details>
     </div>
+    <!-- Everything in flight, in one place: this shell's runs (clickable — the pane is where
+         Stop lives), other operators' runs off the fleet probe, and cursor renders. -->
+    <div id="jobswrap" style="display:none;margin-bottom:14px">
+      <div class="panehead"><label>Jobs</label></div>
+      <div id="jobs"></div>
+    </div>
     <div class="panehead"><label>Recorded runs</label><button id="refresh" class="mini" title="Rescan out/runs">↻</button></div>
     <div id="runs"><span class="empty">No recordings yet — tick “Record video”.</span></div>
   </div>
@@ -231,6 +241,10 @@ let lastFleetView = null;
 // {mac, name, url} while the inline install form is open. Module state, not DOM state: the
 // probe repaints the rows every 15s and would wipe anything typed into a bare input.
 let installForm = null;
+// When each of OUR runs started (host -> epoch ms), for the jobs panel's elapsed column.
+// Parallel to 'running' rather than inside it: four call sites and the tests key that map
+// by its string value, and an object value would break them all silently.
+let runMeta = {};
 // The host whose sign-in is mid-flight. Disabling the clicked button was not enough: the very
 // repaint that shows "opening mac2…" rebuilds the row from markup with the button enabled
 // again, and a second click double-opens screen shares. The rebuild consults this instead.
@@ -725,7 +739,8 @@ bus.onStarted((d) => {
   if (d.app === sel && el('task').value.trim() === d.task) el('task').value = '';
   if (stateFor(d.app).task.trim() === d.task) stateFor(d.app).task = '';
   running[d.host] = d.app;
-  check(); renderAttach(); paintStatus();
+  runMeta[d.host] = Date.now();
+  check(); renderAttach(); paintStatus(); renderJobs();
   // The previous refusal is answered by trying again, whatever the outcome of the retry.
   unready = null; unreadyGen++; renderUnready();
   // A new run replaces that app's terminal — unless the same app is still live on ANOTHER
@@ -751,7 +766,8 @@ bus.onLine((d) => line(hostTag(d.app, d.host) + d.text, d.app));
 if (bus.onHost) bus.onHost((d) => {
   if (running['auto'] === d.app) delete running['auto'];
   running[d.host] = d.app;
-  check(); renderAttach(); paintStatus();
+  if (runMeta['auto'] !== undefined) { runMeta[d.host] = runMeta['auto']; delete runMeta['auto']; }
+  check(); renderAttach(); paintStatus(); renderJobs();
 });
 bus.onDone((d) => {
   // Tagged BEFORE the map entry goes: computed after, a shared buffer's finish line would
@@ -760,7 +776,8 @@ bus.onDone((d) => {
   // d.host is the run's CURRENT name — resolved, if onHost ever fired — so this is the same
   // key onStarted/onHost left in the map.
   delete running[d.host];
-  check(); renderAttach(); paintStatus();
+  delete runMeta[d.host];
+  check(); renderAttach(); paintStatus(); renderJobs();
   // Exit 3 is "needs a sign-in" — an expected, recoverable pause, not a failure, and the
   // sign-in window is about to open itself. Painting it as an error taught people to read
   // a routine first-run-on-a-Mac as something breaking.
@@ -844,6 +861,43 @@ async function loadFleet() {
  * the rows OFFER — opening the install form, a selection change — repaint instantly from the
  * cached view instead of waiting seconds on a fresh ssh fan-out.
  */
+function fmtDur(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return s + 's';
+  return Math.floor(s / 60) + 'm ' + String(s % 60).padStart(2, '0') + 's';
+}
+
+/**
+ * Everything in flight, one row each: this shell's runs (clickable — selecting the app is how
+ * you reach its log and its Stop), other operators' runs from the last fleet probe, and cursor
+ * renders. Hidden entirely when idle: an empty "Jobs" panel is dead weight over the gallery.
+ */
+function renderJobs() {
+  const rows = [];
+  for (const h of Object.keys(running)) {
+    const since = runMeta[h];
+    rows.push('<div class="job mine" data-app="' + encodeURIComponent(running[h]) + '">' +
+      '<span class="s-busy">●</span><span>' + esc(running[h]) + ' @ ' + esc(h === 'local' ? 'this Mac' : h) + '</span>' +
+      '<span class="jmeta">' + (since ? fmtDur(Date.now() - since) : 'running') + '</span></div>');
+  }
+  for (const name of Object.keys(fleetRows)) {
+    const r = fleetRows[name];
+    // Ours are already listed above under the same host key; this row is other operators'.
+    if (r.state !== 'busy' || running[name]) continue;
+    rows.push('<div class="job"><span class="s-busy">●</span><span>' + esc(name) + ' — ' + esc(r.detail || 'busy') + '</span>' +
+      '<span class="jmeta">theirs</span></div>');
+  }
+  for (const id of Object.keys(hstates)) {
+    if (hstates[id].state !== 'rendering') continue;
+    rows.push('<div class="job"><span>✦</span><span>rendering cursor — ' + esc(id) + '</span><span class="jmeta">local</span></div>');
+  }
+  el('jobswrap').style.display = rows.length ? 'block' : 'none';
+  el('jobs').innerHTML = rows.join('');
+  for (const row of el('jobs').children) {
+    if (row.dataset && row.dataset.app !== undefined) row.onclick = () => selectApp(decodeURIComponent(row.dataset.app));
+  }
+}
+
 function renderFleet() {
   const view = lastFleetView;
   if (!view) return;
@@ -896,6 +950,7 @@ function renderFleet() {
   if (signinMsg && ++signinMsg.paints >= 3) signinMsg = null;
 
   offers = view.offers || [];
+  renderJobs();
   // The fold's badge: a busy Mac must stay visible while the panel is closed, or folding it
   // hides the one state that explains why a dispatch was refused.
   const busy = view.rows.filter((r) => r.state === 'busy').length;
@@ -1082,6 +1137,7 @@ async function loadRuns(force) {
   // The render states ride the same tick. A thrown/missing humanizeStatus keeps the previous
   // map — the gallery is a nicety and must not surface a rejection every 4 seconds.
   try { hstates = (await bus.humanizeStatus()) || {}; } catch {}
+  renderJobs();
   const box = el('runs');
   // Rebuilding innerHTML tears down any <video> mid-playback, and this runs on a timer —
   // so redraw only when the set of runs actually changed. Signature over ids, not the
@@ -1409,6 +1465,7 @@ el('attach').onclick = async (e) => {
 // gallery cannot rely on the in-UI done event alone. Cheap poll: loadRuns() only
 // redraws when the set of run ids changes, so this is a directory stat most ticks.
 setInterval(() => loadRuns(false), 4000);
+setInterval(renderJobs, 1000);
 
 // Last chance to persist: a pending saveSoon() would die with the window. saveState is
 // send-not-invoke precisely so it survives being called here.

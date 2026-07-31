@@ -676,6 +676,10 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 						LIVEVIEW_TOKEN: token,
 						LIVEVIEW_MAX_LIFETIME_MS: String(LIVEVIEW_MAX_LIFETIME_MS),
 						LIVEVIEW_IDLE_AFTER_CLOSE_MS: String(LIVEVIEW_IDLE_AFTER_CLOSE_MS),
+						// Names the sign-in target for the engine's constrained-browser mode: the
+						// external OAuth browser gets cropped to its page content, Cmd-shortcuts
+						// to its chrome are dropped, and "Open <App>" is pressed hands-free.
+						LIVEVIEW_APP: app,
 					},
 				},
 			).pid;

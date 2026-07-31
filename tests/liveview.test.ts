@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import {
+	engineArgs,
 	clampFraction,
 	encodeCommand,
 	type EngineEvent,
@@ -301,4 +302,29 @@ test("loginBlockedByRun__ReturnsNull__When__LeaseHolderIsDead", () => {
 		acquire(lease({ pid: DEAD_PID }), dir);
 		assert.equal(loginBlockedByRun(dir), null);
 	});
+});
+
+test("engineArgs__NamesTheTarget__When__AppIsSet", () => {
+	// --app is what arms the engine's constrained-browser mode; an unset or blank app must
+	// leave the argv exactly as before, so plain window streaming stays byte-identical.
+	assert.deepEqual(engineArgs({ app: "  Yarn  " }), ["--app", "Yarn"]);
+	assert.deepEqual(engineArgs({ app: "   " }), []);
+	assert.deepEqual(engineArgs({}), []);
+	assert.deepEqual(engineArgs({ fps: 10, app: "Yarn" }), ["--fps", "10", "--app", "Yarn"]);
+});
+
+test("EventParser__CarriesTheConstrainedFields__When__TheEngineEmitsThem", () => {
+	const parser = new EventParser();
+	const events = parser.push(
+		'{"ev":"window","id":9,"title":"Sign in","app":"Google Chrome","x":0,"y":0,"w":800,"h":600,"scale":2,"foreign":true,"crop":{"x":0.02,"y":0.11,"w":0.96,"h":0.87}}\n' +
+		'{"ev":"auto","pressed":"Open Yarn.app"}\n' +
+		'{"ev":"blocked","what":"key","code":37}\n',
+	);
+
+	assert.equal(events.length, 3);
+	const win = events[0];
+	assert.equal(win.ev === "window" && win.foreign, true);
+	assert.equal(win.ev === "window" && win.crop?.h, 0.87);
+	assert.equal(events[1].ev === "auto" && events[1].pressed, "Open Yarn.app");
+	assert.equal(events[2].ev === "blocked" && events[2].code, 37);
 });

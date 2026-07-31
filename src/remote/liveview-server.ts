@@ -40,6 +40,8 @@ export interface ServerOptions {
 	maxWidth?: number;
 	/** Override the engine binary (tests). */
 	bin?: string;
+	/** Sign-in target app — arms the engine's constrained-browser mode. See EngineOptions.app. */
+	app?: string;
 	/** Bind beyond loopback. Off by default; a raw login stream on the LAN is a leak. */
 	lan?: boolean;
 	/**
@@ -245,7 +247,7 @@ const MAX_QUEUED_SEND_BYTES = 1.5 * 1024 * 1024;
 
 /** Wire one WebSocket to one engine instance. */
 function bridge(socket: Duplex, opts: ServerOptions): void {
-	const engine = spawnEngine({ fps: opts.fps, quality: opts.quality, maxWidth: opts.maxWidth, bin: opts.bin });
+	const engine = spawnEngine({ fps: opts.fps, quality: opts.quality, maxWidth: opts.maxWidth, bin: opts.bin, app: opts.app });
 	const decoder = new WsDecoder();
 	let open = true;
 
