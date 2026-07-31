@@ -1300,6 +1300,67 @@ test("liveview__PreemptsBeforeTheSwap__When__AServerIsAlreadyUp", async () => {
 });
 
 /**
+ * The transport choice crosses the fleet as env on the spawned CLI — the runner never resolves
+ * it (auto's probe runs where the CLI runs). A forced choice rides LIVEVIEW_TRANSPORT
+ * (+ LIVEVIEW_CDP_URL when an endpoint was named) and is echoed in the reply so the operator's
+ * printout can say what was requested.
+ */
+test("liveview__PassesTheTransportToTheSpawnedServer__When__ThePayloadNamesCdp", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const spawner = mkdirSpawner();
+		const runner = await startRunner(dir, { ...noSwap, ...noOpen, log: () => {}, spawn: spawner.spawn });
+		try {
+			const [res] = await request(runner.socketPath, "liveview", {
+				app: "Yarn",
+				operator: "dave",
+				transport: "cdp",
+				endpoint: "http://127.0.0.1:9229",
+			});
+			assert.equal(res.ok, true, String(res.error ?? ""));
+			assert.equal(res.transport, "cdp");
+			assert.equal(spawner.envs[0].LIVEVIEW_TRANSPORT, "cdp");
+			assert.equal(spawner.envs[0].LIVEVIEW_CDP_URL, "http://127.0.0.1:9229");
+		} finally {
+			await runner.close();
+		}
+	});
+});
+
+test("liveview__LeavesTheTransportToTheCli__When__ThePayloadDoesNotNameOne", async () => {
+	// Absent a forced choice, the env stays unset so the CLI's own auto-probe (or this host's
+	// runner.env, which childEnv layers in) decides — setting "auto" here would override a
+	// per-host default with a value nobody asked for.
+	await withTempAsync("yr-serve-", async (dir) => {
+		const spawner = mkdirSpawner();
+		const runner = await startRunner(dir, { ...noSwap, ...noOpen, log: () => {}, spawn: spawner.spawn });
+		try {
+			const [res] = await request(runner.socketPath, "liveview", { app: "Yarn", operator: "dave" });
+			assert.equal(res.ok, true, String(res.error ?? ""));
+			assert.equal(res.transport, "auto", "the reply reports the requested transport, auto included");
+			assert.equal(spawner.envs[0].LIVEVIEW_TRANSPORT, undefined);
+			assert.equal(spawner.envs[0].LIVEVIEW_CDP_URL, undefined);
+		} finally {
+			await runner.close();
+		}
+	});
+});
+
+test("liveview__RefusesWithoutSpawning__When__TheTransportIsOutsideTheVocabulary", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const spawner = mkdirSpawner();
+		const runner = await startRunner(dir, { ...noSwap, ...noOpen, log: () => {}, spawn: spawner.spawn });
+		try {
+			const [res] = await request(runner.socketPath, "liveview", { app: "Yarn", operator: "dave", transport: "webrtc" });
+			assert.equal(res.ok, false);
+			assert.match(String(res.error), /expected auto, cdp or sck/);
+			assert.equal(spawner.calls.length, 0, "a typo must come back as a refusal, not an env the CLI rejects after the swap");
+		} finally {
+			await runner.close();
+		}
+	});
+});
+
+/**
  * A half-done swap can leave the previous operator's session live, so the run must not happen —
  * and the Mac must not be left leased to a job that never started.
  */

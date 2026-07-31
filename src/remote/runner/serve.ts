@@ -860,6 +860,13 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		const app = String(params.app ?? "").trim();
 		const operator = String(params.operator ?? "unknown").trim() || "unknown";
 		if (!app) return { ok: false, error: "app is required" };
+		// Which engine streams the sign-in: auto (the CLI probes the CDP endpoint and falls back
+		// to window capture), or a forced cdp/sck from the operator's flag. Validated here so a
+		// typo comes back as a refusal instead of an env var the CLI rejects after the swap.
+		const transport = String(params.transport ?? "auto").trim() || "auto";
+		if (transport !== "auto" && transport !== "cdp" && transport !== "sck")
+			return { ok: false, error: `unknown liveview transport ${JSON.stringify(transport)} — expected auto, cdp or sck` };
+		const cdpUrl = typeof params.endpoint === "string" && params.endpoint.trim() ? params.endpoint.trim() : undefined;
 
 		const { holder } = inspect(runnerDir);
 		if (holder)
@@ -926,6 +933,11 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 						// Frame rate for the login stream. Named here rather than left to the
 						// engine's default so it is tunable per fleet without a rebuild.
 						LIVEVIEW_FPS: String(LIVEVIEW_FPS),
+						// The transport rides only when the operator forced one; absent, the
+						// CLI's own auto-probe (or this host's runner.env, which childEnv layers
+						// in) decides — the same flag > env > auto precedence as a local run.
+						...(transport !== "auto" ? { LIVEVIEW_TRANSPORT: transport } : {}),
+						...(cdpUrl ? { LIVEVIEW_CDP_URL: cdpUrl } : {}),
 					},
 				},
 			).pid;
@@ -944,6 +956,11 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			token,
 			url: `http://127.0.0.1:${LIVEVIEW_PORT}/?t=${token}`,
 			maxLifetimeSec: LIVEVIEW_MAX_LIFETIME_MS / 1000,
+			// As REQUESTED — auto resolves inside the spawned CLI (the probe runs there), and
+			// plumbing the resolved choice back would mean waiting on a detached child. The
+			// server's own job log records which engine actually ran.
+			transport,
+			...(cdpUrl ? { endpoint: cdpUrl } : {}),
 		};
 	}
 

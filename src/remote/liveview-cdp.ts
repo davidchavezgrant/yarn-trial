@@ -210,6 +210,16 @@ export function mouseEventParams(
 	}
 }
 
+/**
+ * Where the debug endpoint is when nobody named one: explicit argument, then CDP_URL, then
+ * the CDP_PORT loopback default. Exported because the CLI's auto-transport probe must aim
+ * at exactly the endpoint connectOverCDP would use — two derivations of "the default
+ * endpoint" is how a probe passes against one port and the connect dies against another.
+ */
+export function cdpEndpoint(endpoint?: string): string {
+	return endpoint?.trim() || process.env.CDP_URL || `http://127.0.0.1:${envNum("CDP_PORT", 9222)}`;
+}
+
 /** How long the endpoint gets to answer /json/version. The target is already running (the
  *  runner foregrounds it before the viewer link goes out), so this is a liveness check, not
  *  a launch wait. */
@@ -217,7 +227,8 @@ const PROBE_ATTEMPTS = 3;
 const PROBE_DELAY_MS = 300;
 const CONNECT_TIMEOUT_MS = 5_000;
 
-async function endpointAnswers(url: string): Promise<boolean> {
+/** Exported for the CLI's auto-transport selection: answers → screencast, silent → SCK. */
+export async function endpointAnswers(url: string): Promise<boolean> {
 	for (let i = 0; i < PROBE_ATTEMPTS; i++) {
 		try {
 			const r = await fetch(`${url}/json/version`, { signal: AbortSignal.timeout(1_500) });
@@ -254,7 +265,7 @@ function sameOrigin(pageUrl: string, targetUrl: string): boolean {
  * whole feature exists to create must survive the viewer tab closing.
  */
 export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<EngineHandle> {
-	const endpoint = opts.endpoint?.trim() || process.env.CDP_URL || `http://127.0.0.1:${envNum("CDP_PORT", 9222)}`;
+	const endpoint = cdpEndpoint(opts.endpoint);
 
 	const frameCbs: ((j: Buffer) => void)[] = [];
 	const eventCbs: ((e: EngineEvent) => void)[] = [];

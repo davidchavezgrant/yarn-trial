@@ -246,7 +246,7 @@ export function remedyFor(err: ErrorEvent): string {
 		case "spawn-failed":
 			return `the engine binary would not start (${err.detail}) — it is gitignored, so run npm run build:native on that Mac`;
 		case "cdp-unreachable":
-			return `no Chromium debug endpoint answered (${err.detail}) — launch the target with --remote-debugging-port first, point LIVEVIEW_CDP_URL at a live endpoint, or drop LIVEVIEW_TRANSPORT=cdp to fall back to window capture`;
+			return `no Chromium debug endpoint answered (${err.detail}) — launch the target with --remote-debugging-port first, point LIVEVIEW_CDP_URL at a live endpoint, or force --sck for window capture instead`;
 		case "no-page":
 			return `the debug endpoint answered but exposed no drivable page (${err.detail}) — open the target page or window first, then retry`;
 		default:

@@ -103,6 +103,12 @@ improves) — and users weight the second far higher.
 
 **Implemented 2026-07-31** (branch `screencast-engine`): `src/remote/liveview-cdp.ts` —
 `connectCdpEngine()` behind the same `EngineHandle` seam as the SCK engine (which gained a
-transport-neutral `onExit`; `child` is now optional). Selected locally via
-`LIVEVIEW_TRANSPORT=cdp` on `./run liveview` (`LIVEVIEW_CDP_URL` names the endpoint;
-unset, `CDP_PORT`/9222). SCK remains the default; runner/fleet wiring is a next step.
+transport-neutral `onExit`; `child` is now optional). Selection is three-state and CDP-first:
+AUTO (the default) probes the debug endpoint once at CLI start and streams over screencast
+when it answers, SCK otherwise; `--cdp [url]` / `--sck` force a transport (flag > env
+`LIVEVIEW_TRANSPORT=auto|cdp|sck` > auto; `LIVEVIEW_CDP_URL` names the endpoint, unset
+`CDP_PORT`/9222). Fleet-wired the same day: the choice rides the liveview verb's spec to the
+runner, which sets the env for the CLI it spawns and reports the requested transport in its
+reply. Caveat: the CDP engine binds ONE Chromium endpoint per session — a sign-in that hands
+off to a different browser process mid-flow (system-browser OAuth leg) needs SCK's
+window-following, so force `--sck` for those until endpoint-hopping exists.
