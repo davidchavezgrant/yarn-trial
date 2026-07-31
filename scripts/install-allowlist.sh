@@ -47,20 +47,29 @@ xml=$(npx tsx scripts/print-allowlist.ts)
 
 
 # macOS 26 gate. On 15.x a hand-written plist in /Library/Managed Preferences is honoured as
-# forced policy; on 26 that directory belongs to the MDM subsystem and a loose file dropped
+# forced policy; on 26 that directory belongs to the profile subsystem and a loose file dropped
 # there manages NOTHING — `sudo defaults write` returns 0, the bytes land, and Chrome ignores
 # them (measured across the fleet 2026-07-31, commit e51ffcc: mac1 on 15.5 honours a
-# byte-identical file that mac2/mac3 on 26.4.1 discard). Refusing beats asking for a password
-# and reporting success for a write that manages nothing.
+# byte-identical file that mac2/mac3 on 26.4.1 discard).
+#
+# The route on 26 is a CONFIGURATION PROFILE, not MDM enrolment — an earlier reading of this
+# said enrolment was required and that was wrong: none of the three Macs are enrolled
+# (`profiles status -type enrollment` says No on all of them) yet a manually-installed
+# .mobileconfig delivers BrowserSignin and SyncDisabled at MANDATORY level on mac3. So the
+# allowlist belongs in that same profile, which is what this gate points at.
 major=$(ssh -o ConnectTimeout=15 -i ~/.yarn-runner/id_ed25519 "$addr" 'sw_vers -productVersion' 2>/dev/null | cut -d. -f1)
 if [[ ${major:-0} -ge 26 ]]; then
 	cat >&2 <<EOF
-$host runs macOS $major, where /Library/Managed Preferences belongs to the MDM subsystem.
-A hand-written plist there is silently ignored — the write succeeds and manages nothing.
+$host runs macOS $major, where a hand-written plist in /Library/Managed Preferences is
+ignored — the write succeeds and manages nothing.
 
-AutoLaunchProtocolsFromOrigins is mandatory-only, so on this host the only route is real
-MDM enrolment. Until then the "Open <App>?" dialog stays, and a sign-in needs one SCK
-click for that leg (./run liveview $host "<App>" --sck).
+Use the fleet's configuration profile instead. It already carries this allowlist:
+    ssh $addr
+    sudo profiles install -path /tmp/chrome-policy.mobileconfig
+then quit and reopen Chrome (it re-reads platform policy on launch).
+
+If the key still reads "Not set." afterwards, macOS kept the older payload despite the
+version bump: remove the profile and install it again.
 EOF
 	exit 4
 fi

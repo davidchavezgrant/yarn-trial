@@ -192,3 +192,19 @@ the same tunnel. 2FA was approved on a phone and passed.
 the provider's own pages (the long, typed, credential-bearing part); SCK covers the browser's
 chrome — external-protocol dialogs, enterprise interstitials, passkey sheets. The switch is
 currently manual (`--sck`), which is the next thing to close.
+
+**Correction, 2026-07-31 (same day): a configuration profile reaches Mandatory on macOS 26 —
+MDM enrolment is NOT required.** An earlier note here concluded the opposite after
+`sudo defaults write` into `/Library/Managed Preferences` returned 0 and managed nothing on
+mac3. That much is real (the directory belongs to the profile subsystem on 26; e51ffcc
+measured a byte-identical plist honoured on mac1/15.5 and discarded on mac2+mac3/26.4.1) — but
+"therefore only MDM" did not follow. Measured on mac3: `profiles status -type enrollment`
+reports **No** on all three Macs, while `chrome://policy` READ ON THAT HOST reports
+`BrowserSignin=0` and `SyncDisabled=true` at **Mandatory / Platform / OK**, delivered by a
+manually-installed `.mobileconfig`. So the allowlist belongs in that profile, and
+`AutoLaunchProtocolsFromOrigins` is reachable on the current fleet after all.
+
+Method note worth keeping: the wrong reading came from running the `chrome://policy` probe on
+the OPERATOR's laptop against `127.0.0.1:9777` with no tunnel — it answered, plausibly, about
+the wrong machine's browser. Probes of remote state must execute on the remote host (copy the
+script over and run it there), the same discipline the run harness applies to observations.
