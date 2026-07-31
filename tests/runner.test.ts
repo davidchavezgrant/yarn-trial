@@ -1,3 +1,7 @@
+// First import on purpose: redirects dataRoot() to a temp dir before any src/ module
+// snapshots a path from it, so the job registry these tests exercise lands there and not
+// in the checkout's real out/jobs/.
+import "./data-tmp.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -1321,8 +1325,12 @@ test("liveview__PreemptsBeforeTheSwap__When__AServerIsAlreadyUp", async () => {
 		const spawner = mkdirSpawner();
 		const order: string[] = [];
 		const runner = await startRunner(dir, {
+			// noOpen carries the ensureEndpoint/ensureBrowser stubs, not just open. Building
+			// these opts by hand without it made this test relaunch the real Yarn and Chrome
+			// on the developer's Mac every `npm test` — the 9-second runtime was two live app
+			// launches nothing here ever asserted on.
+			...noOpen,
 			log: () => {},
-			open: async () => {},
 			portInUse: async () => true, // a server is already listening
 			freeLiveviewPort: async () => {
 				order.push("preempt");

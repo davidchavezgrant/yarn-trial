@@ -1,3 +1,7 @@
+// First import on purpose: the resetToHome tests below drive observe(), whose probe
+// screenshot lands under OUT — snapshotted from dataRoot() at import time. Redirect first
+// so those frames go to a temp dir instead of the checkout's real out/.
+import "./data-tmp.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";

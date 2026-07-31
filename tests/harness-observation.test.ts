@@ -1,9 +1,14 @@
+// First import on purpose: observe() writes its screenshot under OUT, snapshotted from
+// dataRoot() at import time. Redirect first so the fixture frame goes to a temp dir
+// instead of the checkout's real out/.
+import "./data-tmp.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";
 import { Driver } from "../src/core/driver.js";
 import { observationBlocks, observe, screenIsLocked, TargetNotObservableError } from "../src/core/harness.js";
 import type { ObservationBundle } from "../src/core/harness.js";
+import { outDir } from "../src/paths.js";
 
 // --no-vision A/B arm: the text block must be identical across arms so the only
 // difference the model sees is the presence of the image.
@@ -65,7 +70,10 @@ const fakeDriver = (payload: Record<string, unknown>, shotPath: string): Driver 
 const axWindow = { element_index: 0, role: "AXWindow", label: "", frame: { x: -2181, y: 763, w: 1920, h: 1080 } };
 
 const observeFixture = async (elements: unknown[], opts: { webAreaOnly?: boolean } = {}): Promise<ObservationBundle> => {
-	const shot = `${process.cwd()}/out/test-observe.png`;
+	// Must be the exact path observe() derives (`${OUT}/test-observe.png`) — the fake
+	// driver writes where it is told, and observe() reads back its own derivation. cwd
+	// only matched by accident before data-tmp.js redirected the root.
+	const shot = `${outDir()}/test-observe.png`;
 	const prev = process.env.AXDOM;
 	process.env.AXDOM = "0"; // the sidecar needs a live app; this test is about the join-free path
 	try {
