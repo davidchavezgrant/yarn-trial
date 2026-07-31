@@ -747,14 +747,23 @@ bus.onStarted((d) => {
   check(); renderAttach(); paintStatus();
   // The previous refusal is answered by trying again, whatever the outcome of the retry.
   unready = null; unreadyGen++; renderUnready();
-  // A new run replaces that app's terminal rather than appending to the last one.
-  stateFor(d.app).log = [];
-  if (d.app === sel) { el('log').innerHTML = ''; foldEl = null; foldCount = 0; }
+  // A new run replaces that app's terminal — unless the same app is still live on ANOTHER
+  // host, whose transcript is in this buffer too and must not vanish mid-run. Buffers are
+  // keyed by app, so two same-app runs share one; hostTag below keeps the interleave legible.
+  if (!Object.keys(running).some(h => h !== d.host && running[h] === d.app)) {
+    stateFor(d.app).log = [];
+    if (d.app === sel) { el('log').innerHTML = ''; foldEl = null; foldCount = 0; }
+  }
   line('▶ ' + d.task + '  —  ' + d.app + (d.host === 'local' ? '' : ' @ ' + d.host), d.app);
 });
+// Only while the app is genuinely live on more than one host: the common case (distinct
+// apps) stays untagged, and the tag names which machine spoke when a buffer is shared.
+function hostTag(app, host) {
+  return Object.keys(running).filter(h => running[h] === app).length > 1 ? '[' + host + '] ' : '';
+}
 // The owner arrives WITH the line. Guessing it from a module variable was fine with one run;
 // with one per host it would splice concurrent transcripts together.
-bus.onLine((d) => line(d.text, d.app));
+bus.onLine((d) => line(hostTag(d.app, d.host) + d.text, d.app));
 // 'auto' resolved to a machine: move the run's entry so the header, the busy check and the
 // Stop button all name the Mac it actually occupies. At most one submit can sit unresolved
 // under 'auto' at a time — the host-side busy check refuses a second while the first is.
@@ -764,11 +773,14 @@ if (bus.onHost) bus.onHost((d) => {
   check(); renderAttach(); paintStatus();
 });
 bus.onDone((d) => {
+  // Tagged BEFORE the map entry goes: computed after, a shared buffer's finish line would
+  // read as the only run the moment it stopped being one.
+  const tag = hostTag(d.app, d.host);
   // d.host is the run's CURRENT name — resolved, if onHost ever fired — so this is the same
   // key onStarted/onHost left in the map.
   delete running[d.host];
   check(); renderAttach(); paintStatus();
-  line((d.code === 0 ? '■ finished' : '■ exited with code ' + d.code) + ' after ' + d.elapsed + 's', d.app);
+  line(tag + (d.code === 0 ? '■ finished' : '■ exited with code ' + d.code) + ' after ' + d.elapsed + 's', d.app);
   // 3 is the agent's "not at home, reason unknown" — the one exit code with a remedy a person
   // can act on from here. Everything else is a run that ran.
   unready = d.code === 3 ? { app: d.app, host: d.host, msg: null } : null;
@@ -1283,7 +1295,7 @@ el('fleet').onchange = async (e) => {
     return ask('signing out of ' + sel + ' on ' + mac + '…', () => bus.authClear(mac, sel));
   }
   if (act === 'delete') {
-    if (!confirm("Delete " + sel + ".app from " + mac + "?\n\nRemoves the app bundle and EVERY operator's parked " + sel + " profile on that Mac. Live app data under ~/Library stays.")) return;
+    if (!confirm("Delete " + sel + ".app from " + mac + "?\n\nRemoves the app bundle, its live app data, and EVERY operator's parked " + sel + " profile on that Mac.")) return;
     return ask('deleting ' + sel + ' from ' + mac + '…', () => bus.appDelete(mac, sel));
   }
 };

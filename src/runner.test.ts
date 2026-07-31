@@ -1185,7 +1185,7 @@ test("appdelete__Refuses__When__ARunHoldsTheLease", async () => {
 			deleteApp: async (app) => {
 				deleted++;
 
-				return { app, bundle: `/Applications/${app}.app`, removedProfiles: [] };
+				return { app, bundle: `/Applications/${app}.app`, removedProfiles: [], removedLive: [], ownershipCleared: false };
 			},
 		});
 		let pid = 0;
@@ -1210,13 +1210,21 @@ test("appdelete__ReportsBundleAndProfiles__When__TheHostIsIdle", async () => {
 		const runner = await startRunner(dir, {
 			...noSwap,
 			log: () => {},
-			deleteApp: async (app) => ({ app, bundle: `/Applications/${app}.app`, removedProfiles: ["alice/yarn", "bob/yarn"] }),
+			deleteApp: async (app) => ({
+				app,
+				bundle: `/Applications/${app}.app`,
+				removedProfiles: ["alice/yarn", "bob/yarn"],
+				removedLive: ["Library/Application Support/Yarn"],
+				ownershipCleared: true,
+			}),
 		});
 		try {
 			const [res] = await request(runner.socketPath, "appdelete", { app: "Yarn" });
 			assert.equal(res.ok, true);
 			assert.equal(res.bundle, "/Applications/Yarn.app");
 			assert.deepEqual(res.removedProfiles, ["alice/yarn", "bob/yarn"]);
+			assert.deepEqual(res.removedLive, ["Library/Application Support/Yarn"]);
+			assert.equal(res.ownershipCleared, true);
 
 			const [noApp] = await request(runner.socketPath, "appdelete", {});
 			assert.match(String(noApp.error), /app is required/);

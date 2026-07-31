@@ -242,10 +242,20 @@ function main(): void {
 
 	if (!wantVideo) return;
 
+	// Render to a partial name and rename into place on success. humanized.mp4's EXISTENCE is
+	// the "rendered" signal everywhere (the gallery, listRecordedRuns) — an encoder killed
+	// mid-write would otherwise leave a truncated file that reads as a finished render forever.
+	// The rename is atomic on the same filesystem; a stale partial from a crashed pass is
+	// overwritten by the next render and never surfaces anywhere.
 	const outPath = path.join(recordingDir, "humanized.mp4");
-	renderTrack(track, framesDir, outPath)
-		.then((r) => console.log(`humanized video: ${r.outPath} (${r.frames} frames)`))
+	const partial = path.join(recordingDir, "humanized.partial.mp4");
+	renderTrack(track, framesDir, partial)
+		.then((r) => {
+			fs.renameSync(partial, outPath);
+			console.log(`humanized video: ${outPath} (${r.frames} frames)`);
+		})
 		.catch((err) => {
+			fs.rmSync(partial, { force: true });
 			console.error("render failed:", err instanceof Error ? err.message : err);
 			process.exit(1);
 		});

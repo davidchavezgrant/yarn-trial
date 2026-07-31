@@ -6,10 +6,12 @@ import { test } from "node:test";
 import { deleteAppBundle, describeAppDelete, safeBundleName } from "./runner/uninstall.js";
 
 /**
- * Uninstalling an app, entirely on temp directories: `appDirs`, the profile store and `quit`
- * are all injected, so nothing here goes near /Applications or a live process. The assertions
- * that matter most are the refusals — this module's output feeds `rm -rf`, so the property
- * under test is what it will NOT delete.
+ * Uninstalling an app, entirely on temp directories: `appDirs`, `home`, the profile store and
+ * `quit` are all injected, so nothing here goes near /Applications, ~/Library or a live
+ * process. `home` is NOT optional in these tests — the live-data sweep defaults it to
+ * os.homedir(), and a test that omits it would delete the developer's real app data for
+ * whatever name it made up. The assertions that matter most are the refusals — this module's
+ * output feeds `rm -rf`, so the property under test is what it will NOT delete.
  */
 
 function tmp(): string {
@@ -45,7 +47,7 @@ test("deleteAppBundle__RemovesBundleAndEveryParkedProfile__When__ItExists", asyn
 	fs.writeFileSync(path.join(store, "owners.json"), "{}");
 
 	const q = quitter();
-	const res = await deleteAppBundle({ app: "Yarn.app", appDirs: [apps], root: store, quit: q.quit });
+	const res = await deleteAppBundle({ app: "Yarn.app", appDirs: [apps], root: store, quit: q.quit, home: tmp() });
 
 	assert.deepEqual(q.log, ["Yarn"], "quit first, under the stem name — a live app out of a half-deleted bundle crashes");
 	assert.equal(res.bundle, path.join(apps, "Yarn.app"));
@@ -55,6 +57,31 @@ test("deleteAppBundle__RemovesBundleAndEveryParkedProfile__When__ItExists", asyn
 	assert.match(describeAppDelete(res), /2 parked profile/);
 });
 
+test("deleteAppBundle__RemovesLiveDataAndOwnership__When__TheAppHasASession", async () => {
+	// The orphaned-session half: an app that is gone must not leave a signed-in cookie jar
+	// under ~/Library for a future reinstall to silently adopt, nor an owners.json row
+	// describing directories that no longer exist.
+	const apps = tmp();
+	const store = tmp();
+	const home = tmp();
+	fs.mkdirSync(path.join(apps, "Yarn.app"), { recursive: true });
+	fs.mkdirSync(path.join(home, "Library", "Application Support", "Yarn"), { recursive: true });
+	fs.mkdirSync(path.join(home, "Library", "Caches", "com.yarn.app"), { recursive: true });
+	fs.mkdirSync(path.join(home, "Library", "Application Support", "Chrome"), { recursive: true });
+	fs.mkdirSync(store, { recursive: true });
+	fs.writeFileSync(path.join(store, "owners.json"), JSON.stringify({ yarn: "alice", chrome: "bob" }));
+
+	const res = await deleteAppBundle({ app: "Yarn", appDirs: [apps], root: store, quit: quitter().quit, home, bundleId: "com.yarn.app" });
+
+	assert.deepEqual(res.removedLive.sort(), ["Library/Application Support/Yarn", "Library/Caches/com.yarn.app"]);
+	assert.equal(fs.existsSync(path.join(home, "Library", "Application Support", "Yarn")), false);
+	assert.equal(fs.existsSync(path.join(home, "Library", "Caches", "com.yarn.app")), false);
+	assert.equal(fs.existsSync(path.join(home, "Library", "Application Support", "Chrome")), true, "another app's live data stays");
+	assert.equal(res.ownershipCleared, true);
+	assert.deepEqual(JSON.parse(fs.readFileSync(path.join(store, "owners.json"), "utf8")), { chrome: "bob" });
+	assert.match(describeAppDelete(res), /2 live path/);
+});
+
 test("deleteAppBundle__FallsToTheSecondRoot__When__TheFirstLacksTheBundle", async () => {
 	// The two production roots are /Applications and ~/Applications, in that order — the same
 	// pair the installer writes into when the system-wide one is not writable.
@@ -62,7 +89,7 @@ test("deleteAppBundle__FallsToTheSecondRoot__When__TheFirstLacksTheBundle", asyn
 	const user = tmp();
 	fs.mkdirSync(path.join(user, "Thing.app"), { recursive: true });
 
-	const res = await deleteAppBundle({ app: "Thing", appDirs: [system, user], root: tmp(), quit: quitter().quit });
+	const res = await deleteAppBundle({ app: "Thing", appDirs: [system, user], root: tmp(), quit: quitter().quit, home: tmp() });
 
 	assert.equal(res.bundle, path.join(user, "Thing.app"));
 	assert.equal(fs.existsSync(path.join(user, "Thing.app")), false);
@@ -71,7 +98,7 @@ test("deleteAppBundle__FallsToTheSecondRoot__When__TheFirstLacksTheBundle", asyn
 test("deleteAppBundle__Refuses__When__TheBundleDoesNotExist", async () => {
 	// A refusal, not a no-op: "deleted" answered for a typo hides the miss until a run fails.
 	const q = quitter();
-	await assert.rejects(() => deleteAppBundle({ app: "Ghost", appDirs: [tmp()], root: tmp(), quit: q.quit }), /is not in/);
+	await assert.rejects(() => deleteAppBundle({ app: "Ghost", appDirs: [tmp()], root: tmp(), quit: q.quit, home: tmp() }), /is not in/);
 	assert.deepEqual(q.log, [], "nothing is quit over a bundle that was never there");
 });
 
@@ -81,7 +108,7 @@ test("deleteAppBundle__Refuses__When__ThePathWouldLandUnderSystem", async () => 
 	// the guard — not the presence check — the thing that refuses.
 	const q = quitter();
 	await assert.rejects(
-		() => deleteAppBundle({ app: "Safari", appDirs: ["/System/Applications"], root: tmp(), quit: q.quit }),
+		() => deleteAppBundle({ app: "Safari", appDirs: ["/System/Applications"], root: tmp(), quit: q.quit, home: tmp() }),
 		/\/System is not ours|is not in/,
 	);
 	assert.deepEqual(q.log, [], "the OS's own bundle is never even quit");
@@ -91,7 +118,7 @@ test("deleteAppBundle__SweepsNothing__When__TheProfileStoreDoesNotExistYet", asy
 	const apps = tmp();
 	fs.mkdirSync(path.join(apps, "Yarn.app"), { recursive: true });
 
-	const res = await deleteAppBundle({ app: "Yarn", appDirs: [apps], root: path.join(tmp(), "never-created"), quit: quitter().quit });
+	const res = await deleteAppBundle({ app: "Yarn", appDirs: [apps], root: path.join(tmp(), "never-created"), quit: quitter().quit, home: tmp() });
 
 	assert.deepEqual(res.removedProfiles, []);
 });

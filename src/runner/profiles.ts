@@ -158,6 +158,20 @@ function writeOwners(root: string, owners: OwnerRecord): void {
 	fs.writeFileSync(ownersFile(root), `${JSON.stringify(owners, null, 2)}\n`);
 }
 
+/**
+ * Drop an app's ownership entry, answering whether one existed. For the callers that delete
+ * the live data the entry describes — an owners.json row pointing at directories that are
+ * gone would hand the NEXT swap a manifest of nothing and park the wrong operator's name.
+ */
+export function clearOwner(root: string, slug: string): boolean {
+	const owners = readOwners(root);
+	if (!(slug in owners)) return false;
+	delete owners[slug];
+	writeOwners(root, owners);
+
+	return true;
+}
+
 /** Where one operator's copy of one app lives. Mirrored home-relative, so it reads on disk. */
 export function profileDir(root: string, operator: string, slug: string): string {
 	return path.join(root, sanitise(operator), slug);

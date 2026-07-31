@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { quitApp } from "../appctl.js";
 import { appSlug } from "../paths.js";
-import { profileDir, profilesRoot } from "./profiles.js";
+import { capturePaths, clearOwner, profileDir, profilesRoot } from "./profiles.js";
 
 /**
  * Remove an app from this Mac: the bundle, and every operator's parked profile for it.
@@ -24,10 +24,11 @@ import { profileDir, profilesRoot } from "./profiles.js";
  *
  * Parked profiles go with the bundle for the reason the caller states: an app that is gone
  * should not leave per-operator session data orphaned in the store, silently restored over a
- * future reinstall. The LIVE data under `~/Library` is deliberately left — that is macOS's
- * own uninstall convention (drag to Trash keeps app data), and `authclear` is the verb for
- * data. Ownership in owners.json is likewise kept: it describes the live data, which is
- * still there.
+ * future reinstall. The LIVE data under `~/Library` goes too — on a fleet Mac it is a
+ * session credential for an app nobody can launch any more, and leaving it means a future
+ * reinstall silently comes up signed in as whoever ran last. The ownership entry follows the
+ * data it described. (This is deliberately stricter than macOS's drag-to-Trash convention;
+ * these are shared demo machines, not someone's laptop.)
  */
 
 export interface AppDeleteOptions {
@@ -42,6 +43,13 @@ export interface AppDeleteOptions {
 	root?: string;
 	/** Stop the app before its bundle is deleted. Injected in tests. */
 	quit?: (app: string) => Promise<void>;
+	/**
+	 * The app's bundle id, for finding its `~/Library` data under both naming conventions.
+	 * The CALLER resolves it (serve.ts, via LaunchServices) because resolution needs the
+	 * bundle, and by the time this module wants the id the bundle is gone. Absent is fine —
+	 * the name alone covers the Electron layout, exactly as in profiles.ts.
+	 */
+	bundleId?: string;
 }
 
 export interface AppDelete {
@@ -50,6 +58,10 @@ export interface AppDelete {
 	bundle: string;
 	/** Store-relative parked profiles removed, one per operator: `<operator>/<slug>`. */
 	removedProfiles: string[];
+	/** Home-relative live data removed — the orphaned session, not just the bundle. */
+	removedLive: string[];
+	/** Whether owners.json had an entry for this app to drop. */
+	ownershipCleared: boolean;
 }
 
 /**
@@ -84,6 +96,12 @@ export async function deleteAppBundle(opts: AppDeleteOptions): Promise<AppDelete
 	await (opts.quit ?? quitApp)(name);
 	fs.rmSync(bundle, { recursive: true, force: true });
 
+	// The orphaned live session. capturePaths derives the same constrained ~/Library set the
+	// profile swap moves — nothing wire-supplied reaches this delete. After the quit, so the
+	// app's exit hooks cannot rewrite a cookie jar into a directory mid-removal.
+	const removedLive = capturePaths({ name, ...(opts.bundleId ? { bundleId: opts.bundleId } : {}) }, home);
+	for (const rel of removedLive) fs.rmSync(path.join(home, rel), { recursive: true, force: true });
+
 	// Every operator's parked profile for this app. The store layout is <root>/<operator>/<slug>,
 	// so the sweep is one readdir of the operator directories — owners.json at the root is a
 	// file and drops out of the directory filter.
@@ -103,10 +121,15 @@ export async function deleteAppBundle(opts: AppDeleteOptions): Promise<AppDelete
 		removedProfiles.push(`${op.name}/${slug}`);
 	}
 
-	return { app: name, bundle, removedProfiles };
+	return { app: name, bundle, removedProfiles, removedLive, ownershipCleared: clearOwner(root, slug) };
 }
 
 /** One line for the job log, same shape as `describeSwap`. */
 export function describeAppDelete(d: AppDelete): string {
-	return `appdelete: removed ${d.bundle}${d.removedProfiles.length ? ` and ${d.removedProfiles.length} parked profile(s)` : ""}`;
+	const extras = [
+		d.removedLive.length ? `${d.removedLive.length} live path(s)` : "",
+		d.removedProfiles.length ? `${d.removedProfiles.length} parked profile(s)` : "",
+	].filter(Boolean);
+
+	return `appdelete: removed ${d.bundle}${extras.length ? ` and ${extras.join(" and ")}` : ""}`;
 }

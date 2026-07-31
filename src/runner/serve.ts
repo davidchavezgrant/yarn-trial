@@ -331,7 +331,9 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		(async (app: string, operator: string) => clearOperatorData({ app, operator, bundleId: await resolveBundleId(app) }));
 
 	/** Uninstall an app, injectable for the same reason. */
-	const deleteAppFor = opts.deleteApp ?? ((app: string) => deleteAppBundle({ app }));
+	// Bundle id resolved HERE, not inside deleteAppBundle: LaunchServices needs the bundle to
+	// still exist, and by the time the module wants the id it has already deleted it.
+	const deleteAppFor = opts.deleteApp ?? (async (app: string) => deleteAppBundle({ app, bundleId: await resolveBundleId(app) }));
 
 	/**
 	 * Is the liveview port already taken? A connect that succeeds means a server is up; ECONNREFUSED
@@ -726,7 +728,14 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		}
 		log(describeAppDelete(deleted));
 
-		return { ok: true, app: deleted.app, bundle: deleted.bundle, removedProfiles: deleted.removedProfiles };
+		return {
+			ok: true,
+			app: deleted.app,
+			bundle: deleted.bundle,
+			removedProfiles: deleted.removedProfiles,
+			removedLive: deleted.removedLive,
+			ownershipCleared: deleted.ownershipCleared,
+		};
 	}
 
 	/**

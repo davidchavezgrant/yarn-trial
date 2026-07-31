@@ -656,6 +656,34 @@ test("onLine__FilesEachRunUnderItsOwnApp__When__TwoRunsAreLive", () => {
 	assert.ok(ui.stateFor("Notion Calendar").log.includes("[1] notion step"));
 });
 
+test("onStarted__KeepsTheSharedBuffer__When__TheSameAppStartsOnASecondHost", () => {
+	// Buffers key on the app name, so two same-app runs share one. The second start must not
+	// wipe the first run's transcript mid-flight — clearing is only for a genuinely new pane.
+	const ui = mount();
+	ui.events.started!({ app: "Yarn", task: "t1", host: "mac1" });
+	ui.events.line!({ text: "[1] first run step", app: "Yarn", host: "mac1" });
+	ui.events.started!({ app: "Yarn", task: "t2", host: "mac2" });
+	assert.ok(ui.stateFor("Yarn").log.some((l) => l.includes("[1] first run step")), "the live run's transcript was wiped");
+});
+
+test("onLine__TagsLinesWithTheHost__When__TheSameAppRunsOnTwoHosts", () => {
+	const ui = mount();
+	ui.events.started!({ app: "Yarn", task: "t1", host: "mac1" });
+	ui.events.line!({ text: "solo line", app: "Yarn", host: "mac1" });
+	ui.events.started!({ app: "Yarn", task: "t2", host: "mac2" });
+	ui.events.line!({ text: "shared line", app: "Yarn", host: "mac1" });
+	// The finish line is tagged too — computed before the run leaves the map, or the last
+	// message of a shared buffer would read as the only run the moment it ended.
+	ui.events.done!({ code: 0, elapsed: 5, app: "Yarn", host: "mac1" });
+	ui.events.line!({ text: "back to one", app: "Yarn", host: "mac2" });
+
+	const log = ui.stateFor("Yarn").log;
+	assert.ok(log.includes("solo line"), "a single run's lines must stay untagged");
+	assert.ok(log.includes("[mac1] shared line"), "a shared buffer's lines must name their host");
+	assert.ok(log.some((l) => l.startsWith("[mac1] ■ finished")), "the finish line must carry the tag");
+	assert.ok(log.includes("back to one"), "the tag must retire once the buffer is single again");
+});
+
 test("paintStatus__ListsEveryLiveRun__When__TwoHostsAreBusy", () => {
 	const ui = mount();
 	ui.events.started!({ app: "Yarn", task: "t1", host: "mac1" });
