@@ -56,7 +56,11 @@ export function viewerHtml(token: string): string {
   </div>
   <div id="stage">
     <canvas id="c" class="settling" width="800" height="600"></canvas>
-    <div id="settle" class="on"><div id="spin"></div><div>framing the sign-in window…</div></div>
+    <!-- Spinner only, no caption. "framing the sign-in window…" explained a wait the operator
+         has no decision to make about, and the status line in the bar already carries the
+         state for anyone who wants it. A bare spinner reads as "working" without asking to
+         be read. -->
+    <div id="settle" class="on"><div id="spin"></div></div>
   </div>
 </div>
 <script>
@@ -80,10 +84,9 @@ export function viewerHtml(token: string): string {
   // frame reaching us is already proof it is safe to show.
   let painted = false;
   const settleEl = document.getElementById('settle');
-  const setSettling = (on, label) => {
+  const setSettling = (on) => {
     canvas.classList.toggle('settling', on);
     settleEl.classList.toggle('on', on);
-    if (label) settleEl.lastElementChild.textContent = label;
   };
 
   ws.onopen = () => setStatus('connected — waiting for the first frame');
@@ -112,7 +115,7 @@ export function viewerHtml(token: string): string {
       // settling again). It cannot clear it — only a painted frame does, above: the engine
       // says frames are allowed a moment before one actually arrives, and revealing an empty
       // canvas in that gap is the flash this whole mechanism exists to remove.
-      if (ev.settling) { painted = false; setSettling(true, 'framing the sign-in window…'); setStatus('framing'); }
+      if (ev.settling) { painted = false; setSettling(true); setStatus('framing'); }
       else if (painted) setStatus('live');
     }
     else if (ev.ev === 'auto') { setStatus('pressed \u201c' + ev.pressed + '\u201d for you'); }

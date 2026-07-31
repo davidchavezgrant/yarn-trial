@@ -229,6 +229,33 @@ test("APP_JS__Parses__When__EmittedIntoThePage", () => {
 	assert.doesNotThrow(() => mount());
 });
 
+test("CHROME__DefinesOneSpinner__When__Rendered", () => {
+	// One .spin class, used inline in buttons, in status lines and in list rows. A second
+	// hand-rolled spinner elsewhere is how two of them end up spinning at different speeds.
+	assert.match(CHROME, /\.spin \{/);
+	assert.match(CHROME, /@keyframes spin/);
+	// Decoration, so it must honour the OS setting rather than animate regardless.
+	assert.match(CHROME, /prefers-reduced-motion/);
+});
+
+test("check__ClearsADispatchSpinner__When__TheDispatchEnds", () => {
+	// The spinner is drawn by replacing the button's innerHTML, so something has to put the
+	// label back. check() is where that happens, and it is the ONE exit every dispatch path
+	// shares — success, refusal and throw all route through it — which is what guarantees a
+	// spinner cannot outlive the call that started it.
+	const h = mount();
+	const go = h.nodes.go;
+	go.textContent = "Run";
+	// What dispatchOnce does on the way in.
+	go.dataset.label = go.textContent;
+	go.innerHTML = '<span class="spin"></span>Run';
+
+	h.check();
+
+	assert.equal(go.textContent, "Run", "the label is restored");
+	assert.equal(go.dataset.label, undefined, "and the stash is cleared, so a later paint is not undone twice");
+});
+
 test("CHROME__CarriesTheUrlControls__When__Rendered", () => {
 	// The script addresses these by id; a rename in one place and not the other is silent.
 	for (const id of ["urlrow", "url", "urlhint"]) assert.match(CHROME, new RegExp(`id="${id}"`));

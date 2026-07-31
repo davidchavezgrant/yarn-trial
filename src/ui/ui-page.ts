@@ -79,6 +79,8 @@ export const CHROME = String.raw`<meta charset="utf-8">
   .t-bad { color:var(--bad); }
   .t-meta { color:var(--dim); }
   .empty { color:var(--dim); font-style:italic; }
+  /* A list row that is a status, not a target: no hover, no pointer, nothing to click. */
+  li.loading { color:var(--dim); display:flex; align-items:center; gap:8px; cursor:default; background:none; }
   .run { padding:8px 10px; border:1px solid var(--line); border-radius:8px; margin-bottom:8px; cursor:pointer; }
   .run:hover { border-color:var(--accent); }
   .run .task { font-size:12.5px; color:var(--fg); margin-bottom:4px; }
@@ -92,6 +94,21 @@ export const CHROME = String.raw`<meta charset="utf-8">
   .hrow span { font-size:11px; color:var(--dim); }
   .hfail { font-size:11px; color:var(--bad); margin-top:4px; word-break:break-word; }
   .panehead { display:flex; align-items:center; justify-content:space-between; }
+  /* One spinner, three uses: inline in a button, beside a status line, or centred in a pane.
+     A disabled button and a dead button look identical — the shell already disables during a
+     dispatch, so the only thing missing was evidence that something is happening. currentColor
+     so it inherits whatever it sits in rather than needing a variant per context. */
+  .spin { display:inline-block; width:11px; height:11px; vertical-align:-1px; border:2px solid transparent;
+          border-top-color:currentColor; border-right-color:currentColor; border-radius:50%;
+          animation:spin .7s linear infinite; }
+  .spin.lg { width:20px; height:20px; border-width:2px; }
+  /* Buttons keep their label and gain a spinner before it, so the row does not reflow and the
+     operator can still read what they pressed. */
+  button .spin { margin-right:7px; opacity:.85; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  /* Respect the OS setting: a spinner is decoration, and for anyone who asked for less motion
+     a static ring still reads as "in progress" next to a disabled control. */
+  @media (prefers-reduced-motion: reduce) { .spin { animation:none; opacity:.6; } }
   /* Buttons must read as buttons: dim text on the panel background made every .mini look
      like a passive chip. Full-strength text, a visible raised fill, and a pressed state. */
   .mini { width:auto; padding:3px 10px; font-size:13px; line-height:1.3; color:var(--fg); background:#2a2f3a; border-color:#454c5c; cursor:pointer; }
@@ -202,7 +219,9 @@ export const CHROME = String.raw`<meta charset="utf-8">
              having to be open. Credentials is a SIBLING fold — nesting it in here meant
              finding your API key required knowing it lived "inside the fleet". -->
         <summary>Remote Macs <span id="fleetsum" class="badge r" style="display:none"></span> <button id="fleetrefresh" class="mini" title="Probe every Mac now">↻</button></summary>
-        <div id="fleet"><span class="empty">probing…</span></div>
+        <!-- The first fleet probe is three ssh round trips and can take a few seconds on a cold
+             start; "probing…" alone gave no sign it was still going. -->
+        <div id="fleet"><span class="empty"><span class="spin"></span> probing…</span></div>
       </details>
       <details class="fold" style="margin-top:10px"><summary>Credentials</summary><div id="creds"></div></details>
     </div>
@@ -395,6 +414,11 @@ async function loadApps() {
   // silently repopulates the list with the wrong machine's apps.
   const asked = host;
   el('q').placeholder = 'Searching ' + asked + '…';
+  // Listing a remote Mac's apps is an ssh fan-out ("auto" asks all three). The placeholder
+  // alone left the PREVIOUS host's apps on screen looking current — a spinner in the list is
+  // the only thing that says these entries are stale and something is on its way. Local is
+  // instant and would only flicker, so it is left alone.
+  if (asked !== 'local') el('apps').innerHTML = '<li class="loading"><span class="spin"></span> Listing apps on ' + esc(asked) + '…</li>';
   let res;
   try {
     res = await bus.loadApps(asked);
@@ -403,7 +427,12 @@ async function loadApps() {
     // to say the request died rather than being slow — and the rejection escaped unhandled.
     // Owner is the SELECTION, like the note below: defaulting would file this under whatever
     // app is mid-run, invisibly, instead of the pane the operator is looking at.
-    if (asked === host) { el('q').placeholder = 'Search apps…'; line('✗ listing apps on ' + asked + ': ' + errText(e), sel); }
+    if (asked === host) {
+      el('q').placeholder = 'Search apps…';
+      // Clear the spinner too, or a failed listing spins forever claiming to be in progress.
+      el('apps').innerHTML = '<li class="empty">could not list apps on ' + esc(asked) + '</li>';
+      line('✗ listing apps on ' + asked + ': ' + errText(e), sel);
+    }
 
     return;
   }
@@ -576,6 +605,11 @@ function hintWarning(t) {
 }
 
 function check() {
+  // Clear any dispatch spinner first. check() is what every dispatch path calls on the way out
+  // (success, refusal or throw), so restoring the labels here is what guarantees a spinner
+  // cannot outlive the call that started it — no separate finally block to keep in sync.
+  busyButton(el('go'), false);
+  busyButton(el('ground'), false);
   const t = el('task').value.trim();
   const w = t ? hintWarning(t) : '';
   el('warn').style.display = w ? 'block' : 'none';
@@ -968,7 +1002,11 @@ function renderFleet() {
         '</div>').join('') +
       (r.reason ? '<div class="freason">' + esc(r.reason) + '</div>' : '') +
     '</div>').join('') +
-    (signinMsg ? '<div class="' + (signinMsg.ok ? 'fdetail' : 'freason') + '">' + esc(signinMsg.text) + '</div>' : '');
+    // busy is set only while the action is in flight (ask() clears it by replacing the
+    // message with the verdict), so the spinner marks the difference between "installing…"
+    // still running and an outcome line that happens to read like progress.
+    (signinMsg ? '<div class="' + (signinMsg.ok ? 'fdetail' : 'freason') + '">' +
+      (signinMsg.busy ? '<span class="spin"></span> ' : '') + esc(signinMsg.text) + '</div>' : '');
 
   // Let a sign-in outcome survive two repaints (~30s at the probe cadence) and then retire it.
   if (signinMsg && ++signinMsg.paints >= 3) signinMsg = null;
@@ -1030,7 +1068,10 @@ function renderUnready() {
   box.innerHTML =
     '<div class="umsg">' + esc(unready.app || 'The app') + ' was not at its home screen' + where +
       ', so the run stopped before touching anything. Put it back at its home screen — signing in, if that is what it is asking for — then run again.</div>' +
-    (unready.msg ? '<div class="fdetail">' + esc(unready.msg) + '</div>' : '') +
+    // The busy leg here is a human signing in on another Mac — minutes, not seconds — and the
+    // message alone ("waiting for Yarn to reach home") cannot say whether the wait is still
+    // live or the flow died. The spinner is the liveness.
+    (unready.msg ? '<div class="fdetail">' + (unready.busy ? '<span class="spin"></span> ' : '') + esc(unready.msg) + '</div>' : '') +
     (unready.host && unready.host !== 'local' && !unready.busy
       // Gone, not disabled, while its own flow is in flight: the panel's message narrates
       // the progress, and a visible-but-dead button reads as something else to fix.
@@ -1214,7 +1255,9 @@ async function loadRuns(force) {
       (!r.humanized && (r.renderable || (hs && hs.state))
         ? '<div class="hrow">' +
             (hs && hs.state === 'rendering'
-              ? '<span>rendering cursor…</span>'
+              // An ffmpeg pass over a full recording is tens of seconds with no other signal;
+              // the poll cadence is 4s, so without this the row looks frozen between ticks.
+              ? '<span><span class="spin"></span> rendering cursor…</span>'
               : '<button class="mini" data-render="1">' + (hs && hs.state === 'failed' ? 'Retry render' : 'Render cursor') + '</button>') +
             // The one line the controller kept from the child's output — the diagnosis
             // (missing motion constants, no trajectory turns, no frames), not a stack trace.
@@ -1315,6 +1358,11 @@ async function dispatchOnce(id, send) {
   const b = el(id);
   if (b.disabled) return;
   b.disabled = true;
+  // Dispatching a remote run is an ssh round trip plus a profile swap — seconds during which a
+  // disabled button is indistinguishable from a button that did nothing. The label is kept and
+  // the spinner goes in front of it, so the row neither reflows nor loses what was pressed.
+  // Restored in check(), which every exit path already calls.
+  busyButton(b, true);
   let err;
   try {
     err = await send();
@@ -1325,6 +1373,24 @@ async function dispatchOnce(id, send) {
   }
   if (err) line('✗ ' + err);
   check();
+}
+
+/**
+ * Put a button into (or out of) its working state.
+ *
+ * The original label is stashed on the element rather than recomputed: callers set button text
+ * from several places, and reconstructing it here would be a second source of truth that drifts.
+ * Idempotent — calling it twice does not nest two spinners or lose the label.
+ */
+function busyButton(b, on) {
+  if (!b) return;
+  if (on) {
+    if (b.dataset.label === undefined) b.dataset.label = b.textContent;
+    b.innerHTML = '<span class="spin"></span>' + esc(b.dataset.label);
+  } else if (b.dataset.label !== undefined) {
+    b.textContent = b.dataset.label;
+    delete b.dataset.label;
+  }
 }
 
 el('go').onclick = () => dispatchOnce('go', () =>
@@ -1377,10 +1443,12 @@ el('fleet').addEventListener('click', async (e) => {
   const b = e.target.closest ? e.target.closest('button[data-fact]') : null;
   if (!b || signinBusy) return;
   const mac = b.dataset.mac, act = b.dataset.fact;
-  const say = (ok, text) => { signinMsg = { ok: ok, text: text, paints: 0 }; loadFleet(); };
+  const say = (ok, text, busy) => { signinMsg = { ok: ok, text: text, paints: 0, busy: !!busy }; loadFleet(); };
   const ask = async (progress, send) => {
     signinBusy = mac;
-    say(true, progress);
+    // Every one of these is an ssh round trip to a colo Mac — an install is minutes. The
+    // progress line said WHAT was happening but not that it still was.
+    say(true, progress, true);
     let r;
     try { r = await send(); } catch (err) { r = { ok: false, message: errText(err) }; }
     signinBusy = null;
