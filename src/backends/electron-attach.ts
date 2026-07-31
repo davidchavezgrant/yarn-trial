@@ -310,3 +310,63 @@ export function pickMainPage(pages: PageCandidate[], appName: string): number {
 
 	return best;
 }
+
+/**
+ * The Chrome an OAuth handoff will land in, brought up with a debug port.
+ *
+ * WHY THIS EXISTS (measured on mac3, 2026-07-31). Yarn's "Continue with Google" does not open
+ * a page in its own renderer: the click reaches the main process, which asks macOS to open the
+ * `yarn` deeplink's provider URL externally — the renderer console says `redirectDeeplink yarn`
+ * and nothing else happens in CDP's view. macOS hands that URL to whichever Chrome is ALREADY
+ * RUNNING, and on a colo Mac that was a desktop-session Chrome with no flags. So the login leg
+ * landed in a browser no screencast could attach to, and liveview's endpoint-hopping had
+ * nothing to hop to. Giving the fleet a flagged Chrome — and making it the running one — is
+ * what closes that gap.
+ *
+ * The rules differ from `ensureElectronEndpoint` in one place, deliberately: a portless Chrome
+ * is QUIT and relaunched rather than refused. That function refuses because a running app may
+ * hold the operator's unsaved work; a browser on a fleet Mac holds none, its profile is on
+ * disk, and it is precisely the thing blocking the sign-in. On an operator's own machine this
+ * would be the wrong call, which is why it lives here and not there.
+ *
+ * Idempotent: an already-flagged Chrome is attached to wherever ITS argv says, never relaunched.
+ */
+export async function ensureBrowserEndpoint(opts: { port: number; profileDir: string; bin?: string } ): Promise<{ endpoint: string; port: number; relaunched: boolean }> {
+	const bin = opts.bin ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+	const argv = mainProcessArgv(bin);
+	const declared = argv ? debugPortFromArgv(argv) : undefined;
+
+	if (argv && declared !== undefined) {
+		const endpoint = `http://127.0.0.1:${declared}`;
+		if (await endpointAlive(endpoint, 8, 250)) return { endpoint, port: declared, relaunched: false };
+		// Flag on the argv, nothing listening: a stale ps entry or a Chrome that died mid-boot.
+		// Fall through and replace it rather than reporting an endpoint that does not answer.
+	}
+
+	if (argv) {
+		// The quit that `ensureElectronEndpoint` refuses to do. Chrome reopens its tabs from the
+		// profile, so what a human left on screen survives the relaunch.
+		const { quitApp } = await import("../core/appctl.js");
+		await quitApp("Google Chrome").catch(() => {});
+	}
+
+	fs.mkdirSync(opts.profileDir, { recursive: true });
+	const endpoint = `http://127.0.0.1:${opts.port}`;
+	const child = spawn(
+		bin,
+		[
+			`--remote-debugging-port=${opts.port}`,
+			`--user-data-dir=${opts.profileDir}`,
+			"--no-first-run",
+			"--no-default-browser-check",
+			...KEEP_RENDERING_FLAGS,
+		],
+		{ stdio: "ignore", detached: true },
+	);
+	child.on("error", () => {});
+	child.unref();
+	if (!(await endpointAlive(endpoint, Math.ceil(LAUNCH_TIMEOUT_MS / LAUNCH_POLL_MS), LAUNCH_POLL_MS)))
+		throw new EndpointUnavailableError("port-stripped", `Chrome launched but exposed no debugging endpoint at ${endpoint}`);
+
+	return { endpoint, port: opts.port, relaunched: argv !== undefined };
+}

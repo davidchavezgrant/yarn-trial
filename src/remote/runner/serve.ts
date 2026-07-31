@@ -6,10 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { openApp } from "../../core/appctl.js";
-import { ensureElectronEndpoint } from "../../backends/electron-attach.js";
+import { ensureBrowserEndpoint, ensureElectronEndpoint } from "../../backends/electron-attach.js";
 import { sidecarStatus } from "../../core/axdom.js";
 import { screenIsLocked } from "../../core/harness/observation.js";
-import { dataRoot, resourcesRoot } from "../../paths.js";
+import { dataRoot, outDir, resourcesRoot } from "../../paths.js";
 import { type ChromePolicyState, inspectChromePolicy } from "../chrome-policy.js";
 import { firstLine } from "../control/ssh.js";
 import { listApps } from "../../core/apps.js";
@@ -162,6 +162,19 @@ const LIVEVIEW_FPS = 30;
  */
 const CDP_APP_PORT = 9222;
 
+/**
+ * The debug port the OAuth browser gets — 9777, matching the cdp backend's own web-Chrome
+ * default and the liveview engine's `browserEndpoint` default, so all three agree on where
+ * the browser leg lives without anything being configured.
+ */
+const CDP_BROWSER_PORT = 9777;
+
+/** The flagged Chrome's profile. Persistent and shared with the cdp backend's web runs: a
+ *  human signing into a provider here leaves a session later runs inherit. */
+function browserProfileDir(): string {
+	return `${outDir()}/chrome-profile/${process.env.CDP_PROFILE ?? "yarn-runner"}`;
+}
+
 
 export interface Permissions {
 	accessibility: boolean;
@@ -228,6 +241,11 @@ export interface ServeOptions {
 	 * `--remote-debugging-port` when nothing answers. Injected so the suite launches nothing.
 	 */
 	ensureEndpoint?: (app: string, preferredPort: number) => Promise<{ endpoint: string; port: number }>;
+	/**
+	 * Bring up the OAuth browser's debug endpoint, relaunching a flagless Chrome to do it.
+	 * Injected so the suite neither launches nor QUITS a real browser.
+	 */
+	ensureBrowser?: (opts: { port: number; profileDir: string }) => Promise<{ endpoint: string; port: number; relaunched: boolean }>;
 	/**
 	 * Whether something is already listening on the liveview port. Injected so the "a login is
 	 * already up" branch is testable without binding a real socket.
@@ -375,6 +393,9 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 
 	/** Bring up the app's CDP endpoint, injectable for the same reason as `open`. */
 	const ensureEndpointFor = opts.ensureEndpoint ?? ensureElectronEndpoint;
+
+	/** Bring up the OAuth browser's CDP endpoint. Injectable — it can RELAUNCH Chrome. */
+	const ensureBrowserFor = opts.ensureBrowser ?? ensureBrowserEndpoint;
 
 	/** Sign an operator out, injectable so the suite deletes nothing real. */
 	const clearAuthFor =
@@ -947,6 +968,20 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 				log(`liveview: ${app} listening for CDP on ${endpoint}`);
 			} catch (e) {
 				log(`liveview: no CDP endpoint for ${app} (${(e as Error).message}) — the engine will fall back to window capture`);
+			}
+
+			// And the browser the OAuth leg will land in. Measured on mac3, 2026-07-31: Yarn's
+			// "Continue with Google" hands off through the MAIN process to macOS, which opens the
+			// URL in whichever Chrome is already running — a desktop-session Chrome with no flags,
+			// which no screencast can attach to. Bringing up a flagged one (and making it the
+			// running instance) is what gives the engine's browser leg something to hop to.
+			// Non-fatal for the same reason as above: without it the OAuth page is simply unseen,
+			// which is the state we were already in.
+			try {
+				const browser = await ensureBrowserFor({ port: CDP_BROWSER_PORT, profileDir: browserProfileDir() });
+				log(`liveview: Chrome listening for CDP on ${browser.endpoint}${browser.relaunched ? " (relaunched — it was running without the flag)" : ""}`);
+			} catch (e) {
+				log(`liveview: no CDP endpoint for Chrome (${(e as Error).message}) — an external OAuth leg will not be visible`);
 			}
 		}
 

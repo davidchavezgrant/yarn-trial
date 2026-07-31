@@ -1094,6 +1094,10 @@ const noOpen = {
 	// would open Yarn on the developer's Mac — the same reason `open` is injected at all. The
 	// refusal arm (no endpoint, engine falls back to SCK) is exercised explicitly below.
 	ensureEndpoint: async (_app: string, port: number) => ({ endpoint: `http://127.0.0.1:${port}`, port }),
+	// Stubbed for a sharper reason than `ensureEndpoint`: the real one QUITS a running Chrome
+	// to relaunch it with the debug flag. A suite that left this out would close the
+	// developer's browser mid-test-run.
+	ensureBrowser: async ({ port }: { port: number }) => ({ endpoint: `http://127.0.0.1:${port}`, port, relaunched: false }),
 };
 
 /**
@@ -1355,6 +1359,57 @@ test("liveview__StartsAnyway__When__TheAppExposesNoDebugPort", async () => {
 			const [res] = await request(runner.socketPath, "liveview", { app: "Yarn", operator: "dave" });
 			assert.equal(res.ok, true, String(res.error ?? ""));
 			assert.equal(spawner.envs[0].LIVEVIEW_CDP_URL, undefined);
+		} finally {
+			await runner.close();
+		}
+	});
+});
+
+test("liveview__BringsUpTheOAuthBrowser__When__TheTransportIsCdp", async () => {
+	// The mac3 finding, 2026-07-31: Yarn's Google button hands off through the main process to
+	// macOS, which opens the URL in whatever Chrome is already running — flagless, so the
+	// screencast could not follow the login. The verb now brings up a flagged Chrome too, on
+	// the port the engine's browser leg defaults to.
+	await withTempAsync("yr-serve-", async (dir) => {
+		const ports: number[] = [];
+		const runner = await startRunner(dir, {
+			...noSwap,
+			...noOpen,
+			ensureBrowser: async ({ port }: { port: number }) => {
+				ports.push(port);
+
+				return { endpoint: `http://127.0.0.1:${port}`, port, relaunched: true };
+			},
+			log: () => {},
+			spawn: mkdirSpawner().spawn,
+		});
+		try {
+			const [res] = await request(runner.socketPath, "liveview", { app: "Yarn", operator: "dave", transport: "cdp" });
+			assert.equal(res.ok, true, String(res.error ?? ""));
+			assert.deepEqual(ports, [9777], "the browser leg's default port, shared with the cdp backend's web Chrome");
+		} finally {
+			await runner.close();
+		}
+	});
+});
+
+test("liveview__StartsAnyway__When__TheOAuthBrowserWillNotExposeAPort", async () => {
+	// Same non-fatal rule as the app endpoint: without it the OAuth page is merely unseen,
+	// which is the state every sign-in was in before this existed. Failing the whole sign-in
+	// over it would trade a partial capability for none.
+	await withTempAsync("yr-serve-", async (dir) => {
+		const runner = await startRunner(dir, {
+			...noSwap,
+			...noOpen,
+			ensureBrowser: async () => {
+				throw new Error("Chrome launched but exposed no debugging endpoint");
+			},
+			log: () => {},
+			spawn: mkdirSpawner().spawn,
+		});
+		try {
+			const [res] = await request(runner.socketPath, "liveview", { app: "Yarn", operator: "dave", transport: "cdp" });
+			assert.equal(res.ok, true, String(res.error ?? ""));
 		} finally {
 			await runner.close();
 		}
