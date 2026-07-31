@@ -25,7 +25,7 @@ import { outDir } from "../../paths.js";
  *   lies about three jobs still being in flight.
  */
 
-export type JobKind = "task" | "explore";
+export type JobKind = "task" | "explore" | "replay";
 
 /**
  * `orphaned` is deliberately distinct from `failed`: the run's own exit status is unknown
@@ -47,8 +47,16 @@ export type JobState = "queued" | "running" | "done" | "failed" | "orphaned" | "
 export interface JobArtifacts {
 	/** Combined stdout+stderr of the child. Always present; the child owns this file. */
 	log: string;
-	/** `out/runs/<id>.json`, written by agent.ts. Task runs only. */
+	/** `out/runs/<id>.json`, written by agent.ts (task) or recipe-cli.ts (replay). */
 	runLog?: string;
+	/**
+	 * `out/runs/<id>.journal.jsonl`, the mutation journal a replay appends as it detects
+	 * changes. Listed for replay jobs because the journal is what `npm run cleanup` replays
+	 * after a crash — a pull that left it on the Mac would bring home a run log that says what
+	 * happened and nothing that says what to undo. Absent from the disk when the replay
+	 * changed nothing, which `pull` reports as `missing` rather than failed.
+	 */
+	journal?: string;
 	/** `out/recording/<id>/window.mp4`. Only when the run was submitted with `record`. */
 	recording?: string;
 	/** `docs/appmaps/<slug>.md`, overwritten by a finished grounding pass. Explore only. */
@@ -98,6 +106,20 @@ export interface JobRecord {
 	 */
 	record?: boolean;
 	noVision?: boolean;
+	/** `--backend` on the child argv (task and explore). Absent = the child CLI's own default. */
+	backend?: "ax" | "cdp";
+	/** Vision-only arm: `--no-ax` on the child argv. Task kind only; the agent CLI refuses invalid combos. */
+	noAx?: boolean;
+	/** `AXDOM=0` in the child's environment: the sidecar arm switched off. */
+	axdomOff?: boolean;
+	/** `NO_GROUNDING=1`: the child ignores its appmap — the ungrounded benchmark arm. */
+	noGrounding?: boolean;
+	/** `USE_RECIPE=1`: the child loads the curated docs/recipes/<app>.md notes tier. */
+	useRecipe?: boolean;
+	/** Replay only: the recipe file, relative to the data root — the same key on both machines. */
+	recipe?: string;
+	/** Replay only: `--no-rescue` — a broken step fails the replay, the unattended fleet posture. */
+	noRescue?: boolean;
 	artifacts: JobArtifacts;
 }
 
@@ -114,6 +136,13 @@ export interface JobInit {
 	operator: string;
 	record?: boolean;
 	noVision?: boolean;
+	backend?: "ax" | "cdp";
+	noAx?: boolean;
+	axdomOff?: boolean;
+	noGrounding?: boolean;
+	useRecipe?: boolean;
+	recipe?: string;
+	noRescue?: boolean;
 	/** Accepted behind a held lease: the record starts `queued` and the drain spawns it later. */
 	queued?: boolean;
 }
@@ -132,15 +161,18 @@ const SAFE_ID = /^[A-Za-z0-9._-]+$/;
  * when only one may be in flight at a time.
  */
 export function mintJobId(kind: JobKind, app: string): string {
+	// The same prefixes the child scripts already stamp their artifacts with (explore.ts's
+	// `explore-`, recipe-cli.ts's `replay-`), so the job id and the run key stay one string.
+	const prefix = kind === "task" ? "" : `${kind}-`;
 	// mintRunKey, never runKey: the runner is long-lived and mints an id per job. runKey
 	// returns RUN_STAMP when it is set, and this process sets that variable on every child it
 	// spawns — so a plist or a shell that exported it once would give every job on this Mac
 	// the same id, the same directory and the same log.
-	const id = mintRunKey(kind === "explore" ? "explore-" : "", app);
+	const id = mintRunKey(prefix, app);
 
 	// The last line of defence between a remote operator's `app` string and a path segment.
 	// appSlug is not a security boundary and was never written as one.
-	return SAFE_ID.test(id) ? id : id.replace(/[^A-Za-z0-9._-]/g, "") || mintRunKey(kind === "explore" ? "explore-" : "", "app");
+	return SAFE_ID.test(id) ? id : id.replace(/[^A-Za-z0-9._-]/g, "") || mintRunKey(prefix, "app");
 }
 
 export function jobsDir(): string {
@@ -203,6 +235,13 @@ export function createJob(init: JobInit, root = jobsDir()): JobRecord {
 		...(init.queued ? { queuedAt: now } : {}),
 		...(init.record ? { record: true } : {}),
 		...(init.noVision ? { noVision: true } : {}),
+		...(init.backend ? { backend: init.backend } : {}),
+		...(init.noAx ? { noAx: true } : {}),
+		...(init.axdomOff ? { axdomOff: true } : {}),
+		...(init.noGrounding ? { noGrounding: true } : {}),
+		...(init.useRecipe ? { useRecipe: true } : {}),
+		...(init.recipe ? { recipe: init.recipe } : {}),
+		...(init.noRescue ? { noRescue: true } : {}),
 		artifacts: artifactsFor(id, init),
 	};
 	writeJob(rec, root);
@@ -218,6 +257,14 @@ function artifactsFor(id: string, init: JobInit): JobArtifacts {
 			appmap: `docs/appmaps/${appSlug(init.app)}.md`,
 			appmapGraph: `docs/appmaps/${appSlug(init.app)}.json`,
 			checkpoint: `out/runs/${id}.checkpoint.json`,
+		};
+	// recipe-cli.ts writes exactly these two under the run key: the run log always, the
+	// journal only when a step mutated something (`pull` reads an absent one as `missing`).
+	if (init.kind === "replay")
+		return {
+			log,
+			runLog: `out/runs/${id}.json`,
+			journal: `out/runs/${id}.journal.jsonl`,
 		};
 
 	return {
@@ -269,10 +316,11 @@ export function updateJob(id: string, patch: Partial<JobRecord>, root = jobsDir(
 }
 
 /**
- * Newest first. The id's timestamp portion sorts lexicographically by time, but explore ids
- * carry an `explore-` prefix and `e` outranks every digit — sorted raw, every explore job sat
- * above every task job regardless of age, and `runnerctl logs` on an idle host streamed a
- * week-old explore log. Compare on the timestamp with the prefix stripped; still no stat calls.
+ * Newest first. The id's timestamp portion sorts lexicographically by time, but explore and
+ * replay ids carry a kind prefix and letters outrank every digit — sorted raw, every prefixed
+ * job sat above every task job regardless of age, and `runnerctl logs` on an idle host
+ * streamed a week-old explore log. Compare on the timestamp with the prefix stripped; still
+ * no stat calls.
  */
 export function listJobs(root = jobsDir()): JobRecord[] {
 	let names: string[];
@@ -281,7 +329,7 @@ export function listJobs(root = jobsDir()): JobRecord[] {
 	} catch {
 		return [];
 	}
-	const stamp = (n: string): string => (n.startsWith("explore-") ? n.slice("explore-".length) : n);
+	const stamp = (n: string): string => n.replace(/^(?:explore|replay)-/, "");
 
 	return names
 		.filter((n) => SAFE_ID.test(n))

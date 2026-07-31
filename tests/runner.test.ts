@@ -21,7 +21,7 @@ import {
 import { acquire, adopt, defaultRunnerDir, describeHolder, inspect, type Lease, release } from "../src/remote/runner/lease.js";
 import { childEnv, isPackaged, PACKAGED_ENV, resolveRunCommand, spawnDetached } from "../src/remote/runner/spawn.js";
 import { parseArgs } from "../src/remote/runner/ctl.js";
-import { staleGrants, startRunner } from "../src/remote/runner/serve.js";
+import { staleGrants, startRunner, unsafeRelPath } from "../src/remote/runner/serve.js";
 import { resourcesRoot } from "../src/paths.js";
 import { tempDir, withTemp, withTempAsync } from "./fixtures.js";
 
@@ -202,6 +202,12 @@ test("mintJobId__MatchesTheRunLogStamp__When__AppNameHasSpaces", () => {
 	assert.equal(mintJobId("task", "../../etc").includes("/"), false);
 });
 
+test("mintJobId__CarriesTheReplayPrefix__When__TheJobIsAReplay", () => {
+	// The same prefix recipe-cli.ts stamps its artifacts with (runKey("replay-", …)), so the
+	// job id and the run log/journal share one key exactly like task and explore runs.
+	assert.match(mintJobId("replay", "Yarn"), /^replay-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}(-\d+)?-yarn$/);
+});
+
 test("mintJobId__YieldsDistinctIds__When__TwoAreMintedInTheSameSecond", () => {
 	// The collision the millis precision exists to prevent: a runner dispatching two jobs back
 	// to back would otherwise give both the same id, directory and log.
@@ -242,6 +248,22 @@ test("createJob__ListsTheAppmapGraph__When__TheJobIsAnExplorePass", async () => 
 		const task = createJob({ id: "task-job", kind: "task", app: "Notion Calendar", task: "t", operator: "dave" }, dir);
 		assert.equal(task.artifacts.appmapGraph, undefined);
 		assert.equal(task.artifacts.runLog, "out/runs/task-job.json");
+	});
+});
+
+test("createJob__ListsRunLogAndJournal__When__TheJobIsAReplay", async () => {
+	await withTempAsync("yr-jobs-", async (dir) => {
+		// recipe-cli.ts writes exactly these two under the run key: the run log always, the
+		// journal only when a step mutated something (pull reads an absent one as `missing`).
+		const rec = createJob({ id: "replay-job", kind: "replay", app: "Yarn", task: "", operator: "dave", recipe: "docs/recipes/yarn.abc123.recipe.json", noRescue: true }, dir);
+		assert.equal(rec.artifacts.runLog, "out/runs/replay-job.json");
+		assert.equal(rec.artifacts.journal, "out/runs/replay-job.journal.jsonl");
+		assert.equal(rec.artifacts.appmap, undefined);
+		assert.equal(rec.artifacts.recording, undefined);
+		// The recipe path and the rescue posture are on the record — a queued replay spawns
+		// later, possibly under a restarted runner, and the record is the only carrier.
+		assert.equal(rec.recipe, "docs/recipes/yarn.abc123.recipe.json");
+		assert.equal(rec.noRescue, true);
 	});
 });
 
@@ -418,13 +440,16 @@ test("spawnDetached__WritesChildOutputToItsOwnLog__When__ChildIsDetached", async
 });
 
 /** Records what the runner would have spawned, so a submit can be tested without driving the Mac. */
-function fakeSpawner(): { calls: Array<{ command: string; args: string[] }>; spawn: any } {
+function fakeSpawner(): { calls: Array<{ command: string; args: string[] }>; envs: Array<Record<string, string | undefined>>; spawn: any } {
 	const calls: Array<{ command: string; args: string[] }> = [];
+	const envs: Array<Record<string, string | undefined>> = [];
 
 	return {
 		calls,
-		spawn: (cmd: { command: string; args: string[] }, opts: { logFile: string }) => {
+		envs,
+		spawn: (cmd: { command: string; args: string[] }, opts: { logFile: string; env?: Record<string, string | undefined> }) => {
 			calls.push(cmd);
+			envs.push(opts.env ?? {});
 			fs.appendFileSync(opts.logFile, "pretend agent output\n");
 			// A long-lived stand-in for the agent: alive until the test kills it, which is what
 			// makes the lease it holds a real one.
@@ -797,13 +822,16 @@ test("submit__SaysNothingAboutSignin__When__TheOperatorAlreadyOwnsTheApp", async
  * because the drain only runs when a run actually ENDS and killing detached pids from the
  * test is a race the suite should not have to win.
  */
-function quickSpawner(lifeSec = 0.3): { calls: Array<{ command: string; args: string[] }>; spawn: any } {
+function quickSpawner(lifeSec = 0.3): { calls: Array<{ command: string; args: string[] }>; envs: Array<Record<string, string | undefined>>; spawn: any } {
 	const calls: Array<{ command: string; args: string[] }> = [];
+	const envs: Array<Record<string, string | undefined>> = [];
 
 	return {
 		calls,
-		spawn: (cmd: { command: string; args: string[] }, opts: { logFile: string }) => {
+		envs,
+		spawn: (cmd: { command: string; args: string[] }, opts: { logFile: string; env?: Record<string, string | undefined> }) => {
 			calls.push(cmd);
+			envs.push(opts.env ?? {});
 			fs.appendFileSync(opts.logFile, "pretend agent output\n");
 			const child = spawn("/bin/sh", ["-c", `sleep ${lifeSec}`], { detached: true, stdio: "ignore" });
 			child.unref();
@@ -1302,6 +1330,12 @@ test("submit__IsRejected__When__AFlagArrivesAsSomethingOtherThanABoolean", async
 				{ kind: "task", app: "Yarn", task: "t", noVision: "false" },
 				{ kind: "task", app: "Yarn", task: "t", record: "true" },
 				{ kind: "task", app: "Yarn", task: "t", record: 1 },
+				// The arm flags are read through the same flag() gate as record/noVision.
+				{ kind: "task", app: "Yarn", task: "t", noAx: "true" },
+				{ kind: "task", app: "Yarn", task: "t", axdomOff: "false" },
+				{ kind: "task", app: "Yarn", task: "t", noGrounding: 1 },
+				{ kind: "task", app: "Yarn", task: "t", useRecipe: "yes" },
+				{ kind: "task", app: "Yarn", task: "t", noRescue: 0 },
 				{ kind: "wander", app: "Yarn", task: "t" },
 			];
 			for (const params of bad) {
@@ -1321,6 +1355,234 @@ test("submit__IsRejected__When__AFlagArrivesAsSomethingOtherThanABoolean", async
 			if (ok.pid) try { process.kill(-ok.pid, "SIGKILL"); } catch {}
 		} finally {
 			await runner.close();
+		}
+	});
+});
+
+test("submit__CarriesTheArmFlagsToTheChild__When__BenchmarkOptionsAreSet", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const prevData = process.env.YARN_RUNNER_DATA;
+		process.env.YARN_RUNNER_DATA = dir;
+		const spawner = fakeSpawner();
+		const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
+		let pid = 0;
+		try {
+			const [res] = await request(runner.socketPath, "submit", {
+				kind: "task",
+				app: "Yarn",
+				task: "show me how to change the cursor type",
+				operator: "dave",
+				backend: "cdp",
+				noAx: true,
+				axdomOff: true,
+				noGrounding: true,
+				useRecipe: true,
+			});
+			assert.equal(res.ok, true, String(res.error ?? ""));
+			pid = res.pid;
+
+			// Flags become argv; env arms become env — the same split the local CLI uses.
+			const args = spawner.calls[0].args;
+			assert.deepEqual(args.slice(args.indexOf("--backend")), ["--backend", "cdp"]);
+			assert.equal(args.includes("--no-ax"), true);
+			const env = spawner.envs[0];
+			assert.equal(env.AXDOM, "0");
+			assert.equal(env.NO_GROUNDING, "1");
+			assert.equal(env.USE_RECIPE, "1");
+			// And they are persisted: the record is the only carrier for a queued job.
+			const rec = readJob(res.jobId);
+			assert.equal(rec?.backend, "cdp");
+			assert.equal(rec?.noAx, true);
+			assert.equal(rec?.axdomOff, true);
+			assert.equal(rec?.noGrounding, true);
+			assert.equal(rec?.useRecipe, true);
+		} finally {
+			if (pid) try { process.kill(-pid, "SIGKILL"); } catch {}
+			await runner.close();
+			if (prevData === undefined) delete process.env.YARN_RUNNER_DATA;
+			else process.env.YARN_RUNNER_DATA = prevData;
+		}
+	});
+});
+
+test("submit__LeavesArgvAndEnvClean__When__NoArmFlagIsSet", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const spawner = fakeSpawner();
+		const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
+		let pid = 0;
+		try {
+			const [res] = await request(runner.socketPath, "submit", { kind: "task", app: "Yarn", task: "t", operator: "dave" });
+			assert.equal(res.ok, true);
+			pid = res.pid;
+			// Absent means absent: no --backend pair for the child CLI to read a default out of,
+			// and no arm variable set to a value that would switch a channel off.
+			assert.equal(spawner.calls[0].args.includes("--backend"), false);
+			assert.equal(spawner.calls[0].args.includes("--no-ax"), false);
+			const env = spawner.envs[0];
+			assert.equal(env.AXDOM, undefined);
+			assert.equal(env.NO_GROUNDING, undefined);
+			assert.equal(env.USE_RECIPE, undefined);
+		} finally {
+			if (pid) try { process.kill(-pid, "SIGKILL"); } catch {}
+			await runner.close();
+		}
+	});
+});
+
+test("submit__PutsTheBackendOnTheExploreArgv__When__TheKindIsExplore", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const spawner = fakeSpawner();
+		const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
+		let pid = 0;
+		try {
+			const [res] = await request(runner.socketPath, "submit", { kind: "explore", app: "Yarn", operator: "dave", backend: "cdp" });
+			assert.equal(res.ok, true, String(res.error ?? ""));
+			pid = res.pid;
+			const args = spawner.calls[0].args;
+			assert.equal(args.includes("src/core/explore.ts"), true);
+			assert.deepEqual(args.slice(-3), ["Yarn", "--backend", "cdp"]);
+		} finally {
+			if (pid) try { process.kill(-pid, "SIGKILL"); } catch {}
+			await runner.close();
+		}
+	});
+});
+
+test("submit__IsRejected__When__TheBackendIsOutsideTheVocabulary", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const spawner = fakeSpawner();
+		const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
+		try {
+			// "dom" was a backend once; it is deleted, and a stale client asking for it must get
+			// a refusal it can read rather than a child dying on a usage error in the job log.
+			for (const backend of ["dom", "chrome", 7, ""]) {
+				const [res] = await request(runner.socketPath, "submit", { kind: "task", app: "Yarn", task: "t", operator: "dave", backend });
+				assert.equal(res.ok, false, `${JSON.stringify(backend)} should be refused`);
+				assert.match(String(res.error), /backend must be/);
+				assert.equal(inspect(dir).holder, undefined, `${JSON.stringify(backend)} left the lease held`);
+			}
+			assert.equal(spawner.calls.length, 0);
+		} finally {
+			await runner.close();
+		}
+	});
+});
+
+test("unsafeRelPath__NamesTheProblem__When__ThePathBreaksDiscipline", () => {
+	// The recipe path arrives over a socket and is resolved against the data root; each
+	// refusal names its rule so a stale client's error is actionable from the dispatch log.
+	assert.match(unsafeRelPath("/etc/passwd") ?? "", /absolute/);
+	assert.match(unsafeRelPath("docs//recipes/x.json") ?? "", /absolute paths and doubled slashes/);
+	assert.match(unsafeRelPath("../secrets.json") ?? "", /traversal/);
+	assert.match(unsafeRelPath("docs/recipes/../../x.json") ?? "", /traversal/);
+	assert.match(unsafeRelPath("docs/recipes/$(id).json") ?? "", /characters outside/);
+	assert.match(unsafeRelPath("docs/recipes/a b.json") ?? "", /characters outside/);
+	assert.equal(unsafeRelPath("docs/recipes/www.wikipedia.org.bdf46c21.recipe.json"), undefined);
+	assert.equal(unsafeRelPath("x.json"), undefined);
+});
+
+test("submit__RefusesTheReplay__When__TheRecipePathIsUnsafeOrAbsent", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const prevData = process.env.YARN_RUNNER_DATA;
+		process.env.YARN_RUNNER_DATA = dir;
+		const spawner = fakeSpawner();
+		const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
+		try {
+			const cases: Array<[unknown, RegExp]> = [
+				[undefined, /needs a recipe path/],
+				["", /needs a recipe path/],
+				["/etc/passwd", /unsafe recipe path/],
+				["../outside.recipe.json", /unsafe recipe path/],
+				// Disciplined path, no file: a clear refusal beats a child that dies instantly.
+				["docs/recipes/ghost.recipe.json", /no recipe at/],
+			];
+			for (const [recipe, expected] of cases) {
+				const [res] = await request(runner.socketPath, "submit", { kind: "replay", app: "Yarn", operator: "dave", ...(recipe === undefined ? {} : { recipe }) });
+				assert.equal(res.ok, false, `${JSON.stringify(recipe)} should be refused`);
+				assert.match(String(res.error), expected);
+				assert.equal(inspect(dir).holder, undefined, `${JSON.stringify(recipe)} left the lease held`);
+			}
+			assert.equal(spawner.calls.length, 0);
+		} finally {
+			await runner.close();
+			if (prevData === undefined) delete process.env.YARN_RUNNER_DATA;
+			else process.env.YARN_RUNNER_DATA = prevData;
+		}
+	});
+});
+
+test("submit__SpawnsRecipeCliWithTheResolvedPath__When__TheKindIsReplay", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const prevData = process.env.YARN_RUNNER_DATA;
+		process.env.YARN_RUNNER_DATA = dir;
+		const spawner = fakeSpawner();
+		const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
+		let pid = 0;
+		try {
+			const rel = "docs/recipes/yarn.abc123.recipe.json";
+			fs.mkdirSync(path.join(dir, "docs", "recipes"), { recursive: true });
+			fs.writeFileSync(path.join(dir, rel), JSON.stringify({ version: 1, task: "t", app: "Yarn", slug: "yarn", backend: "ax", compiledFrom: "x", compiledAt: "2026-07-31T00:00:00.000Z", steps: [] }));
+
+			const [res] = await request(runner.socketPath, "submit", { kind: "replay", app: "Yarn", operator: "dave", recipe: rel, noRescue: true });
+			assert.equal(res.ok, true, String(res.error ?? ""));
+			pid = res.pid;
+			assert.match(res.jobId, /^replay-.*-yarn$/);
+			assert.equal(res.artifacts.runLog, `out/runs/${res.jobId}.json`);
+			assert.equal(res.artifacts.journal, `out/runs/${res.jobId}.journal.jsonl`);
+
+			// recipe-cli's replay verb, with the recipe resolved against THIS Mac's data root.
+			const args = spawner.calls[0].args;
+			assert.equal(args.includes("src/core/recipe-cli.ts"), true);
+			assert.deepEqual(args.slice(args.indexOf("replay")), ["replay", path.join(dir, rel), "--no-rescue"]);
+			// The job id reaches the child as RUN_STAMP, so the replay's artifacts land on it.
+			assert.equal(spawner.envs[0].RUN_STAMP, res.jobId);
+		} finally {
+			if (pid) try { process.kill(-pid, "SIGKILL"); } catch {}
+			await runner.close();
+			if (prevData === undefined) delete process.env.YARN_RUNNER_DATA;
+			else process.env.YARN_RUNNER_DATA = prevData;
+		}
+	});
+});
+
+test("drain__CarriesTheArmFlags__When__AQueuedJobStartsAfterTheHostFrees", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const prevData = process.env.YARN_RUNNER_DATA;
+		process.env.YARN_RUNNER_DATA = dir;
+		const spawner = quickSpawner();
+		const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
+		try {
+			const [first] = await request(runner.socketPath, "submit", { kind: "task", app: "Yarn", task: "t", operator: "dave" });
+			assert.equal(first.ok, true);
+			const [second] = await request(runner.socketPath, "submit", {
+				kind: "task",
+				app: "Yarn",
+				task: "show me how to change the cursor type",
+				operator: "sam",
+				queue: true,
+				backend: "cdp",
+				noAx: true,
+				axdomOff: true,
+				noGrounding: true,
+				useRecipe: true,
+			});
+			assert.equal(second.queued, true);
+
+			// The drain spawns from the RECORD, not from anything held in memory — this is the
+			// queued→drained lifecycle the persistence exists for.
+			await waitFor("the queued job to start", () => spawner.calls.length === 2, 10_000);
+			const args = spawner.calls[1].args;
+			assert.deepEqual(args.slice(args.indexOf("--backend")), ["--backend", "cdp"]);
+			assert.equal(args.includes("--no-ax"), true);
+			const env = spawner.envs[1];
+			assert.equal(env.AXDOM, "0");
+			assert.equal(env.NO_GROUNDING, "1");
+			assert.equal(env.USE_RECIPE, "1");
+			await waitFor("the drained job to finish", () => readJob(second.jobId)?.state === "done", 10_000);
+		} finally {
+			await runner.close();
+			if (prevData === undefined) delete process.env.YARN_RUNNER_DATA;
+			else process.env.YARN_RUNNER_DATA = prevData;
 		}
 	});
 });

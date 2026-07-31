@@ -117,6 +117,24 @@ function withProfileLock<T>(fn: () => Promise<T>): Promise<T> {
 	return r;
 }
 
+/**
+ * Why a relative path from the wire is refused, or undefined when it is safe to resolve
+ * against the data root. The per-segment alphabet is SAFE_ID's (jobs.ts) — job ids are the
+ * precedent for socket-supplied path material — with `/` allowed only as the separator, so
+ * an absolute path (empty first segment), a `..` hop and a smuggled special character are
+ * each named rather than collapsing into one opaque refusal.
+ */
+export function unsafeRelPath(p: string): string | undefined {
+	const segments = p.split("/");
+	for (const s of segments) {
+		if (!s) return "empty path segment (absolute paths and doubled slashes are refused)";
+		if (s === "." || s === "..") return "path traversal is refused";
+		if (!/^[A-Za-z0-9._-]+$/.test(s)) return `segment ${JSON.stringify(s)} carries characters outside [A-Za-z0-9._-]`;
+	}
+
+	return undefined;
+}
+
 /** Fixed port for the liveview server, so the runner and the operator's `ssh -L` agree without a round trip. */
 const LIVEVIEW_PORT = 7682;
 /**
@@ -456,18 +474,38 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		}
 		log(`job ${id}: ${describeSwap(swap)}`);
 
-		const script = kind === "explore" ? "src/core/explore.ts" : "src/core/agent.ts";
+		const script = kind === "explore" ? "src/core/explore.ts" : kind === "replay" ? "src/core/recipe-cli.ts" : "src/core/agent.ts";
 		const base = resolveRunCommand(script);
+		// `--backend` rides both the task and the explore argv; every further rule about the
+		// combination (e.g. --no-ax outside the ax backend) belongs to the child CLI, which
+		// refuses invalid ones itself — a second copy of its validation here would drift.
+		const backendArgs = rec.backend ? ["--backend", rec.backend] : [];
 		const runArgs =
 			kind === "explore"
-				? [app]
-				: [task, app, ...(rec.record ? ["--record"] : []), ...(rec.noVision ? ["--no-vision"] : [])];
+				? [app, ...backendArgs]
+				: kind === "replay"
+					// The recipe path was validated relative at submit time; the child resolves
+					// paths against its cwd (the resources root), so hand it the data-root form.
+					? ["replay", path.join(dataRoot(), rec.recipe ?? ""), ...(rec.noRescue ? ["--no-rescue"] : [])]
+					: [task, app, ...(rec.record ? ["--record"] : []), ...(rec.noVision ? ["--no-vision"] : []), ...(rec.noAx ? ["--no-ax"] : []), ...backendArgs];
 
 		let spawned: Spawned;
 		try {
 			spawned = spawnRun(
 				{ command: base.command, args: [...base.args, ...runArgs] },
-				{ logFile: logPath(id, root), env: childEnv({ runnerDir, stamp: id }), cwd: resourcesRoot() },
+				{
+					logFile: logPath(id, root),
+					// Arm variables layer on top of childEnv's output rather than inside it:
+					// childEnv is the launchd-survival kit every child shares, and these are
+					// per-job measurement inputs read straight off the persisted record.
+					env: {
+						...childEnv({ runnerDir, stamp: id }),
+						...(rec.axdomOff ? { AXDOM: "0" } : {}),
+						...(rec.noGrounding ? { NO_GROUNDING: "1" } : {}),
+						...(rec.useRecipe ? { USE_RECIPE: "1" } : {}),
+					},
+					cwd: resourcesRoot(),
+				},
 			);
 		} catch (e) {
 			// A failed spawn must not strand the host. This is the one path where the lease is
@@ -564,9 +602,9 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 	}
 
 	async function submit(params: Params): Promise<RunnerResponse> {
-		if (params.kind !== undefined && params.kind !== "explore" && params.kind !== "task")
-			return { ok: false, error: `kind must be "task" or "explore", got ${JSON.stringify(params.kind)}` };
-		const kind: JobKind = params.kind === "explore" ? "explore" : "task";
+		if (params.kind !== undefined && params.kind !== "explore" && params.kind !== "task" && params.kind !== "replay")
+			return { ok: false, error: `kind must be "task", "explore" or "replay", got ${JSON.stringify(params.kind)}` };
+		const kind: JobKind = params.kind === "explore" || params.kind === "replay" ? params.kind : "task";
 		const app = String(params.app ?? "").trim();
 		// Verbatim, start to finish. `auditTaskPrompt` in agent.ts is the authoritative gate
 		// and refuses a hinted prompt there (exit 2, visible in the job log); rewriting or
@@ -581,12 +619,63 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		// a validation branch that forgets to leaves the Mac permanently busy with no run on it.
 		const record = flag(params, "record");
 		const noVision = flag(params, "noVision");
+		const noAx = flag(params, "noAx");
+		const axdomOff = flag(params, "axdomOff");
+		const noGrounding = flag(params, "noGrounding");
+		const useRecipe = flag(params, "useRecipe");
+		const noRescue = flag(params, "noRescue");
 		const queue = flag(params, "queue");
 		if (typeof record !== "boolean") return record;
 		if (typeof noVision !== "boolean") return noVision;
+		if (typeof noAx !== "boolean") return noAx;
+		if (typeof axdomOff !== "boolean") return axdomOff;
+		if (typeof noGrounding !== "boolean") return noGrounding;
+		if (typeof useRecipe !== "boolean") return useRecipe;
+		if (typeof noRescue !== "boolean") return noRescue;
 		if (typeof queue !== "boolean") return queue;
 
+		// Fixed vocabulary, like `kind`: anything else in this field is a client trying to put
+		// text on the child's argv, and the child CLI's own usage error would only be visible in
+		// the job log after the lease was already spent.
+		if (params.backend !== undefined && params.backend !== "ax" && params.backend !== "cdp")
+			return { ok: false, error: `backend must be "ax" or "cdp", got ${JSON.stringify(params.backend)}` };
+		const backend = params.backend as "ax" | "cdp" | undefined;
+
+		// A replay names its recipe as a data-root-relative path — the same key the file has on
+		// every machine. Checked for path discipline AND presence here: a missing recipe would
+		// otherwise cost the operator a lease, a profile swap and a child that dies on its first
+		// read, with the reason buried in the job log.
+		let recipe: string | undefined;
+		if (kind === "replay") {
+			if (typeof params.recipe !== "string" || !params.recipe)
+				return { ok: false, error: "a replay needs a recipe path (relative to the data root)" };
+			recipe = params.recipe;
+			const bad = unsafeRelPath(recipe);
+			if (bad) return { ok: false, error: `unsafe recipe path ${JSON.stringify(recipe)}: ${bad}` };
+			if (!fs.existsSync(path.join(dataRoot(), recipe)))
+				return { ok: false, error: `no recipe at ${recipe} on this Mac — sync recipes before dispatching a replay` };
+		}
+
 		const id = mintJobId(kind, app);
+		// One init for both the queued and the immediate path: a queued job spawns later —
+		// possibly under a restarted runner — so the record is the only carrier of the options,
+		// and two literals here would be two lists to keep identical.
+		const init = {
+			id,
+			kind,
+			app,
+			task,
+			operator,
+			record,
+			noVision,
+			noAx,
+			axdomOff,
+			noGrounding,
+			useRecipe,
+			noRescue,
+			...(backend !== undefined ? { backend } : {}),
+			...(recipe !== undefined ? { recipe } : {}),
+		};
 		const claim = acquire(
 			{ jobId: id, operator, kind, app, startedAt: new Date().toISOString(), pid: process.pid },
 			runnerDir,
@@ -608,7 +697,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 					elapsedSec: claim.holder.heldSec,
 				};
 
-			const job = createJob({ id, kind, app, task, operator, record, noVision, queued: true }, root);
+			const job = createJob({ ...init, queued: true }, root);
 			// 1-based place in the drain order. Ids are minted here, monotonic within this
 			// process, and the drain serves oldest-first — so the index is the wait.
 			const position = listQueued(root).findIndex((q) => q.id === id) + 1;
@@ -638,7 +727,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		// alive, so reap() never reclaims it and the host stays busy until a runner restart.
 		let job: JobRecord;
 		try {
-			job = createJob({ id, kind, app, task, operator, record, noVision }, root);
+			job = createJob(init, root);
 		} catch (e) {
 			release(runnerDir, id);
 			throw e;
