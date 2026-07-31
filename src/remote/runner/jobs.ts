@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { appSlug } from "../../paths.js";
+import { targetSlug } from "../../core/target.js";
 import { mintRunKey } from "../../core/harness/run.js";
 import { readJsonOr } from "../../fsutil.js";
 import { outDir } from "../../paths.js";
@@ -269,13 +270,29 @@ export function createJob(init: JobInit, root = jobsDir()): JobRecord {
 
 function artifactsFor(id: string, init: JobInit): JobArtifacts {
 	const log = `out/jobs/${id}/log.txt`;
-	if (init.kind === "explore")
+	if (init.kind === "explore") {
+		// The slug MUST match what the pass itself writes, and for a web target appSlug does
+		// not: explore/state.ts names its output with targetSlug(), which is `web-<host>` for a
+		// URL — `web-app.notion.com` — while appSlug over the raw URL gives
+		// `https-app.notion.com`. The two disagreed silently, so a completed 369-action Notion
+		// pass was collected as "orphaned — no appmap", and phase 2's web-grounded arm would
+		// then have run with no grounding at all while looking like a grounded arm.
+		//
+		// Reconstructing the target from the record rather than importing the resolver: a job
+		// record carries `url` exactly when the run was a web target, which is the same fact
+		// the resolver branches on.
+		// `origin` is required by the Target type but unread by targetSlug, which derives the
+		// slug from the URL's host. Deriving it here anyway keeps the value honest rather than
+		// passing a placeholder that a future reader would trust.
+		const slug = init.url ? targetSlug({ kind: "web", url: init.url, origin: new URL(init.url).origin }) : appSlug(init.app);
+
 		return {
 			log,
-			appmap: `docs/appmaps/${appSlug(init.app)}.md`,
-			appmapGraph: `docs/appmaps/${appSlug(init.app)}.json`,
+			appmap: `docs/appmaps/${slug}.md`,
+			appmapGraph: `docs/appmaps/${slug}.json`,
 			checkpoint: `out/runs/${id}.checkpoint.json`,
 		};
+	}
 	// recipe-cli.ts writes exactly these two under the run key: the run log always, the
 	// journal only when a step mutated something (`pull` reads an absent one as `missing`).
 	if (init.kind === "replay")

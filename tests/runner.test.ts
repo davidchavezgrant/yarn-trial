@@ -26,7 +26,7 @@ import {
 import { acquire, adopt, defaultRunnerDir, describeHolder, inspect, type Lease, release } from "../src/remote/runner/lease.js";
 import { childEnv, isPackaged, PACKAGED_ENV, resolveRunCommand, spawnDetached } from "../src/remote/runner/spawn.js";
 import { parseArgs } from "../src/remote/runner/ctl.js";
-import { staleGrants, startRunner, unsafeRelPath } from "../src/remote/runner/serve.js";
+import { staleGrants, startRunner, unsafeRelPath, passErrored } from "../src/remote/runner/serve.js";
 import { resourcesRoot } from "../src/paths.js";
 import { tempDir, withTemp, withTempAsync } from "./fixtures.js";
 
@@ -2205,5 +2205,66 @@ test("startRunner__RefusesTheRequest__When__ItGrowsWithoutANewline", async () =>
 		} finally {
 			await runner.close();
 		}
+	});
+});
+
+test("passErrored__GradesTheRunNotTheProcess__When__AFailedPassExitsCleanly", () => {
+	// The mismatch this closes: an explore that throws still salvages its findings and exits
+	// 0, so the job read `done` while the pass's own last line read `stopped: error`. Both
+	// David and I misread a 162-action run that quit the app it was exploring as a success on
+	// 2026-07-31, because the fleet panel grades the process.
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "passerr-"));
+	try {
+		const write = (name: string, body: string): string => {
+			const f = path.join(dir, name);
+			fs.writeFileSync(f, body);
+
+			return f;
+		};
+		// Each marker a failing pass can leave, all of them at the END of the file.
+		for (const marker of ["stopped: error | controls: 65 actuated", "exploration threw after 162 actions: ...", "explore failed: browserType.connectOverCDP"]) {
+			assert.equal(passErrored(write(`${marker.slice(0, 8)}.log`, `[1] fine\n[2] fine\n${marker}\n`)), true, marker);
+		}
+		// A pass that ended on its own terms is not touched.
+		assert.equal(passErrored(write("ok.log", "[1] fine\nstopped: frontier-empty | controls: 55 actuated\n")), false);
+		// `stopped: error` must be anchored: a NOTE mentioning the phrase mid-line is not a verdict.
+		assert.equal(passErrored(write("note.log", "note: the button showed stopped: error to the user\nstopped: frontier-empty\n")), false);
+		// Unreadable means no verdict — the exit code decides, because a grading helper must
+		// never be the thing that fails a healthy run.
+		assert.equal(passErrored(path.join(dir, "does-not-exist.log")), false);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("passErrored__ReadsTheTail__When__TheLogIsLarge", () => {
+	// Explore logs run to megabytes and the markers are always last, so only the tail is read.
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "passerr-big-"));
+	try {
+		const f = path.join(dir, "big.log");
+		fs.writeFileSync(f, `${"x".repeat(200_000)}\nstopped: error | controls: 1 actuated\n`);
+		assert.equal(passErrored(f), true);
+		// And a marker buried far ABOVE the tail window is not found — acceptable, because the
+		// real ones are written at the end. Stated so the limit is a decision, not a surprise.
+		fs.writeFileSync(f, `stopped: error\n${"x".repeat(200_000)}\nstopped: frontier-empty\n`);
+		assert.equal(passErrored(f), false);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("createJob__NamesTheAppmapTheWayTheExploreWritesIt__When__TheTargetIsAWebUrl", async () => {
+	// The slug must match explore/state.ts, which uses targetSlug(): `web-<host>`. appSlug over
+	// the raw URL gives `https-app.notion.com` instead, and the two disagreed silently — a
+	// completed 369-action Notion pass collected as "orphaned — no appmap", which would then
+	// have left phase 2's web-grounded arm ungrounded while still labelled grounded.
+	await withTempAsync("yr-jobs-", async (dir) => {
+		const web = createJob({ id: "explore-web", kind: "explore", app: "https://app.notion.com", url: "https://app.notion.com", task: "", operator: "dave" }, dir);
+		assert.equal(web.artifacts.appmap, "docs/appmaps/web-app.notion.com.md");
+		assert.equal(web.artifacts.appmapGraph, "docs/appmaps/web-app.notion.com.json");
+
+		// An app target is unchanged — it never went through URL slugging.
+		const app = createJob({ id: "explore-app", kind: "explore", app: "Yarn", task: "", operator: "dave" }, dir);
+		assert.equal(app.artifacts.appmap, "docs/appmaps/yarn.md");
 	});
 });

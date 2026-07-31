@@ -112,6 +112,36 @@ const MAX_REQUEST_BYTES = 1 << 20;
  */
 let profileSwapChain: Promise<unknown> = Promise.resolve();
 
+/**
+ * Did the run declare its OWN failure, whatever its exit code said?
+ *
+ * An explore that throws still salvages its findings and exits 0, so the process looks clean
+ * while the pass's own last lines say otherwise. Grading on exit code alone therefore files a
+ * failed pass as `done` — which is how a 162-action run that quit the app it was exploring
+ * came to sit in the fleet panel looking like a success next to a genuine one.
+ *
+ * Reads only the TAIL: these markers are written at the end, and a long explore log runs to
+ * megabytes. Any read error means no verdict, so the exit code decides — a grading helper must
+ * never be the thing that fails a healthy run.
+ */
+export function passErrored(file: string): boolean {
+	try {
+		const fd = fs.openSync(file, "r");
+		try {
+			const size = fs.fstatSync(fd).size;
+			const span = Math.min(size, 8192);
+			const buf = Buffer.alloc(span);
+			fs.readSync(fd, buf, 0, span, size - span);
+
+			return /^stopped: error|exploration threw|explore failed:/m.test(buf.toString("utf8"));
+		} finally {
+			fs.closeSync(fd);
+		}
+	} catch {
+		return false;
+	}
+}
+
 function withProfileLock<T>(fn: () => Promise<T>): Promise<T> {
 	const r = profileSwapChain.then(fn, fn);
 	profileSwapChain = r.then(() => undefined, () => undefined);
@@ -574,7 +604,13 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			// arrives as a signal, and filing those under an operator stop hides the crash; an
 			// unrequested signal is a failure, with the signal's name kept in the record.
 			const stopped = stopping.has(id);
-			finalise(id, stopped ? "stopped" : code === 0 ? "done" : "failed", code, signal ?? undefined);
+			// Exit code grades the PROCESS; the pass grades ITSELF. They disagree whenever a run
+			// fails and then cleans up successfully — an explore that threw still salvages its
+			// findings and exits 0, so the job read `done` while its own last line read
+			// `stopped: error`. Two people misread that as a completed pass on 2026-07-31, and a
+			// GUI showing it green is worse than useless.
+			const clean = code === 0 && !passErrored(logPath(id, root));
+			finalise(id, stopped ? "stopped" : clean ? "done" : "failed", code, signal ?? undefined);
 		});
 		log(`job ${id} started: ${kind} ${app} (pid ${spawned.pid}, operator ${operator})`);
 
