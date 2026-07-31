@@ -243,10 +243,13 @@ function stripVolatile(args: Record<string, unknown>): Record<string, unknown> {
 }
 
 function surfaceOf(s: StepRecord): string | undefined {
-	// StepRecord does not carry the target's surface today; absent means "resolve by name
-	// and role alone". Kept as a field so a future recording that captures it tightens
-	// resolution without a format change.
-	return (s as any).targetSurface;
+	// Typed, not cast. The `as any` this replaces is the whole reason the field went unwritten
+	// for months: the read compiled fine against a StepRecord that had no such property, so
+	// nothing flagged that step.ts never set it. Every recipe compiled in that window has
+	// targets with name+role only, which resolve ambiguously on any app with two same-named
+	// controls — the failure is safe (an error, never a wrong click) and therefore silent.
+	// Absent still means "resolve by name and role alone", which is what old recipes carry.
+	return s.targetSurface;
 }
 
 function slugOf(runLog: Record<string, any>, stamp: string): string {

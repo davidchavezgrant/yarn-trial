@@ -66,6 +66,17 @@ export interface StepRecord {
 	/** That control's name as the model saw it, so channel attribution can be read per step. */
 	targetName?: string;
 	/**
+	 * The control's nearest named ancestor — which panel, menu or document it sat in.
+	 *
+	 * Recorded for RECIPE REPLAY, which re-resolves a step's target by (name, surface, role)
+	 * against a fresh observation. Name and role alone cannot separate two same-named controls
+	 * — the dual-scope trap this repo measures on Yarn, where 10 settings exist at both brand
+	 * and document scope — so without the surface a recipe on such an app resolves ambiguously
+	 * and errors out rather than replaying. It failed SAFE, which is why it went unnoticed:
+	 * `surfaceOf()` in src/core/recipe.ts read this field for months before anything wrote it.
+	 */
+	targetSurface?: string;
+	/**
 	 * Which channel NAMED the control this step operated: an AX label, the DOM descriptor
 	 * (axdom sidecar — the control is anonymous in bare AX), or neither ("none": addressed by
 	 * handle or coordinate with no name at all). Absent when no element was resolved. This is

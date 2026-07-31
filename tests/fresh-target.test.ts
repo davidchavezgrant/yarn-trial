@@ -212,3 +212,61 @@ test("Verify__StillRuns__When__DriverReportsIncompleteDelivery", async () => {
 	assert.match(resultText, /Driver warning \(advisory\)/);
 	assert.match(resultText, /Verification: PASSED/);
 });
+
+test("executeAction__RecordsTheTargetSurface__When__TheElementHasOne", async () => {
+	// The write half of recipe replay's dual-scope disambiguation. Tested HERE rather than
+	// against a StepRecord fixture because the fixture is what let this ship broken: recipe.ts
+	// read `targetSurface` through an `as any`, compileRecipe's tests handed it one directly,
+	// and nothing checked that a real step ever produced the field. It did not, for months.
+	const el = (over: Partial<InteractiveElement> = {}): InteractiveElement => ({
+		handle: 3,
+		role: "AXPopUpButton",
+		name: "Cursor Style",
+		surface: "Brand Kit",
+		value: "",
+		x: 0,
+		y: 0,
+		w: 10,
+		h: 10,
+		...over,
+	});
+	const bundle = (): ObservationBundle => ({
+		elementsText: "",
+		haystack: "pointer-first",
+		screenshotB64: "",
+		title: "Yarn",
+		interactive: [el()],
+		appContent: 1,
+		domEnriched: 0,
+		frames: new Map(),
+	});
+	const records: StepRecord[] = [];
+	const ctx = {
+		driver: { act: async () => "ok" } as unknown as Driver,
+		cdp: undefined,
+		win: { pid: 1, windowId: 2 },
+		app: "Yarn",
+		doObserve: async () => bundle(),
+		overlay: { setDriving() {} },
+		sync: { busy: false, lastActionAt: 0 },
+		rec: { active: false, frameTimes: [], frameDrops: [] },
+		records,
+		messages: [] as any[],
+		vision: false,
+		noAx: false,
+		cleanupMode: "off",
+		journalPath: "",
+		graph: undefined,
+	};
+	const ls = { obs: bundle(), lastShot: undefined, blindStreak: 0 };
+	await executeAction(ctx as any, ls as any, 1, { id: "tu_1", type: "tool_use", name: "act", input: {} } as any, {
+		action: { name: "click", element_index: 3 },
+		expectation: { description: "the style changes", textIncludes: ["Pointer-first"] },
+	});
+
+	assert.equal(records.length, 1);
+	assert.equal(records[0].targetName, "Cursor Style");
+	// The field a compiled recipe carries into resolveTarget's narrowing branch. Without it,
+	// two same-named controls are unresolvable and the replay errors instead of running.
+	assert.equal(records[0].targetSurface, "Brand Kit");
+});

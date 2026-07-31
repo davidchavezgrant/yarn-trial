@@ -363,11 +363,16 @@ export async function executeAction(
 		listShownToModel: noAx ? 0 : prevObs.elementsText ? prevObs.elementsText.split("\n").length : 0,
 		// Demo steps record the FRESH target — the geometry that was actually clicked and
 		// that the recording frames show — instead of the stale observation's rect.
+		// `targetSurface` comes off the observation element in BOTH branches, including the demo
+		// one: DemoPlan.target carries only the geometry it re-resolved, while the surface is a
+		// property of the control in the tree and is the same either way. Recipe replay needs it
+		// to separate two same-named controls (see StepRecord.targetSurface).
 		...(plan?.target
 			? {
 					targetRole: plan.target.role,
 					targetRect: { x: plan.target.x, y: plan.target.y, w: plan.target.w, h: plan.target.h },
 					targetName: plan.target.name,
+					...(target?.surface ? { targetSurface: target.surface } : {}),
 					...(target?.namedBy ? { targetNamedBy: target.namedBy } : {}),
 				}
 			: target
@@ -377,6 +382,7 @@ export async function executeAction(
 						// the click point above); that box supersedes the observation-time rect.
 						targetRect: cdp?.lastActuation ? cdp.lastActuation.box : { x: target.x, y: target.y, w: target.w, h: target.h },
 						targetName: target.name,
+						...(target.surface ? { targetSurface: target.surface } : {}),
 						...(target.namedBy ? { targetNamedBy: target.namedBy } : {}),
 					}
 				: {}),

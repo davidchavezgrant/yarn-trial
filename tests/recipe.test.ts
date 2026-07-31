@@ -76,6 +76,24 @@ test("compileRecipe__StripsVolatileHandles__When__StepsCarryThem", () => {
 	assert.equal(r.steps[0].target?.role, "AXButton");
 });
 
+test("compileRecipe__CarriesTheTargetSurface__When__TheStepRecordedOne", () => {
+	// The gap that made the dual-scope tests below vacuous for months: resolveTarget was well
+	// covered with a surface HANDED to it, but nothing checked that compileRecipe ever produces
+	// one. It did not — surfaceOf() read `targetSurface` through an `as any` while step.ts never
+	// wrote the field — so every compiled recipe carried name+role only, and the narrowing
+	// branch those tests exercise could not fire on a real replay.
+	const r = compileRecipe(runLog({ steps: [step({ targetSurface: "Brand Kit" })] }), "s-yarn");
+	assert.equal(r.steps[0].target?.surface, "Brand Kit");
+});
+
+test("compileRecipe__OmitsTheSurface__When__TheStepPredatesTheField", () => {
+	// Old recipes and old run logs stay replayable: absent means "resolve by name and role",
+	// which is exactly what they have always done.
+	const r = compileRecipe(runLog(), "s-yarn");
+	assert.equal(r.steps[0].target?.surface, undefined);
+	assert.equal(r.steps[0].target?.name, "Open Settings");
+});
+
 test("compileRecipe__KeepsPayloadArgs__When__ActionCarriesTextAndKeys", () => {
 	const r = compileRecipe(
 		runLog({
