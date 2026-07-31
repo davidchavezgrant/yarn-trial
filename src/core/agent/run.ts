@@ -70,7 +70,7 @@ export async function main(): Promise<void> {
 	const cdpMod = backendKind === "cdp" ? await import("../../backends/cdp.js") : undefined;
 	let axMod = backendKind === "ax" ? await import("../../backends/ax.js") : undefined;
 
-	const { client, model } = makeClient();
+	const { client, model, transport } = makeClient();
 	// Announce the takeover before the first action. An ax run seizes pointer and keyboard
 	// for minutes and is otherwise indistinguishable from an idle machine, so anyone sitting
 	// in front of it cannot tell when it is safe to type. On cdp there is no takeover to
@@ -173,6 +173,10 @@ export async function main(): Promise<void> {
 					// The exact model id, because forensics on a bad run starts with "what was
 					// driving" and until now the logs only recorded token usage.
 					model,
+					// WHICH WIRE served it. One id can arrive by different transports (Sol via
+					// OpenRouter or via Azure Responses), and a benchmark row that cannot tell
+					// them apart attributes a transport difference to the model.
+					transport,
 					vision,
 					// What the MODEL was shown, so an A/B analysis reads arms off the logs
 					// themselves instead of trusting a dispatch manifest.

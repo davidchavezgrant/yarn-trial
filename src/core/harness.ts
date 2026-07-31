@@ -28,6 +28,7 @@ export * from "./harness/observation.js";
 export * from "./harness/frontier.js";
 export * from "./harness/declared-frontier.js";
 export * from "./harness/model.js";
+export * from "./harness/responses.js";
 export * from "./harness/gates.js";
 export * from "./harness/appmap.js";
 export * from "./harness/verification.js";

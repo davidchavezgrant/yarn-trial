@@ -26,7 +26,7 @@ import { accumulatedGraph, newPass } from "./explore/state.js";
 
 async function main(): Promise<void> {
 	const { target, app, guidance, backendKind, vision, noAx } = parseCli();
-	const { client, model } = makeClient();
+	const { client, model, transport } = makeClient();
 	// A grounding pass clicks through the whole app for minutes on end — same takeover as a
 	// task run, and the same backend gate: a cdp pass never touches the operator's input,
 	// so it shows no banner (backendSeizesInput in overlay.ts).

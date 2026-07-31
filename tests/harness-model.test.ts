@@ -227,27 +227,42 @@ function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
 test("makeClient__GoesDirect__When__TheModelIsABareClaudeId", () => {
 	// Both keys present — the state a provisioned fleet Mac is in. The ID decides, so the
 	// Claude arm does NOT get routed through OpenRouter just because its key is there.
-	const { model, client } = withEnv(
+	const { model, transport } = withEnv(
 		{ AGENT_MODEL: "claude-fable-5", ANTHROPIC_API_KEY: "sk-ant-test", OPENROUTER_API_KEY: "sk-or-test" },
 		() => makeClient(),
 	);
 	assert.equal(model, "claude-fable-5");
-	assert.match(String(client.baseURL), /api\.anthropic\.com/);
+	assert.equal(transport, "anthropic");
 });
 
 test("makeClient__RoutesThroughOpenRouter__When__TheIdIsNamespaced", () => {
-	const { model, client } = withEnv(
+	const { model, transport } = withEnv(
 		{ AGENT_MODEL: "openai/gpt-5.6-sol:nitro", ANTHROPIC_API_KEY: "sk-ant-test", OPENROUTER_API_KEY: "sk-or-test" },
 		() => makeClient(),
 	);
 	assert.equal(model, "openai/gpt-5.6-sol:nitro");
-	assert.match(String(client.baseURL), /openrouter\.ai/);
+	assert.equal(transport, "openrouter");
+});
+
+test("makeClient__UsesTheResponsesTransport__When__TheIdIsAzurePrefixed", () => {
+	// The deployment name — not a catalog id — is what reaches the wire, because that is what
+	// Azure routes on. The `azure/` prefix is consumed by the transport choice.
+	const { model, transport } = withEnv(
+		{
+			AGENT_MODEL: "azure/gpt-5.6-sol",
+			AZURE_OPENAI_ENDPOINT: "https://example.openai.azure.com/openai/responses?api-version=2025-04-01-preview",
+			AZURE_OPENAI_API_KEY: "az-test",
+		},
+		() => makeClient(),
+	);
+	assert.equal(model, "gpt-5.6-sol");
+	assert.equal(transport, "azure-responses");
 });
 
 test("makeClient__DefaultsToFableDirect__When__AnAnthropicKeyExists", () => {
-	const { model, client } = withEnv({ AGENT_MODEL: undefined, ANTHROPIC_API_KEY: "sk-ant-test", OPENROUTER_API_KEY: "sk-or-test" }, () => makeClient());
+	const { model, transport } = withEnv({ AGENT_MODEL: undefined, ANTHROPIC_API_KEY: "sk-ant-test", OPENROUTER_API_KEY: "sk-or-test" }, () => makeClient());
 	assert.equal(model, "claude-fable-5");
-	assert.match(String(client.baseURL), /api\.anthropic\.com/);
+	assert.equal(transport, "anthropic");
 });
 
 test("makeClient__Refuses__When__TheAskedModelHasNoKeyForItsTransport", () => {
@@ -260,5 +275,10 @@ test("makeClient__Refuses__When__TheAskedModelHasNoKeyForItsTransport", () => {
 	assert.throws(
 		() => withEnv({ AGENT_MODEL: "openai/gpt-5.6-sol", ANTHROPIC_API_KEY: "sk-ant-test", OPENROUTER_API_KEY: undefined }, () => makeClient()),
 		/needs OPENROUTER_API_KEY/,
+	);
+	// Azure names BOTH of its variables, since a half-configured endpoint is the likely mistake.
+	assert.throws(
+		() => withEnv({ AGENT_MODEL: "azure/gpt-5.6-sol", AZURE_OPENAI_ENDPOINT: undefined, AZURE_OPENAI_API_KEY: "az" }, () => makeClient()),
+		/needs AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY/,
 	);
 });

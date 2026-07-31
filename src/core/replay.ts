@@ -1,3 +1,4 @@
+import type { ModelClient } from "./harness.js";
 import Anthropic from "@anthropic-ai/sdk";
 import type { CdpBackend } from "../backends/cdp.js";
 import type { Driver } from "./driver.js";
@@ -66,7 +67,7 @@ export interface ReplayDeps {
 	win?: WindowRef;
 	observe: (name: string) => Promise<ObservationBundle>;
 	/** Rescue client; absent = deterministic-only, a broken step fails the replay. */
-	client?: Anthropic;
+	client?: ModelClient;
 	model?: string;
 	rescue?: (args: RescueArgs) => Promise<{ ok: boolean; note: string; calls: number }>;
 	graph?: AppMap;

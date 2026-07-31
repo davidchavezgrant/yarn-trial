@@ -1,3 +1,4 @@
+import type { ModelClient } from "./harness.js";
 import Anthropic from "@anthropic-ai/sdk";
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -82,7 +83,7 @@ export interface BackfillResult {
 }
 
 /** One model call, tool_choice pinned, then the same validation an exploration pass gets. */
-export async function deriveHome(graph: AppMap, client: Anthropic, model: string): Promise<BackfillResult> {
+export async function deriveHome(graph: AppMap, client: ModelClient, model: string): Promise<BackfillResult> {
 	if (!graph.nodes.some((n) => n.kind === "surface")) return { problem: "the map records no surfaces" };
 
 	const msg = await retryTransient(() =>

@@ -1,3 +1,4 @@
+import type { ModelClient } from "./responses.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -187,7 +188,7 @@ export interface VisualVerdict {
  * replacing the deterministic text check.
  */
 export async function visualJudge(
-	client: Anthropic,
+	client: ModelClient,
 	model: string,
 	goal: string,
 	screenshotB64: string,

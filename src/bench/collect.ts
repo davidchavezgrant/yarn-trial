@@ -67,6 +67,9 @@ export function parseRunMetrics(runLog: Record<string, any>): RunMetrics {
 		// The run log's model is ground truth (makeClient records what actually ran); the
 		// manifest's model field is only what dispatch asked for. Divergence is a finding.
 		...(runLog.model ? { model: String(runLog.model) } : {}),
+		// The wire that served the model. Grouping arms by model alone would merge a Sol run
+		// routed through OpenRouter with one through Azure Responses.
+		...(runLog.transport ? { transport: String(runLog.transport) } : {}),
 		...(runLog.backend ? { backend: String(runLog.backend) } : {}),
 		...(typeof runLog.vision === "boolean" ? { vision: runLog.vision } : {}),
 		...(typeof runLog.ax === "boolean" ? { ax: runLog.ax } : {}),

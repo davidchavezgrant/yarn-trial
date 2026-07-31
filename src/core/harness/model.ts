@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { AppMapEdge, AppMapNode } from "../../types.js";
+import { AZURE_ENDPOINT_ENV, AZURE_KEY_ENV, type ModelClient, responsesClient } from "./responses.js";
 
 /**
  * The default is Claude Fable 5 on Anthropic's own API (set by David, 2026-07-31): the
@@ -24,15 +25,32 @@ import type { AppMapEdge, AppMapNode } from "../../types.js";
  * explore/agent prompts carry are accepted and then ignored. Nothing breaks; the per-chapter
  * system prompt is simply billed in full each time.
  */
-export function makeClient(): { client: Anthropic; model: string } {
+export type Transport = "anthropic" | "openrouter" | "azure-responses";
+
+export function makeClient(): { client: ModelClient; model: string; transport: Transport } {
 	const requested = process.env.AGENT_MODEL?.trim();
 	const anthropicKey = process.env.ANTHROPIC_API_KEY;
 	const openrouter = process.env.OPENROUTER_API_KEY;
+	const azureEndpoint = process.env[AZURE_ENDPOINT_ENV]?.trim();
+	const azureKey = process.env[AZURE_KEY_ENV];
 	// Default: Fable 5 direct when an Anthropic key exists, else whatever OpenRouter can
 	// reach. :nitro is OpenRouter's throughput-first routing (fastest provider hosting the
 	// model, premium pricing) — a model-id suffix, not a different model. Composes with
 	// providerRouting(): nitro sets the sort, the ignore list still excludes watched failures.
 	const model = requested || (anthropicKey ? "claude-fable-5" : "openai/gpt-5.6-sol:nitro");
+
+	// `azure/<deployment>` is the third transport: OpenAI's Responses API, translated at the
+	// boundary (src/core/harness/responses.ts) so no call site knows the difference. The
+	// deployment name — not a catalog model id — is what follows the prefix, because that is
+	// what Azure routes on.
+	if (wantsAzureResponses(model)) {
+		const deployment = model.slice("azure/".length);
+		if (!azureEndpoint || !azureKey)
+			throw new Error(`${model} needs ${AZURE_ENDPOINT_ENV} and ${AZURE_KEY_ENV} (the full endpoint URL including api-version).`);
+
+		return { model: deployment, transport: "azure-responses", client: responsesClient({ endpoint: azureEndpoint, apiKey: azureKey }) };
+	}
+
 	const direct = wantsAnthropicDirect(model);
 	if (direct && !anthropicKey)
 		throw new Error(`${model} needs ANTHROPIC_API_KEY (a bare claude-* id runs direct). Set it, or ask for OpenRouter's "anthropic/${model}".`);
@@ -40,10 +58,16 @@ export function makeClient(): { client: Anthropic; model: string } {
 
 	return {
 		model: direct ? model.replace(/^anthropic:/, "") : model,
+		transport: direct ? "anthropic" : "openrouter",
 		client: direct
 			? new Anthropic({ apiKey: anthropicKey })
 			: new Anthropic({ baseURL: "https://openrouter.ai/api", authToken: openrouter }),
 	};
+}
+
+/** `azure/<deployment>` routes to the Responses transport. */
+export function wantsAzureResponses(model: string): boolean {
+	return model.trim().startsWith("azure/");
 }
 
 /**
