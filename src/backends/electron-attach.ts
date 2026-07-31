@@ -74,6 +74,42 @@ export function fallbackEligible(err: unknown, targetKind: Target["kind"]): err 
 	return targetKind === "app" && err instanceof EndpointUnavailableError;
 }
 
+/** One health-probe HTTP call's budget. Target creation on a healthy Chrome is tens of ms;
+ *  a probe that needs longer than this is answering the question in the negative. */
+const MINT_PROBE_TIMEOUT_MS = 3_000;
+
+/**
+ * Whether the endpoint can actually CREATE a page target — the operation web runs and OAuth
+ * handoffs depend on. `/json/version` answering proves only that the DevTools HTTP thread is
+ * alive: mac1's Chrome (2026-07-31) answered it for hours while `/json/list` reported zero
+ * targets and Target.createTarget hung — so every reuse path trusted a browser in which no
+ * tab could open, "Continue with Google" clicks piled up blank tab shells, and web runs died
+ * on newPage timeouts. The probe is one create/close round trip over the same HTTP interface;
+ * a flashed about:blank tab, once per acquire, is the price of testing the operation itself
+ * rather than a proxy for it.
+ *
+ * Browser endpoints ONLY, never the app's: a created target on an Electron endpoint is a new
+ * BrowserWindow in the target app, which a health check must not conjure. The wedge this
+ * catches is Chrome-side anyway.
+ */
+export async function canMintTargets(endpoint: string, timeoutMs = MINT_PROBE_TIMEOUT_MS): Promise<boolean> {
+	let id: string | undefined;
+	try {
+		// PUT: required since Chrome 111; the GET form answers 405 with the same instruction.
+		const r = await fetch(`${endpoint}/json/new?about:blank`, { method: "PUT", signal: AbortSignal.timeout(timeoutMs) });
+		if (!r.ok) return false;
+		id = ((await r.json()) as { id?: string }).id;
+
+		return typeof id === "string" && id.length > 0;
+	} catch {
+		return false;
+	} finally {
+		// Best-effort: the create already decided the verdict, and an uncloseable probe tab
+		// costs one blank tab, not the answer.
+		if (id) await fetch(`${endpoint}/json/close/${id}`, { signal: AbortSignal.timeout(timeoutMs) }).catch(() => {});
+	}
+}
+
 /** Poll a debugging endpoint until it answers, or give up. */
 export async function endpointAlive(url: string, attempts: number, delayMs: number): Promise<boolean> {
 	for (let i = 0; i < attempts; i++) {
@@ -338,9 +374,11 @@ export async function ensureBrowserEndpoint(opts: { port: number; profileDir: st
 
 	if (argv && declared !== undefined) {
 		const endpoint = `http://127.0.0.1:${declared}`;
-		if (await endpointAlive(endpoint, 8, 250)) return { endpoint, port: declared, relaunched: false };
-		// Flag on the argv, nothing listening: a stale ps entry or a Chrome that died mid-boot.
-		// Fall through and replace it rather than reporting an endpoint that does not answer.
+		if ((await endpointAlive(endpoint, 8, 250)) && (await canMintTargets(endpoint))) return { endpoint, port: declared, relaunched: false };
+		// Flag on the argv but nothing listening (a stale ps entry, a Chrome that died
+		// mid-boot) — or listening WITHOUT being able to mint a target (the mac1 zombie:
+		// /json/version answered for hours over a hung Target.createTarget). Both are the
+		// same verdict: replace it rather than report an endpoint runs cannot use.
 	}
 
 	if (argv) {
@@ -367,6 +405,11 @@ export async function ensureBrowserEndpoint(opts: { port: number; profileDir: st
 	child.unref();
 	if (!(await endpointAlive(endpoint, Math.ceil(LAUNCH_TIMEOUT_MS / LAUNCH_POLL_MS), LAUNCH_POLL_MS)))
 		throw new EndpointUnavailableError("port-stripped", `Chrome launched but exposed no debugging endpoint at ${endpoint}`);
+	// A plain Error, not the marked type: a Chrome that relaunches already wedged is an
+	// environment fault the operator must see, and there is no further remedy to route to —
+	// this code just replaced it once.
+	if (!(await canMintTargets(endpoint)))
+		throw new Error(`Chrome relaunched at ${endpoint} but cannot create a page target — it came up wedged; retry, or restart it by hand`);
 
 	return { endpoint, port: opts.port, relaunched: argv !== undefined };
 }

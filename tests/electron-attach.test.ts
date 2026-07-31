@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { appExecutable, debugPortFromArgv, isMainProcessOf, pickMainPage } from "../src/backends/electron-attach.js";
+import { appExecutable, canMintTargets, debugPortFromArgv, isMainProcessOf, pickMainPage } from "../src/backends/electron-attach.js";
 
 // The shape a real Electron endpoint presents: the app's window is NOT alone — its
 // devtools, extension machinery and hidden background window are all page targets too,
@@ -119,4 +120,84 @@ test("isMainProcessOf__RefusesHelpers__When__TheyLiveUnderFrameworks", () => {
 	);
 	// A different app entirely, even if the prefix is superficially close.
 	assert.equal(isMainProcessOf("/Applications/Yarn Beta.app/Contents/MacOS/Yarn", outer), false);
+});
+
+// ---- canMintTargets: the health probe is the operation, not a proxy for it -----------------
+// mac1, 2026-07-31: a Chrome answered /json/version for hours while /json/list reported zero
+// targets and Target.createTarget hung — every reuse path trusted it, OAuth handoffs opened
+// blank tab shells, web runs timed out. The probe is a create/close round trip against the
+// same HTTP interface, so a fake devtools server is the whole harness.
+
+interface FakeDevtools {
+	url: string;
+	hits: string[];
+	close: () => void;
+}
+
+/** A devtools-shaped HTTP server; per-path handlers, "hang" leaves the request unanswered. */
+function fakeDevtools(behaviour: { create?: "ok" | "hang" | "empty" | "error"; close?: "ok" | "error" }): Promise<FakeDevtools> {
+	return new Promise((resolve) => {
+		const hits: string[] = [];
+		const server = http.createServer((req, res) => {
+			hits.push(`${req.method} ${req.url}`);
+			if (req.url?.startsWith("/json/new")) {
+				const mode = behaviour.create ?? "ok";
+				if (mode === "hang") return; // never answered — the zombie's signature
+				if (mode === "error") return void (res.statusCode = 500, res.end());
+				if (mode === "empty") return void res.end("{}");
+
+				return void res.end(JSON.stringify({ id: "probe-target-1", type: "page", url: "about:blank" }));
+			}
+			if (req.url?.startsWith("/json/close/")) {
+				if ((behaviour.close ?? "ok") === "error") return void (res.statusCode = 404, res.end());
+
+				return void res.end("Target is closing");
+			}
+			res.statusCode = 404;
+			res.end();
+		});
+		server.listen(0, "127.0.0.1", () => {
+			const addr = server.address() as { port: number };
+			resolve({ url: `http://127.0.0.1:${addr.port}`, hits, close: () => server.closeAllConnections?.() ?? server.close() });
+		});
+		server.unref();
+	});
+}
+
+test("canMintTargets__ReturnsTrue__When__CreateAndCloseSucceed", async () => {
+	const dt = await fakeDevtools({});
+	assert.equal(await canMintTargets(dt.url, 1_000), true);
+	// The probe must clean up after itself: the created target is closed, by id.
+	assert.ok(dt.hits.includes("GET /json/close/probe-target-1"), `close never arrived — hits: ${dt.hits.join(", ")}`);
+	dt.close();
+});
+
+test("canMintTargets__ReturnsFalse__When__CreateHangs", async () => {
+	// The mac1 zombie: the HTTP thread is alive, target creation never completes.
+	const dt = await fakeDevtools({ create: "hang" });
+	assert.equal(await canMintTargets(dt.url, 150), false);
+	dt.close();
+});
+
+test("canMintTargets__ReturnsFalse__When__CreateAnswersWithoutAnId", async () => {
+	const dt = await fakeDevtools({ create: "empty" });
+	assert.equal(await canMintTargets(dt.url, 1_000), false);
+	dt.close();
+});
+
+test("canMintTargets__ReturnsFalse__When__CreateErrors", async () => {
+	const dt = await fakeDevtools({ create: "error" });
+	assert.equal(await canMintTargets(dt.url, 1_000), false);
+	dt.close();
+});
+
+test("canMintTargets__ReturnsTrue__When__OnlyTheCleanupCloseFails", async () => {
+	// The create IS the verdict; a failed best-effort close costs one blank tab, not the probe.
+	const dt = await fakeDevtools({ close: "error" });
+	assert.equal(await canMintTargets(dt.url, 1_000), true);
+	dt.close();
+});
+
+test("canMintTargets__ReturnsFalse__When__NothingListens", async () => {
+	assert.equal(await canMintTargets("http://127.0.0.1:1", 500), false);
 });
