@@ -11,7 +11,7 @@ import { sidecarStatus } from "../../core/axdom.js";
 import { screenIsLocked } from "../../core/harness/observation.js";
 import { envNum } from "../../env.js";
 import { dataRoot, outDir, resourcesRoot } from "../../paths.js";
-import { type ChromePolicyState, inspectChromePolicy } from "../chrome-policy.js";
+import { type ChromePolicyState, inspectChromePolicy, MANDATORY_PLISTS } from "../chrome-policy.js";
 import { firstLine } from "../control/ssh.js";
 import { listApps } from "../../core/apps.js";
 import {
@@ -1656,7 +1656,7 @@ export function socketIsLive(socketPath: string, timeoutMs = 1000): Promise<bool
  * diagnostic that can throw is a diagnostic that can take the fleet down.
  */
 function chromePolicyHere(): ChromePolicyState {
-	const readDefault = (domain: string, key: string): string | undefined => {
+	const read1 = (domain: string, key: string): string | undefined => {
 		try {
 			// `defaults` exits nonzero for an unset key, which execFileSync turns into a throw —
 			// that is the "unset" answer, not an error.
@@ -1664,6 +1664,23 @@ function chromePolicyHere(): ChromePolicyState {
 		} catch {
 			return undefined;
 		}
+	};
+	/**
+	 * Managed domain FIRST, then the user domain — the order Chrome itself resolves in.
+	 *
+	 * A key delivered by a configuration profile exists ONLY under /Library/Managed
+	 * Preferences; nothing writes it to the user domain. Reading just the user domain graded
+	 * AutoLaunchProtocolsFromOrigins "unset" on 2026-07-31 while `chrome://policy` on the same
+	 * host reported it Mandatory/OK — the grader calling a correctly-policed fleet unpoliced,
+	 * which is the exact failure the level check exists to prevent, inverted.
+	 */
+	const readDefault = (domain: string, key: string): string | undefined => {
+		for (const p of MANDATORY_PLISTS) {
+			const hit = read1(p.replace("__HOME__", os.homedir()).replace("__USER__", os.userInfo().username).replace(/\.plist$/, ""), key);
+			if (hit !== undefined) return hit;
+		}
+
+		return read1(domain, key);
 	};
 	const running = ((): boolean | undefined => {
 		try {
