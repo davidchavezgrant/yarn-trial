@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { appExecutable, debugPortFromArgv, pickMainPage } from "../src/backends/electron-attach.js";
+import { appExecutable, debugPortFromArgv, isMainProcessOf, pickMainPage } from "../src/backends/electron-attach.js";
 
 // The shape a real Electron endpoint presents: the app's window is NOT alone — its
 // devtools, extension machinery and hidden background window are all page targets too,
@@ -95,4 +95,28 @@ test("debugPortFromArgv__ReadsThePort__When__TheFlagIsPresent", () => {
 
 test("debugPortFromArgv__ReturnsUndefined__When__TheFlagIsAbsent", () => {
 	assert.equal(debugPortFromArgv("/Applications/Yarn.app/Contents/MacOS/Yarn --disable-renderer-backgrounding"), undefined);
+});
+
+test("isMainProcessOf__MatchesTheNestedBundleMain__When__OpenLaunchedTheInnerApp", () => {
+	// Yarn ships an app-in-an-app: `open -a Yarn` runs the INNER bundle's binary while
+	// appExecutable resolves the outer one. Both are main processes of the same app —
+	// missing the inner one launched a second instance beside it (seam test, 2026-07-31).
+	const outer = "/Applications/Yarn.app/Contents/MacOS/Yarn";
+	assert.equal(isMainProcessOf("/Applications/Yarn.app/Contents/MacOS/Yarn", outer), true);
+	assert.equal(isMainProcessOf("/Applications/Yarn.app/Contents/Resources/Yarn.app/Contents/MacOS/Yarn", outer), true);
+	assert.equal(isMainProcessOf("/Applications/Yarn.app/Contents/MacOS/Yarn --remote-debugging-port=9223 --disable-renderer-backgrounding", outer), true);
+});
+
+test("isMainProcessOf__RefusesHelpers__When__TheyLiveUnderFrameworks", () => {
+	const outer = "/Applications/Yarn.app/Contents/MacOS/Yarn";
+	assert.equal(
+		isMainProcessOf("/Applications/Yarn.app/Contents/Frameworks/Yarn Helper (GPU).app/Contents/MacOS/Yarn Helper (GPU) --type=gpu-process", outer),
+		false,
+	);
+	assert.equal(
+		isMainProcessOf("/Applications/Yarn.app/Contents/Frameworks/Electron Framework.framework/Helpers/chrome_crashpad_handler --database=x", outer),
+		false,
+	);
+	// A different app entirely, even if the prefix is superficially close.
+	assert.equal(isMainProcessOf("/Applications/Yarn Beta.app/Contents/MacOS/Yarn", outer), false);
 });

@@ -293,6 +293,8 @@ export class CdpBackend {
 		private home?: string,
 		/** Demo actuation: recorded runs get visible pointer choreography and per-key typing. */
 		private demo = false,
+		/** The app name for re-picking a window when the driven one closes (Electron only). */
+		private appName?: string,
 	) {
 		page.setDefaultTimeout(ACTION_TIMEOUT_MS);
 	}
@@ -429,7 +431,13 @@ export class CdpBackend {
 			// hidden instead.
 			if (target.kind === "web") await page.bringToFront().catch(() => {});
 
-			const backend = new CdpBackend(browser, page, target.kind === "web" ? target.url : undefined, opts.demo === true);
+			const backend = new CdpBackend(
+				browser,
+				page,
+				target.kind === "web" ? target.url : undefined,
+				opts.demo === true,
+				target.kind === "app" ? target.name : undefined,
+			);
 			backend.attachInfo = attachInfo;
 
 			return backend;
@@ -450,7 +458,40 @@ export class CdpBackend {
 		return `navigated to ${this.home}`;
 	}
 
+	/**
+	 * Re-point `page` at the app's current main window if ours has closed.
+	 *
+	 * A freshly launched Electron app can present a page that later CLOSES: Yarn boots
+	 * through a splash/loading window, pickMainPage legitimately selects it (it is the only
+	 * window), and the handle dies when the real window replaces it — observed on the
+	 * BENCH_QUIT_PORTLESS seam test (2026-07-31) as "Target page … has been closed" on the
+	 * first post-reset observation. The browser connection is still fine; only the page
+	 * handle is stale, and the same picker that chose the first window chooses its successor.
+	 */
+	private async ensurePage(): Promise<void> {
+		if (!this.page.isClosed()) return;
+		const pages = this.browser.contexts().flatMap((c) => c.pages());
+		const candidates: PageCandidate[] = [];
+		for (const p of pages)
+			candidates.push({
+				url: p.url(),
+				title: await p.title().catch(() => ""),
+				viewport:
+					p.viewportSize()
+					?? ((await p.evaluate("({ width: window.innerWidth, height: window.innerHeight })").catch(() => null)) as PageCandidate["viewport"]),
+			});
+		const idx = pickMainPage(candidates, this.appName ?? "");
+		if (idx < 0)
+			throw new Error(
+				`the page this run was driving closed and no successor window appeared — saw: ${candidates.map((c) => c.url || "(blank)").join(", ") || "(no pages)"}`,
+			);
+		this.page = pages[idx];
+		this.page.setDefaultTimeout(ACTION_TIMEOUT_MS);
+		console.log(`the driven window closed — re-attached to its successor (${candidates[idx].title || candidates[idx].url})`);
+	}
+
 	async observe(shotName: string): Promise<ObservationBundle> {
+		await this.ensurePage();
 		const snapshot = await this.page.ariaSnapshot({ mode: "ai", boxes: true });
 		const { rows, texts } = parseAiSnapshot(snapshot);
 		this.lastRows = rows;
@@ -574,6 +615,10 @@ export class CdpBackend {
 	 */
 	async act(a: any): Promise<string> {
 		this.assertSupported(a.name);
+		// Refs resolve against the page the OBSERVATION used; a window swap between then and
+		// now (splash → main, a reload) would address handles into a dead page. ensurePage
+		// re-points at the successor, and the stale-ref error that follows is the honest one.
+		await this.ensurePage();
 		// Only ever the CURRENT act's resolution — a stale point must never attach to a
 		// later turn's trajectory.
 		this.lastActuation = undefined;

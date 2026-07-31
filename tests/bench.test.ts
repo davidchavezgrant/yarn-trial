@@ -381,6 +381,7 @@ const RUN_LOG = {
 	vision: true,
 	ax: true,
 	grounding: { provenance: "explore", path: "docs/appmaps/yarn.md", sha256: "ab493c45e2ac", graph: { nodes: 150, edges: 71, scopeAmbiguities: [] } },
+	homeReset: "reset",
 	hintedPrompt: false,
 	expectationRejections: 1,
 	elapsedSec: 52,
@@ -391,7 +392,14 @@ const RUN_LOG = {
 	success: true,
 	finalCheck: { verified: true, note: "expectation met", channel: "text" },
 	visualCheck: { verdict: "PASS", scope: "brand" },
-	steps: [{ index: 1 }, { index: 2 }, { index: 3 }, { index: 4 }],
+	steps: [
+		{ index: 1, observationNodes: 221, listShownToModel: 503 },
+		{ index: 2, observationNodes: 180, listShownToModel: 410 },
+		{ index: 3, observationNodes: 200, listShownToModel: 450 },
+		// The instrumentation landed mid-matrix on some logs; a step without it must not
+		// poison the mean.
+		{ index: 4 },
+	],
 };
 
 test("parseRunMetrics__ExtractsRunFields__When__GivenLiveRunLog", () => {
@@ -412,6 +420,16 @@ test("parseRunMetrics__ExtractsRunFields__When__GivenLiveRunLog", () => {
 	assert.equal(m.ax, true);
 	assert.equal(m.finalCheckVerified, true);
 	assert.equal(m.visualVerdict, "PASS");
+	assert.equal(m.homeReset, "reset");
+	// Means over only the steps that carry the fields (three of four here).
+	assert.equal(m.meanObservationNodes, 200.3);
+	assert.equal(m.meanListShownToModel, 454.3);
+});
+
+test("parseRunMetrics__OmitsAttentionMeans__When__NoStepCarriesTheCounts", () => {
+	const m = parseRunMetrics({ ...RUN_LOG, steps: [{ index: 1 }, { index: 2 }] });
+	assert.equal(m.meanObservationNodes, undefined);
+	assert.equal(m.meanListShownToModel, undefined);
 });
 
 test("parseRunMetrics__CountsRescuedSteps__When__GivenReplayRunLog", () => {

@@ -305,7 +305,19 @@ export async function main(): Promise<void> {
 						// refusal below never fires on cdp — observed on mac1 (2026-07-31):
 						// the agent spent six steps clicking "Continue with Google" before
 						// the operator killed the run.
-						const probe = homeVisible(app, await doObserve(`${stepsDir}/home-probe`), loadAppMapGraph(slug));
+						//
+						// Retried while the observation is EMPTY: the debug endpoint answers
+						// before the UI renders, so a probe right after a fresh launch sees
+						// zero content elements — not a sign-in wall, just a booting app
+						// (observed on the BENCH_QUIT_PORTLESS seam test, 2026-07-31). Only
+						// emptiness buys a retry; a rendered wall still refuses immediately.
+						let probe = { ready: undefined as boolean | undefined, detail: "" };
+						for (let attempt = 0; attempt < 8; attempt++) {
+							const obs = await doObserve(`${stepsDir}/home-probe`);
+							probe = homeVisible(app, obs, loadAppMapGraph(slug));
+							if (obs.appContent > 0 || probe.ready) break;
+							await new Promise((r) => setTimeout(r, 2000));
+						}
 						if (probe.ready === undefined) return { result: "none", detail: probe.detail };
 
 						return probe.ready ? { result: "root-visible", detail: probe.detail } : { result: "failed", detail: probe.detail };

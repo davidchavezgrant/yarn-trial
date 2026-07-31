@@ -75,18 +75,43 @@ export function appExecutable(appName: string, dirs: string[] = APP_DIRS): strin
 }
 
 /**
- * The app's MAIN process command line, if it is running. Main process only — argv[0] is
- * the bundle's MacOS binary — because that is the process that owns the debug flag and
- * Chromium's single-instance lock. Helper processes (crashpad, recordkit, renderers under
+ * Whether one ps line is a MAIN process of the app whose outer executable this is.
+ *
+ * Main process only — because that is the process that owns the debug flag and Chromium's
+ * single-instance lock. Helper processes (crashpad, recordkit, renderers under
  * Contents/Frameworks/) routinely outlive a cmd+Q by design and hold neither; counting
  * them as "running" made a cleanly-quit app refuse to relaunch (observed with Yarn's
  * lingering crashpad handler, 2026-07-31).
+ *
+ * Matched by BUNDLE, not by exact binary path: Yarn ships an app-in-an-app, and
+ * `open -a Yarn` runs the INNER bundle's binary
+ * (`Yarn.app/Contents/Resources/Yarn.app/Contents/MacOS/Yarn`) while `appExecutable`
+ * resolves the outer one. An exact-path match read that as "not running", launched a
+ * second instance beside it, and the two fought over one user-data dir until the readiness
+ * gate refused (observed 2026-07-31, the first BENCH_QUIT_PORTLESS seam test). A main
+ * process is therefore any argv[0] under the bundle at `<something>/Contents/MacOS/<bin>`
+ * that is not a Frameworks helper.
  */
+export function isMainProcessOf(argv: string, executable: string): boolean {
+	const bundle = executable.replace(/\/Contents\/MacOS\/[^/]+$/, "");
+	if (bundle === executable) return argv === executable || argv.startsWith(`${executable} `);
+	const bin = argv.split(" --")[0];
+
+	return (
+		bin.startsWith(`${bundle}/`) &&
+		/\/Contents\/MacOS\/[^/]+$/.test(bin) &&
+		!bin.includes("/Contents/Frameworks/")
+	);
+}
+
 function mainProcessArgv(executable: string): string | undefined {
+	// The pgrep pattern is the BUNDLE root, so nested-bundle mains match too; the filter
+	// below is what separates them from Frameworks helpers.
+	const bundle = executable.replace(/\/Contents\/MacOS\/[^/]+$/, "");
 	let pids: string[];
 	try {
 		// pgrep -f takes a regex; escape the path's regex metacharacters (dots, spaces are fine).
-		pids = execFileSync("pgrep", ["-f", executable.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")], { encoding: "utf8" })
+		pids = execFileSync("pgrep", ["-f", bundle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")], { encoding: "utf8" })
 			.trim()
 			.split("\n");
 	} catch {
@@ -95,7 +120,7 @@ function mainProcessArgv(executable: string): string | undefined {
 	for (const pid of pids) {
 		try {
 			const argv = execFileSync("ps", ["-o", "command=", "-p", pid], { encoding: "utf8" }).trim();
-			if (argv === executable || argv.startsWith(`${executable} `)) return argv;
+			if (isMainProcessOf(argv, executable)) return argv;
 		} catch {}
 	}
 
