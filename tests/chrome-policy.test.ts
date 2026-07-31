@@ -253,8 +253,12 @@ test("chromePolicyWriteLines__CoversExactlyThePolicyTable__When__GeneratingTheIn
 	const lines = chromePolicyWriteLines();
 
 	assert.equal(lines.length, CHROME_POLICY.length);
-	for (const { key } of CHROME_POLICY) {
-		const line = lines.find((l) => l.includes(`defaults write "$DOMAIN" ${key} -bool false`));
+	for (const { key, value } of CHROME_POLICY) {
+		// Typed per value: `-bool` for the toggles, `-int` for the enumerated policies whose
+		// off-value is 0. `-bool 0` would store a boolean where Chrome expects an integer, and
+		// be silently ignored while `defaults read` still printed a plausible 0.
+		const written = typeof value === "number" ? `-int ${value}` : `-bool ${String(value)}`;
+		const line = lines.find((l) => l.includes(`defaults write "$DOMAIN" ${key} ${written}`));
 		assert.ok(line, `no write line for ${key}`);
 		// Written AND read back. The write's exit status is not the report: a `defaults write`
 		// to a plist owned by another uid can fail without a nonzero exit.
@@ -304,10 +308,26 @@ test("CHROME_POLICY__DisablesTheFormHistoryStore__When__ListingTheKeys", () => {
 	 * while the other two keys made the host grade clean.
 	 */
 	assert.ok(CHROME_POLICY.some((p) => p.key === "AutofillAddressEnabled"), "the form-history key is what closes the observed leak");
-	assert.ok(CHROME_POLICY.every((p) => p.value === false));
+	// EVERY entry is a disable — `false`, or the 0 that means "off" for the policies Chrome
+	// enumerates instead of toggling. The table must never turn a feature ON: that is the one
+	// property making it safe to apply unattended across the fleet.
+	assert.ok(CHROME_POLICY.every((p) => p.value === false || p.value === 0));
 	// And the honesty requirement: the password entry must not claim to hide saved passwords.
 	const pw = CHROME_POLICY.find((p) => p.key === "PasswordManagerEnabled");
 	assert.match(pw?.why ?? "", /does NOT hide/);
+});
+
+test("CHROME_POLICY__KeepsTheManagedProfileInterstitialAway__When__ListingTheKeys", () => {
+	// The mac3 blocker, 2026-07-31: a managed-Workspace sign-in raised
+	// chrome://managed-user-profile-notice, which halts the OAuth chain AND is unreachable from
+	// CDP (Chrome refuses injected input on privileged WebUI), forcing the whole sign-in onto
+	// the SCK transport. BrowserSignin=0 stops the BROWSER profile from taking a Google account
+	// at all, so the interstitial has nothing to fire on, while the WEB sign-in an OAuth handoff
+	// needs is untouched. Verified effective on mac3: chrome://policy reports both as
+	// Recommended/OK from the user domain — no root, no MDM, unlike the allowlist key.
+	const signin = CHROME_POLICY.find((p) => p.key === "BrowserSignin");
+	assert.equal(signin?.value, 0, "0 is 'no browser sign-in'; any other value re-arms the interstitial");
+	assert.ok(CHROME_POLICY.some((p) => p.key === "SigninInterceptionEnabled" && p.value === false));
 });
 
 // --- The external-protocol allowlist (AutoLaunchProtocolsFromOrigins). Added for the CDP

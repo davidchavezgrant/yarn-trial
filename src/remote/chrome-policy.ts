@@ -94,8 +94,14 @@ export const RECOMMENDED_PLISTS = [`__HOME__/Library/Preferences/${CHROME_DOMAIN
 
 export interface ChromePolicyKey {
 	key: string;
-	/** Every policy here is a disable. Typed as the literal so a future `true` is a compile error. */
-	value: false;
+	/**
+	 * Every policy here is a DISABLE — `false`, or the integer whose meaning is "off" for the
+	 * few Chrome policies that enumerate instead of toggling (`BrowserSignin: 0` = no browser
+	 * sign-in). Widened from the literal `false` on 2026-07-31 for exactly that case; the
+	 * "never enable anything from this table" rule is now the reviewer's to keep, so state the
+	 * off-ness in `why` when adding an integer.
+	 */
+	value: false | 0;
 	/** What it actually buys, in one line. The long form is in this file's header. */
 	why: string;
 }
@@ -122,6 +128,16 @@ export const CHROME_POLICY: ChromePolicyKey[] = [
 		key: "PasswordManagerEnabled",
 		value: false,
 		why: "stops NEW credentials being saved on a shared Mac — does NOT hide already-saved ones, no policy does",
+	},
+	{
+		key: "BrowserSignin",
+		value: 0,
+		why: "0 = no BROWSER sign-in, which is what keeps a managed account off the profile and the 'your organization will manage this profile' interstitial from ever appearing — web sign-in, the kind an OAuth handoff needs, is unaffected",
+	},
+	{
+		key: "SigninInterceptionEnabled",
+		value: false,
+		why: "kills the residual 'create a new profile?' bubble that survives BrowserSignin on some paths",
 	},
 ];
 
@@ -429,6 +445,14 @@ export function inspectChromePolicy(opts: {
  * Anything else is returned as the trimmed string rather than coerced, so `chromePolicyProblems`
  * can say what it actually found instead of flattening a surprise into `false`.
  */
+/**
+ * `defaults read` prints untyped text; this is what the graders compare against.
+ *
+ * "0" folding to `false` is load-bearing rather than incidental: the enumerated policies in
+ * CHROME_POLICY are written with `-int` and their off value IS 0 (`BrowserSignin: 0` = no
+ * browser sign-in), so a correctly-applied integer policy must read as the same "off" the
+ * boolean ones do. Change this and every int policy grades as an override.
+ */
 export function parseDefaultsBool(raw: string): boolean | string {
 	const t = raw.trim();
 	if (t === "0" || t === "false" || t === "NO") return false;
@@ -468,6 +492,11 @@ export function chromePolicyWriteLines(): string[] {
 		// `|| true` because the write is not the report. A failed write must fall through to
 		// `check`, which reads the value back — under `set -e` an unguarded failure would abort
 		// the script before it could say WHICH key did not take.
-		return `# ${why}\ndefaults write "$DOMAIN" ${key} -bool ${String(value)} 2>/dev/null || true\ncheck ${key}`;
+		// `-int` for the enumerated policies, `-bool` for the toggles: `defaults write … -bool 0`
+		// stores a boolean false, and Chrome reads BrowserSignin as an integer — it would be
+		// ignored as the wrong type while `defaults read` showed a plausible 0.
+		const typed = typeof value === "number" ? `-int ${value}` : `-bool ${String(value)}`;
+
+		return `# ${why}\ndefaults write "$DOMAIN" ${key} ${typed} 2>/dev/null || true\ncheck ${key}`;
 	});
 }
