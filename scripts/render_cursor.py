@@ -18,7 +18,7 @@ import subprocess
 import sys
 import tempfile
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 # macOS ships its cursors as PDFs with a hotspot in an adjacent plist. PIL cannot read PDF, so
 # sips rasterizes them. The standard arrow is NOT in this directory (checked) and is drawn instead.
@@ -176,6 +176,59 @@ def hover_at(hovers, t_ms):
     return None
 
 
+# Named-key chip: how long one stays up, and the fade at its tail. Typing keys
+# ("character"/"space"/"delete", synthesized for legacy runs) never get a chip — the
+# text on screen already shows them; the chip exists for the keys that otherwise have
+# NO visible cause (escape closing an overlay, enter committing, cmd chords).
+KEYCAP_MS = 900.0
+KEYCAP_FADE_MS = 250.0
+TYPING_KEYTYPES = {"character", "space", "delete"}
+
+
+def keycaps_at(events, t_ms):
+    """Labels of named keys pressed recently enough to still be on screen, with alpha."""
+    out = []
+    for e in events:
+        if e["kind"] != "key" or e.get("keyType") in TYPING_KEYTYPES:
+            continue
+        age = t_ms - e["tMs"]
+        if age < 0 or age > KEYCAP_MS:
+            continue
+        alpha = 1.0 if age < KEYCAP_MS - KEYCAP_FADE_MS else (KEYCAP_MS - age) / KEYCAP_FADE_MS
+        out.append((str(e.get("keyType", "key")), alpha))
+    return out
+
+
+def draw_keycaps(frame, caps, frame_scale, font):
+    """Bottom-center chips, most recent last. Dark pill, light label — the standard
+    screencast key overlay, drawn only when a named key actually fired."""
+    if not caps:
+        return frame
+    layer = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    pad_x = round(14 * frame_scale)
+    pad_y = round(8 * frame_scale)
+    gap = round(8 * frame_scale)
+    chips = []
+    total = -gap
+    for label, alpha in caps[-3:]:
+        text = label.upper()
+        bbox = d.textbbox((0, 0), text, font=font)
+        w = (bbox[2] - bbox[0]) + 2 * pad_x
+        h = (bbox[3] - bbox[1]) + 2 * pad_y
+        chips.append((text, alpha, w, h))
+        total += w + gap
+    x = (frame.size[0] - total) / 2
+    for text, alpha, w, h in chips:
+        y = frame.size[1] - h - round(24 * frame_scale)
+        a = int(210 * alpha)
+        d.rounded_rectangle([x, y, x + w, y + h], radius=h / 4, fill=(20, 20, 24, a))
+        bbox = d.textbbox((0, 0), text, font=font)
+        d.text((x + (w - (bbox[2] - bbox[0])) / 2 - bbox[0], y + (h - (bbox[3] - bbox[1])) / 2 - bbox[1]), text, font=font, fill=(240, 240, 245, int(255 * alpha)))
+        x += w + gap
+    return Image.alpha_composite(frame.convert("RGBA"), layer).convert("RGB")
+
+
 def draw_hover(frame, box, strength):
     """Tint a control to look hovered.
 
@@ -226,6 +279,11 @@ def main():
     height = track["space"]["height"]
     samples = track["cursor"]
     events = track["events"]
+    # Helvetica ships on every Mac; the bitmap fallback keeps a render from dying over a font.
+    try:
+        keycap_font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", max(12, round(13 * track["space"]["width"] / 1568)))
+    except Exception:
+        keycap_font = ImageFont.load_default()
     plan = track["framePlan"]
     hovers = track.get("hovers", [])
     # Output pixels per logical point of the captured window. Everything drawn on top of the frame
@@ -296,6 +354,10 @@ def main():
                     )
                     frame = Image.alpha_composite(frame.convert("RGBA"), ring).convert("RGB")
                 frame.paste(scaled, (x, y), scaled)
+
+            caps = keycaps_at(events, t_ms)
+            if caps:
+                frame = draw_keycaps(frame, caps, frame_scale, keycap_font)
 
             out.write(frame.tobytes())
 

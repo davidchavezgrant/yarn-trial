@@ -825,3 +825,35 @@ test("octantOf__PartitionsTheCircle__When__GivenAxisDirections", () => {
 	assert.equal(octantOf(-1, 0), 4);
 	assert.equal(octantOf(0, -1), 6);
 });
+
+test("buildTrack__ComposesChordLabel__When__PressKeyHasModifiers", () => {
+	// The keycap chip renders this label verbatim; a bare "a" for what was really
+	// cmd+a would depict a stray keystroke.
+	const base = 1_000_000;
+	const track = buildTrack({
+		stamp: "t",
+		app: "Yarn",
+		task: "t",
+		runLog: "",
+		steps: [{ index: 1, timestamp: "", action: { kind: "tool", name: "press_key" } }],
+		turns: [
+			{
+				tool: "press_key",
+				arguments: { key: "a", modifiers: ["cmd"] },
+				startMs: 0,
+				endMs: 150,
+				epochMs: base + 2000,
+				dir: "",
+				captureWidth: 1568,
+			},
+		],
+		frameTimes: [base, base + 2000, base + 3000],
+		frameSize: { width: 1568, height: 882 },
+		captureSize: { width: 1568, height: 882 },
+		constants: CONSTANTS,
+		library: { fittedFrom: { dataset: "t", generatedAt: "" }, segments: [] },
+	});
+	const key = track.events.find((e) => e.kind === "key");
+	assert.ok(key, "press_key emitted no key event");
+	assert.equal((key as { keyType?: string }).keyType, "cmd+a");
+});

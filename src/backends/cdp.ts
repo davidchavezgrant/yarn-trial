@@ -796,6 +796,17 @@ export class CdpBackend {
 						throw new Error(
 							`nothing editable holds the caret (focus is on <${holder}>) — nothing was typed. Click the field first, or pass its ref so the harness clicks it.`,
 						);
+					// Anchor the pointer where the text will actually APPEAR: the caret's own
+					// screen rect, read live. Without this, ref-less typing had no pointer
+					// anchor at all — text materialized across the screen from a parked
+					// cursor, the original complaint #7 reintroduced through the escape
+					// hatch. Falls back to whatever the focus click recorded (or nothing).
+					const caret = (await this.page
+						.evaluate(
+							"(() => { const s = window.getSelection(); if (!s || s.rangeCount === 0) return null; const r = s.getRangeAt(0).getBoundingClientRect(); const a = document.activeElement; const b = (r.width || r.height) ? r : (a ? a.getBoundingClientRect() : null); return b ? { x: b.x, y: b.y, w: Math.max(b.width, 2), h: Math.max(b.height, 14) } : null; })()",
+						)
+						.catch(() => null)) as { x: number; y: number; w: number; h: number } | null;
+					if (caret) this.lastActuation = { point: { x: caret.x + caret.w / 2, y: caret.y + caret.h / 2 }, box: caret };
 					const { chunks } = chunkText(text);
 					let typed = "";
 					for (const chunk of chunks) {

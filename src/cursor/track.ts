@@ -1214,10 +1214,13 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 		}
 
 		if (turn.tool === "press_key") {
+			// The full chord, because the renderer draws this as an on-screen keycap: a
+			// bare "a" chip for what was really cmd+a would depict a stray keystroke.
+			const mods = Array.isArray(turn.arguments.modifiers) ? turn.arguments.modifiers.map(String) : [];
 			events.push({
 				tMs: dispatchMs,
 				kind: "key",
-				keyType: String(turn.arguments.key ?? "key"),
+				keyType: [...mods, String(turn.arguments.key ?? "key")].join("+"),
 				holdMs: input.constants.keyHoldMs,
 				sourceTMs: turn.startMs,
 				stepIndex: step?.index,
