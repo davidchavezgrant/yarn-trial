@@ -22,6 +22,19 @@ test("parseTarget__ReturnsTheFallbackApp__When__NoUrlFlagGiven", () => {
 	assert.deepEqual(rest, ["show me how to X", "Yarn"]);
 });
 
+test("parseTarget__ReturnsFallbackNotThePositional__When__AppNamedOnCommandLine", () => {
+	// parseTarget consumes ONLY --url; the app positional stays in `rest` for the caller to
+	// read. So `target.name` is the FALLBACK, not the named app — the caller must rebuild the
+	// target from the resolved positional, or the run grounds against the wrong appmap (the slug
+	// comes from `target`, the app from `rest[1]`). This pins the sharp edge that bug rode.
+	const { target, rest } = parseTarget(["change my timezone to Paris", "Notion Calendar"], "Yarn");
+	assert.deepEqual(target, { kind: "app", name: "Yarn" });
+	assert.equal(rest[1], "Notion Calendar");
+	// What the caller must do, and what its slug must then be:
+	const resolved = rest[1];
+	assert.equal(targetSlug({ kind: "app", name: resolved }), "notion-calendar");
+});
+
 test("parseTarget__ConsumesTheFlagPair__When__UrlGiven", () => {
 	// The positionals either side must survive: explore reads guidance from positional 1 and
 	// agent reads the task from positional 0, and neither should see the flag.

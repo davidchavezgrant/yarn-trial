@@ -317,6 +317,12 @@ async function main(): Promise<void> {
 	// Yarn is the canonical target for all runs (set by David, 2026-07-29); Notion
 	// Calendar remains available by passing it explicitly.
 	const app = target.kind === "web" ? targetLabel(target) : (afterUrl[1] ?? "Yarn");
+	// parseTarget only consumes --url; for an app run it returns the FALLBACK name, never the
+	// positional. Everything keyed off `target` below — the grounding slug, scope warnings, the
+	// mutation graph, the run log's provenance — would otherwise describe "Yarn" while the run
+	// drove the app named on the command line, grounding it with the wrong appmap and recording
+	// a run log that lies about which map it used. Rebuild the target from the resolved name.
+	if (target.kind === "app") target = { kind: "app", name: app };
 	if (!task || !["ax", "dom"].includes(backendKind)) {
 		console.error('usage: tsx src/agent.ts "<task>" ["App Name"] [--record] [--backend ax|dom] [--no-vision] [--no-ax]');
 		console.error("--backend dom drives an Electron/browser target over CDP; launch it with --remote-debugging-port first.");
@@ -541,7 +547,12 @@ async function main(): Promise<void> {
 		if (!noReset) {
 			// The reset clicks, so it is actuation like any step.
 			overlay.setDriving(true);
-			const reset = await resetToHome(driver, win, app);
+			// Load the graph by the run's OWN slug, not resetToHome's default of appSlug(app):
+			// a web target's map is stored under `web-<host>` while `app` is the bare host, so the
+			// default lookup misses and every web run silently starts from wherever the last one
+			// stopped. Loaded unconditionally (not gated on grounding) to keep the A/B arms
+			// starting from the same normalised state.
+			const reset = await resetToHome(driver, win, app, loadAppMapGraph(slug));
 			overlay.setDriving(false);
 			homeReset = reset.result;
 			console.log(`home reset: ${reset.result} — ${reset.detail}`);

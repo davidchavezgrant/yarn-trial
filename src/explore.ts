@@ -268,6 +268,10 @@ async function main(): Promise<void> {
 	const bi = afterUrl.indexOf("--backend");
 	let positional = afterUrl.filter((_, i) => bi < 0 || (i !== bi && i !== bi + 1));
 	const app = target.kind === "web" ? targetLabel(target) : (positional[0] ?? "Notion Calendar");
+	// parseTarget returns the FALLBACK name for an app run, not the positional, so the slug
+	// below would stamp this pass's output to "notion-calendar" no matter which app was named —
+	// overwriting another app's committed map. Rebuild the target from the resolved name.
+	if (target.kind === "app") target = { kind: "app", name: app };
 	// `buildRunArgs` keeps the label in positional 0 for a web target too, so that guidance
 	// stays where every caller already puts it. Drop it here rather than teaching the guidance
 	// slot to move — a shifted positional is how a target name becomes a safety instruction.
