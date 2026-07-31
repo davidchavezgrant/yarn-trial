@@ -836,7 +836,12 @@ export class CdpBackend {
 						if (typed) {
 							let now = (await this.page.evaluate(ACTIVE_DESC).catch(() => "")) as string;
 							if (!now.startsWith("E:"))
-								for (let tries = 0; tries < 6 && !now.startsWith("E:"); tries++) {
+								// 3s, not the arrival-wait's 1.2s: Yarn's debounced scene sync
+								// re-mounts the editor ~1s into typing and takes a further beat
+								// to hand focus back — a poll that gives up first turns every
+								// long sentence into an interrupted step (observed at ~13 chars,
+								// twice in one run). Riding it out keeps one typing action whole.
+								for (let tries = 0; tries < 15 && !now.startsWith("E:"); tries++) {
 									await new Promise((r) => setTimeout(r, 200));
 									now = (await this.page.evaluate(ACTIVE_DESC).catch(() => "")) as string;
 								}
