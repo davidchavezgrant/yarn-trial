@@ -21,6 +21,11 @@ export const CHROME = String.raw`<meta charset="utf-8">
      the gallery), never on the document. */
   html, body { height:100%; }
   body { margin:0; overflow:hidden; display:flex; flex-direction:column; font:14px/1.5 ui-sans-serif,-apple-system,system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  /* No visible scrollbars anywhere — scrolling itself is untouched (trackpad, wheel, and the
+     log's autoscroll pin all read scrollTop, not the bar). Safe to do wholesale because this
+     page only ever renders in Electron's Chromium, so the -webkit pseudo-element is the one
+     spelling that matters. */
+  ::-webkit-scrollbar { display:none; }
   /* 88px of left padding clears the macOS traffic lights: the window uses hiddenInset, so
      they are drawn OVER the page's top-left corner. The header doubles as the drag region
      the hidden title bar no longer provides; its controls opt back out or they stop being
