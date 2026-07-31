@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { appmapsDir, dataRoot, outDir } from "./paths.js";
-import { appBundlePath, listApps, listRecordedRuns, parseByteRange, pruneUiState, readUiState, RunController, streamPump, writeUiState } from "./ui-core.js";
+import { appBundlePath, HumanizeController, listApps, listRecordedRuns, parseByteRange, pruneUiState, readUiState, resolveVideo, RunController, streamPump, writeUiState } from "./ui-core.js";
 
 /**
  * Each test gets its own data root rather than writing out/ui-state.json into the checkout.
@@ -130,6 +132,38 @@ test("listRecordedRuns__SkipsTheRun__When__DeclaredVideoIsGone", () => {
 		fakeRun("2026-07-30T03-00-00-yarn", { app: "Yarn", success: true, steps: [] });
 		fs.rmSync(`${dataRoot()}/out/recording/2026-07-30T03-00-00-yarn/window.mp4`);
 		assert.deepEqual(listRecordedRuns(), []);
+	});
+});
+
+test("listRecordedRuns__SurfacesTheHumanizedRender__When__ItExistsBesideTheCapture", () => {
+	// The humanize pass writes humanized.mp4 next to window.mp4; the gallery keys its default
+	// playback and its Render button off this field, so presence-on-disk must become presence
+	// in the entry on the very next scan.
+	inTempRoot(() => {
+		fakeRun("2026-07-30T04-00-00-yarn", { app: "Yarn", success: true, steps: [] });
+		fs.writeFileSync(`${dataRoot()}/out/recording/2026-07-30T04-00-00-yarn/humanized.mp4`, "");
+		const runs = listRecordedRuns();
+		assert.equal(runs.length, 1);
+		assert.equal(runs[0].humanized, "out/recording/2026-07-30T04-00-00-yarn/humanized.mp4");
+	});
+});
+
+test("listRecordedRuns__OmitsHumanized__When__NoRenderHasBeenMade", () => {
+	// Absence is load-bearing: it is what makes the card offer "Render human cursor".
+	inTempRoot(() => {
+		fakeRun("2026-07-30T05-00-00-yarn", { app: "Yarn", success: true, steps: [] });
+		assert.equal(listRecordedRuns()[0].humanized, undefined);
+	});
+});
+
+test("resolveVideo__ServesTheHumanizedRender__When__AskedForIt", () => {
+	// Pins the assumption the gallery leans on: the protocol path needed NO change for
+	// humanized.mp4 because resolveVideo accepts any mp4 under out/recording.
+	inTempRoot(() => {
+		const rel = "out/recording/2026-07-30T06-00-00-yarn/humanized.mp4";
+		fs.mkdirSync(path.dirname(`${dataRoot()}/${rel}`), { recursive: true });
+		fs.writeFileSync(`${dataRoot()}/${rel}`, "");
+		assert.equal(resolveVideo(rel), `${dataRoot()}/${rel}`);
 	});
 });
 
@@ -342,4 +376,121 @@ test("parseByteRange__AnswersWhole__When__ThereIsNoRangeToHonour", () => {
 test("parseByteRange__Refuses__When__TheRangeStartsPastTheFile", () => {
 	assert.deepEqual(parseByteRange("bytes=100-", 100), { kind: "unsatisfiable" });
 	assert.deepEqual(parseByteRange("bytes=50-10", 100), { kind: "unsatisfiable" });
+});
+
+/**
+ * A render is never actually spawned here: launch() is patched out the way RunController.spawn
+ * is, and the test emits the child's bytes and exit by hand — no tsx, no ffmpeg, no minutes of
+ * real compositing inside a unit test.
+ */
+interface FakeChild {
+	child: ChildProcess;
+	out(text: string): void;
+	err(text: string): void;
+	close(code: number | null): void;
+	error(message: string): void;
+}
+
+function fakeChild(): FakeChild {
+	const child = new EventEmitter();
+	const stdout = new EventEmitter();
+	const stderr = new EventEmitter();
+	Object.assign(child, { stdout, stderr });
+
+	return {
+		child: child as unknown as ChildProcess,
+		out: (t) => stdout.emit("data", Buffer.from(t)),
+		err: (t) => stderr.emit("data", Buffer.from(t)),
+		close: (code) => child.emit("close", code),
+		error: (message) => child.emit("error", new Error(message)),
+	};
+}
+
+/** A controller whose launch() hands out the given fakes in order. */
+function rig(children: FakeChild[]): HumanizeController {
+	const controller = new HumanizeController();
+	let i = 0;
+	(controller as unknown as { launch(stamp: string): ChildProcess }).launch = () => children[i++].child;
+
+	return controller;
+}
+
+test("start__RefusesTheSecond__When__TheSameStampIsAlreadyRendering", () => {
+	// Two renders of one stamp race on the same motion-track.json and humanized.mp4.
+	const c = rig([fakeChild()]);
+	assert.equal(c.start("2026-07-30T01-00-00-yarn"), undefined);
+	assert.match(c.start("2026-07-30T01-00-00-yarn") ?? "", /already rendering/);
+});
+
+test("start__RefusesTheThird__When__TwoRendersAreInFlight", () => {
+	// Different stamps are allowed concurrently — up to the cap, which is about CPU fan-out,
+	// not correctness.
+	const c = rig([fakeChild(), fakeChild()]);
+	assert.equal(c.start("stamp-one"), undefined);
+	assert.equal(c.start("stamp-two"), undefined);
+	assert.match(c.start("stamp-three") ?? "", /2 renders already in flight/);
+});
+
+test("start__AllowsTheStampAgain__When__ThePreviousRenderSettled", () => {
+	// failed must be retryable, and a settled render must release its slot under the cap.
+	const a = fakeChild();
+	const b = fakeChild();
+	const c = rig([a, b]);
+	assert.equal(c.start("stamp-one"), undefined);
+	a.err("no recording at out/recording/stamp-one\n");
+	a.close(1);
+	assert.equal(c.status()["stamp-one"].state, "failed");
+	assert.equal(c.start("stamp-one"), undefined);
+	assert.deepEqual(c.status()["stamp-one"], { state: "rendering" });
+});
+
+test("start__CapturesTheLastErrorLine__When__TheChildExitsNonzero", () => {
+	// The card's failed state shows ONE line, and it must be the diagnosis humanize.ts printed
+	// to stderr right before exit(1) — not the stdout progress that preceded it. The stderr
+	// line carries no trailing newline on purpose: a process's last words rarely do, so this
+	// also pins the flush-before-report ordering.
+	const a = fakeChild();
+	const c = rig([a]);
+	c.start("stamp-one");
+	a.out("motion track: out/recording/stamp-one/motion-track.json (400 cursor samples)\n");
+	a.err("render failed: no frames to render at out/recording/stamp-one/frames");
+	a.close(1);
+	assert.deepEqual(c.status()["stamp-one"], { state: "failed", error: "render failed: no frames to render at out/recording/stamp-one/frames" });
+});
+
+test("start__FallsBackToStdout__When__AFailingChildWroteNoStderr", () => {
+	const a = fakeChild();
+	const c = rig([a]);
+	c.start("stamp-one");
+	a.out("could not measure changed regions: python3 missing\n");
+	a.close(1);
+	assert.deepEqual(c.status()["stamp-one"], { state: "failed", error: "could not measure changed regions: python3 missing" });
+});
+
+test("start__MarksDone__When__TheChildExitsZero", () => {
+	const a = fakeChild();
+	const c = rig([a]);
+	c.start("stamp-one");
+	a.out("humanized video: out/recording/stamp-one/humanized.mp4 (900 frames)\n");
+	a.close(0);
+	assert.deepEqual(c.status()["stamp-one"], { state: "done" });
+});
+
+test("start__ReportsFailure__When__TheChildCannotSpawn", () => {
+	// npx missing from a packaged app's PATH emits 'error' and then 'close' — the second event
+	// must not overwrite the failure, and nothing here may throw across IPC.
+	const a = fakeChild();
+	const c = rig([a]);
+	assert.equal(c.start("stamp-one"), undefined);
+	a.error("spawn npx ENOENT");
+	a.close(null);
+	assert.deepEqual(c.status()["stamp-one"], { state: "failed", error: "could not start the render: spawn npx ENOENT" });
+});
+
+test("start__RefusesTheStamp__When__ItIsNotStampShaped", () => {
+	// The stamp arrives from the renderer and rides into argv: path separators and flag-shaped
+	// strings are refused before a child exists to be confused by them.
+	const c = rig([]);
+	for (const bad of ["", "  ", "../etc", "a/b", "--no-video"]) assert.match(c.start(bad) ?? "", /not a run stamp/);
+	assert.deepEqual(c.status(), {});
 });

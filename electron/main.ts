@@ -1,7 +1,7 @@
 import { app, BrowserWindow, desktopCapturer, ipcMain, net, protocol, shell, systemPreferences } from "electron";
 import fs from "node:fs";
 import { Readable } from "node:stream";
-import { appBundlePath, listApps, listRecordedRuns, parseByteRange, readUiState, resolveVideo, RunController, writeUiState, type RunHandlers, type RunOptions } from "../src/ui-core.js";
+import { appBundlePath, HumanizeController, listApps, listRecordedRuns, parseByteRange, readUiState, resolveVideo, RunController, writeUiState, type RunHandlers, type RunOptions } from "../src/ui-core.js";
 import { page } from "../src/ui-page.js";
 import { describeCredentials, provisionFromBundle } from "../src/remote/team.js";
 import {
@@ -62,6 +62,10 @@ const runs = new RunController();
  * identity, never by key alone: keys can move under a controller mid-run.
  */
 const remotes = new Map<string, RemoteRunController>();
+// Its own controller, not a verb on RunController: rendering a cursor is local ffmpeg work
+// with no driver session, so it must stay OUTSIDE the single-run guard and keep working while
+// an agent run is in flight.
+const humanizer = new HumanizeController();
 let win: BrowserWindow | undefined;
 
 /** Injected before the shared app script; implements the `window.__bus` contract. */
@@ -78,6 +82,10 @@ window.__bus = {
   videoUrl: (rel) => window.__videoBase + rel.split('/').map(encodeURIComponent).join('/'),
   run: (opts) => ipcRenderer.invoke('run', opts),
   ground: (app, host, url) => ipcRenderer.invoke('ground', { app, host, url }),
+  // Humanized-cursor render for a gallery card. Fire once, then poll the status map — the
+  // render outlives any single IPC round trip and the gallery already repaints on a timer.
+  humanize: (stamp) => ipcRenderer.invoke('humanize', stamp),
+  humanizeStatus: () => ipcRenderer.invoke('humanize:status'),
   // Stop names the machine whose run should end — with runs live on several hosts at once,
   // a bare stop would have to guess which one the operator meant.
   stop: (host) => ipcRenderer.invoke('stop', host),
@@ -231,6 +239,16 @@ ipcMain.handle("appIcon", async (_event, name: unknown) => {
 
 /** Gallery entries, tagged with the Mac each one was pulled from. Local runs carry no tag. */
 ipcMain.handle("runs", () => annotateRuns(listRecordedRuns()));
+
+/**
+ * Render a human cursor over a recorded run. NOT gated on alreadyBusy(): no driver session is
+ * involved, so a render alongside an agent run is exactly the concurrency the split into its
+ * own controller exists to allow. Answers an error string or undefined — never throws across
+ * IPC; the controller is written to guarantee that.
+ */
+ipcMain.handle("humanize", (_event, stamp: unknown) => humanizer.start(String(stamp ?? "")));
+
+ipcMain.handle("humanize:status", () => humanizer.status());
 
 /**
  * Videos are served through a custom scheme rather than file:// — a data: document has a

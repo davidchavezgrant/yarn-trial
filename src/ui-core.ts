@@ -165,6 +165,13 @@ export interface PastRun {
 	visual?: string;
 	/** Repo-relative path to the run's mp4, when it was recorded. */
 	video?: string;
+	/**
+	 * Repo-relative path to the humanized render (the `npm run humanize` output beside the raw
+	 * capture), present only once that pass has produced it. The gallery keys everything off
+	 * this field's presence: default playback, the Humanized/Raw toggle, and whether to offer
+	 * the "Render human cursor" button at all.
+	 */
+	humanized?: string;
 	startedAt: string;
 }
 
@@ -190,6 +197,11 @@ export function listRecordedRuns(limit = 40): PastRun[] {
 			continue; // a half-written log during a live run is not an error worth surfacing
 		}
 		if (!d.video || !fs.existsSync(`${dataRoot()}/${d.video}`)) continue;
+		// The humanize pass writes its render beside the raw capture, so the path is derived from
+		// the video's own directory rather than rebuilt from the id — one source of truth for
+		// where a run's recording lives. Existence is checked per scan, not cached: the file
+		// appears when a render finishes and the next gallery poll must see it.
+		const humanized = `${path.posix.dirname(d.video)}/humanized.mp4`;
 		out.push({
 			id: f.replace(/\.json$/, ""),
 			app: d.app ?? "",
@@ -201,6 +213,7 @@ export function listRecordedRuns(limit = 40): PastRun[] {
 			grounding: d.grounding?.provenance ?? "none",
 			visual: d.visualCheck?.verdict,
 			video: d.video,
+			...(fs.existsSync(`${dataRoot()}/${humanized}`) ? { humanized } : {}),
 			startedAt: d.steps?.[0]?.timestamp ?? "",
 		});
 	}
@@ -493,5 +506,111 @@ export class RunController {
 
 	stop(): void {
 		this.current?.child.kill("SIGINT");
+	}
+}
+
+/** One recording's render state. A stamp absent from the map is idle — never rendered this session. */
+export type HumanizeState =
+	| { state: "rendering" }
+	| { state: "failed"; error: string }
+	| { state: "done" };
+
+/**
+ * How many humanize passes may run at once.
+ *
+ * Two is a bound on fan-out, not a tuned number: each render pins a core streaming raw rgb24
+ * into ffmpeg, and a gallery's worth of clicks must not become a render per card.
+ */
+const HUMANIZE_CONCURRENCY = 2;
+
+/**
+ * Spawns `npm run humanize`'s work (tsx src/humanize.ts <stamp>) for gallery cards.
+ *
+ * Deliberately NOT behind RunController's single-run guard: that guard exists because two
+ * driver sessions kill each other (LIMITATIONS §6), and a humanize pass opens no driver
+ * session — it is local ffmpeg/CPU work over files a finished run left behind, safe to run
+ * while an agent run is in flight. Its own guards are narrower: never two renders of the SAME
+ * stamp (they would race on motion-track.json and humanized.mp4), and a small cap across
+ * different stamps.
+ *
+ * States survive after settle rather than being deleted, so the renderer's poll can see
+ * `failed` (and its last error line) instead of a job that silently vanished. The map is
+ * bounded by the gallery size in practice — one entry per stamp ever rendered this session.
+ */
+export class HumanizeController {
+	private readonly states = new Map<string, HumanizeState>();
+
+	/**
+	 * Start the render for a recorded run's stamp. Returns an error string instead of throwing:
+	 * the reply crosses IPC and the renderer paints it, so nothing here may take the main
+	 * process down.
+	 */
+	start(stamp: string): string | undefined {
+		const id = stamp.trim();
+		// The stamp names a directory under out/recording and rides into argv; anything that is
+		// not stamp-shaped (path separators, a leading dash that reads as a flag) is refused here
+		// rather than passed along to become a confusing child-process error.
+		if (!/^[A-Za-z0-9][\w.-]*$/.test(id)) return "not a run stamp";
+		if (this.states.get(id)?.state === "rendering") return `already rendering ${id}`;
+		const inFlight = [...this.states.values()].filter((s) => s.state === "rendering").length;
+		if (inFlight >= HUMANIZE_CONCURRENCY) return `${HUMANIZE_CONCURRENCY} renders already in flight — wait for one to finish`;
+
+		this.states.set(id, { state: "rendering" });
+
+		let child: ChildProcess;
+		try {
+			child = this.launch(id);
+		} catch (err) {
+			// spawn() itself can throw (EMFILE and friends) before a child exists to emit 'error'.
+			const msg = err instanceof Error ? err.message : String(err);
+			this.states.set(id, { state: "failed", error: msg });
+
+			return `could not start the render: ${msg}`;
+		}
+
+		// The card's failed state shows ONE line. humanize.ts exits nonzero right after a
+		// console.error naming the missing input (no motion constants, no trajectory turns, no
+		// frames), so the last stderr line is the diagnosis; the last stdout line is the fallback
+		// for a child that died without one.
+		let lastErr = "";
+		let lastOut = "";
+		const errPump = streamPump((l) => (lastErr = l));
+		const outPump = streamPump((l) => (lastOut = l));
+		child.stdout?.on("data", outPump.push);
+		child.stderr?.on("data", errPump.push);
+
+		// Settle exactly once: a child that cannot be spawned emits `error` and then `close`, and
+		// the second event must not overwrite a failure with "exited with code null".
+		let settled = false;
+		const settle = (code: number | null): void => {
+			if (settled) return;
+			settled = true;
+			// Flush before reporting — the reason a render died is usually its unterminated last line.
+			outPump.end();
+			errPump.end();
+			this.states.set(id, code === 0 ? { state: "done" } : { state: "failed", error: lastErr || lastOut || `exited with code ${code}` });
+		};
+		child.on("error", (e) => {
+			// Stream output wins when there is any; this message covers the no-toolchain case
+			// where npx never produced a byte.
+			lastErr = lastErr || `could not start the render: ${e.message}`;
+			settle(1);
+		});
+		child.on("close", settle);
+
+		return undefined;
+	}
+
+	/** Snapshot for the renderer's poll. A plain object because it crosses IPC. */
+	status(): Record<string, HumanizeState> {
+		return Object.fromEntries(this.states);
+	}
+
+	/** The real launch, patched out in tests the way RunController.spawn is. */
+	private launch(stamp: string): ChildProcess {
+		// Same launch shape as RunController.spawn: no shell (the stamp passes as one argv
+		// entry), cwd is the checkout so tsx resolves src/humanize.ts — and so humanize.ts's own
+		// cwd-derived out/ and data/ land where the gallery reads them.
+		return spawnProcess("npx", ["tsx", "src/humanize.ts", stamp], { cwd: resourcesRoot(), env: process.env });
 	}
 }

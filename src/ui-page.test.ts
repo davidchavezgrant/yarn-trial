@@ -33,6 +33,8 @@ interface FakeEl {
 	listeners: Record<string, ((e: unknown) => void)[]>;
 	addEventListener(type: string, fn: (e: unknown) => void): void;
 	querySelector(): null;
+	/** Always empty: innerHTML is a plain string here, so markup never becomes children. */
+	querySelectorAll(): FakeEl[];
 	appendChild(c: FakeEl): void;
 	removeChild(c: FakeEl): void;
 }
@@ -57,6 +59,7 @@ const el = (): FakeEl => ({
 		(this.listeners[type] ??= []).push(fn);
 	},
 	querySelector: () => null,
+	querySelectorAll: () => [],
 	appendChild(c: FakeEl) {
 		this.children.push(c);
 	},
@@ -89,6 +92,7 @@ interface Harness {
 	render(): void;
 	agoLabel(iso: string): string;
 	stateFor(app: string): { task: string; log: string[]; url?: string };
+	loadRuns(force?: boolean): Promise<void>;
 	pinned: boolean;
 	host: string;
 	/** Fire the host's `started` echo, as captured off bus.onStarted at mount. */
@@ -117,7 +121,8 @@ interface Harness {
  * markup, not code, and `new Function` rightly refuses it.
  *
  * `busOverrides` swaps individual bus methods so a test can stub the host side — a `run`
- * that records its options, an `appIcon` that rejects — without re-declaring the whole bus.
+ * that records its options, an `appIcon` that rejects, a gallery feed (loadRuns,
+ * humanizeStatus) — without re-declaring the whole bus.
  */
 function mount(busOverrides: Record<string, unknown> = {}): Harness {
 	const nodes: Record<string, FakeEl> = {};
@@ -160,6 +165,8 @@ function mount(busOverrides: Record<string, unknown> = {}): Harness {
 		},
 		attach: async () => undefined,
 		saveKey: async () => ({ ok: true }),
+		humanize: async () => undefined,
+		humanizeStatus: async () => ({}),
 		...busOverrides,
 	};
 	const document = {
@@ -182,7 +189,7 @@ function mount(busOverrides: Record<string, unknown> = {}): Harness {
 			get pinned(){return pinned}, set pinned(v){pinned=v},
 			get running(){return running}, set offers(v){offers=v},
 			check, syncUrlRow, selUrl, isBrowser, appendLine, line, errText, dropStaleSelection, selectApp, notePin,
-			render, agoLabel, renderAttach, paneRunHost, stateFor };`,
+			render, agoLabel, renderAttach, paneRunHost, stateFor, loadRuns };`,
 	);
 	const noTimer = () => 0;
 	const api = fn({ __bus: bus, addEventListener() {} }, document, noTimer, noTimer) as Harness;
@@ -736,6 +743,76 @@ test("onHost__RekeysTheRun__When__AutoResolvesToAMac", () => {
 	assert.equal(ui.nodes.status.textContent, "running: Yarn @ mac2");
 	ui.sel = "Yarn";
 	assert.equal(ui.paneRunHost(), "mac2");
+/**
+ * The boot script fires its own loadRuns() as the module loads; its awaits are microtasks, so
+ * draining one macrotask lets it settle before a test drives loadRuns deterministically —
+ * otherwise the runsBusy guard silently swallows the test's call.
+ */
+const settle = (): Promise<void> => new Promise((r) => setImmediate(r));
+
+/** A recorded run as the host lists it, minus `humanized` — each test decides that part. */
+const RUN = {
+	id: "2026-07-30T01-00-00-yarn",
+	app: "Yarn",
+	task: "show me how to change the cursor type",
+	success: true,
+	actions: 3,
+	verified: 3,
+	elapsedSec: 40,
+	grounding: "explore",
+	video: "out/recording/2026-07-30T01-00-00-yarn/window.mp4",
+};
+
+test("loadRuns__OffersTheRenderButton__When__ARunHasNoHumanizedVideo", async () => {
+	const ui = mount({ loadRuns: async () => [RUN] });
+	await settle();
+	await ui.loadRuns(true);
+	assert.match(ui.nodes.runs.innerHTML, /Render human cursor/);
+});
+
+test("loadRuns__DropsTheRenderButton__When__TheHumanizedRenderExists", async () => {
+	// The button's absence is the card's "done" signal; the humanized file itself plays via
+	// attach(), which the fake DOM cannot reach.
+	const ui = mount({ loadRuns: async () => [{ ...RUN, humanized: "out/recording/2026-07-30T01-00-00-yarn/humanized.mp4" }] });
+	await settle();
+	await ui.loadRuns(true);
+	assert.doesNotMatch(ui.nodes.runs.innerHTML, /Render human cursor/);
+});
+
+test("loadRuns__ShowsRendering__When__TheHostReportsARenderInFlight", async () => {
+	const ui = mount({
+		loadRuns: async () => [RUN],
+		humanizeStatus: async () => ({ [RUN.id]: { state: "rendering" } }),
+	});
+	await settle();
+	await ui.loadRuns(true);
+	assert.match(ui.nodes.runs.innerHTML, /rendering human cursor/);
+	// No button while it renders: a second click on the same stamp would only earn a refusal.
+	assert.doesNotMatch(ui.nodes.runs.innerHTML, /data-render/);
+});
+
+test("loadRuns__ShowsTheFailureLine__When__TheRenderFailed", async () => {
+	const ui = mount({
+		loadRuns: async () => [RUN],
+		humanizeStatus: async () => ({ [RUN.id]: { state: "failed", error: "no frames in out/recording/x/frames" } }),
+	});
+	await settle();
+	await ui.loadRuns(true);
+	assert.match(ui.nodes.runs.innerHTML, /no frames in out\/recording\/x\/frames/);
+	assert.match(ui.nodes.runs.innerHTML, /Retry human cursor/);
+});
+
+test("loadRuns__RepaintsTheCard__When__TheHumanizedRenderAppears", async () => {
+	// The regression this pins: the redraw signature was ids-only, so a render finishing
+	// between polls changed no id and the finished file never appeared until a forced refresh.
+	let humanized: string | undefined;
+	const ui = mount({ loadRuns: async () => [{ ...RUN, ...(humanized ? { humanized } : {}) }] });
+	await settle();
+	await ui.loadRuns(true);
+	assert.match(ui.nodes.runs.innerHTML, /Render human cursor/);
+	humanized = "out/recording/2026-07-30T01-00-00-yarn/humanized.mp4";
+	await ui.loadRuns(false); // the 4s tick, unforced — the signature alone must trigger the repaint
+	assert.doesNotMatch(ui.nodes.runs.innerHTML, /Render human cursor/);
 });
 
 test("appendLine__StillCapsTheDom__When__NoAnimationFrameEverFires", () => {

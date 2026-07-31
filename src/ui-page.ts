@@ -20,6 +20,14 @@ export interface UiBus {
 	/** Repo-relative mp4 path -> a URL this shell can play. */
 	videoUrl(rel: string): string;
 	/**
+	 * Start rendering a human cursor over a recorded run (the humanize pass, local ffmpeg work —
+	 * allowed while an agent run is in flight). Error string, or undefined once started; the
+	 * outcome arrives through humanizeStatus, not through this promise.
+	 */
+	humanize(stamp: string): Promise<string | undefined>;
+	/** Per-stamp render state. Stamps never rendered this session are absent. */
+	humanizeStatus(): Promise<Record<string, { state: "rendering" | "failed" | "done"; error?: string }>>;
+	/**
 	 * Start a grounding (exploration) pass. Resolves to an error string, or undefined.
 	 *
 	 * `url` is set for a web target, alongside — never instead of — `app`, which stays the
@@ -147,6 +155,11 @@ export const CHROME = String.raw`<meta charset="utf-8">
   .run video { width:100%; border-radius:6px; margin-top:8px; background:#000; display:block; }
   .run .ok { color:var(--ok); }
   .run .bad { color:var(--bad); }
+  .vtoggle { display:flex; gap:6px; margin-top:6px; }
+  .vtoggle .mini.on { color:var(--fg); border-color:var(--accent); }
+  .hrow { margin-top:6px; }
+  .hrow span { font-size:11px; color:var(--dim); }
+  .hfail { font-size:11px; color:var(--bad); margin-top:4px; word-break:break-word; }
   .panehead { display:flex; align-items:center; justify-content:space-between; }
   .mini { width:auto; padding:2px 8px; font-size:13px; line-height:1.2; color:var(--dim); cursor:pointer; }
   .mini:hover { color:var(--fg); border-color:var(--accent); }
@@ -948,6 +961,34 @@ function paintKeyState(present) {
 
 let runSig = '';
 let runsBusy = false;
+// Per-stamp humanize state from the host, refreshed on the gallery's own cadence. Kept across
+// a failed poll rather than reset, so an in-flight render does not flash back to a Render
+// button for one tick and then forward again.
+let hstates = {};
+
+/**
+ * Kick off the humanize pass for one card. The host's status map is authoritative for the
+ * outcome; the local write below only bridges the gap until the next poll so the card reads
+ * "rendering…" immediately instead of four seconds later.
+ */
+async function startHumanize(stamp, btn) {
+  // Same double-click window as dispatchOnce: the IPC round trip is long enough to click
+  // twice, and the second call would earn a pointless "already rendering" line.
+  if (btn.disabled) return;
+  btn.disabled = true;
+  let err;
+  try {
+    err = await bus.humanize(stamp);
+  } catch (e) {
+    err = errText(e);
+  }
+  // A refusal (cap reached, bad stamp) is about THIS click, not about the run's stored state —
+  // it lands in the log pane like every other refused dispatch does.
+  if (err) line('✗ render human cursor: ' + err);
+  else hstates[stamp] = { state: 'rendering' };
+  loadRuns(true);
+}
+
 async function loadRuns(force) {
   // Three callers race here — the 4s timer, the refresh button, onDone — and the host walks
   // every run log on disk to answer. Overlapping passes can resolve out of order and repaint
@@ -965,11 +1006,16 @@ async function loadRuns(force) {
   } finally {
     runsBusy = false;
   }
+  // The render states ride the same tick. A thrown/missing humanizeStatus keeps the previous
+  // map — the gallery is a nicety and must not surface a rejection every 4 seconds.
+  try { hstates = (await bus.humanizeStatus()) || {}; } catch {}
   const box = el('runs');
   // Rebuilding innerHTML tears down any <video> mid-playback, and this runs on a timer —
   // so redraw only when the set of runs actually changed. Signature over ids, not the
-  // whole payload: an in-flight run's log is rewritten as it goes.
-  const sig = runs.map(r => r.id + (r.host || '')).join('|');
+  // whole payload: an in-flight run's log is rewritten as it goes. The humanized flag and the
+  // render state are part of it because both change a card without changing the id — without
+  // them a finished render would never repaint and the toggle would never appear.
+  const sig = runs.map(r => r.id + (r.host || '') + (r.humanized ? '+h' : '') + ((hstates[r.id] || {}).state || '')).join('|');
   if (!force && sig === runSig) return;
   runSig = sig;
 
@@ -979,10 +1025,11 @@ async function loadRuns(force) {
   // collapse the one being watched.
   const open = new Set([...box.querySelectorAll('.run')].filter(c => c.querySelector('video')).map(c => c.dataset.id));
 
-  box.innerHTML = runs.map((r, i) =>
+  box.innerHTML = runs.map((r, i) => {
+    const hs = hstates[r.id];
     // esc() everywhere, not a bare '<' swap: the task text is arbitrary user input landing in
     // markup, and data-id sits inside a quoted attribute where an unescaped quote breaks out.
-    '<div class="run" data-i="' + i + '" data-id="' + esc(r.id) + '">' +
+    return '<div class="run" data-i="' + i + '" data-id="' + esc(r.id) + '">' +
       '<div class="task">' + esc(r.task) + '</div>' +
       '<div class="meta">' +
         '<span>' + esc(r.app) + '</span>' +
@@ -994,23 +1041,70 @@ async function loadRuns(force) {
         '<span>' + r.grounding + '</span>' +
         (r.visual ? '<span>judge ' + r.visual + '</span>' : '') +
       '</div>' +
-    '</div>').join('');
+      // A card with a humanized render offers it in the player (see attach); one without
+      // offers to make it. Both never at once — the button's absence IS the "done" signal.
+      (!r.humanized
+        ? '<div class="hrow">' +
+            (hs && hs.state === 'rendering'
+              ? '<span>rendering human cursor…</span>'
+              : '<button class="mini" data-render="1">' + (hs && hs.state === 'failed' ? 'Retry human cursor' : 'Render human cursor') + '</button>') +
+            // The one line the controller kept from the child's output — the diagnosis
+            // (missing motion constants, no trajectory turns, no frames), not a stack trace.
+            (hs && hs.state === 'failed' ? '<div class="hfail">' + esc(hs.error || 'render failed') + '</div>' : '') +
+          '</div>'
+        : '') +
+    '</div>';
+  }).join('');
 
   const attach = (card, r, autoplay) => {
     const v = document.createElement('video');
-    v.src = bus.videoUrl(r.video);
+    // The humanized render is the artifact this gallery exists to show once it exists; the
+    // raw cursor-less capture stays one toggle away rather than becoming unreachable.
+    let showing = r.humanized ? 'h' : 'raw';
+    v.src = bus.videoUrl(showing === 'h' ? r.humanized : r.video);
     v.controls = true; v.autoplay = autoplay; v.loop = true; v.muted = true;
     card.appendChild(v);
+    if (!r.humanized) return;
+    const t = document.createElement('div');
+    t.className = 'vtoggle';
+    const paint = () => {
+      t.innerHTML = '<button class="mini' + (showing === 'h' ? ' on' : '') + '" data-v="h">Humanized</button>' +
+        '<button class="mini' + (showing === 'raw' ? ' on' : '') + '" data-v="raw">Raw</button>';
+    };
+    paint();
+    t.onclick = (e) => {
+      const b = e.target.closest ? e.target.closest('button[data-v]') : null;
+      if (!b || b.dataset.v === showing) return;
+      showing = b.dataset.v;
+      v.src = bus.videoUrl(showing === 'h' ? r.humanized : r.video);
+      // Swapping src resets the element to paused; resuming is what makes this read as a
+      // toggle rather than a reload. play() can reject (autoplay policy), and an unhandled
+      // rejection on every toggle is not worth the pause it reports.
+      if (v.play) { const p = v.play(); if (p && p.catch) p.catch(() => {}); }
+      paint();
+    };
+    card.appendChild(t);
   };
 
   // Load the mp4 only when a card is opened; autoloading every one would fetch the lot.
   for (const card of box.children) {
     const r = runs[Number(card.dataset.i)];
     if (open.has(card.dataset.id)) attach(card, r, false);
+    const rb = card.querySelector('button[data-render]');
+    if (rb) rb.onclick = () => startHumanize(r.id, rb);
     card.onclick = (e) => {
       if (e.target.tagName === 'VIDEO') return;   // clicking the player is not a toggle
+      // Buttons inside the card (Render, Humanized/Raw) act on the run, not on whether the
+      // card is open — their clicks bubble here and must not close the player under them.
+      if (e.target.closest && e.target.closest('button')) return;
       const existing = card.querySelector('video');
-      if (existing) { existing.remove(); return; }
+      if (existing) {
+        existing.remove();
+        // The toggle exists only to steer the player; it leaves with it.
+        const t = card.querySelector('.vtoggle');
+        if (t) t.remove();
+        return;
+      }
       attach(card, r, true);
     };
   }
