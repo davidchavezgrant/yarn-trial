@@ -144,3 +144,51 @@ deep-link) and the fleet path (runner-spawned CLI over the tunnel). The `yarn` s
 its origin are now in `AUTO_LAUNCH_PROTOCOLS` — scheme read off Yarn.app's Info.plist,
 origin off app.asar's auth endpoints — the origin still wants confirming against a real
 handoff.
+
+---
+
+## Live fleet sign-in, mac3, 2026-07-31 — what a REAL OAuth run found
+
+Ran the full path: `./run signout mac3 Yarn` → `./run liveview mac3 Yarn --cdp` → `ssh -L`
+tunnel → viewer in a browser → real Google sign-in on `me@davidgrant.info`.
+
+**Worked, first time**: the runner brought the app up on 9222 and streamed it; the viewer
+showed Yarn's real login screen; clicks and typing landed; **the endpoint hop fired against a
+real OAuth handoff** — the stream followed Yarn → the external Chrome (9777) across two
+processes and two ports, and Google's 2-Step Verification appeared in the same viewer through
+the same tunnel. 2FA was approved on a phone and passed.
+
+**Three findings, in ascending order of how much they change the design:**
+
+1. **The app's debug port is not enough — the OAuth browser needs one too.** Yarn's "Continue
+   with Google" never opens a page in its own renderer: the click reaches the MAIN process,
+   which asks macOS to open the provider URL externally (`redirectDeeplink yarn` in the
+   renderer console, and nothing else in CDP's view). macOS hands that URL to whichever Chrome
+   is ALREADY RUNNING — on mac3 a desktop-session Chrome with no flags, which no screencast can
+   attach to. Fixed: `ensureBrowserEndpoint()` brings up a flagged Chrome on 9777 and the
+   liveview verb calls it alongside the app's. It QUITS a flagless Chrome to do so, unlike
+   `ensureElectronEndpoint` which refuses — a browser on a fleet Mac holds no unsaved work and
+   is the exact blocker. Verified: after the fix the hop worked.
+   *Generalisation*: any Electron app whose auth leaves through `shell.openExternal` has this
+   shape. Verifying inside one channel cannot see an effect that leaves it — the same lesson as
+   pixel-delta existing because canvas content is absent from the AX channel.
+
+2. **`chrome://` WebUI is unreachable from CDP, by design.** A managed-Workspace account
+   triggered `chrome://managed-user-profile-notice` ("Your organization will manage this
+   profile"), which blocks the OAuth chain. Neither a synthetic `.click()` on its shadow-DOM
+   `#proceed-button` nor a real `Input.dispatchMouseEvent` at the button's measured rect did
+   anything: Chrome refuses injected input on privileged browser UI (the protection that stops
+   a page driving your settings). `bringToFront()` did not move the stream either — the follow
+   policy watches page CREATION, so a page that already exists cannot be selected.
+   **This is the case SCK exists for**, and it is not fixable on the CDP path.
+
+3. **The `"Open Yarn?"` dialog is real, and recommended-level policy does not suppress it.**
+   Seen under SCK: `https://y-prod-api.onrender.com wants to open this application.` — the
+   exact origin now in `AUTO_LAUNCH_PROTOCOLS`, confirming that data. The allowlist is
+   mandatory-only and the fleet's unattended path reaches recommended, so the dialog still
+   appears; the grader already reports this as set-but-ineffective. Root/MDM is the only fix.
+
+**Consequence for the design**: a sign-in is not one transport's job. CDP covers the app and
+the provider's own pages (the long, typed, credential-bearing part); SCK covers the browser's
+chrome — external-protocol dialogs, enterprise interstitials, passkey sheets. The switch is
+currently manual (`--sck`), which is the next thing to close.

@@ -304,6 +304,18 @@ export class FollowStack<T> {
 	dropOrigin(origin: FollowOrigin): void {
 		this.entries = this.entries.filter((e) => e.origin !== origin);
 	}
+
+	/**
+	 * Make the OLDEST entry active — the operator's manual override for a newest-wins pick
+	 * that landed on the wrong page (mac3, 2026-07-31: a blocking enterprise interstitial hid
+	 * behind the redirect page that opened after it). Repeated calls walk every page and
+	 * return to where they started, so a human can always reach any of them by pressing again.
+	 * Rotation, not a swap: a swap on three or more pages can never reach the middle.
+	 */
+	cycle(): void {
+		const first = this.entries.shift();
+		if (first) this.entries.push(first);
+	}
 }
 
 /** How long the endpoint gets to answer /json/version. The target is already running (the
@@ -541,10 +553,22 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 		sync();
 	};
 
-	/** Follow every page a browser opens from here on. New pages land in EXISTING contexts (a
-	 *  popup shares its opener's), so watching those covers the flows this exists for. */
+	/**
+	 * Follow every page a browser opens from here on, AND every page it already has.
+	 *
+	 * The adoption half was learned the hard way on mac3, 2026-07-31: a managed-Workspace
+	 * sign-in opened `chrome://managed-user-profile-notice`, which BLOCKS the OAuth chain, and
+	 * the engine never offered it — page events only fire for pages created after the listener
+	 * attaches, so anything already open was invisible and unreachable. A page the operator
+	 * cannot select is the same as a page that is not there. Adopting existing pages costs
+	 * nothing (the stack dedupes, `followed` guards) and is the difference between a stuck
+	 * sign-in and a steerable one.
+	 */
 	const watch = (b: Browser, origin: FollowOrigin) => {
-		for (const c of b.contexts()) c.on("page", (p) => follow(p, origin));
+		for (const c of b.contexts()) {
+			c.on("page", (p) => follow(p, origin));
+			for (const p of c.pages()) follow(p, origin);
+		}
 	};
 
 	watch(browser, "primary");
@@ -644,9 +668,19 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 
 					return;
 				case "follow":
+					// Cycle to the next followed page. Newest-wins is a heuristic and mac3
+					// (2026-07-31) showed it losing: a blocking enterprise interstitial was
+					// superseded by the redirect page that arrived after it, leaving the
+					// operator watching a blank `Redirecting` while the thing needing a click
+					// sat behind it. An automatic policy will always have such a case, so the
+					// human gets a manual override rather than a cleverer heuristic.
+					stack.cycle();
+					sync();
+
+					return;
 				case "pin":
-					// The follow stack decides what streams; the viewer's window verbs have
-					// nothing to pick.
+					// A viewer-side window id means nothing here: the CDP engine's units are
+					// pages, and the viewer never learns their ids. `follow` is the verb.
 					return;
 				case "mouse": {
 					if (!s || !meta) return; // no frame from the current page yet: nowhere to aim

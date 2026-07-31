@@ -348,6 +348,45 @@ test("FollowStack__DropsOnlyPrimaryPages__When__PrimaryOriginNamed", () => {
 	assert.equal(s.size, 1);
 });
 
+// ---- cycle: the operator's override for a newest-wins pick that landed wrong -------------
+
+test("FollowStack__MakesAnotherPageActive__When__Cycled", () => {
+	// The mac3 case, 2026-07-31: a blocking `chrome://managed-user-profile-notice` was pushed,
+	// then the SetSID redirect page opened after it and won. The human needs the interstitial.
+	const s = new FollowStack<string>();
+	s.push("notice", "browser");
+	s.push("redirect", "browser");
+	assert.equal(s.active?.page, "redirect");
+
+	s.cycle();
+
+	assert.equal(s.active?.page, "notice");
+});
+
+test("FollowStack__ReachesEveryPageAndReturns__When__CycledRepeatedly", () => {
+	// Rotation, not a swap: a swap can never reach the middle of three, so an operator would
+	// have a page they cannot get to. Cycling the full length must come back to the start.
+	const s = new FollowStack<string>();
+	for (const p of ["a", "b", "c"]) s.push(p, "primary");
+	const seen = [s.active?.page];
+	for (let i = 0; i < 3; i++) {
+		s.cycle();
+		seen.push(s.active?.page);
+	}
+
+	// Oldest-to-top, so the walk runs a→b→c rather than backwards. Either direction is fine;
+	// what matters is that all three are reachable and the fourth press is home again.
+	assert.deepEqual(seen, ["c", "a", "b", "c"], "every page reachable, and back where it started");
+});
+
+test("FollowStack__StaysEmpty__When__CycledWithNothingFollowed", () => {
+	const s = new FollowStack<string>();
+	s.cycle();
+
+	assert.equal(s.active, undefined);
+	assert.equal(s.size, 0);
+});
+
 test("FollowStack__RevivesWithNewPage__When__PushedAfterEmptying", () => {
 	// An emptied stack is not a dead session (only primary-endpoint death is): a page
 	// opening later streams again.

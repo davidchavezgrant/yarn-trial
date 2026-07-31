@@ -58,7 +58,7 @@ export function viewerHtml(token: string): string {
   <div id="bar">
     <b id="title">Connecting…</b>
     <span id="status">opening the window stream</span>
-    <span style="margin-left:auto;color:#666">click the window to focus it, then type your login · <kbd>Esc</kbd> stays in the app</span>
+    <span style="margin-left:auto;color:#666">click the window to focus it, then type your login · <kbd>Esc</kbd> stays in the app · <kbd>⌘]</kbd> next page</span>
   </div>
   <div id="stage">
     <canvas id="c" class="settling" width="800" height="600"></canvas>
@@ -153,6 +153,11 @@ export function viewerHtml(token: string): string {
     // Let the browser keep its own shortcuts (reload, devtools) — only forward when the canvas
     // is the focus of the login, which for a viewer is "always while this tab is active".
     if (e.metaKey && (e.key === 'r' || e.key === 'R')) return;
+    // cmd+] — show me a different page. The CDP engine streams the newest page, which is a
+    // heuristic, and on mac3 (2026-07-31) it lost: a blocking enterprise interstitial sat
+    // behind the redirect page that opened after it, unreachable and invisible. This is the
+    // way out of any such pick. The SCK engine has no pages and ignores it.
+    if (e.metaKey && e.key === ']') { send({ cmd:'follow' }); e.preventDefault(); return; }
     if (e.key in NAMED) { send({ cmd:'key', down:true, code:NAMED[e.key], flags:flags(e) }); send({ cmd:'key', down:false, code:NAMED[e.key], flags:0 }); e.preventDefault(); return; }
     if (e.key.length === 1 && !e.metaKey && !e.ctrlKey) { send({ cmd:'text', s:e.key }); e.preventDefault(); }
     // cmd+V etc. would need clipboard bridging; a login rarely pastes, and the engine's 'text'
