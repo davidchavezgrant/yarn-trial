@@ -378,12 +378,26 @@ export function scopeWarnings(map: AppMap): string {
 }
 
 /**
+ * Which appmap pair grounds this run. "" is the element-grounded default;
+ * APPMAP_VARIANT=vision selects the `.vision.*` pair a vision-only explore pass wrote
+ * (`explore --no-ax`) — a benchmark arm, so the run log's grounding meta must say which
+ * variant was used. Read per call, not at import, so a test can flip it.
+ */
+export const appmapVariant = (): string => (process.env.APPMAP_VARIANT === "vision" ? ".vision" : "");
+
+/**
  * Takes the artifact SLUG, not an app name: a web target's slug is derived from its origin
  * rather than by folding whitespace, so `appSlug` is no longer the right thing to apply here
  * and applying it twice would mangle one. Callers own the slug (see `targetSlug`).
+ *
+ * Honours APPMAP_VARIANT the same way loadGrounding does — a run grounded on the vision prose
+ * must also take the vision GRAPH, or its scope warnings would come from a map the model
+ * never read. Deliberately NO fallback to the default pair when the variant's graph is
+ * absent: that would leak the element-grounded map's knowledge into a vision-grounded arm.
+ * A missing graph merely switches the graph features off, same as ever.
  */
 export function loadAppMapGraph(slug: string): AppMap | undefined {
-	const path = `${appmapsDir()}/${slug}.json`;
+	const path = `${appmapsDir()}/${slug}${appmapVariant()}.json`;
 	if (!fs.existsSync(path)) return undefined;
 
 	try {
