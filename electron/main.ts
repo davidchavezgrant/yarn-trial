@@ -1,5 +1,5 @@
 import { app, BrowserWindow, desktopCapturer, ipcMain, net, protocol, shell, systemPreferences, WebContentsView } from "electron";
-import { spawn as spawnProcess } from "node:child_process";
+import { execFile, spawn as spawnProcess } from "node:child_process";
 import fs from "node:fs";
 import { Readable } from "node:stream";
 import { defaultOperator, loadHosts, resolveHost, type HostEntry } from "../src/remote/control/hosts.js";
@@ -86,6 +86,15 @@ const portal = new SigninPortal({
 		const res = await runSsh(host, runnerArgv("liveview", { app, operator }), { timeoutMs: 60_000 });
 
 		return lastFrame(res.stdout);
+	},
+	freeLocalPort: async (port) => {
+		// lsof names the holders; SIGKILL because a wedged ssh ignores TERM, and this only ever
+		// targets processes listening on OUR fixed forward port on loopback.
+		await new Promise<void>((resolve) => {
+			execFile("/bin/sh", ["-c", `lsof -ti tcp:${port} | xargs kill -9 2>/dev/null; exit 0`], () => resolve());
+		});
+		// Give the kernel a moment to release the listener before ssh tries to bind it.
+		await new Promise((r) => setTimeout(r, 400));
 	},
 	spawnTunnel: (host, port) => {
 		// stdio ignored: the tunnel's only output is noise, and an unread pipe would block it.

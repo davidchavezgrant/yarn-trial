@@ -12,7 +12,7 @@
 export const CHROME = String.raw`<meta charset="utf-8">
 <title>Self-driving demo agent</title>
 <style>
-  :root { color-scheme: dark; --bg:#16181d; --panel:#1e2128; --line:#2e323c; --fg:#e6e8ec; --dim:#9aa1ad; --accent:#6c8cff; --ok:#57c98a; --bad:#e5736a; }
+  :root { color-scheme: dark; --bg:#16181d; --panel:#1e2128; --line:#2e323c; --fg:#e6e8ec; --dim:#9aa1ad; --accent:#6c8cff; --ok:#57c98a; --warn:#d9b45b; --bad:#e5736a; }
   * { box-sizing: border-box; }
   /* The window never scrolls as a whole: the page is a fixed header over a grid that takes
      exactly the remaining height. Flex, not height:calc(100vh - Npx) — the calc pinned the
@@ -75,6 +75,7 @@ export const CHROME = String.raw`<meta charset="utf-8">
   #log div { padding:1px 0; }
   .t-step { color:var(--accent); }
   .t-ok { color:var(--ok); }
+  .t-warn { color:var(--warn); }
   .t-bad { color:var(--bad); }
   .t-meta { color:var(--dim); }
   .empty { color:var(--dim); font-style:italic; }
@@ -686,15 +687,28 @@ function schedulePaint() {
 function appendLine(text) {
   // Only the scope-ambiguity dump is folded; everything else stays inline.
   if (/^\s+scope ambiguity:/.test(text)) return foldable(text);
+  // Interpreter chatter — Pillow and Node deprecation notices, npm's own warnings — is dropped,
+  // not dimmed: nothing in those lines is actionable from this window, and they arrive once per
+  // step (pixelDelta shells out to python for every action). The child's full stderr is still
+  // in the job log on disk for whoever is debugging the toolchain itself.
+  if (/DeprecationWarning|ExperimentalWarning|^npm warn |^\(node:\d+\)|--trace-(deprecation|warnings)/i.test(text)) return;
   const d = document.createElement('div');
   let cls = '';
   if (/^\[\d+\]/.test(text)) cls = 't-step';
-  else if (/✓|PASSED|=== DONE/.test(text)) cls = 't-ok';
-  // Before the failure bucket: the readiness refusal is the agent declining to guess at a
-  // sign-in wall — expected and recoverable (the sign-in window opens itself), not a failure.
-  else if (/^REFUSING TO RUN|sign-in needed/.test(text)) cls = 't-meta';
-  else if (/✗|FAIL|WARNING|REFUS|error/i.test(text)) cls = 't-bad';
+  // Summary lines stay dim even when they contain words like "failed": the verdict's color
+  // belongs to the DONE/exit line, not to every line that restates it.
   else if (/^(stats|verification|home reset|target|task|loaded|recording|run log|visual judge)/.test(text)) cls = 't-meta';
+  else if (/=== DONE \(failure/.test(text)) cls = 't-bad';
+  else if (/✓|PASSED|=== DONE|■ finished/.test(text)) cls = 't-ok';
+  // Yellow = something went wrong and the run is still going: a failed step check the agent now
+  // recovers from, a retried model call, a revived driver session, a refusal or pause with a
+  // stated remedy. Red is reserved for a run that is dead or an operation that failed outright —
+  // the ordering matters, because retry lines quote errors ("retrying in 4s: 500 Internal
+  // Server Error") and must claim the line before the error bucket sees it.
+  else if (/retrying|routing around|REFUTED|REFUS|sign-in needed|paused|WARNING|^\s*NOTE:/.test(text)) cls = 't-warn';
+  else if (/^✗|■ exited|error/i.test(text)) cls = 't-bad';
+  // Step-level ✗/FAIL that reached here is indented agent output whose run continued.
+  else if (/✗|FAIL/.test(text)) cls = 't-warn';
   d.className = cls;
   d.textContent = text;
   const log = el('log');

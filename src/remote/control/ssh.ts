@@ -119,7 +119,26 @@ export function sshArgv(host: HostEntry, remoteArgv: string[]): string[] {
 export function tunnelArgv(host: HostEntry, port: number): string[] {
 	if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error(`not a forwardable port: ${port}`);
 
-	return [...sshBaseArgv(host), "-L", `${port}:127.0.0.1:${port}`, "-N", `${host.ssh.user}@${host.ssh.host}`];
+	// Multiplexing OFF for the tunnel, and this is the whole bug behind the "white sign-in
+	// screen" (measured 2026-07-31). sshBaseArgv turns on ControlMaster=auto so the fleet's
+	// 15s status poll reuses one connection — correct there, fatal here: when a master socket
+	// for this host already EXISTS, a new `ssh -L` joins it as a client and ssh refuses the
+	// forward with "Could not request local forwarding", exiting nonzero. The local port then
+	// accepts and instantly resets (ECONNRESET), so the viewer loads into a dead socket and
+	// paints blank. A tunnel is long-lived and single-purpose — it gains nothing from sharing —
+	// so it takes its own connection: ControlPath=none overrides the base block's setting.
+	return [
+		...sshBaseArgv(host),
+		"-o", "ControlPath=none",
+		"-o", "ControlMaster=no",
+		// Notice a dead tunnel instead of holding a port open against a wedged link.
+		"-o", "ServerAliveInterval=15",
+		"-o", "ServerAliveCountMax=3",
+		"-o", "ExitOnForwardFailure=yes",
+		"-L", `${port}:127.0.0.1:${port}`,
+		"-N",
+		`${host.ssh.user}@${host.ssh.host}`,
+	];
 }
 
 /**

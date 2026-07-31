@@ -203,6 +203,13 @@ test("tunnelArgv__CarriesTheSamePinning__When__ForwardingThePortalPort", () => {
 	assert.equal(argv.includes("StrictHostKeyChecking=yes"), true);
 	assert.equal(argv.includes("IdentitiesOnly=yes"), true);
 	assert.equal(argv.includes("BatchMode=yes"), true);
+	// Multiplexing must be OFF: with a master socket already open for this host (the fleet
+	// poll keeps one), ssh joins it as a client and REFUSES the forward — "Could not request
+	// local forwarding" — leaving a port that accepts and instantly resets. Measured; it is
+	// what made the sign-in viewer load into a dead socket and paint blank.
+	assert.equal(argv.includes("ControlPath=none"), true);
+	assert.equal(argv.includes("ControlMaster=no"), true);
+	assert.equal(argv.includes("ExitOnForwardFailure=yes"), true);
 	assert.equal(argv.includes("-L"), true);
 	assert.equal(argv.includes("7682:127.0.0.1:7682"), true);
 	assert.equal(argv.includes("-N"), true);

@@ -265,6 +265,8 @@ struct ForeignScan {
 	var webArea: CGRect?
 	/** Bounding box of the page's visible ink — the login card. Preferred over webArea. */
 	var ink: CGRect?
+	/** How many ink elements were found. Reported so "no ink" is distinguishable from "no scan". */
+	var inkLeaves = 0
 	/** The "Open <App>" confirmation button, when it is on screen. */
 	var openButton: AXUIElement?
 	var openTitle: String = ""
@@ -350,6 +352,7 @@ func scanForeignWindow(_ root: AXUIElement, appName: String) -> ForeignScan {
 			for k in kids { inkWalk(k, depth: depth + 1) }
 		}
 		inkWalk(we, depth: 0)
+		out.inkLeaves = leaves
 		// A handful of leaves is a page mid-load, not a form; keep the web area until it settles.
 		if leaves >= 3 { out.ink = union }
 	}
@@ -416,6 +419,7 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 	private var scanInFlight = false
 	private var lastPressAt = Date.distantPast
 	private var lastCropSent: CGRect?
+	private var lastShapeSent = ""
 
 	init(fps: Int) {
 		self.minInterval = 1.0 / Double(fps)
@@ -616,6 +620,16 @@ final class Engine: NSObject, SCStreamOutput, SCStreamDelegate {
 		if moved {
 			lastCropSent = next
 			emitWindowEvent(id: windowId, title: "", app: currentApp)
+		}
+		// Diagnostic, once per scan whose findings changed shape: which of the two rects the
+		// crop came from, and how much ink was found. "web area, 0 leaves" and "ink, 19 leaves"
+		// look identical downstream, and telling them apart is the whole debugging problem.
+		let shape = "\(scan.ink != nil ? "ink" : (scan.webArea != nil ? "webarea" : "none"))"
+		if shape != lastShapeSent {
+			lastShapeSent = shape
+			emitEvent(["ev": "scan", "source": shape, "leaves": scan.inkLeaves,
+			           "web": scan.webArea.map { "\(Int($0.width))x\(Int($0.height))" } ?? "nil",
+			           "ink": scan.ink.map { "\(Int($0.width))x\(Int($0.height))" } ?? "nil"])
 		}
 
 		// The hands-free redirect. Debounced: the dialog outlives the press by a frame or two,

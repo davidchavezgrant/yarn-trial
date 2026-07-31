@@ -89,7 +89,10 @@ changed = sum(1 for p in diff.getdata() if p > 12)
 print(changed / float(w * h))
 `;
 	try {
-		const out = execFileSync("python3", ["-c", script, beforePath, afterPath], { encoding: "utf8" }).trim();
+		// -W ignore: Pillow deprecates getdata() with a warning PER CALL, and this runs every
+		// step — the GUI console was mostly Pillow telling us about 2027. The replacement API
+		// does not exist on older Pillows, so suppression beats migration here.
+		const out = execFileSync("python3", ["-W", "ignore::DeprecationWarning", "-c", script, beforePath, afterPath], { encoding: "utf8" }).trim();
 		if (out === "SIZE_MISMATCH") return undefined;
 		const v = Number(out);
 
@@ -142,7 +145,7 @@ print(frac(int(sys.argv[3]), int(sys.argv[4])), frac(int(sys.argv[5]), int(sys.a
 	try {
 		const out = execFileSync(
 			"python3",
-			["-c", script, beforePath, afterPath, String(from.x), String(from.y), String(to.x), String(radius), String(to.y)],
+			["-W", "ignore::DeprecationWarning", "-c", script, beforePath, afterPath, String(from.x), String(from.y), String(to.x), String(radius), String(to.y)],
 			{ encoding: "utf8" },
 		).trim();
 		if (out === "SIZE_MISMATCH") return { moved: false };

@@ -32,6 +32,16 @@ export interface PortalDeps {
 	/** Spawn `ssh -L port:127.0.0.1:port -N` with the fleet argv. Kill must be idempotent. */
 	spawnTunnel(host: HostEntry, port: number): { kill(): void };
 	/**
+	 * Kill whatever local process still holds the forward port, and resolve once it is free.
+	 *
+	 * Called before every spawn, not just after a failure. An ssh -L whose parent died, a
+	 * previous session's tunnel, a hand-run one — any of them keeps the port, and ssh then
+	 * refuses the new forward ("cannot listen to port") while the port still ACCEPTS and
+	 * resets, which is indistinguishable from a working tunnel until the viewer goes blank.
+	 * Measured 2026-07-31: this is what made a second sign-in attempt fail after a first.
+	 */
+	freeLocalPort(port: number): Promise<void>;
+	/**
 	 * True once the viewer is actually SERVABLE through the tunnel — an HTTP response, not a
 	 * TCP connect. Measured 2026-07-31: `ssh -L` accepts local connections the moment ssh is
 	 * up, before anything listens on the far side, so a connect-only probe passed against a
@@ -72,6 +82,8 @@ interface ActiveSession {
 	app: string;
 	/** The resolved entry, kept so the teardown can reach the runner without a re-lookup. */
 	entry: HostEntry;
+	/** The forward port, so teardown can release it without re-deriving it. */
+	port: number;
 	tunnel: { kill(): void };
 	viewer: { close(): void };
 	lifetime: NodeJS.Timeout;
@@ -129,6 +141,9 @@ export class SigninPortal {
 		if (!Number.isFinite(port) || port <= 0 || !token)
 			return { kind: "fallback", reason: `the runner on ${host.name} answered without a port or token` };
 
+		// Always, not only on retry: the port is a fixed fleet-wide constant, so anything left
+		// holding it locally poisons this attempt exactly as it poisoned the last one.
+		await this.deps.freeLocalPort(port);
 		const tunnel = this.deps.spawnTunnel(host, port);
 		if (!(await this.deps.portReady(port, TUNNEL_READY_MS))) {
 			tunnel.kill();
@@ -147,6 +162,7 @@ export class SigninPortal {
 			host: host.name,
 			app,
 			entry: host,
+			port,
 			tunnel,
 			viewer,
 			// The engine self-terminates at its lifetime; a viewer of a dead stream plus a
@@ -178,9 +194,19 @@ export class SigninPortal {
 		// flag above has already made a no-op.
 		s.viewer.close();
 		s.tunnel.kill();
-		// Best-effort and unawaited: the engine's own idle/lifetime exits are the backstop,
-		// this just frees the port NOW so the next sign-in is not refused for a dead session.
-		void this.deps.stopEngine(s.entry).catch(() => undefined);
+		// Backing out must leave NOTHING behind on either machine, or the next attempt inherits
+		// this one's wreckage — the failure mode that made a second sign-in impossible without
+		// a restart. Three things go, in the order that cannot strand the others:
+		//   1. the engine over there (frees the fixed remote port now, not at its 20min lifetime),
+		//   2. the local forward port (a killed ssh can leave the listener a moment longer),
+		//   3. the UI's own notion that a sign-in is open.
+		// Unawaited by design: close() is called from window-close handlers and process exit,
+		// where nothing can wait, and every step is independently best-effort.
+		void this.deps
+			.stopEngine(s.entry)
+			.catch(() => undefined)
+			.then(() => this.deps.freeLocalPort(s.port))
+			.catch(() => undefined);
 		this.deps.onSessionEnd?.();
 	}
 

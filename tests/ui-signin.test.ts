@@ -40,6 +40,9 @@ function deps(overrides: Partial<PortalDeps> = {}) {
 		stopEngine: async (h) => {
 			log.push(`engine-stopped ${h.name}`);
 		},
+		freeLocalPort: async (p) => {
+			log.push(`port-freed ${p}`);
+		},
 		onSessionEnd: () => void log.push("session-end"),
 		setTimeout: (fn, ms) => {
 			timers.push({ fn, ms });
@@ -62,7 +65,13 @@ test("open__OpensViewerThroughTunnel__When__TheRunnerAnswers", async () => {
 	assert.equal(out.kind, "open");
 	if (out.kind !== "open") return;
 	assert.deepEqual(out.watch, { host: "mac1", app: "Yarn" });
-	assert.deepEqual(log, ["verb", "tunnel", "viewer http://127.0.0.1:7682/?t=tok-abc :: Sign in — Yarn @ mac1"]);
+	assert.deepEqual(log, [
+		"verb",
+		// The port is cleared before ssh binds it — see open__ClearsTheForwardPort.
+		"port-freed 7682",
+		"tunnel",
+		"viewer http://127.0.0.1:7682/?t=tok-abc :: Sign in — Yarn @ mac1",
+	]);
 	assert.equal(timers[0].ms, 1_200_000, "the lifetime timer must come from the runner's reply");
 	assert.deepEqual(portal.active, { host: "mac1", app: "Yarn" });
 });
@@ -126,7 +135,11 @@ test("open__KillsTheTunnelAndFallsBack__When__TheLocalEndNeverComesUp", async ()
 	assert.equal(out.kind, "fallback");
 	// The engine over there gets stopped too — it would otherwise hold its fixed port against
 	// the very retry this fallback suggests.
-	assert.deepEqual(log, ["verb", "tunnel", "tunnel-killed", "engine-stopped mac1"], "a dead tunnel must not leak, and no viewer may open on it");
+	assert.deepEqual(
+		log,
+		["verb", "port-freed 7682", "tunnel", "tunnel-killed", "engine-stopped mac1"],
+		"a dead tunnel must not leak, and no viewer may open on it",
+	);
 });
 
 test("close__StopsTheEngineAndSignalsTheEnd__When__TheSessionEnds", async () => {
@@ -140,6 +153,20 @@ test("close__StopsTheEngineAndSignalsTheEnd__When__TheSessionEnds", async () => 
 
 	assert.equal(log.filter((l) => l === "engine-stopped mac1").length, 1);
 	assert.equal(log.filter((l) => l === "session-end").length, 1);
+	// Backing out releases the forward port too — the next attempt must not inherit a listener
+	// that makes ssh refuse the new forward while the port still accepts and resets.
+	await new Promise((r) => setTimeout(r, 0));
+	assert.equal(log.filter((l) => l === "port-freed 7682").length, 2, "freed once before the spawn, once on teardown");
+});
+
+test("open__ClearsTheForwardPort__When__StartingASession", async () => {
+	// Always, not only after a failure: a leftover ssh -L from a previous session (or a hand-run
+	// one) keeps the fixed port, and ssh then refuses the new forward while the port still
+	// accepts and instantly resets — a blank viewer that looks exactly like a working tunnel.
+	const { d, log } = deps();
+	await new SigninPortal(d).open(host("mac1"), "Yarn", "op");
+
+	assert.ok(log.indexOf("port-freed 7682") < log.indexOf("tunnel"), "the port must be cleared BEFORE ssh binds it");
 });
 
 test("open__RefusesTheSecond__When__ASessionIsAlreadyUp", async () => {
