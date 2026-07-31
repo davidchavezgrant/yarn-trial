@@ -165,11 +165,23 @@ export interface RunLogStep {
 	pixelDelta?: number;
 	/** Did the step's own expectation hold? False plus a driver warning means a no-op. */
 	verified?: boolean;
+	/**
+	 * The step typed for REAL (demo actuation): the frames show the text appearing, so no
+	 * keystrokes are synthesized for it. Absent on runs recorded before live typing existed.
+	 */
+	typedLive?: boolean;
+	/** Real typing spans, one per chunk, in epoch ms. Recorded by the run; never synthesized. */
+	typedChunks?: Array<{ text: string; epochStartMs: number; epochEndMs: number }>;
 }
 
 export interface JoinedAction {
 	step?: RunLogStep;
 	turn: TrajectoryTurn;
+	/**
+	 * Trailing type_text turns collapsed into this entry: a typedLive step types in chunks, and
+	 * on the AX path each chunk is its own driver call. Absent everywhere else.
+	 */
+	chunkTurns?: TrajectoryTurn[];
 }
 
 /**
@@ -234,10 +246,20 @@ export function readTrajectory(recordingDir: string): TrajectoryTurn[] {
 export function joinSteps(steps: RunLogStep[], turns: TrajectoryTurn[]): JoinedAction[] {
 	const joined: JoinedAction[] = [];
 	let si = 0;
-	for (const turn of turns) {
+	for (let ti = 0; ti < turns.length; ti++) {
+		const turn = turns[ti];
 		let match: RunLogStep | undefined;
 		for (let probe = si; probe < steps.length; probe++) {
 			const name = steps[probe].action.name ?? steps[probe].action.kind;
+			/**
+			 * A typedLive step's actuation begins with a synthetic focus click on the field, so
+			 * that click turn arrives BEFORE the step's own type_text turns. Probing past the
+			 * step would hand it to whatever LATER step happens to be a click — and advance si
+			 * past the typed step, orphaning its chunk turns into the legacy keystroke-synthesis
+			 * path. The turn belongs to the typed step's window; the scan stops and it stays
+			 * unmatched.
+			 */
+			if (steps[probe].typedLive && name !== turn.tool) break;
 			if (name !== turn.tool) continue;
 			/**
 			 * Tool name alone is not enough to pair on. Almost every action in a run is a click, so
@@ -257,10 +279,38 @@ export function joinSteps(steps: RunLogStep[], turns: TrajectoryTurn[]): JoinedA
 			si = probe + 1;
 			break;
 		}
-		joined.push({ step: match, turn });
+		const entry: JoinedAction = { step: match, turn };
+		/**
+		 * A typedLive step types in chunks, and on the AX path each chunk is its own driver
+		 * type_text call — so ONE run-log step owns SEVERAL consecutive trajectory turns. The
+		 * trailing ones are absorbed here rather than left for the walk to mis-pair with later
+		 * steps. Absorption is bounded by the step's own text: a chunk is taken only while the
+		 * concatenation is still building toward that text, so the next step's typing (or an
+		 * unknown stray type_text) ends the collapse instead of joining it. When the step
+		 * recorded no text, adjacency is the only evidence and every consecutive turn is taken.
+		 */
+		if (match?.typedLive && turn.tool === "type_text") {
+			const full = String(match.action.args?.text ?? "");
+			let concat = String(turn.arguments.text ?? "");
+			const chunkTurns: TrajectoryTurn[] = [];
+			while (ti + 1 < turns.length && turns[ti + 1].tool === "type_text") {
+				const next = String(turns[ti + 1].arguments.text ?? "");
+				if (full !== "" && !full.startsWith(concat + next)) break;
+				concat += next;
+				chunkTurns.push(turns[ti + 1]);
+				ti++;
+			}
+			if (chunkTurns.length > 0) entry.chunkTurns = chunkTurns;
+		}
+		joined.push(entry);
 	}
 
 	return joined;
+}
+
+/** When an entry's footage ends: the last collapsed chunk's completion, or the turn's own. */
+export function entryEndEpochMs(entry: JoinedAction): number {
+	return entry.chunkTurns?.at(-1)?.epochMs ?? entry.turn.epochMs;
 }
 
 /**
@@ -676,12 +726,14 @@ export function synthesizeMove(
 }
 
 /**
- * Per-character keystroke schedule for a typed string.
+ * Per-character keystroke schedule for a LEGACY atomic type_text.
  *
- * The agent types atomically (one type_text call carrying the whole string), so nothing about
- * per-key timing survives from the run and all of it is synthesized here from the corpus: a
- * lognormal-ish draw around the measured inter-key interval, slower after a space, with occasional
- * corrections that type a wrong character and delete it.
+ * An atomic step typed in one driver call carrying the whole string, so nothing about per-key
+ * timing survives from the run and all of it is synthesized here from the corpus: a lognormal-ish
+ * draw around the measured inter-key interval, slower after a space. Only the characters actually
+ * in `text` are ever emitted — a synthesized typo-and-backspace put a correction into the record
+ * that never happened on screen, and was removed for exactly that reason. Steps that typed for
+ * real (typedLive) never reach this function; their timing is recorded, not synthesized.
  */
 export function keystrokeSchedule(
 	text: string,
@@ -703,13 +755,6 @@ export function keystrokeSchedule(
 		else gap = iki.p90 + ((r - 0.9) / 0.1) * (iki.p99 - iki.p90);
 		if (previous === " ") gap *= constants.ikiAfterSpaceMs / iki.p50;
 		t += gap;
-		// A correction types a neighbouring character, pauses, deletes it, and retypes.
-		if (rand() < constants.correctionRate && ch !== " ") {
-			out.push({ tMs: t, keyType: "character", char: wrongKeyFor(ch), holdMs: constants.keyHoldMs });
-			t += iki.p50 + iki.p75;
-			out.push({ tMs: t, keyType: "delete", holdMs: constants.keyHoldMs });
-			t += iki.p50;
-		}
 		out.push({
 			tMs: t,
 			keyType: ch === " " ? "space" : ch === "\n" ? "return" : "character",
@@ -720,21 +765,6 @@ export function keystrokeSchedule(
 	}
 
 	return out;
-}
-
-/** A plausible mistyped character: the physical neighbour on a QWERTY board. */
-function wrongKeyFor(ch: string): string {
-	const rows = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
-	const lower = ch.toLowerCase();
-	for (const row of rows) {
-		const i = row.indexOf(lower);
-		if (i < 0) continue;
-		const neighbour = row[i + 1] ?? row[i - 1] ?? lower;
-
-		return ch === lower ? neighbour : neighbour.toUpperCase();
-	}
-
-	return ch;
 }
 
 /**
@@ -877,7 +907,8 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 	 */
 	const startMs = Math.max(firstFrameMs, input.recordedFromMs ?? 0);
 	const dropped: Array<{ from: number; to: number }> = [];
-	const joined = allJoined.filter(({ step, turn }, i) => {
+	const joined = allJoined.filter((entry) => {
+		const { step, turn } = entry;
 		// A click the driver warned about that also failed verification is a no-op: the agent
 		// pressed something that does not advertise AXPress and the expected result never appeared.
 		const noop = turn.warned && step?.verified === false;
@@ -896,7 +927,7 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 		 * with it, so the click had no frame at or before it and clamped to the timeline start.
 		 */
 		const dispatch = turn.epochMs - (turn.endMs - turn.startMs);
-		dropped.push({ from: dispatch, to: turn.epochMs + THINK_SETTLE_MS });
+		dropped.push({ from: dispatch, to: entryEndEpochMs(entry) + THINK_SETTLE_MS });
 
 		return false;
 	});
@@ -916,10 +947,10 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 	 * where cause and effect have to stay visible.
 	 */
 	const inAction = (t: number): boolean =>
-		joined.some(({ turn }) => {
-			const dispatch = turn.epochMs - (turn.endMs - turn.startMs);
+		joined.some((entry) => {
+			const dispatch = entry.turn.epochMs - (entry.turn.endMs - entry.turn.startMs);
 
-			return t >= dispatch - PRE_ACTION_MS && t <= turn.epochMs + THINK_SETTLE_MS;
+			return t >= dispatch - PRE_ACTION_MS && t <= entryEndEpochMs(entry) + THINK_SETTLE_MS;
 		});
 	const keptTimes: number[] = [];
 	const keptFiles: string[] = [];
@@ -963,9 +994,9 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 
 	const plan = buildFramePlan(
 		keptTimes,
-		joined.map(({ turn }) => ({
-			startEpochMs: turn.epochMs - (turn.endMs - turn.startMs),
-			endEpochMs: turn.epochMs,
+		joined.map((entry) => ({
+			startEpochMs: entry.turn.epochMs - (entry.turn.endMs - entry.turn.startMs),
+			endEpochMs: entryEndEpochMs(entry),
 		})),
 		keptFiles.length === keptTimes.length ? keptFiles : undefined,
 	);
@@ -985,11 +1016,12 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 	let lastActionMs = 0;
 	cursor.push({ tMs: 0, x: at.x, y: at.y, type });
 
-	for (const { step, turn } of joined) {
+	for (const entry of joined) {
+		const { step, turn, chunkTurns } = entry;
 		// Anchored to the end of its frame: that frame is the last capture BEFORE the action, and
 		// the app's response is the next one, so the click has to sit right against the cut.
 		const dispatchMs = toOutputMs(plan, keptTimes, turn.epochMs - (turn.endMs - turn.startMs), true);
-		const completeMs = toOutputMs(plan, keptTimes, turn.epochMs, true);
+		const completeMs = toOutputMs(plan, keptTimes, entryEndEpochMs(entry), true);
 		const raw = actionPoint(turn);
 		// Corrected against the pixels before scaling: the change box is in the same capture space
 		// the driver reported the click point in.
@@ -1127,12 +1159,45 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 		}
 
 		if (turn.tool === "type_text") {
-			const text = String(turn.arguments.text ?? "");
-			// The reveal spans the action's real duration; the schedule is synthesized because the
-			// agent types atomically and no per-key timing was ever recorded.
-			for (const k of keystrokeSchedule(text, input.constants, rand))
-				events.push({ tMs: dispatchMs + k.tMs, kind: "key", keyType: k.keyType, char: k.char, holdMs: k.holdMs, stepIndex: step?.index });
-			events.push({ tMs: dispatchMs, kind: "textReveal", reveal: "typed", text, sourceTMs: turn.startMs, stepIndex: step?.index });
+			if (step?.typedLive) {
+				/**
+				 * The step typed for REAL and the frames show the text appearing, so the track
+				 * carries only the recorded spans. Synthesizing a keystream on top would
+				 * double-report what the plate already shows. The step's own chunk timings are
+				 * preferred; a run that recorded none falls back to each turn's dispatch-to-
+				 * completion window — real timing either way, never invented.
+				 */
+				const recorded = step.typedChunks ?? [];
+				if (recorded.length > 0) {
+					for (const c of recorded)
+						events.push({
+							tMs: toOutputMs(plan, keptTimes, c.epochStartMs),
+							endTMs: toOutputMs(plan, keptTimes, c.epochEndMs),
+							kind: "textReveal",
+							reveal: "live",
+							text: c.text,
+							stepIndex: step.index,
+						});
+				} else {
+					for (const t of [turn, ...(chunkTurns ?? [])])
+						events.push({
+							tMs: toOutputMs(plan, keptTimes, t.epochMs - (t.endMs - t.startMs)),
+							endTMs: toOutputMs(plan, keptTimes, t.epochMs),
+							kind: "textReveal",
+							reveal: "live",
+							text: String(t.arguments.text ?? ""),
+							sourceTMs: t.startMs,
+							stepIndex: step.index,
+						});
+				}
+			} else {
+				const text = String(turn.arguments.text ?? "");
+				// A LEGACY atomic type_text: the whole string went in one driver call, so no
+				// per-key timing was ever recorded and the schedule is synthesized.
+				for (const k of keystrokeSchedule(text, input.constants, rand))
+					events.push({ tMs: dispatchMs + k.tMs, kind: "key", keyType: k.keyType, char: k.char, holdMs: k.holdMs, stepIndex: step?.index });
+				events.push({ tMs: dispatchMs, kind: "textReveal", reveal: "typed", text, sourceTMs: turn.startMs, stepIndex: step?.index });
+			}
 		}
 
 		if (turn.tool === "set_value") {

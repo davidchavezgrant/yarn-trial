@@ -40,8 +40,6 @@ CURSOR_FILES = {
 # Rasterize at 2x and downsample when pasting, so the cursor stays crisp against a scaled frame.
 RASTER = 64
 
-CARET_BLINK_MS = 530
-
 # The art is rasterized into a RASTER-px box representing 32 logical points, so RASTER/32 px per
 # point. Drawing it unscaled sized the cursor for an unscaled display; against a 1920pt window
 # captured at 1568px it came out ~1.5x too big and towered over the UI text beside it.

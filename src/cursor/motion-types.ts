@@ -37,11 +37,17 @@ export type TrackEvent =
 	/** One synthesized keystroke. `char` is absent for non-character keys (delete, return, ...). */
 	| { tMs: number; kind: "key"; keyType: string; char?: string; holdMs: number; sourceTMs?: number; stepIndex?: number }
 	/**
-	 * A text mutation the agent performed atomically (set_value). Declared, never animated:
-	 * faking a typing animation over an atomic write invents evidence, which cuts against this
-	 * repo's whole verification posture.
+	 * A text mutation, by provenance:
+	 *
+	 * - "live" — the step typed for REAL (demo actuation) and the frames show the text appearing;
+	 *   `tMs..endTMs` is the recorded typing span mapped onto the output timeline. Nothing is
+	 *   synthesized for these — a keystream on top would double-report what the plate shows.
+	 * - "typed" — a legacy atomic type_text; per-key timing never existed, so `key` events beside
+	 *   this reveal are synthesized from the corpus.
+	 * - "atomic" — a set_value write. Declared, never animated: faking a typing animation over an
+	 *   atomic write invents evidence, which cuts against this repo's whole verification posture.
 	 */
-	| { tMs: number; kind: "textReveal"; reveal: "typed" | "atomic"; text: string; sourceTMs?: number; stepIndex?: number };
+	| { tMs: number; kind: "textReveal"; reveal: "typed" | "atomic" | "live"; text: string; endTMs?: number; sourceTMs?: number; stepIndex?: number };
 
 /**
  * Coordinate space of every x/y in the track.
@@ -146,7 +152,11 @@ export interface MotionConstants {
 	/** Median IKI following a space, which runs slower than mid-word. */
 	ikiAfterSpaceMs: number;
 	keyHoldMs: number;
-	/** Fraction of keypresses that are corrections (delete). */
+	/**
+	 * Fraction of corpus keypresses that are corrections (delete). Provenance only: the schedule
+	 * never synthesizes a typo-and-backspace, because that renders a correction the run did not
+	 * perform. The measurement stays because fit-motion.py emits it and the fitted file carries it.
+	 */
 	correctionRate: number;
 	/** Max perpendicular deviation from the straight line, as a fraction of movement distance. */
 	perpDeviationFrac: { p50: number; p75: number; p90: number };

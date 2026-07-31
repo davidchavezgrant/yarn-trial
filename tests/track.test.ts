@@ -83,6 +83,62 @@ test("joinSteps__PairsEveryStep__When__TrajectoryHasUnmatchedTurns", () => {
 	assert.equal(joined[2].step?.index, 2);
 });
 
+test("joinSteps__CollapsesChunkTurns__When__StepTypedLive", () => {
+	// One demo type step actuates as a focus click plus one driver type_text call PER CHUNK, so
+	// the trajectory holds several turns for a single run-log step. The chunks must collapse
+	// into the step's entry, the focus click must not steal a later click step, and the step
+	// after the typing must keep its own pairing.
+	const steps: RunLogStep[] = [
+		{
+			index: 1,
+			timestamp: "",
+			action: { kind: "tool", name: "type_text", args: { text: "hello world" } },
+			typedLive: true,
+			typedChunks: [
+				{ text: "hello ", epochStartMs: 1_000_100, epochEndMs: 1_000_500 },
+				{ text: "world", epochStartMs: 1_000_600, epochEndMs: 1_001_000 },
+			],
+		},
+		{ index: 2, timestamp: "", action: { kind: "tool", name: "click" } },
+	];
+	const turns = [
+		turn("click", { epochMs: 1_000_050 }),
+		turn("type_text", { arguments: { text: "hello " }, startMs: 100, endMs: 500, epochMs: 1_000_500 }),
+		turn("type_text", { arguments: { text: "world" }, startMs: 600, endMs: 1000, epochMs: 1_001_000 }),
+		turn("click", { epochMs: 1_002_000 }),
+	];
+	const joined = joinSteps(steps, turns);
+	assert.equal(joined.length, 3, "the trailing chunk collapses into the step's entry");
+	assert.equal(joined[0].step, undefined, "the focus click is the typed step's own actuation, not a later step's");
+	assert.equal(joined[1].step?.index, 1);
+	assert.equal(joined[1].chunkTurns?.length, 1);
+	assert.equal(joined[1].chunkTurns?.[0].epochMs, 1_001_000);
+	assert.equal(joined[2].step?.index, 2, "the step after the typing keeps its own turn");
+	// A chunk run cut short — a strict prefix of the step's text — still collapses.
+	const partial = joinSteps(steps.slice(0, 1), [
+		turn("type_text", { arguments: { text: "hello " }, epochMs: 1_000_500 }),
+		turn("type_text", { arguments: { text: "wor" }, epochMs: 1_001_000 }),
+	]);
+	assert.equal(partial.length, 1);
+	assert.equal(partial[0].chunkTurns?.length, 1);
+});
+
+test("joinSteps__KeepsTurnsSeparate__When__StepsNotTypedLive", () => {
+	// Legacy runs are one turn per step; two adjacent atomic type_text steps must not merge.
+	const steps: RunLogStep[] = [
+		{ index: 1, timestamp: "", action: { kind: "tool", name: "type_text", args: { text: "one" } } },
+		{ index: 2, timestamp: "", action: { kind: "tool", name: "type_text", args: { text: "two" } } },
+	];
+	const joined = joinSteps(steps, [
+		turn("type_text", { arguments: { text: "one" } }),
+		turn("type_text", { arguments: { text: "two" } }),
+	]);
+	assert.equal(joined.length, 2);
+	assert.equal(joined[0].step?.index, 1);
+	assert.equal(joined[0].chunkTurns, undefined);
+	assert.equal(joined[1].step?.index, 2);
+});
+
 test("toFramePixels__LandsOnControl__When__CaptureIsLargerThanFrame", () => {
 	// The measured case: click_point (1346.5, 270) on a 1920-wide capture is (1100, 220) on a
 	// 1568-wide frame, verified visually to sit on the clicked combobox.
@@ -270,10 +326,22 @@ test("keystrokeSchedule__MatchesFittedIKI__When__TextContainsSpaces", () => {
 	assert.ok(keys.every((k) => k.holdMs === CONSTANTS.keyHoldMs));
 });
 
-test("keystrokeSchedule__IsMonotonic__When__CorrectionsAreInserted", () => {
+test("keystrokeSchedule__IsMonotonic__When__Synthesizing", () => {
 	const keys = keystrokeSchedule("the quick brown fox jumps over the lazy dog", CONSTANTS, makeRandom(9));
 	for (let i = 1; i < keys.length; i++)
 		assert.ok(keys[i].tMs >= keys[i - 1].tMs, "keystroke times must never go backwards");
+});
+
+test("keystrokeSchedule__EmitsOnlyTextChars__When__Synthesizing", () => {
+	// The correction branch typed a QWERTY neighbour and deleted it — a fabricated typo in the
+	// record of what happened, rendered over frames that never showed one. Even with the fitted
+	// correction rate forced to certainty, only the text's own characters may come out.
+	const text = "the quick brown fox";
+	const keys = keystrokeSchedule(text, { ...CONSTANTS, correctionRate: 1 }, makeRandom(9));
+	assert.equal(keys.length, [...text].length, "exactly one keystroke per character");
+	assert.ok(keys.every((k) => k.keyType !== "delete"), "no fabricated backspace");
+	const typed = keys.map((k) => (k.keyType === "space" ? " " : k.char)).join("");
+	assert.equal(typed, text);
 });
 
 test("buildFramePlan__PreservesActionAdjacentDuration__When__ThinkingGapsCompressed", () => {
@@ -607,6 +675,109 @@ test("buildTrack__OmitsHoverSpan__When__StepHasNoTargetRect", () => {
 		library: { fittedFrom: { dataset: "t", generatedAt: "" }, segments: [] },
 	});
 	assert.equal(track.hovers.length, 0);
+});
+
+test("buildTrack__SkipsKeystrokeSynthesis__When__StepTypedLive", () => {
+	// The frames of a live-typed step genuinely show the text appearing, so a synthesized
+	// keystream would double-report it. The reveal carries the RECORDED chunk timing instead.
+	const base = 1_000_000;
+	const track = buildTrack({
+		stamp: "t",
+		app: "Yarn",
+		task: "t",
+		runLog: "",
+		steps: [
+			{
+				index: 1,
+				timestamp: "",
+				action: { kind: "tool", name: "type_text", args: { text: "hello world" } },
+				typedLive: true,
+				typedChunks: [
+					{ text: "hello ", epochStartMs: base + 2000, epochEndMs: base + 2600 },
+					{ text: "world", epochStartMs: base + 2900, epochEndMs: base + 3400 },
+				],
+			},
+		],
+		turns: [
+			turn("type_text", { arguments: { text: "hello " }, startMs: 100, endMs: 700, epochMs: base + 2600 }),
+			turn("type_text", { arguments: { text: "world" }, startMs: 900, endMs: 1400, epochMs: base + 3400 }),
+		],
+		frameTimes: [base, base + 1000, base + 2000, base + 3000, base + 4000],
+		frameSize: { width: 1568, height: 882 },
+		captureSize: { width: 1568, height: 882 },
+		constants: CONSTANTS,
+		library: { fittedFrom: { dataset: "t", generatedAt: "" }, segments: [] },
+	});
+	assert.equal(track.events.filter((e) => e.kind === "key").length, 0, "no synthesized keystrokes over real typing");
+	const reveals = track.events.filter((e) => e.kind === "textReveal") as Array<{
+		tMs: number;
+		endTMs?: number;
+		reveal: string;
+		text: string;
+	}>;
+	assert.equal(reveals.length, 2, "one reveal per recorded chunk");
+	for (const r of reveals) {
+		assert.equal(r.reveal, "live");
+		assert.ok(r.endTMs !== undefined && r.endTMs >= r.tMs, "a live reveal spans its recorded chunk");
+	}
+	assert.deepEqual(reveals.map((r) => r.text), ["hello ", "world"]);
+});
+
+test("buildTrack__SpansTurnTiming__When__TypedLiveWithoutChunkRecord", () => {
+	// Defensive: a typedLive step whose log carries no chunk timings still reveals with REAL
+	// timing — the turn's own dispatch-to-completion window — never a synthesized schedule.
+	const base = 1_000_000;
+	const track = buildTrack({
+		stamp: "t",
+		app: "Yarn",
+		task: "t",
+		runLog: "",
+		steps: [{ index: 1, timestamp: "", action: { kind: "tool", name: "type_text", args: { text: "hello" } }, typedLive: true }],
+		turns: [turn("type_text", { arguments: { text: "hello" }, startMs: 100, endMs: 700, epochMs: base + 2600 })],
+		frameTimes: [base, base + 1000, base + 2000, base + 3000],
+		frameSize: { width: 1568, height: 882 },
+		captureSize: { width: 1568, height: 882 },
+		constants: CONSTANTS,
+		library: { fittedFrom: { dataset: "t", generatedAt: "" }, segments: [] },
+	});
+	assert.equal(track.events.filter((e) => e.kind === "key").length, 0);
+	const reveals = track.events.filter((e) => e.kind === "textReveal") as Array<{
+		tMs: number;
+		endTMs?: number;
+		reveal: string;
+		text: string;
+	}>;
+	assert.equal(reveals.length, 1);
+	assert.equal(reveals[0].reveal, "live");
+	assert.equal(reveals[0].text, "hello");
+	assert.ok(reveals[0].endTMs !== undefined && reveals[0].endTMs > reveals[0].tMs);
+});
+
+test("buildTrack__SynthesizesKeystream__When__RunLogPredatesLiveTyping", () => {
+	// An old-shape run log — no typedLive, no typedChunks — must keep producing the legacy
+	// track: an atomic type_text gets a corpus-synthesized schedule and a "typed" reveal, with
+	// exactly the text's own characters and nothing invented.
+	const base = 1_000_000;
+	const track = buildTrack({
+		stamp: "t",
+		app: "Yarn",
+		task: "t",
+		runLog: "",
+		steps: [{ index: 1, timestamp: "", action: { kind: "tool", name: "type_text", args: { text: "hi there" } } }],
+		turns: [turn("type_text", { arguments: { text: "hi there" }, startMs: 100, endMs: 400, epochMs: base + 2000 })],
+		frameTimes: [base, base + 1000, base + 2000, base + 3000],
+		frameSize: { width: 1568, height: 882 },
+		captureSize: { width: 1568, height: 882 },
+		constants: CONSTANTS,
+		library: { fittedFrom: { dataset: "t", generatedAt: "" }, segments: [] },
+	});
+	const keys = track.events.filter((e) => e.kind === "key") as Array<{ keyType: string; char?: string }>;
+	assert.equal(keys.length, "hi there".length, "one synthesized keystroke per character, none invented");
+	assert.equal(keys.map((k) => (k.keyType === "space" ? " " : k.char)).join(""), "hi there");
+	const reveals = track.events.filter((e) => e.kind === "textReveal") as Array<{ reveal: string; endTMs?: number }>;
+	assert.equal(reveals.length, 1);
+	assert.equal(reveals[0].reveal, "typed");
+	assert.equal(reveals[0].endTMs, undefined);
 });
 
 test("toOutputMs__PlacesClickAgainstTheCut__When__AnchoredToEnd", () => {
