@@ -89,6 +89,36 @@ test("open__RefusesWithoutFallback__When__TheRunnerRefuses", async () => {
 	assert.match(out.message, /aman is running/);
 });
 
+test("open__WaitsForTheServer__When__TheTunnelAcceptsBeforeItExists", async () => {
+	// The white-screen bug, pinned. `ssh -L` accepts local connections the moment ssh is up —
+	// measured against a forward with nothing behind it — so readiness that resolves on the
+	// FIRST probe would open the viewer into an ECONNRESET and paint a blank page. The portal
+	// must not open the viewer until portReady says the server actually answered.
+	const order: string[] = [];
+	let settled = false;
+	const { d } = deps({
+		// The real probe polls until the server ANSWERS and only then resolves true; this fake
+		// stands in for that latency. The property under test is the ordering it guarantees.
+		portReady: async () => {
+			order.push("probe-start");
+			await new Promise((r) => setTimeout(r, 20));
+			settled = true;
+			order.push("probe-ready");
+
+			return true;
+		},
+		openViewer: () => {
+			order.push(settled ? "viewer-after-ready" : "viewer-too-early");
+
+			return { close: () => {}, onClosed: () => {} };
+		},
+	});
+	const out = await new SigninPortal(d).open(host("mac1"), "Yarn", "op");
+
+	assert.equal(out.kind, "open");
+	assert.deepEqual(order, ["probe-start", "probe-ready", "viewer-after-ready"]);
+});
+
 test("open__KillsTheTunnelAndFallsBack__When__TheLocalEndNeverComesUp", async () => {
 	const { d, log } = deps({ portReady: async () => false });
 	const out = await new SigninPortal(d).open(host("mac1"), "Yarn", "op");

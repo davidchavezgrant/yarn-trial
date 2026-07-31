@@ -31,7 +31,13 @@ export interface PortalDeps {
 	requestLiveview(host: HostEntry, app: string, operator: string): Promise<Record<string, unknown> | undefined>;
 	/** Spawn `ssh -L port:127.0.0.1:port -N` with the fleet argv. Kill must be idempotent. */
 	spawnTunnel(host: HostEntry, port: number): { kill(): void };
-	/** True once the local end of the tunnel accepts connections, false at the deadline. */
+	/**
+	 * True once the viewer is actually SERVABLE through the tunnel — an HTTP response, not a
+	 * TCP connect. Measured 2026-07-31: `ssh -L` accepts local connections the moment ssh is
+	 * up, before anything listens on the far side, so a connect-only probe passed against a
+	 * dead forward and the viewer loaded into an ECONNRESET — a blank white page, with nothing
+	 * to retry it. The probe must speak the protocol the viewer will speak.
+	 */
 	portReady(port: number, deadlineMs: number): Promise<boolean>;
 	/** Open the viewer window. `onClosed` must fire however the window dies, exactly once. */
 	openViewer(url: string, title: string): { close(): void; onClosed(cb: () => void): void };

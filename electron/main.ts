@@ -1,9 +1,6 @@
 import { app, BrowserWindow, desktopCapturer, ipcMain, net, protocol, shell, systemPreferences, WebContentsView } from "electron";
 import { spawn as spawnProcess } from "node:child_process";
 import fs from "node:fs";
-// Electron's `net` (imported above) is an HTTP client with no raw sockets; the tunnel-ready
-// probe below needs a plain TCP connect, which only node's own module provides.
-import nodeNet from "node:net";
 import { Readable } from "node:stream";
 import { defaultOperator, loadHosts, resolveHost, type HostEntry } from "../src/remote/control/hosts.js";
 import { lastFrame, runnerArgv, runSsh, tunnelArgv } from "../src/remote/control/ssh.js";
@@ -95,23 +92,23 @@ const portal = new SigninPortal({
 
 		return { kill: () => void child.kill("SIGTERM") };
 	},
-	portReady: (port, deadlineMs) =>
-		new Promise((resolve) => {
-			const startedAt = Date.now();
-			const attempt = (): void => {
-				const probe = nodeNet.connect({ host: "127.0.0.1", port });
-				probe.once("connect", () => {
-					probe.destroy();
-					resolve(true);
-				});
-				probe.once("error", () => {
-					probe.destroy();
-					if (Date.now() - startedAt >= deadlineMs) return resolve(false);
-					setTimeout(attempt, 250);
-				});
-			};
-			attempt();
-		}),
+	portReady: async (port, deadlineMs) => {
+		// An HTTP request, not a TCP connect: the forward accepts connections before the remote
+		// server exists, so a connect-only probe is not evidence the viewer can load. Any HTTP
+		// status counts — 403 without the token still proves a server answered.
+		const startedAt = Date.now();
+		for (;;) {
+			try {
+				const res = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(2000) });
+				void res.body?.cancel();
+
+				return true;
+			} catch {
+				if (Date.now() - startedAt >= deadlineMs) return false;
+				await new Promise((r) => setTimeout(r, 250));
+			}
+		}
+	},
 	openViewer: (url, title) => {
 		// Embedded in the main window rather than floating: the sign-in was asked for from
 		// this window, and a separate one reads as a separate app — the header stays visible
@@ -141,7 +138,24 @@ const portal = new SigninPortal({
 			owner.contentView.addChildView(view);
 			layout();
 			owner.on("resize", layout);
-			void view.webContents.loadURL(url);
+
+			// Belt and braces behind the HTTP readiness probe: if the load still fails (the
+			// tunnel dropping mid-handshake, the engine dying at startup), an embedded view has
+			// no reload of its own and would sit there as a blank white rectangle — the exact
+			// symptom that made this bug hard to read. Retry a few times, then SAY so.
+			let attempts = 0;
+			const load = (): void => {
+				attempts += 1;
+				view.webContents.loadURL(url).catch(() => {
+					if (attempts <= 5) return void setTimeout(load, 600);
+					void view.webContents.loadURL(
+						`data:text/html,${encodeURIComponent(
+							`<body style="margin:0;background:#16181d;color:#e6e8ec;font:14px ui-sans-serif,system-ui;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center"><div><p>The sign-in view could not reach the Mac.</p><p style="color:#9aa1ad;font-size:12.5px">The tunnel or the capture server went away. Cancel the sign-in and try again.</p></div></body>`,
+						)}`,
+					);
+				});
+			};
+			load();
 
 			let closedCb: (() => void) | undefined;
 
