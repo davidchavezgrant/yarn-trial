@@ -224,11 +224,11 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 	// The gate refuses DISPATCH, not the preview: without --go nothing can fire anyway, and
 	// the preview is how an operator finds out what phase 2 needs before phase 1 has run.
 	const missingMaps =
-		phase === 2 && !opts.force
+		(phase === 2 || phase === 5) && !opts.force
 			? phase1GateArms().filter((a) => !entriesForArm(manifest, a.id, opts.model).some((e) => e.collected))
 			: [];
 	if (missingMaps.length && opts.go) {
-		log(`REFUSED: phase 2's grounded arms need phase-1 maps${opts.model ? ` from THIS model's pass (${opts.model} grounds itself)` : ""}, and today's manifest has no collected explore for: ${missingMaps.map((a) => a.id).join(", ")}`);
+		log(`REFUSED: phase ${phase}'s grounded arms need phase-1 maps${opts.model ? ` from THIS model's pass (${opts.model} grounds itself)` : ""}, and today's manifest has no collected explore for: ${missingMaps.map((a) => a.id).join(", ")}`);
 		log(`Run \`./run bench phase 1${opts.model ? ` --model ${opts.model}` : ""} --go\`, wait, \`./run bench collect\` — or \`--force\` to use maps from an earlier pass.`);
 
 		return EXIT_REFUSED;
@@ -303,8 +303,9 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 export function printPlan(log: (line: string) => void = console.log): void {
 	const total = MATRIX.reduce((sum, a) => sum + a.n, 0);
 	log(`benchmark matrix — ${MATRIX.length} arms, ${total} runs (dom cut; Notion Calendar slice cut, vision-only tier completed 2026-07-31 — reasons in matrix.ts)`);
-	for (const phase of [1, 2, 3, 4] as Phase[]) {
-		log(`\nphase ${phase} — ${phaseRunCount(phase)} runs${phase === 4 ? " (optional)" : ""}`);
+	for (const phase of [1, 2, 3, 4, 5] as Phase[]) {
+		const note = phase === 4 ? " (optional)" : phase === 5 ? " (filmed takes — run last; --record changes the action space)" : "";
+		log(`\nphase ${phase} — ${phaseRunCount(phase)} runs${note}`);
 		for (const arm of phaseArms(phase)) {
 			log(`  ${arm.id}  n=${arm.n}  ${arm.kind}  "${arm.app}"  ${flagsLine(arm)}`);
 			if (arm.task) log(`      task: ${JSON.stringify(arm.task)}`);
@@ -333,7 +334,7 @@ async function defaultCompile(): Promise<CompileFn> {
 }
 
 const USAGE = `usage: ./run bench plan
-       ./run bench phase <1|2|3|4> [--model <id>] [--go] [--force]
+       ./run bench phase <1|2|3|4|5> [--model <id>] [--go] [--force]
        ./run bench collect
        ./run bench judge
 
@@ -346,7 +347,14 @@ phase    dispatch that phase's runs to the fleet queue. WITHOUT --go: preview an
          matters: docs/appmaps/ holds one live map per app, so a pass's phase 2 must
          run before the next pass's phase 1 overwrites it (collect archives each pass's
          maps under out/bench/<date>/appmaps/<model>/).
-         --force skips the phase-2 "phase-1 maps collected this pass" gate.
+         --force skips the "phase-1 maps collected this pass" gate (phases 2 and 5).
+         Phase 5 is the FILMED pass and must run last: --record injects demo conduct,
+         swaps in an act tool without set_value, and changes actuation, so a filmed run
+         has a different action space than the run that measured it. It exists to catch a
+         REORDER — demo mode bans the keyboard paths ungrounded agents tend to find, so it
+         may cost them more than the grounded arms. n=1 per config: direction, not
+         significance. Cursor compositing is still manual afterwards:
+         \`npm run humanize -- <stamp>\` per filmed run.
 collect  pull artifacts for every uncollected manifest entry, compute metrics, rewrite
          the report skeleton. Idempotent; run it as often as you like while the queue drains.
 judge    grades collected runs with the offline adversarial judge (pinned to
@@ -362,7 +370,7 @@ async function main(argv: string[]): Promise<number> {
 	}
 	if (cmd === "phase") {
 		const phase = Number(argv[1]);
-		if (phase !== 1 && phase !== 2 && phase !== 3 && phase !== 4) {
+		if (![1, 2, 3, 4, 5].includes(phase)) {
 			console.error(USAGE);
 
 			return EXIT_REFUSED;

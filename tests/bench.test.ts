@@ -80,6 +80,8 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	assert.equal(phaseRunCount(3), 2 + 6 + 3);
 	// Phase 4 (optional): 2 task cells × 2 + 1 compile + 2 replays.
 	assert.equal(phaseRunCount(4), 7);
+	// Phase 5 (filmed): one take per phase-2 task config (12) + one filmed replay per backend.
+	assert.equal(phaseRunCount(5), 12 + 2);
 });
 
 test("MATRIX__UsesOnlyAxAndCdp__When__DomIsDeleted", () => {
@@ -117,8 +119,30 @@ test("MATRIX__CarriesNoUnmetPrereqs__When__ArmsTargetASecondApp", () => {
 	for (const arm of MATRIX.filter((a) => a.prereq)) assert.match(arm.prereq ?? "", /signed in|installed/i, `${arm.id} prereq must name what is missing`);
 });
 
+test("MATRIX__ConfinesRecordingToTheFilmedPhase__When__ArmsAreDeclared", () => {
+	// Recording is not a passive camera: it injects DEMO CONDUCT into the prompt, swaps in an
+	// act tool without set_value, and changes actuation to hover-dwell-click. A measurement arm
+	// that filmed itself would report demo-mode reliability as config reliability, so the split
+	// is enforced rather than remembered.
+	for (const arm of MATRIX) {
+		if (arm.dispatch.record) assert.equal(arm.phase, 5, `${arm.id} films, so it belongs to phase 5`);
+		if (arm.phase === 5) assert.equal(arm.dispatch.record, true, `${arm.id} is a filmed take and must set record`);
+	}
+	// Every filmed take is n=1 — footage, not statistics.
+	for (const arm of MATRIX.filter((a) => a.phase === 5)) assert.equal(arm.n, 1, `${arm.id} must be a single take`);
+	// And each one mirrors a real measured config rather than inventing flags, so a config
+	// cannot be measured under one set of flags and filmed under another.
+	const measured = new Set(MATRIX.filter((a) => a.phase === 2).map((a) => JSON.stringify({ ...a.dispatch, record: true })));
+	for (const arm of MATRIX.filter((a) => a.phase === 5 && a.kind === "task")) {
+		assert.ok(measured.has(JSON.stringify(arm.dispatch)), `${arm.id} does not mirror any phase-2 config`);
+	}
+	// Explores are not filmed: a 40-minute video of the agent operating every control it can
+	// find is not a demo, and nothing downstream consumes it.
+	assert.deepEqual(MATRIX.filter((a) => a.kind === "explore" && a.dispatch.record), []);
+});
+
 test("auditPhase__ReturnsNoProblems__When__RunOverEveryPhase", () => {
-	for (const phase of [1, 2, 3, 4] as const) assert.deepEqual(auditPhase(phase), []);
+	for (const phase of [1, 2, 3, 4, 5] as const) assert.deepEqual(auditPhase(phase), []);
 });
 
 // --- manifest ---

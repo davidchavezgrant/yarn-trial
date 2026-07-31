@@ -26,7 +26,7 @@
 
 export type BenchBackend = "ax" | "cdp";
 export type ArmKind = "task" | "explore" | "replay" | "compile";
-export type Phase = 1 | 2 | 3 | 4;
+export type Phase = 1 | 2 | 3 | 4 | 5;
 
 /**
  * The dispatch knobs an arm turns, in `DispatchOptions`' exact spellings.
@@ -45,6 +45,13 @@ export interface ArmDispatch {
 	noGrounding?: boolean;
 	useRecipe?: boolean;
 	noRescue?: boolean;
+	/**
+	 * Film this take. Phase 5 only — a measurement arm must never set it, because recording
+	 * changes the agent's action space (demo prompt, demo act tool with no `set_value`,
+	 * hover-dwell-click actuation) and would make the arm measure demo mode instead of the
+	 * config. A test enforces the split.
+	 */
+	record?: boolean;
 	/** Web target for an explore arm (`explore --url … --backend cdp`). Contract-assumed. */
 	url?: string;
 }
@@ -309,7 +316,67 @@ const PHASE4: Arm[] = [
 	},
 ];
 
-export const MATRIX: readonly Arm[] = [...PHASE1, ...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE3, ...PHASE4];
+/**
+ * Phase 5 — filmed takes. Every measured configuration, once, with `--record`.
+ *
+ * This is FOOTAGE, and it is also the matrix's own validity check. `--record` is not a
+ * passive camera: it injects DEMO CONDUCT into the system prompt ("prefer clicking visible
+ * controls over keyboard shortcuts"), swaps in a demo act tool without `set_value`, and
+ * changes actuation mechanics (hover→dwell→click, per-keystroke typing). A filmed run
+ * therefore has a different action space than the run that measured it.
+ *
+ * That is exactly why filming EVERY config matters rather than only the winner. Demo mode
+ * forbids the keyboard paths an ungrounded agent is most likely to have discovered, so it may
+ * penalise the ungrounded and vision-only arms harder than the grounded ones. If the
+ * reliability ranking REORDERS under film, then phases 1–4 measured a ranking in a mode the
+ * product does not ship — and nothing else in the matrix can see that.
+ *
+ * Read these as a flag to investigate, never as a conclusion: n=1 per config buys direction,
+ * not significance. A reorder says "re-measure this arm filmed at n=3", not "the ranking is
+ * wrong".
+ *
+ * Derived from the phase-2 arms rather than re-declared, so a config cannot be measured and
+ * filmed under different flags. Two things it inherits for free: teardown runs AFTER the
+ * recording is assembled, so the video ends on the changed state while the app is still put
+ * back; and filmed runs write per-run step frames, so `bench judge` can return real VISUAL
+ * verdicts on them instead of frames-stale.
+ *
+ * Explores are deliberately NOT filmed — a 40-minute video of the agent operating every
+ * control it can find is not a demo, and nothing downstream consumes it.
+ *
+ * Remaining manual step: the composited cursor. `npm run humanize -- <stamp>` per filmed run,
+ * after `bench collect` pulls it. It reads the run's own trajectory (click points, target
+ * rects, real typing timings), so it needs no extra capture — but it is not wired into
+ * `bench` yet, and the gallery is where the renders surface.
+ */
+const filmed = (arm: Arm): Arm => ({
+	...arm,
+	id: `p5-${arm.id.replace(/^p[0-9]-/, "")}-filmed`,
+	phase: 5,
+	n: 1,
+	dispatch: { ...arm.dispatch, record: true },
+	informs: `filmed take — does this config survive demo conduct (mouse-first, no set_value)? ${arm.informs ?? ""}`.trim(),
+});
+
+const PHASE5: Arm[] = [
+	...PHASE2_CORE.map(filmed),
+	...PHASE2_SLICES.map(filmed),
+	// Replays are the best filming candidates in the whole matrix: zero model calls on the
+	// happy path means no thinking gaps to speed up in post. Source the recipes phase 3
+	// already compiled rather than compiling again.
+	...BACKENDS.map((backend): Arm => ({
+		id: `p5-replay-${backend}-filmed`,
+		phase: 5,
+		kind: "replay",
+		app: BENCH_APP,
+		n: 1,
+		dispatch: { backend, record: true },
+		sourceArm: `p3-compile-${backend}`,
+		informs: "filmed take of a deterministic replay — the cleanest possible demo footage, no model latency to hide",
+	})),
+];
+
+export const MATRIX: readonly Arm[] = [...PHASE1, ...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE3, ...PHASE4, ...PHASE5];
 
 export const phaseArms = (phase: Phase): Arm[] => MATRIX.filter((a) => a.phase === phase);
 
