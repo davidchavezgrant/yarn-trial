@@ -112,6 +112,10 @@ Settings…**.
   just confirmed where focus is: the agent composer at the bottom ("Ask, edit, or make
   something…") holds default focus and silently swallows stray keystrokes** — two runs
   typed their narration into it. Tab-traversal toward the editor does NOT reach it (it
-  reaches the comment composer on the canvas instead).
+  reaches the comment composer on the canvas instead). The placeholder row's ref resolves
+  but its element measures NO box by any means, so if `type_text` with its ref fails,
+  **click the empty script-panel area by coordinate** (the whitespace directly under the
+  "Type script or # for new scene" line, read off the screenshot), then `type_text`
+  without a ref at the caret.
 - Creating a draft via "New draft" opens the editor immediately with the title "Untitled";
   the sidebar entry updates after the title field is committed (click away / switch tabs).

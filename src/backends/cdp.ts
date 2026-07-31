@@ -640,6 +640,30 @@ export class CdpBackend {
 			case "right_click":
 			case "double_click":
 			case "hover": {
+				// Coordinate form, mirroring the AX tool's painted-target branch: the escape
+				// hatch for things a ref cannot measure — canvas content, and rich-editor
+				// pseudo-content like Yarn's script placeholder, which resolves to a ref whose
+				// element reports no box by ANY means (boundingBox, getBoundingClientRect, the
+				// snapshot row all came back empty on a live round). The model aims from the
+				// screenshot it already sees; coordinates are viewport CSS pixels, same space.
+				if (a.ref === undefined && a.query === undefined && a.x !== undefined && a.y !== undefined) {
+					const x = Number(a.x);
+					const y = Number(a.y);
+					if (a.name === "hover") {
+						await this.page.mouse.move(x, y);
+
+						return `hover at (${x}, ${y})`;
+					}
+					const plan = demoClickPlan({ x: x - 1, y: y - 1, width: 2, height: 2 }, a.name);
+					if (this.demo) {
+						await this.page.mouse.move(plan.point.x, plan.point.y);
+						await new Promise((r) => setTimeout(r, plan.dwellMs));
+					}
+					await this.page.mouse.click(x, y, { button: plan.button, clickCount: plan.clickCount, delay: this.demo ? plan.pressMs : undefined });
+					this.lastActuation = { point: { x, y }, box: { x: x - 1, y: y - 1, w: 2, h: 2 } };
+
+					return `${a.name} at (${x}, ${y})`;
+				}
 				const ref = await this.resolveRef(a);
 				const loc = this.page.locator(`aria-ref=${ref}`);
 				if (a.name === "hover") await loc.hover();
@@ -917,6 +941,8 @@ export function cdpActTool(demo: boolean): Anthropic.Tool {
 								: "Target ref from the current observation (click/right_click/double_click/hover/type_text, optional for scroll).",
 						},
 						query: { type: "string", description: "Alternative to ref: resolve the target by name at action time. Refused if it matches more than one element." },
+						x: { type: "number", description: "With y and NO ref/query: pointer actions at viewport CSS-pixel coordinates read off the screenshot — the escape hatch for painted or unmeasurable targets (canvas, rich-editor placeholders). To type there: click the spot first, then type_text without a ref." },
+						y: { type: "number", description: "See x." },
 						text: {
 							type: "string",
 							description: demo
