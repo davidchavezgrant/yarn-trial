@@ -390,6 +390,7 @@ export function inspectChromePolicy(opts: {
 	exists: (path: string) => boolean;
 	chromeInstalled: boolean;
 	chromeRunning?: boolean;
+	autoLaunch?: AutoLaunchProtocolEntry[];
 }): ChromePolicyState {
 	const expand = (p: string): string => p.replace("__HOME__", opts.home.replace(/\/+$/, "")).replace("__USER__", opts.user);
 	// Level is a property of WHERE a value lives, and only a managed plist forces one. Computed
@@ -405,7 +406,7 @@ export function inspectChromePolicy(opts: {
 	return {
 		chromeInstalled: opts.chromeInstalled,
 		...(opts.chromeRunning === undefined ? {} : { chromeRunning: opts.chromeRunning }),
-		keys: policedKeyNames().map((key): ChromePolicyKeyState => {
+		keys: policedKeyNames(opts.autoLaunch).map((key): ChromePolicyKeyState => {
 			let raw: string | undefined;
 			try {
 				raw = opts.readDefault(CHROME_DOMAIN, key);

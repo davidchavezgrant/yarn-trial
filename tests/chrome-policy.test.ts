@@ -33,7 +33,7 @@ const USER = "administrator";
 
 /** A host with the policy nowhere. What every Mac looked like before this shipped. */
 function nothingSet(): ChromePolicyState {
-	return readChromePolicy(() => undefined, { home: HOME, user: USER, chromeInstalled: true });
+	return readChromePolicy(() => undefined, { home: HOME, user: USER, autoLaunch: [], chromeInstalled: true });
 }
 
 /** Reads from a map of path → plist contents, so a test states only the files that exist. */
@@ -59,7 +59,7 @@ test("readChromePolicy__ReportsEveryKeyUnset__When__NoPlistCarriesThem", () => {
 });
 
 test("readChromePolicy__ReportsRecommended__When__OnlyTheUserDomainCarriesTheKeys", () => {
-	const state = readChromePolicy(reader({ [RECOMMENDED_PATH]: ALL_FALSE }), { home: HOME, user: USER, chromeInstalled: true });
+	const state = readChromePolicy(reader({ [RECOMMENDED_PATH]: ALL_FALSE }), { home: HOME, user: USER, autoLaunch: [], chromeInstalled: true });
 
 	assert.deepEqual(
 		state.keys.map((k) => k.level),
@@ -76,7 +76,7 @@ test("readChromePolicy__PrefersTheManagedValue__When__BothDomainsCarryTheKey", (
 	// managed one exists would describe a host that is not the host in front of you.
 	const state = readChromePolicy(
 		reader({ [MANAGED_PATH]: { AutofillAddressEnabled: false }, [RECOMMENDED_PATH]: { AutofillAddressEnabled: true } }),
-		{ home: HOME, user: USER, chromeInstalled: true },
+		{ home: HOME, user: USER, autoLaunch: [], chromeInstalled: true },
 	);
 	const key = state.keys.find((k) => k.key === "AutofillAddressEnabled");
 
@@ -87,7 +87,7 @@ test("readChromePolicy__PrefersTheManagedValue__When__BothDomainsCarryTheKey", (
 test("readChromePolicy__FindsTheKeys__When__ManagedPreferencesArePerUser", () => {
 	// MDM files managed preferences per-user as well as machine-wide and Chrome reads both. A
 	// grader that knew only the machine-wide path would call a properly enrolled Mac unpoliced.
-	const state = readChromePolicy(reader({ [MANAGED_USER_PATH]: ALL_FALSE }), { home: HOME, user: USER, chromeInstalled: true });
+	const state = readChromePolicy(reader({ [MANAGED_USER_PATH]: ALL_FALSE }), { home: HOME, user: USER, autoLaunch: [], chromeInstalled: true });
 
 	assert.deepEqual(
 		state.keys.map((k) => k.level),
@@ -99,7 +99,7 @@ test("readChromePolicy__ReportsTheKeyAsSet__When__ItsValueIsFalse", () => {
 	// The regression this guards is a one-character one. The value being looked for IS `false`,
 	// so any truthiness test — `doc[key]`, `!!doc[key]` — reports a correctly policed host as
 	// unset, and the fleet lights up red for being right.
-	const state = readChromePolicy(reader({ [RECOMMENDED_PATH]: ALL_FALSE }), { home: HOME, user: USER, chromeInstalled: true });
+	const state = readChromePolicy(reader({ [RECOMMENDED_PATH]: ALL_FALSE }), { home: HOME, user: USER, autoLaunch: [], chromeInstalled: true });
 
 	assert.equal(state.keys.every((k) => k.level !== "unset"), true, JSON.stringify(state.keys));
 	assert.deepEqual(chromePolicyProblems(state), []);
@@ -119,7 +119,7 @@ test("chromePolicyProblems__StaysSilent__When__EveryKeyIsFalseAtRecommendedLevel
 	// no passwordless sudo, no /Library/Managed Preferences, not MDM-enrolled). Grading it as a
 	// fault would put a permanent red mark on every correctly provisioned host, which is how a
 	// checklist stops being read.
-	assert.deepEqual(chromePolicyProblems(readChromePolicy(reader({ [RECOMMENDED_PATH]: ALL_FALSE }), { home: HOME, user: USER, chromeInstalled: true })), []);
+	assert.deepEqual(chromePolicyProblems(readChromePolicy(reader({ [RECOMMENDED_PATH]: ALL_FALSE }), { home: HOME, user: USER, autoLaunch: [], chromeInstalled: true })), []);
 });
 
 test("chromePolicyProblems__ReportsTheOverride__When__ThePolicyIsSetButNotToFalse", () => {
@@ -127,7 +127,7 @@ test("chromePolicyProblems__ReportsTheOverride__When__ThePolicyIsSetButNotToFals
 	// pref and RECOMMENDED sits below the user store, so an account-delivered value silently
 	// wins — invisible any other way, and the reason doctor re-reads the effective value
 	// instead of trusting the provisioning step's word that it wrote something.
-	const state = readChromePolicy(reader({ [RECOMMENDED_PATH]: { ...ALL_FALSE, PasswordManagerEnabled: true } }), { home: HOME, user: USER, chromeInstalled: true });
+	const state = readChromePolicy(reader({ [RECOMMENDED_PATH]: { ...ALL_FALSE, PasswordManagerEnabled: true } }), { home: HOME, user: USER, autoLaunch: [], chromeInstalled: true });
 	const problems = chromePolicyProblems(state);
 
 	assert.equal(problems.length, 1);
@@ -148,14 +148,14 @@ test("chromePolicyProblems__StaysSilent__When__TheRunnerDidNotReportTheField", (
 test("chromePolicyProblems__StaysSilent__When__ChromeIsNotInstalled", () => {
 	// Policy is still written to such a host — installing Chrome later must not silently
 	// reopen the hole — but a Mac with no Chrome has no dropdown to leak, so it is not a finding.
-	assert.deepEqual(chromePolicyProblems(readChromePolicy(() => undefined, { home: HOME, user: USER, chromeInstalled: false })), []);
+	assert.deepEqual(chromePolicyProblems(readChromePolicy(() => undefined, { home: HOME, user: USER, autoLaunch: [], chromeInstalled: false })), []);
 });
 
 test("chromePolicyProblems__WarnsAboutTheStaleRead__When__ChromeIsStillRunning", () => {
 	// cfprefsd caches, and Chrome re-reads platform policy only periodically — so a freshly
 	// policed host can still serve the old answer, which is precisely when someone is about to
 	// start a sign-in and expect the dropdown to be gone.
-	const state = readChromePolicy(reader({ [RECOMMENDED_PATH]: ALL_FALSE }), { home: HOME, user: USER, chromeInstalled: true });
+	const state = readChromePolicy(reader({ [RECOMMENDED_PATH]: ALL_FALSE }), { home: HOME, user: USER, autoLaunch: [], chromeInstalled: true });
 	const problems = chromePolicyProblems({ ...state, chromeRunning: true });
 
 	assert.equal(problems.length, 1);
@@ -176,6 +176,7 @@ test("inspectChromePolicy__ReadsTheEffectiveValue__When__DefaultsAnswers", () =>
 	const state = inspectChromePolicy({
 		home: HOME,
 		user: USER,
+		autoLaunch: [],
 		readDefault: (domain, key) => {
 			assert.equal(domain, CHROME_DOMAIN);
 			asked.push(key);
@@ -198,6 +199,7 @@ test("inspectChromePolicy__ReportsMandatory__When__AManagedPlistExists", () => {
 	const state = inspectChromePolicy({
 		home: HOME,
 		user: USER,
+		autoLaunch: [],
 		readDefault: () => "0",
 		exists: (p) => p === MANAGED_PATH,
 		chromeInstalled: true,
@@ -207,7 +209,7 @@ test("inspectChromePolicy__ReportsMandatory__When__AManagedPlistExists", () => {
 });
 
 test("inspectChromePolicy__ReportsUnset__When__DefaultsHasNoSuchKey", () => {
-	const state = inspectChromePolicy({ home: HOME, user: USER, readDefault: () => undefined, exists: () => false, chromeInstalled: true });
+	const state = inspectChromePolicy({ home: HOME, user: USER, autoLaunch: [], readDefault: () => undefined, exists: () => false, chromeInstalled: true });
 
 	assert.deepEqual(state.keys.map((k) => k.level), CHROME_POLICY.map(() => "unset"));
 	assert.equal(chromePolicyProblems(state).length, 1);
@@ -219,6 +221,7 @@ test("inspectChromePolicy__DegradesToUnset__When__AProbeThrows", () => {
 	const state = inspectChromePolicy({
 		home: HOME,
 		user: USER,
+		autoLaunch: [],
 		readDefault: () => {
 			throw new Error("defaults: command not found");
 		},
@@ -274,9 +277,9 @@ test("chromePolicyWriteLines__EmitsNoShellMetacharacters__When__GeneratingTheIns
 test("describeChromePolicy__CountsWhatIsApplied__When__RenderingAStatusCell", () => {
 	assert.equal(describeChromePolicy(undefined), "not reported");
 	assert.match(describeChromePolicy(nothingSet()), new RegExp(`^0/${CHROME_POLICY.length}`));
-	assert.equal(describeChromePolicy(readChromePolicy(() => undefined, { home: HOME, user: USER, chromeInstalled: false })), "Chrome not installed");
+	assert.equal(describeChromePolicy(readChromePolicy(() => undefined, { home: HOME, user: USER, autoLaunch: [], chromeInstalled: false })), "Chrome not installed");
 
-	const applied = readChromePolicy(reader({ [RECOMMENDED_PATH]: ALL_FALSE }), { home: HOME, user: USER, chromeInstalled: true });
+	const applied = readChromePolicy(reader({ [RECOMMENDED_PATH]: ALL_FALSE }), { home: HOME, user: USER, autoLaunch: [], chromeInstalled: true });
 	assert.equal(describeChromePolicy(applied), `${CHROME_POLICY.length}/${CHROME_POLICY.length} applied (recommended)`);
 });
 
@@ -331,9 +334,14 @@ test("autoLaunchProtocolsPlist__RendersTheChromiumSchema__When__GivenEntries", (
 
 test("autoLaunchProtocolsPlist__ReturnsUndefined__When__TheTableIsEmpty", () => {
 	assert.equal(autoLaunchProtocolsPlist([]), undefined);
-	// And the module's own table IS empty until someone reads the real scheme off a real
-	// handoff. This assertion is meant to flip the day that happens — update it with the entry.
-	assert.deepEqual(AUTO_LAUNCH_PROTOCOLS, []);
+});
+
+test("AUTO_LAUNCH_PROTOCOLS__CarriesTheYarnEntry__When__ReadOffTheAppBundle", () => {
+	// The tripwire the empty-table assertion promised: flipped 2026-07-31 when the scheme was
+	// read off Yarn.app's Info.plist (CFBundleURLSchemes = ["yarn"]) and the origin off
+	// app.asar's auth endpoints. The origin still wants confirming against a real handoff —
+	// if that widens the table, widen this with it.
+	assert.deepEqual(AUTO_LAUNCH_PROTOCOLS, [{ protocol: "yarn", allowedOrigins: ["https://y-prod-api.onrender.com"] }]);
 });
 
 test("autoLaunchProtocolsPlist__Throws__When__TheSchemeCarriesItsSeparator", () => {
@@ -363,9 +371,9 @@ test("autoLaunchProtocolsPlist__Throws__When__AProtocolHasNoOrigins", () => {
 });
 
 test("autoLaunchWriteLines__EmitsNothing__When__TheTableIsEmpty", () => {
-	// Today's installer must be byte-identical to yesterday's: mechanism wired, data absent.
+	// An empty table must keep the installer inert — the mechanism grades nothing it has no
+	// data for. (The live table is non-empty since 2026-07-31, so this pins the [] arm only.)
 	assert.deepEqual(autoLaunchWriteLines([]), []);
-	assert.deepEqual(autoLaunchWriteLines(), []);
 });
 
 test("autoLaunchWriteLines__TargetsTheManagedDomain__When__GivenEntries", () => {
