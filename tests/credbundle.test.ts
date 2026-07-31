@@ -5,6 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { exportProfile, importProfile } from "../src/remote/runner/credbundle.js";
 import { currentOwner, profileDir, readOwners, swapProfile } from "../src/remote/runner/profiles.js";
+import { unpackInto } from "../src/remote/runner/tarball.js";
 
 /**
  * The runner's export/import of a session, using the REAL `tar` on this machine so a bundle is
@@ -50,7 +51,7 @@ test("exportProfile__TarsTheLiveSession__When__OperatorOwnsIt", async () => {
 	assert.equal(currentOwner(root, "Yarn"), "dave");
 
 	const out = path.join(tmp("stage"), "dave.tar.gz");
-	const res = await exportProfile({ app: "Yarn", operator: "dave", outFile: out, home: h, root });
+	const res = await exportProfile({ app: "Yarn", operator: "dave", outFile: out, home: h, root, quit: noQuit });
 	assert.equal(res.found, true);
 	assert.equal(res.source, "live");
 	assert.ok(fs.existsSync(out) && fs.statSync(out).size > 0);
@@ -66,10 +67,33 @@ test("exportProfile__RefusesOthersLiveSession__When__CallerDoesNotOwnIt", async 
 	assert.equal(currentOwner(root, "Yarn"), "eve");
 
 	const out = path.join(tmp("stage"), "dave.tar.gz");
-	const res = await exportProfile({ app: "Yarn", operator: "dave", outFile: out, home: h, root });
+	const res = await exportProfile({ app: "Yarn", operator: "dave", outFile: out, home: h, root, quit: noQuit });
 	assert.equal(res.found, false, "Dave has no session here — Eve's live session must NOT be exported as Dave's");
 	assert.equal(res.source, "none");
 	assert.ok(!fs.existsSync(out), "and nothing was written");
+});
+
+test("exportProfile__QuitsBeforeSnapshot__So__TheBundleReflectsTheFlushedProfile", async () => {
+	const h = home("mid-write");
+	const root = tmp("store");
+	await swapProfile({ app: "Yarn", operator: "dave", home: h, root, quit: noQuit });
+
+	// A quit that flushes, exactly as a graceful app quit does: it rewrites the live session to its
+	// final consistent value. If export snapshotted BEFORE the quit, the bundle would still hold
+	// "mid-write"; capturing AFTER the quit holds "flushed". This is the torn-DB fix asserted as an
+	// ordering property — the reason a hot copy of a running Chromium profile crash-loops on restore.
+	let quitCalled = false;
+	const quit = async (): Promise<void> => {
+		quitCalled = true;
+		fs.writeFileSync(path.join(h, HOME_REL, "session.json"), "flushed");
+	};
+	const out = path.join(tmp("stage"), "dave.tar.gz");
+	await exportProfile({ app: "Yarn", operator: "dave", outFile: out, home: h, root, quit });
+	assert.ok(quitCalled, "the app was quit before snapshotting");
+
+	const dst = tmp("unpack");
+	await unpackInto(out, dst);
+	assert.equal(fs.readFileSync(path.join(dst, HOME_REL, "session.json"), "utf8"), "flushed", "the bundle captured the post-quit, flushed state");
 });
 
 test("importProfile__RoundTripsASession__When__PushedToAFreshBox", async () => {
@@ -78,7 +102,7 @@ test("importProfile__RoundTripsASession__When__PushedToAFreshBox", async () => {
 	const rootA = tmp("storeA");
 	await swapProfile({ app: "Yarn", operator: "dave", home: hA, root: rootA, quit: noQuit });
 	const bundle = path.join(tmp("stage"), "dave.tar.gz");
-	const exp = await exportProfile({ app: "Yarn", operator: "dave", outFile: bundle, home: hA, root: rootA });
+	const exp = await exportProfile({ app: "Yarn", operator: "dave", outFile: bundle, home: hA, root: rootA, quit: noQuit });
 	assert.equal(exp.found, true);
 
 	// Box B: factory-fresh, nobody signed in. Import Dave's bundle.
@@ -102,7 +126,7 @@ test("importProfile__ParksTheOtherOperator__When__BoxIsOwnedBySomeoneElse", asyn
 	const rootA = tmp("storeA");
 	await swapProfile({ app: "Yarn", operator: "dave", home: hA, root: rootA, quit: noQuit });
 	const bundle = path.join(tmp("stage"), "dave.tar.gz");
-	await exportProfile({ app: "Yarn", operator: "dave", outFile: bundle, home: hA, root: rootA });
+	await exportProfile({ app: "Yarn", operator: "dave", outFile: bundle, home: hA, root: rootA, quit: noQuit });
 
 	const imp = await importProfile({ app: "Yarn", operator: "dave", tarFile: bundle, home: hB, root: rootB, quit: noQuit });
 	assert.equal(imp.install.action, "installed");
@@ -126,7 +150,7 @@ test("importProfile__SkipsOwned__When__OperatorAlreadyOwnsTheBox", async () => {
 	const rootA = tmp("storeA");
 	await swapProfile({ app: "Yarn", operator: "dave", home: hA, root: rootA, quit: noQuit });
 	const bundle = path.join(tmp("stage"), "dave.tar.gz");
-	await exportProfile({ app: "Yarn", operator: "dave", outFile: bundle, home: hA, root: rootA });
+	await exportProfile({ app: "Yarn", operator: "dave", outFile: bundle, home: hA, root: rootA, quit: noQuit });
 
 	const imp = await importProfile({ app: "Yarn", operator: "dave", tarFile: bundle, home: hB, root: rootB, quit: noQuit });
 	assert.equal(imp.install.action, "skipped-owned");
