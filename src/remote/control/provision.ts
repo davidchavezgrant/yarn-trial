@@ -637,9 +637,20 @@ install -m 755 "$PROV/yarn-runner-serve" "$HOME/.local/bin/yarn-runner-serve"
 #
 # The staged copy is removed either way. It arrives at 0600, but .provision/ lives inside the
 # synced checkout and the key's home is ~/.yarn-runner/env — one copy, one mode to reason about.
+#
+# Four states, because the report must describe the HOST, not the shipment. A provision run
+# from an environment with no key ships none, and the old kept/written/absent trio collapsed
+# "nothing sent, host already keyed" into the same 'absent' as "host has no key at all" —
+# which reads as a fleet outage when it is actually fine (misread exactly that way,
+# 2026-07-31). So: written (sent, installed), kept (sent, host's own key wins), present
+# (nothing sent, host already has one), absent (nothing sent, host has none — the only
+# state that needs action).
 KEY=absent
+if grep -qE '^[[:space:]]*(export[[:space:]]+)?OPENROUTER_API_KEY[[:space:]]*=' "$HOME/.yarn-runner/env" 2>/dev/null; then
+	KEY=present
+fi
 if [ -f "$PROV/env" ]; then
-	if grep -qE '^[[:space:]]*(export[[:space:]]+)?OPENROUTER_API_KEY[[:space:]]*=' "$HOME/.yarn-runner/env" 2>/dev/null; then
+	if [ "$KEY" = present ]; then
 		KEY=kept
 	else
 		install -m 600 "$PROV/env" "$HOME/.yarn-runner/env"

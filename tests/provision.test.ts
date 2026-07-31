@@ -293,6 +293,10 @@ test("stageProvisioningFiles__CarriesTheModelKeyAsA0600File__When__ProvisionerHa
 		// Kept, not clobbered: a host given a deliberate per-host key by hand must not lose it to
 		// whoever re-provisions next. The GUI is the deliberate-overwrite path.
 		assert.match(install, /KEY=kept/);
+		// The report describes the HOST, not the shipment: a keyless provision against an
+		// already-keyed host must say `present`, not `absent` — the old trio collapsed the
+		// two and a healthy fleet read as one with no keys (misread that way 2026-07-31).
+		assert.match(install, /KEY=present/);
 		// And the staged secret does not outlive the install.
 		assert.match(install, /rm -f "\$PROV\/env"/);
 
