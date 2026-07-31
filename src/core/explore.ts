@@ -12,9 +12,7 @@ import {
 	onInterrupt,
 	type WindowRef,
 } from "./harness.js";
-import { ensureBrowser } from "../backends/browser.js";
-import { CDP_ACT_TOOL, CDP_FIND_TOOL, CDP_RULES, CdpBackend } from "../backends/cdp.js";
-import { DOM_ACT_TOOL, DOM_RULES, DomBackend, FIND_TOOL } from "../backends/dom.js";
+import type { CdpBackend } from "../backends/cdp.js";
 import { readJournal } from "./journal.js";
 import { startOverlay } from "./overlay.js";
 import { targetVocabulary } from "./target.js";
@@ -50,11 +48,13 @@ async function main(): Promise<void> {
 		// reachable without handling credentials here.
 		// On the CDP backend there is no driver and no window: the page is the target, and
 		// acquisition (launch-or-attach, tab pick, navigate) lives in CdpBackend.acquire.
+		// Backends load lazily at their selection branch so src/backends/ stays deletable
+		// without breaking default ax explores — same seam as agent.ts and teardown.ts.
 		let win: WindowRef | undefined;
 		if (backendKind === "cdp") {
-			cdp = await CdpBackend.acquire(target);
+			cdp = await (await import("../backends/cdp.js")).CdpBackend.acquire(target);
 		} else if (target.kind === "web") {
-			({ win } = await ensureBrowser(driver!, target, { cdp: backendKind === "dom" }));
+			({ win } = await (await import("../backends/browser.js")).ensureBrowser(driver!, target, { cdp: backendKind === "dom" }));
 		} else {
 			await driver!.act({ kind: "tool", name: "launch_app", args: { name: app } });
 			await new Promise((r) => setTimeout(r, 1500));
@@ -69,7 +69,7 @@ async function main(): Promise<void> {
 		// backend has no such chain: ariaSnapshot returns the whole tree in one call.)
 		const dom =
 			backendKind === "dom"
-				? await DomBackend.bind(driver!, win!, Infinity, target.kind === "web" ? target.origin : undefined)
+				? await (await import("../backends/dom.js")).DomBackend.bind(driver!, win!, Infinity, target.kind === "web" ? target.origin : undefined)
 				: undefined;
 		if (!dom && !cdp) win = await ensureObservable(driver!, win!, app);
 		// webAreaOnly keeps the browser's own tab strip, omnibox and menu bar out of the
@@ -81,8 +81,18 @@ async function main(): Promise<void> {
 		// The claim tool is only offered under descent — a non-descent pass never creates
 		// anything, so a claim ledger it can't act on is just a distraction in the prompt.
 		const extra = DESCENT_ON ? [...EXTRA_TOOLS, CLAIM_TOOL] : EXTRA_TOOLS;
-		p.tools = cdp ? [CDP_ACT_TOOL, CDP_FIND_TOOL, ...extra] : dom ? [DOM_ACT_TOOL, FIND_TOOL, ...extra] : [ACT_TOOL, ...extra];
-		p.basePrompt = systemPrompt(cdp ? CDP_RULES : dom ? DOM_RULES : DRIVER_RULES, targetVocabulary(target), DESCENT_ON, vision);
+		if (cdp) {
+			const { CDP_ACT_TOOL, CDP_FIND_TOOL, CDP_RULES } = await import("../backends/cdp.js");
+			p.tools = [CDP_ACT_TOOL, CDP_FIND_TOOL, ...extra];
+			p.basePrompt = systemPrompt(CDP_RULES, targetVocabulary(target), DESCENT_ON, vision);
+		} else if (dom) {
+			const { DOM_ACT_TOOL, FIND_TOOL, DOM_RULES } = await import("../backends/dom.js");
+			p.tools = [DOM_ACT_TOOL, FIND_TOOL, ...extra];
+			p.basePrompt = systemPrompt(DOM_RULES, targetVocabulary(target), DESCENT_ON, vision);
+		} else {
+			p.tools = [ACT_TOOL, ...extra];
+			p.basePrompt = systemPrompt(DRIVER_RULES, targetVocabulary(target), DESCENT_ON, vision);
+		}
 		console.log(
 			cdp
 				? `exploring ${app} url=${target.kind === "web" ? target.url : "(attached)"} backend=cdp`
