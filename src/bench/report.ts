@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { dataRoot } from "../paths.js";
 import { type CostRollup, rollupCost, usd } from "./cost.js";
-import { type Arm, flagsLine, MATRIX, phaseArms } from "./matrix.js";
+import { type Arm, flagsLine, MATRIX, phaseArms, perceptionLine } from "./matrix.js";
 import type { Manifest, ManifestEntry, RunMetrics } from "./manifest.js";
 
 /**
@@ -185,7 +185,7 @@ function taskTable(arms: Arm[], m: Manifest): string[] {
 }
 
 function exploreTable(arms: Arm[], m: Manifest): string[] {
-	const header = "| arm | model | flags | actions | elapsed | calls | out-tok | $ | actuated/dismissed/seen | surfaces | nodes | edges | ambiguities |";
+	const header = "| arm | model | perception | flags | actions | elapsed | calls | out-tok | $ | actuated/dismissed/seen | surfaces | nodes | edges | ambiguities |";
 	const rows = arms.flatMap((a) =>
 		modelPasses(m, a.id).map((model) => {
 			const e = m.entries.filter((x) => x.armId === a.id && x.model === model).find((x) => x.collected);
@@ -194,7 +194,7 @@ function exploreTable(arms: Arm[], m: Manifest): string[] {
 
 			const cost = rollupCost(e?.collected ? [{ ...mm, ...(mm.model ? { model: mm.model } : { model }) }] : []);
 
-			return `| ${a.id} | ${passLabel(model)} | ${flagsLine(a)} | ${fmt(mm.exploreActions)} | ${fmt(mm.exploreElapsed)} | ${fmt(mm.modelCalls)} | ${fmt(mm.outputTokens)} | ${costCell(cost)} | ${controls} | ${fmt(mm.surfaces)} | ${fmt(mm.graphNodes)} | ${fmt(mm.graphEdges)} | ${fmt(mm.scopeAmbiguities)} |`;
+			return `| ${a.id} | ${passLabel(model)} | ${perceptionLine(a).replace("perception: ", "")} | ${flagsLine(a)} | ${fmt(mm.exploreActions)} | ${fmt(mm.exploreElapsed)} | ${fmt(mm.modelCalls)} | ${fmt(mm.outputTokens)} | ${costCell(cost)} | ${controls} | ${fmt(mm.surfaces)} | ${fmt(mm.graphNodes)} | ${fmt(mm.graphEdges)} | ${fmt(mm.scopeAmbiguities)} |`;
 		}),
 	);
 

@@ -1,9 +1,12 @@
+import { type ChildProcess, spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import type { Duplex } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readJournal } from "../core/journal.js";
 import type { FleetRow } from "../remote/control/fleet.js";
+import type { EngineHandle } from "../remote/liveview.js";
 import { appSlug, dataRoot } from "../paths.js";
 import { appmapSlug } from "../core/target.js";
 import { archiveDirFor } from "./collect.js";
@@ -350,7 +353,7 @@ export interface DetailStep {
 export interface DashDetail {
 	jobId: string;
 	armId: string;
-	graph?: { nodes: any[]; edges: any[]; home?: string };
+	graph?: { nodes: any[]; edges: any[]; home?: string; gated?: string[] };
 	/** Where the graph came from — archived arm map, live docs/appmaps, or nothing. */
 	graphSource?: string;
 	steps: DetailStep[];
@@ -481,7 +484,7 @@ function resolveGraph(
 		const file = fs.readdirSync(archive).find((f) => f.endsWith(".json"));
 		if (file) {
 			const g = readJsonFile(path.join(archive, file));
-			if (g?.nodes) return { graph: { nodes: g.nodes, edges: g.edges ?? [], ...(g.home ? { home: String(g.home) } : {}) }, source: `${exploreArmId} pass (archived)` };
+			if (g?.nodes) return { graph: shapeGraph(g), source: `${exploreArmId} pass (archived)` };
 		}
 	} catch {
 		// No archive for that arm yet — fall through to the live map.
@@ -491,9 +494,21 @@ function resolveGraph(
 	// `web-app.notion.com`. The dash then reported no map for a 471-node map that existed.
 	const slug = appmapSlug(app);
 	const live = readJsonFile(path.join(dataDir, "docs", "appmaps", `${slug}.json`));
-	if (live?.nodes) return { graph: { nodes: live.nodes, edges: live.edges ?? [], ...(live.home ? { home: String(live.home) } : {}) }, source: `docs/appmaps/${slug}.json (live)` };
+	if (live?.nodes) return { graph: shapeGraph(live), source: `docs/appmaps/${slug}.json (live)` };
 
 	return {};
+}
+
+/** The graph fields the page renders — including gated node ids, the per-node "refused" signal. */
+function shapeGraph(g: Record<string, any>): NonNullable<DashDetail["graph"]> {
+	const gated = Array.isArray(g.gated) ? g.gated.map((x: any) => String(x?.id)).filter(Boolean) : [];
+
+	return {
+		nodes: g.nodes,
+		edges: g.edges ?? [],
+		...(g.home ? { home: String(g.home) } : {}),
+		...(gated.length ? { gated } : {}),
+	};
 }
 
 /** Everything the board's dropdown needs for one run: the map, the walk, the mutations. */
@@ -660,6 +675,144 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		push();
 	};
 
+	/**
+	 * Fleet peek: a view-only live stream of a colo Mac's Chromium target, embedded in its
+	 * host card. CDP-transport ONLY, on purpose: the debug port needs no TCC and no runner
+	 * involvement — the dash tunnels to it (tunnelArgv, the repo's one ssh builder) and hosts
+	 * the screencast engine itself, so nothing ships to the fleet mid-drain. An ax-arm run on
+	 * an unflagged app has no endpoint and says so; the SCK path needs a runner verb and waits.
+	 *
+	 * View-only is structural: the viewer's messages are never forwarded to the engine, so a
+	 * stray click cannot corrupt a live benchmark run. One peek at a time — the tunnels map
+	 * the remote debug ports onto the SAME local ports (9222/9777), so a second host's peek
+	 * preempts the first (last request wins, the fleet's own idiom).
+	 */
+	interface Peek {
+		host: string;
+		tunnels: ChildProcess[];
+		engine?: EngineHandle;
+		sockets: Set<Duplex>;
+		idleTimer?: NodeJS.Timeout;
+	}
+	let peek: Peek | undefined;
+	const PEEK_PORTS = [9222, 9777]; // app target · web-Chrome, matching the cdp backend's defaults
+	const MAX_QUEUED_PEEK_BYTES = 1.5 * 1024 * 1024;
+
+	const teardownPeek = (): void => {
+		if (!peek) return;
+		const p = peek;
+		peek = undefined;
+		clearTimeout(p.idleTimer);
+		p.engine?.close();
+		for (const t of p.tunnels) t.kill("SIGTERM");
+		for (const s of p.sockets) s.destroy();
+		addEvent(`peek: closed (${p.host})`);
+	};
+
+	const endpointUp = async (port: number): Promise<boolean> => {
+		try {
+			const res = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1500) });
+
+			return res.ok;
+		} catch {
+			return false;
+		}
+	};
+
+	/** Something ACCEPTS on the port, whatever protocol it speaks — the pre-tunnel squatter check. */
+	const portAccepts = async (port: number): Promise<boolean> => {
+		const { connect } = await import("node:net");
+
+		return new Promise((resolve) => {
+			const sock = connect({ port, host: "127.0.0.1" });
+			const done = (v: boolean) => {
+				sock.destroy();
+				resolve(v);
+			};
+			sock.once("connect", () => done(true));
+			sock.once("error", () => done(false));
+			setTimeout(() => done(false), 800).unref();
+		});
+	};
+
+	async function ensurePeek(hostName: string): Promise<{ ok: true } | { ok: false; error: string }> {
+		if (peek?.host === hostName && peek.engine) return { ok: true };
+		teardownPeek();
+		const [{ loadHosts }, { tunnelArgv }] = await Promise.all([import("../remote/control/hosts.js"), import("../remote/control/ssh.js")]);
+		const host = loadHosts().hosts.find((h) => h.name === hostName);
+		if (!host) return { ok: false, error: `unknown host ${JSON.stringify(hostName)}` };
+
+		// The previous session's tunnels take a beat to release their ports after SIGTERM —
+		// wait them out, or switching hosts trips the squatter guard on our own dying ssh.
+		const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+		for (let i = 0; i < 20; i++) {
+			const held = (await Promise.all(PEEK_PORTS.map(portAccepts))).some(Boolean);
+			if (!held) break;
+			await sleep(150);
+		}
+
+		// The tunnels bind the debug ports LOCALLY. If something STILL listens there — a
+		// stale ControlMaster forward, a local debug-flagged Chrome, another operator tool —
+		// our ssh dies on ExitOnForwardFailure and the probe below would happily stream from
+		// the SQUATTER, showing pixels from the wrong machine. Refuse instead: a peek that
+		// might lie about which Mac it shows is worse than no peek.
+		for (const port of PEEK_PORTS)
+			if (await portAccepts(port))
+				return {
+					ok: false,
+					error: `local port ${port} is held by something that is not this dash (a stale ssh forward or a local debug Chrome) — close it first: lsof -nP -iTCP:${port} -sTCP:LISTEN`,
+				};
+
+		const p: Peek = { host: hostName, tunnels: [], sockets: new Set() };
+		peek = p;
+		for (const port of PEEK_PORTS) p.tunnels.push(spawn("ssh", tunnelArgv(host, port), { stdio: "ignore" }));
+
+		// Which debug port answers decides what we watch: 9222 is the app the run drives,
+		// 9777 the web-Chrome. Poll briefly — the tunnel itself takes a moment to come up.
+		let endpoint: string | undefined;
+		let browserEndpoint: string | undefined;
+		for (let tries = 0; tries < 5 && !endpoint; tries++) {
+			for (const port of PEEK_PORTS)
+				if (!endpoint && (await endpointUp(port))) endpoint = `http://127.0.0.1:${port}`;
+				else if (endpoint && !endpoint.endsWith(String(port)) && (await endpointUp(port))) browserEndpoint = `http://127.0.0.1:${port}`;
+		}
+		if (peek !== p) return { ok: false, error: "superseded by a newer peek" };
+		if (!endpoint) {
+			teardownPeek();
+
+			return {
+				ok: false,
+				error: `no CDP debug endpoint reachable on ${hostName} — the current run is likely an ax-arm driving an unflagged app; peek covers Chromium targets only for now`,
+			};
+		}
+
+		const { connectCdpEngine } = await import("../remote/liveview-cdp.js");
+		const engine = await connectCdpEngine({ endpoint, ...(browserEndpoint ? { browserEndpoint } : {}), quality: 80, maxWidth: 1600, app: hostName });
+		if (peek !== p) {
+			engine.close();
+
+			return { ok: false, error: "superseded by a newer peek" };
+		}
+		p.engine = engine;
+		const { encodeFrame } = await import("../remote/liveview-ws.js");
+		const cast = (payload: Buffer, kind: "binary" | "text") => {
+			for (const s of p.sockets) {
+				if (kind === "binary" && (s as any).writableLength > MAX_QUEUED_PEEK_BYTES) continue;
+				try {
+					s.write(encodeFrame(payload, kind));
+				} catch {
+					s.destroy();
+				}
+			}
+		};
+		engine.onFrame((jpeg) => cast(jpeg, "binary"));
+		engine.onEvent((ev) => cast(Buffer.from(JSON.stringify(ev)), "text"));
+		engine.onExit(() => cast(Buffer.from(JSON.stringify({ ev: "error", message: "stream ended — the target closed or the tunnel dropped" })), "text"));
+		addEvent(`peek: streaming ${hostName} via ${endpoint}${browserEndpoint ? ` (+${browserEndpoint})` : ""}`);
+
+		return { ok: true };
+	}
+
 	const htmlPath = resolveHtml();
 	const server = http.createServer((req, res) => {
 		const url = req.url ?? "/";
@@ -684,6 +837,66 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		}
 	});
 
+	// The peek stream rides a WebSocket on the same port. View-only: inbound text frames are
+	// deliberately dropped on the floor (only ping/close are honored), so no viewer — local,
+	// LAN, or tunneled through ngrok — can inject input into a machine mid-benchmark.
+	server.on("upgrade", async (req, socket: Duplex) => {
+		const url = new URL(req.url ?? "/", "http://127.0.0.1");
+		const key = req.headers["sec-websocket-key"];
+		if (url.pathname !== "/peek" || typeof key !== "string") {
+			socket.destroy();
+
+			return;
+		}
+		const { encodeFrame, handshakeResponse, WsDecoder } = await import("../remote/liveview-ws.js");
+		socket.write(handshakeResponse(key));
+		const say = (obj: unknown) => {
+			try {
+				socket.write(encodeFrame(Buffer.from(JSON.stringify(obj)), "text"));
+			} catch {
+				socket.destroy();
+			}
+		};
+		const r = await ensurePeek(url.searchParams.get("host") ?? "");
+		if (!r.ok) {
+			say({ ev: "error", message: r.error });
+			socket.end();
+
+			return;
+		}
+		const session = peek;
+		if (!session) {
+			socket.end();
+
+			return;
+		}
+		clearTimeout(session.idleTimer);
+		session.sockets.add(socket);
+		const decoder = new WsDecoder();
+		socket.on("data", (chunk: Buffer) => {
+			try {
+				for (const frame of decoder.push(chunk)) {
+					if (frame.opcode === "close") socket.end();
+					else if (frame.opcode === "ping") socket.write(encodeFrame(frame.payload, "pong"));
+					// text frames: dropped — the peek is view-only by construction.
+				}
+			} catch {
+				socket.destroy();
+			}
+		});
+		const gone = () => {
+			session.sockets.delete(socket);
+			// Last viewer gone: linger briefly (a reload, a tab hop), then drop the engine and
+			// tunnels — an idle capture stream against a colo Mac serves nobody.
+			if (session.sockets.size === 0 && peek === session)
+				session.idleTimer = setTimeout(() => {
+					if (peek === session && session.sockets.size === 0) teardownPeek();
+				}, 30_000);
+		};
+		socket.on("close", gone);
+		socket.on("error", gone);
+	});
+
 	// Listen errors (EADDRINUSE above all) must reject rather than crash the process later:
 	// the Electron shell catches "port taken" and attaches its window to the dash already
 	// serving there instead of dying.
@@ -695,6 +908,17 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			resolve();
 		});
 	});
+
+	// Orphaned ssh tunnels outlive a dead parent silently — kill them with the process. The
+	// signal handlers matter: "exit" does NOT fire on an unhandled SIGTERM/SIGINT, which is
+	// exactly how a dash restart (kill + relaunch) leaks its tunnels onto the debug ports and
+	// then trips its own squatter guard.
+	process.on("exit", teardownPeek);
+	for (const sig of ["SIGINT", "SIGTERM"] as const)
+		process.on(sig, () => {
+			teardownPeek();
+			process.exit(0);
+		});
 
 	setInterval(() => {
 		for (const res of clients) res.write(": ping\n\n");

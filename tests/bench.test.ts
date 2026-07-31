@@ -25,7 +25,7 @@ import {
 	updateEntry,
 	writeManifest,
 } from "../src/bench/manifest.js";
-import { armById, BACKENDS, MATRIX, phaseArms, phaseRunCount } from "../src/bench/matrix.js";
+import { armById, BACKENDS, MATRIX, phaseArms, phaseRunCount, perceptionLine } from "../src/bench/matrix.js";
 import type { DispatchOptions } from "../src/remote/control/dispatch.js";
 import {
 	auditPhase,
@@ -866,4 +866,25 @@ test("poisonedHosts__FlagsTheHost__When__LastThreeRunsFailIdentically", () => {
 	assert.deepEqual(poisonedHosts(m([entry("mac2", "a", "unready"), entry("mac2", "b", "unready")])), []);
 	// Local compiles never poison anything.
 	assert.deepEqual(poisonedHosts(m([entry("local", "a", "crashed"), entry("local", "b", "crashed"), entry("local", "c", "crashed")])), []);
+});
+
+test("perceptionLine__SaysWhatTheModelSees__When__FlagsLookContradictory", () => {
+	// `--backend ax --no-ax` reads as a contradiction and is not one: --backend names the
+	// ACTUATOR (cua driver vs CDP), --no-ax/--no-vision name PERCEPTION. David read the
+	// vision arm as "vision + AX" on 2026-07-31 — the opposite of what it measures — because
+	// the plan printed only the flags and left the reader to decode them.
+	const arm = (dispatch: any): any => ({ id: "x", phase: 2, kind: "task", app: "Yarn", n: 1, dispatch });
+	assert.equal(perceptionLine(arm({ backend: "ax", noAx: true })), "perception: screenshots only");
+	assert.equal(perceptionLine(arm({ backend: "ax", noVision: true })), "perception: element list only");
+	assert.equal(perceptionLine(arm({ backend: "ax" })), "perception: elements + screenshots");
+	assert.equal(perceptionLine(arm({ backend: "cdp" })), "perception: elements + screenshots");
+	// The actuator must not change the answer — that conflation is the whole bug.
+	assert.equal(perceptionLine(arm({ backend: "cdp", noAx: true })), perceptionLine(arm({ backend: "ax", noAx: true })));
+});
+
+test("perceptionLine__ReportsTheEmptyCase__When__BothChannelsAreOff", () => {
+	// The explore CLI refuses this combination (a window title and nothing else), but a label
+	// that quietly cannot happen teaches nothing to whoever declares the arm that tries it.
+	const both: any = { id: "x", phase: 2, kind: "task", app: "Yarn", n: 1, dispatch: { backend: "ax", noAx: true, noVision: true } };
+	assert.equal(perceptionLine(both), "perception: NOTHING");
 });

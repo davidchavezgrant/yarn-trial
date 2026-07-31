@@ -443,6 +443,30 @@ export const phaseRunCount = (phase: Phase): number => phaseArms(phase).reduce((
  * use (`--backend ax`, `NO_GROUNDING=1`, …) rather than the wire field names. For `bench
  * plan` output and dispatch confirmation lines.
  */
+/**
+ * What the model can SEE, in words — because the flags do not say it.
+ *
+ * `--backend ax --no-ax` reads as a contradiction and is not one: the two flags name
+ * different axes. `--backend` is ACTUATION (how a click is delivered — the cua driver or
+ * CDP), `--no-ax`/`--no-vision` are PERCEPTION (which channels reach the model). So
+ * "ax + no-ax" means actuate through the AX driver while showing the model screenshots only,
+ * and a reader has to know that to decode it. David read it as "vision + AX" on 2026-07-31,
+ * which is the opposite of what the arm measures.
+ *
+ * Rendered alongside the raw flags rather than instead of them: the flags are what you would
+ * type, this is what the arm means.
+ */
+export function perceptionLine(arm: Arm): string {
+	const { noAx, noVision } = arm.dispatch;
+	// Refused by the explore CLI (a window title and nothing else), but rendered honestly if a
+	// future arm ever declares it — a label that quietly cannot happen teaches nothing.
+	if (noAx && noVision) return "perception: NOTHING";
+	if (noAx) return "perception: screenshots only";
+	if (noVision) return "perception: element list only";
+
+	return "perception: elements + screenshots";
+}
+
 export function flagsLine(arm: Arm): string {
 	const d = arm.dispatch;
 	const parts: string[] = [];

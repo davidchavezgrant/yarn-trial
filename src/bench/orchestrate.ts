@@ -14,8 +14,7 @@ import {
 	MATRIX,
 	type Phase,
 	phaseArms,
-	phaseRunCount,
-} from "./matrix.js";
+	phaseRunCount, perceptionLine } from "./matrix.js";
 import {
 	entriesForArm,
 	type Manifest,
@@ -416,6 +415,9 @@ export function printPlan(log: (line: string) => void = console.log): void {
 		log(`\nphase ${phase} — ${phaseRunCount(phase)} runs${note}`);
 		for (const arm of phaseArms(phase)) {
 			log(`  ${arm.id}  n=${arm.n}  ${arm.kind}  "${arm.app}"  ${flagsLine(arm)}`);
+			// Only where it is not the default: printing "elements + screenshots" on every one
+			// of 41 arms would bury the four where perception is the whole point of the arm.
+			if (arm.dispatch.noAx || arm.dispatch.noVision) log(`      ${perceptionLine(arm)} — --backend names the ACTUATOR, not a perception channel`);
 			if (arm.task) log(`      task: ${JSON.stringify(arm.task)}`);
 			if (arm.sourceArm) log(`      source: ${arm.sourceArm}`);
 			if (arm.env) log(`      env: ${Object.entries(arm.env).map(([k, v]) => `${k}=${v}`).join(" ")} (crosses the wire as appmapVariant)`);
