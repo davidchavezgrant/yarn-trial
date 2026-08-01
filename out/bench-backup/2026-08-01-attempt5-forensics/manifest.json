@@ -1,0 +1,172 @@
+{
+	"date": "2026-08-01",
+	"createdAt": "2026-08-01T06:44:00.624Z",
+	"entries": [
+		{
+			"armId": "p1-explore-ax",
+			"jobId": "explore-2026-08-01T06-56-23-253-yarn",
+			"host": "mac1",
+			"submittedAt": "2026-08-01T06:56:23.306Z",
+			"state": "orphaned",
+			"collected": true,
+			"model": "azure/gpt-5.6-sol",
+			"metrics": {
+				"startedAt": "2026-08-01T06:56:23.255Z",
+				"endedAt": "2026-08-01T07:02:54.402Z",
+				"runSec": 391,
+				"exploreActions": 133,
+				"exploreElapsed": "28m",
+				"inputTokens": 1649907,
+				"outputTokens": 35004,
+				"cacheReadTokens": 9495552,
+				"cacheCreationTokens": 0,
+				"modelCalls": 229,
+				"controlsActuated": 46,
+				"controlsDismissed": 373,
+				"controlsSeen": 418,
+				"surfaces": 31,
+				"graphNodes": 156,
+				"graphEdges": 57,
+				"scopeAmbiguities": 17
+			},
+			"technical": {
+				"kind": "orphaned",
+				"detail": "the runner died under this run; nothing about the agent was measured"
+			},
+			"note": "TECHNICAL FAILURE (orphaned) — not counted as a sample; re-run the phase to replace it"
+		},
+		{
+			"armId": "p1-explore-cdp",
+			"jobId": "explore-2026-08-01T06-56-26-865-yarn",
+			"host": "mac2",
+			"submittedAt": "2026-08-01T06:56:26.979Z",
+			"state": "running",
+			"collected": false,
+			"model": "azure/gpt-5.6-sol"
+		},
+		{
+			"armId": "p1-explore-no-vision",
+			"jobId": "explore-2026-08-01T06-56-30-397-yarn",
+			"host": "mac3",
+			"submittedAt": "2026-08-01T06:56:30.511Z",
+			"state": "failed",
+			"collected": true,
+			"model": "azure/gpt-5.6-sol",
+			"metrics": {
+				"startedAt": "2026-08-01T06:56:30.399Z",
+				"endedAt": "2026-08-01T07:06:54.419Z",
+				"runSec": 624,
+				"exploreActions": 62,
+				"exploreElapsed": "9m",
+				"inputTokens": 448235,
+				"outputTokens": 16006,
+				"cacheReadTokens": 2926976,
+				"cacheCreationTokens": 0,
+				"modelCalls": 93,
+				"controlsActuated": 43,
+				"controlsDismissed": 37,
+				"controlsSeen": 382,
+				"surfaces": 31,
+				"graphNodes": 143,
+				"graphEdges": 53,
+				"scopeAmbiguities": 16
+			}
+		},
+		{
+			"armId": "p1-explore-ax-noaxdom",
+			"jobId": "explore-2026-08-01T06-56-33-917-yarn",
+			"host": "mac1",
+			"submittedAt": "2026-08-01T06:56:33.979Z",
+			"state": "failed",
+			"collected": true,
+			"model": "azure/gpt-5.6-sol",
+			"metrics": {
+				"queuedAt": "2026-08-01T06:56:33.917Z",
+				"startedAt": "2026-08-01T07:02:54.411Z",
+				"endedAt": "2026-08-01T07:28:53.519Z",
+				"queueWaitSec": 380,
+				"runSec": 1559,
+				"exploreActions": 123,
+				"exploreElapsed": "21m",
+				"inputTokens": 1273099,
+				"outputTokens": 24543,
+				"cacheReadTokens": 5993344,
+				"cacheCreationTokens": 0,
+				"modelCalls": 160,
+				"controlsActuated": 75,
+				"controlsDismissed": 38,
+				"controlsSeen": 1029,
+				"surfaces": 33,
+				"graphNodes": 191,
+				"graphEdges": 53,
+				"scopeAmbiguities": 14
+			}
+		},
+		{
+			"armId": "p1-explore-ax-noaxdom-no-vision",
+			"jobId": "explore-2026-08-01T06-56-37-606-yarn",
+			"host": "mac2",
+			"submittedAt": "2026-08-01T06:56:37.647Z",
+			"state": "queued",
+			"collected": false,
+			"model": "azure/gpt-5.6-sol"
+		},
+		{
+			"armId": "p1-explore-cdp-no-vision",
+			"jobId": "explore-2026-08-01T06-56-41-323-yarn",
+			"host": "mac3",
+			"submittedAt": "2026-08-01T06:56:41.364Z",
+			"state": "done",
+			"collected": true,
+			"model": "azure/gpt-5.6-sol",
+			"metrics": {
+				"queuedAt": "2026-08-01T06:56:41.324Z",
+				"startedAt": "2026-08-01T07:06:54.420Z",
+				"endedAt": "2026-08-01T07:26:33.322Z",
+				"queueWaitSec": 613,
+				"runSec": 1179,
+				"exploreActions": 134,
+				"exploreElapsed": "17m",
+				"inputTokens": 379501,
+				"outputTokens": 32395,
+				"cacheReadTokens": 2201600,
+				"cacheCreationTokens": 0,
+				"modelCalls": 216,
+				"controlsActuated": 80,
+				"controlsDismissed": 91,
+				"controlsSeen": 291,
+				"surfaces": 23,
+				"graphNodes": 123,
+				"graphEdges": 64,
+				"scopeAmbiguities": 8
+			}
+		},
+		{
+			"armId": "p1-explore-vision",
+			"jobId": "explore-2026-08-01T06-56-44-830-yarn",
+			"host": "mac1",
+			"submittedAt": "2026-08-01T06:56:44.840Z",
+			"state": "running",
+			"collected": false,
+			"model": "azure/gpt-5.6-sol"
+		},
+		{
+			"armId": "p1-explore-ax",
+			"jobId": "explore-2026-08-01T06-56-48-314-yarn",
+			"host": "mac2",
+			"submittedAt": "2026-08-01T06:56:48.358Z",
+			"state": "queued",
+			"collected": false,
+			"model": "azure/gpt-5.6-sol"
+		},
+		{
+			"armId": "p1-explore-cdp",
+			"jobId": "explore-2026-08-01T06-56-51-861-yarn",
+			"host": "mac3",
+			"submittedAt": "2026-08-01T06:56:51.899Z",
+			"state": "running",
+			"collected": false,
+			"model": "azure/gpt-5.6-sol"
+		}
+	]
+}
