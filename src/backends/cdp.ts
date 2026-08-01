@@ -323,13 +323,24 @@ export function parseAiSnapshot(snapshot: string): { rows: SnapshotRow[]; texts:
 		const surface = [...stack].reverse().find((s) => s.name)?.name ?? "";
 		// Ancestors of THIS node (text lines never push, rows are pushed after their event).
 		const chain = stack.map((s) => s.id);
+		// Text inside a control is that control's own content (a button's caption, a custom
+		// dropdown's value echo) — never a sibling's label. Without this, the second of two
+		// dropdowns sharing a row adopts the first one's echo as its name, and a name derived
+		// from a neighbor's CURRENT VALUE changes whenever that value does, which breaks the
+		// journal's (name, surface) matching across observations. Real control roles only:
+		// a cursor=pointer generic is a clickable row CONTAINER, and the label inside one is
+		// exactly the wrapped-label shape synthesis exists to read.
+		const insideControl = stack.some((s) => s.row && INTERACTIVE_ROLES.has(s.row.role));
 
 		if (rest.startsWith("text:")) {
 			const t = rest.slice(5).trim();
 			if (t) {
 				texts.push(unquote(t));
+				// The value-echo lift below, for the bare-text rendering of the same shape.
+				const owner = [...stack].reverse().find((s) => s.row?.role === "combobox")?.row;
+				if (owner && !owner.value) owner.value = unquote(t);
 				const label = labelText(unquote(t));
-				if (label) events.push({ chain, blocker: false, text: label });
+				if (label && !insideControl) events.push({ chain, blocker: false, text: label });
 			}
 			continue;
 		}
@@ -377,6 +388,19 @@ export function parseAiSnapshot(snapshot: string): { rows: SnapshotRow[]; texts:
 			if (parent && !parent.value) parent.value = name;
 		}
 
+		// A CUSTOM dropdown (Radix-style) mounts its options only while OPEN: closed, there
+		// is no [selected] child to lift and the current value renders as a plain text child
+		// of the trigger instead (`- generic: Pointer-first` under the combobox — the live
+		// Yarn shape, probed 2026-08-01). Lift the first text-bearing non-interactive
+		// descendant, first-wins like the option lift, or the combobox parses with value ""
+		// and the mutation journal can never match a clicked option's label against it.
+		// Combobox ONLY: a listbox renders its options as children always, so its first text
+		// child is its first option, not a current value.
+		if (!INTERACTIVE_ROLES.has(role) && (name || value)) {
+			const owner = [...stack].reverse().find((s) => s.row?.role === "combobox")?.row;
+			if (owner && !owner.value) owner.value = name || value;
+		}
+
 		let row: SnapshotRow | undefined;
 		if (ref || name || value) {
 			row = {
@@ -397,7 +421,7 @@ export function parseAiSnapshot(snapshot: string): { rows: SnapshotRow[]; texts:
 			const claimant = SYNTH_ROLES.has(role) && !name.trim() ? row : undefined;
 			// Named (or value-only, e.g. `- generic: Cursor Style`) static rows are label
 			// material too — the name is preferred as the label-ier of the two.
-			const label = !blocker && LABEL_ROLES.has(role) ? labelText(name || value) : "";
+			const label = !blocker && !insideControl && LABEL_ROLES.has(role) ? labelText(name || value) : "";
 			if (blocker || claimant || label) events.push({ chain, blocker, text: label, claimant });
 		}
 		stack.push({ indent, name, row, id: nextId++ });

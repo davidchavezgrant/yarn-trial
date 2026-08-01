@@ -69,6 +69,74 @@ test("parseAiSnapshot__LeavesTheComboboxValueEmpty__When__TheSelectedRowIsNotIts
 	assert.equal(rows.find((r) => r.role === "combobox")?.value, "");
 });
 
+test("parseAiSnapshot__LiftsTheValueEcho__When__AClosedCustomDropdownHasNoSelectedOption", () => {
+	// The REAL Yarn closed-state shape, probed live on mac1 2026-08-01: a Radix-style
+	// dropdown mounts its options only while OPEN, so the closed combobox has no [selected]
+	// child to lift — the current value renders as a plain text child of the trigger
+	// instead. Without this lift the combobox parses with value "" and optionCommit can
+	// never match a clicked option's label against it: two cursor runs journaled nothing
+	// exactly this way, with the control freshly named and the option-role routing in place.
+	const page = `- generic [ref=e175] [box=0,0,400,40]:
+  - generic [ref=e176]: Cursor Style
+  - combobox [ref=e179] [cursor=pointer] [box=200,0,120,25]:
+    - generic [ref=e180]: Pointer-first
+`;
+	const { rows } = parseAiSnapshot(page);
+	const combo = rows.find((r) => r.ref === "e179")!;
+	assert.equal(combo.value, "Pointer-first");
+	// Synthesis still lands: the echo text now equals the combobox's lifted value, so the
+	// value-echo guard skips it neutrally and the scan reaches the real label.
+	assert.equal(combo.name, "Cursor Style");
+	assert.equal(combo.nameSynthesized, true);
+});
+
+test("parseAiSnapshot__PrefersDocumentOrder__When__BothEchoAndSelectedOptionExist", () => {
+	// An OPEN custom dropdown can render the trigger echo AND the mounted options at once;
+	// both spell the current value, and first-wins keeps the lift deterministic either way.
+	const page = `- combobox [ref=e1] [box=0,0,50,20]:
+  - generic [ref=e2]: Arrow-first
+  - listbox [ref=e3]:
+    - option "Arrow-first" [selected] [ref=e4] [box=0,0,0,0]
+    - option "Pointer-first" [ref=e5] [box=0,0,0,0]
+`;
+	const { rows } = parseAiSnapshot(page);
+	assert.equal(rows.find((r) => r.ref === "e1")?.value, "Arrow-first");
+});
+
+test("parseAiSnapshot__LeavesTheListboxAlone__When__ItsFirstTextChildIsAnOption", () => {
+	// The echo lift is combobox-ONLY: a listbox renders its options as children always,
+	// so "first text child" is its first option, not a current value.
+	const page = `- listbox [ref=e1] [box=0,0,50,60]:
+  - generic [ref=e2]: Red
+  - generic [ref=e3]: Blue
+`;
+	const { rows } = parseAiSnapshot(page);
+	assert.equal(rows.find((r) => r.ref === "e1")?.value, "");
+});
+
+test("parseAiSnapshot__RefusesALabelInsideAnotherControl__When__TwinDropdownsShareARow", () => {
+	// Live Yarn shape (probed 2026-08-01): the Keyboard Presses row holds TWO dropdowns,
+	// and the second was synthesized-named "Set B" — the FIRST dropdown's value echo
+	// adopted as a label. Text inside a control is that control's own content, never a
+	// sibling's label; and a name derived from a neighbor's current value changes whenever
+	// that value does, which breaks (name, surface) journal matching across observations.
+	// Anonymity is the correct outcome for the second dropdown.
+	const page = `- generic [ref=e270] [box=0,0,400,40]:
+  - generic [ref=e271]: Keyboard Presses
+  - combobox [ref=e277] [cursor=pointer] [box=200,0,80,25]:
+    - generic [ref=e278]: Set B
+  - combobox [ref=e285] [cursor=pointer] [box=290,0,80,25]:
+    - generic [ref=e286]: Extra Soft
+`;
+	const { rows } = parseAiSnapshot(page);
+	const first = rows.find((r) => r.ref === "e277")!;
+	const second = rows.find((r) => r.ref === "e285")!;
+	assert.equal(first.name, "Keyboard Presses");
+	assert.equal(first.value, "Set B");
+	assert.equal(second.name, "");
+	assert.equal(second.value, "Extra Soft");
+});
+
 test("parseAiSnapshot__IgnoresBrackets__When__TheyAppearInsideAValue", () => {
 	// Bracket groups are only meaningful before the ": value" separator; a value that
 	// happens to contain "[disabled]" must not scan as a flag (or [box=…] as geometry).
