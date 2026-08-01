@@ -177,3 +177,22 @@ export function rollupCost(runs: Array<TokenCounts & { model?: string }>): CostR
 
 /** `$1.23`, or `$0.0412` under a cent — arm-level costs are small and rounding hides them. */
 export const usd = (n: number): string => (n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`);
+
+/**
+ * A manifest's collected entries priced — the one mapping from manifest rows to rollupCost's
+ * shape, shared by truecost and the autopilot's spend ceiling so their totals cannot drift.
+ * The run log's own model (metrics.model — what actually RAN) outranks the dispatch request.
+ */
+export function manifestCost(entries: Array<{ collected: boolean; model?: string; metrics?: TokenCounts & { model?: string } }>): CostRollup {
+	return rollupCost(
+		entries
+			.filter((e) => e.collected)
+			.map((e) => ({
+				inputTokens: e.metrics?.inputTokens,
+				outputTokens: e.metrics?.outputTokens,
+				cacheReadTokens: e.metrics?.cacheReadTokens,
+				cacheCreationTokens: e.metrics?.cacheCreationTokens,
+				...(e.metrics?.model ? { model: e.metrics.model } : e.model ? { model: e.model } : {}),
+			})),
+	);
+}

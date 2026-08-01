@@ -65,6 +65,14 @@ export interface WatchOptions {
 	sleepFn?: (ms: number) => Promise<void>;
 	/** Stop after this many polls regardless — a backstop against watching a wedged fleet forever. */
 	maxPolls?: number;
+	/**
+	 * Stop early (returning not-done) when progress is unchanged for this many CONSECUTIVE
+	 * polls. Off by default. Exists because a job record can wedge in `running` forever — the
+	 * archive holds seven, the oldest days-stale — and the only other exit is maxPolls, which
+	 * defaults to hours. Size it well above the longest legitimate quiet stretch: a full Yarn
+	 * explore holds the same (inFlight, outstanding) line for ~40 minutes while it works.
+	 */
+	stallPolls?: number;
 }
 
 export async function watchPhase(opts: WatchOptions): Promise<PhaseProgress> {
@@ -86,6 +94,7 @@ export async function watchPhase(opts: WatchOptions): Promise<PhaseProgress> {
 	let progress = phaseProgress(opts.phase, readManifest(date, liveDir(outDir())), model);
 	let polls = 0;
 	let last = "";
+	let unchanged = 0;
 	while (!progress.done && polls < maxPolls) {
 		await sleep(intervalMs);
 		polls++;
@@ -100,7 +109,12 @@ export async function watchPhase(opts: WatchOptions): Promise<PhaseProgress> {
 		const line = `phase ${opts.phase}: ${progress.inFlight} in flight, ${progress.outstanding} sample(s) still owed`;
 		// Only on change: a two-hour watch at 120s is sixty identical lines otherwise.
 		if (line !== last) log(line);
+		unchanged = line === last ? unchanged + 1 : 0;
 		last = line;
+		if (opts.stallPolls !== undefined && unchanged >= opts.stallPolls) {
+			log(`phase ${opts.phase}: no progress in ${opts.stallPolls} consecutive polls — a run is likely wedged. Stopping the watch, NOT the runs.`);
+			break;
+		}
 	}
 
 	if (!progress.done) {

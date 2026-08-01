@@ -4,7 +4,7 @@ import { appSlug, liveDir, outDir, relToData } from "../paths.js";
 import { AUTO_HOST, type DispatchOptions, dispatchNotes, type DispatchResult } from "../remote/control/dispatch.js";
 import { CHALLENGER_N, challengerNeedsExplore, planChallenger } from "./challenger.js";
 import { collect } from "./collect.js";
-import { rollupCost } from "./cost.js";
+import { manifestCost } from "./cost.js";
 import { fetchTrueCost, reconcile } from "./truecost.js";
 import { BENCH_APP, BENCH_PRIMARY_MODEL, MATRIX, armById, flagsLine, perceptionLine, phaseArms, phaseRunCount, type Arm, type Phase } from "./matrix.js";
 import {
@@ -75,6 +75,8 @@ export interface PhaseOptions {
 	 */
 	host?: string;
 	compileFn?: CompileFn;
+	/** Where promoted procedures live (phase-6 gate). Injected by tests; defaults to paths'. */
+	proceduresDir?: string;
 	log?: (line: string) => void;
 }
 
@@ -418,27 +420,38 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 	 * missing procedure only warns on the child's console and the run proceeds as an ordinary
 	 * appmap-grounded one: six runs of data labelled "procedure" that measured the appmap tier.
 	 * groundingChecked catches it, but only at collect, after the runs are paid for.
+	 *
+	 * PER ARM since 2026-08-01: an arm without its procedure is SKIPPED loudly, the rest
+	 * dispatch. All-or-nothing meant the arm most likely to be unharvestable (the ungrounded
+	 * lineage — a judged-PASS ungrounded run is rare by design) held the runnable arms hostage.
+	 * Only when EVERY arm is missing does the phase refuse outright, as before.
 	 */
-	if (phase === 6 && opts.go && !opts.force) {
+	let missingProcedures = new Set<string>();
+	if (phase === 6 && !opts.force) {
 		const { proceduresDir } = await import("../paths.js");
 		const { procedureFileFor } = await import("../core/procedure.js");
 		const fs6 = await import("node:fs");
+		const dir = opts.proceduresDir ?? proceduresDir();
 		const wanted = (a: (typeof MATRIX)[number]): string =>
-			procedureFileFor(proceduresDir(), appSlug(a.app), a.task ?? "", a.dispatch.backend, a.dispatch.procedureLineage ?? "grounded");
-		const ungrounded = phaseArms(6).filter((a) => !fs6.existsSync(wanted(a)));
-		if (ungrounded.length) {
-			log(`REFUSED: phase 6 grounds on promoted procedures, and none exists for: ${ungrounded.map((a) => a.id).join(", ")}`);
+			procedureFileFor(dir, appSlug(a.app), a.task ?? "", a.dispatch.backend, a.dispatch.procedureLineage ?? "grounded");
+		const missing = phaseArms(6).filter((a) => !fs6.existsSync(wanted(a)));
+		if (missing.length === phaseArms(6).length && opts.go) {
+			log(`REFUSED: phase 6 grounds on promoted procedures, and none exists for any arm.`);
 			log(`Workflow: runs land → \`./run bench judge\` → \`./run bench harvest\` → \`./run procedures promote <stamp>\` → phase 6.`);
-			log(`Expected at: ${ungrounded.map((a) => relToData(wanted(a))).join(", ")}`);
+			log(`Expected at: ${missing.map((a) => relToData(wanted(a))).join(", ")}`);
 
 			return EXIT_REFUSED;
+		}
+		if (missing.length) {
+			missingProcedures = new Set(missing.map((a) => a.id));
+			for (const a of missing) log(`– ${a.id}: no promoted procedure at ${relToData(wanted(a))} — SKIPPED (harvest + promote a source run, then re-run phase 6)`);
 		}
 	}
 
 	// Compiles are local and cheap, but they are still phase work — gated like everything else.
 	if (opts.go && (phase === 3 || phase === 4)) manifest = await runCompiles(phase, manifest, { ...opts, log });
 
-	const planned = plannedRuns(phase, manifest, opts.model);
+	const planned = plannedRuns(phase, manifest, opts.model).filter((p) => !missingProcedures.has(p.arm.id));
 	// Resolve replay recipes AFTER compiles so a single --go does compile-then-replay when
 	// the sources are already collected; a missing recipe defers the replay to a later re-run.
 	const ready = planned.filter((p) => p.arm.kind !== "replay" || recipeFor(manifest, p.arm, opts.model) !== undefined);
@@ -565,24 +578,30 @@ export function dateArg(argv: string[]): string | undefined {
 }
 
 /**
- * Warn when today's manifest is empty but yesterday's holds recent work — the signature of a
- * pass interrupted by the UTC rollover. A warning rather than an automatic continuation:
- * silently adopting yesterday's manifest would be the right guess most of the time and a
- * baffling one when an operator genuinely means to start a new pass.
+ * The signature of a pass interrupted by the UTC rollover: today's manifest is empty while
+ * yesterday's holds work. Returns yesterday's date + entry count when that is the case.
+ * The autopilot REFUSES on this (an unattended pass must not silently fork); the interactive
+ * `bench phase` merely warns, because an operator may genuinely mean to start a new pass.
  */
-function warnRollover(date: string, outRoot: string, log: (s: string) => void): void {
+export function interruptedPass(date: string, outRoot: string): { date: string; entries: number } | undefined {
 	try {
-		if (readManifest(date, liveDir(outRoot)).entries.length) return;
+		if (readManifest(date, liveDir(outRoot)).entries.length) return undefined;
 		const prev = new Date(`${date}T00:00:00Z`);
 		prev.setUTCDate(prev.getUTCDate() - 1);
 		const yday = prev.toISOString().slice(0, 10);
-		const entries = readManifest(yday, liveDir(outRoot)).entries;
-		if (!entries.length) return;
-		log(`NOTE: today's manifest (${date}) is empty, but ${yday} holds ${entries.length} entr(ies) — the UTC date rolled over.`);
-		log(`      A phase re-run now re-dispatches arms already collected yesterday. Continue that pass with: --date ${yday}`);
+		const entries = readManifest(yday, liveDir(outRoot)).entries.length;
+
+		return entries ? { date: yday, entries } : undefined;
 	} catch {
-		// Advisory only.
+		return undefined;
 	}
+}
+
+function warnRollover(date: string, outRoot: string, log: (s: string) => void): void {
+	const prior = interruptedPass(date, outRoot);
+	if (!prior) return;
+	log(`NOTE: today's manifest (${date}) is empty, but ${prior.date} holds ${prior.entries} entr(ies) — the UTC date rolled over.`);
+	log(`      A phase re-run now re-dispatches arms already collected yesterday. Continue that pass with: --date ${prior.date}`);
 }
 
 const USAGE = `usage: ./run bench plan
@@ -591,6 +610,8 @@ const USAGE = `usage: ./run bench plan
        ./run bench judge [--cross] [--date YYYY-MM-DD]
        ./run bench harvest [--date YYYY-MM-DD]
        ./run bench watch <phase> [--then <phase>] [--interval <sec>] [--date YYYY-MM-DD]
+       ./run bench autopilot [--phases 1,2,3,6] [--model <id>] [--date YYYY-MM-DD] [--host <mac>]
+                             [--interval <sec>] [--max-usd <n>] [--max-waves <n>] [--max-retries <n>] [--go]
        ./run bench truecost [--since <RFC3339>] [--bucket 1m|1h|1d]
        ./run bench challenger --model <id> [--primary <id>] [--go]
 
@@ -651,6 +672,21 @@ watch    waits for a phase to finish, collecting as it goes (which is also what 
          --then <phase> dispatches the next phase ONCE when this one completes — opt-in,
          and it never chains further, because phase 2 wants a human to read the phase-1
          maps first. Holds no leash: a dying watcher never touches a run.
+autopilot
+         the whole pass, hands off: for each phase — dispatch, watch, collect, re-dispatch
+         what technical failures freed — and judge → harvest → promote automatically before
+         phase 6. Encodes the known gotchas: date pinned at launch (UTC rollover), judge-key
+         liveness checked BEFORE anything dispatches, per-arm technical-failure retry budget
+         (--max-retries, default 2), optional hard spend ceiling (--max-usd), second waves
+         for phase-3/4 compiles+replays (--max-waves, default 4). Stops the line on the first
+         NEW sign-in refusal (exit 3 — 29% of archived runs; prints the signin command) and
+         on a newly POISONED host; aborts a watch after 90 min of flat progress (wedged run)
+         instead of holding the phase for hours; refuses to adopt an archive manifest as a
+         wiped live pass. Default phases 1,2,3,6 —
+         4 (optional) and 5 (filmed; changes the action space) are opt-in via --phases.
+         Without --go: prints the plan and current progress, dispatches nothing. Your --go
+         here is David's explicit-go gate, given once for the printed span. Holds no leash:
+         Ctrl-C never touches a run, and re-running resumes from the manifest.
 harvest  turns judged-PASS phase-2 runs into procedures — prose describing the route that
          worked, for a later agent to ground on. Refuses any run the judge did not pass, so
          run \`bench judge\` first. Writes into each run's own folder; promoting one into
@@ -730,17 +766,7 @@ async function main(argv: string[]): Promise<number> {
 		const bi = argv.indexOf("--bucket");
 		const bucketWidth = (bi >= 0 ? argv[bi + 1] : "1h") as "1m" | "1h" | "1d";
 		const m = readManifest(dateArg(argv) ?? utcDate());
-		const estimated = rollupCost(
-			m.entries
-				.filter((e) => e.collected)
-				.map((e) => ({
-					inputTokens: e.metrics?.inputTokens,
-					outputTokens: e.metrics?.outputTokens,
-					cacheReadTokens: e.metrics?.cacheReadTokens,
-					cacheCreationTokens: e.metrics?.cacheCreationTokens,
-					...(e.metrics?.model ? { model: e.metrics.model } : e.model ? { model: e.model } : {}),
-				})),
-		);
+		const estimated = manifestCost(m.entries);
 		const truth = await fetchTrueCost({ startingAt, adminKey, bucketWidth });
 		for (const line of reconcile(estimated.usd, truth)) console.log(line);
 
@@ -788,6 +814,47 @@ async function main(argv: string[]): Promise<number> {
 		});
 
 		return EXIT_OK;
+	}
+	if (cmd === "autopilot") {
+		const num = (flag: string): number | undefined => {
+			const i = argv.indexOf(flag);
+			const v = i >= 0 ? Number(argv[i + 1]) : Number.NaN;
+
+			return Number.isFinite(v) ? v : undefined;
+		};
+		const pi = argv.indexOf("--phases");
+		let phases: Phase[] | undefined;
+		if (pi >= 0) {
+			const nums = (argv[pi + 1] ?? "").split(",").map((s) => Number(s.trim()));
+			if (!nums.length || nums.some((n) => ![1, 2, 3, 4, 5, 6].includes(n))) {
+				console.error("--phases wants a comma list from 1-6, e.g. --phases 1,2,3,6");
+
+				return EXIT_REFUSED;
+			}
+			phases = nums as Phase[];
+		}
+		const mi = argv.indexOf("--model");
+		const model = mi >= 0 && argv[mi + 1] && !argv[mi + 1].startsWith("--") ? argv[mi + 1] : undefined;
+		const hi = argv.indexOf("--host");
+		const pinnedHost = hi >= 0 && argv[hi + 1] && !argv[hi + 1].startsWith("--") ? argv[hi + 1] : undefined;
+		const aDate = dateArg(argv);
+		const interval = num("--interval");
+		const maxUsd = num("--max-usd");
+		const maxWaves = num("--max-waves");
+		const maxRetries = num("--max-retries");
+		const { autopilot } = await import("./autopilot.js");
+
+		return autopilot({
+			go: argv.includes("--go"),
+			...(phases ? { phases } : {}),
+			...(model ? { model } : {}),
+			...(aDate ? { date: aDate } : {}),
+			...(pinnedHost ? { host: pinnedHost } : {}),
+			...(interval !== undefined ? { intervalSec: interval } : {}),
+			...(maxUsd !== undefined ? { maxUsd } : {}),
+			...(maxWaves !== undefined ? { maxWaves } : {}),
+			...(maxRetries !== undefined ? { maxTechnicalFailures: maxRetries } : {}),
+		});
 	}
 	if (cmd === "harvest") {
 		const { harvestBench } = await import("./harvest.js");

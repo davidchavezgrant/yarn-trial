@@ -121,7 +121,7 @@ async function main(): Promise<void> {
 
 	if (verb === "harvest") {
 		if (!arg) usage();
-		const { body, run } = await harvest(arg);
+		const { body } = await harvest(arg);
 		const file = writeProcedure(runPath(arg, RUN_FILES.procedure), body);
 		console.log(`harvested: ${file}`);
 		// The run's backup was taken when it terminated; this write lands long after, so it
@@ -129,7 +129,7 @@ async function main(): Promise<void> {
 		try {
 			archiveRun(arg);
 		} catch {}
-		if (argv.includes("--promote")) promote(arg, run);
+		if (argv.includes("--promote")) promoteProcedure(arg);
 		else console.log(`promote it into docs/procedures/ (making it loadable by future runs): ./run procedures promote ${arg}`);
 
 		return;
@@ -137,10 +137,7 @@ async function main(): Promise<void> {
 
 	if (verb === "promote") {
 		if (!arg) usage();
-		const src = runFile(arg, RUN_FILES.procedure);
-		if (!fs.existsSync(src)) throw new ProcedureError(`no harvested procedure for ${arg} — run: ./run procedures harvest ${arg}`);
-		const run = JSON.parse(fs.readFileSync(runFile(arg, RUN_FILES.log), "utf8")) as HarvestSource;
-		promote(arg, run);
+		promoteProcedure(arg);
 
 		return;
 	}
@@ -148,17 +145,28 @@ async function main(): Promise<void> {
 	usage();
 }
 
-function promote(stamp: string, run: HarvestSource): void {
-	const src = runFile(stamp, RUN_FILES.procedure);
+/**
+ * Copy a run's harvested procedure into docs/procedures/, making it an INPUT to future runs.
+ * Exported (with injectable roots) for the bench autopilot's promote stage; the deliberateness
+ * argument still holds there — the operator's one `autopilot --go` covers a stage whose whole
+ * job is promotion, printed in the plan, which is not a side effect of dispatching a phase.
+ */
+export function promoteProcedure(stamp: string, opts: { out?: string; dir?: string; log?: (s: string) => void } = {}): string {
+	const log = opts.log ?? console.log;
+	const src = runFile(stamp, RUN_FILES.procedure, opts.out);
+	if (!fs.existsSync(src)) throw new ProcedureError(`no harvested procedure for ${stamp} — run: ./run procedures harvest ${stamp}`);
+	const run = JSON.parse(fs.readFileSync(runFile(stamp, RUN_FILES.log, opts.out), "utf8")) as HarvestSource;
 	// run.backend is what actually DROVE (the run log records the post-fallback backend), which
 	// is the right axis: a procedure written from an ax run names ax's surface labels.
-	const dest = procedureFileFor(proceduresDir(), slugOf(run as Record<string, unknown>, stamp), run.task ?? "", run.backend, lineageOf(run));
+	const dest = procedureFileFor(opts.dir ?? proceduresDir(), slugOf(run as Record<string, unknown>, stamp), run.task ?? "", run.backend, lineageOf(run));
 	fs.mkdirSync(path.dirname(dest), { recursive: true });
 	fs.copyFileSync(src, dest);
-	console.log(`promoted: ${dest}`);
-	console.log(
+	log(`promoted: ${dest}`);
+	log(
 		`future runs ground on it with USE_PROCEDURES=1${lineageOf(run) === "ungrounded" ? " PROCEDURE_LINEAGE=ungrounded" : ""} (run log will record provenance "procedure")`,
 	);
+
+	return dest;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)

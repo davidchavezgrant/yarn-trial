@@ -1236,11 +1236,15 @@ test("technicalFailure__SeparatesHarnessFromAgent__When__ARunFails", () => {
 	assert.equal(technicalFailure("failed", { failureKind: "crashed" }, explore, [])?.kind, "crashed");
 	assert.equal(technicalFailure("failed", {}, explore, ["no appmap at docs/appmaps/yarn.cdp.md"])?.kind, "crashed");
 
+	// Refused at the home-state gate before measuring anything — a host problem (usually
+	// signed out), not a sample. 29% of archived runs died this way, each one silently
+	// consuming a sample slot until 2026-08-01.
+	assert.equal(technicalFailure("failed", { failureKind: "unready" }, explore, [])?.kind, "unready");
+
 	// Ran to a verdict, or a human intervened → these ARE the measurement, and auto-retrying
 	// them would either discard real failures or fight the operator who stopped the run.
 	assert.equal(technicalFailure("failed", { failureKind: "gave-up" }, explore, []), undefined);
 	assert.equal(technicalFailure("stopped", { failureKind: "stopped" }, explore, []), undefined);
-	assert.equal(technicalFailure("failed", { failureKind: "unready" }, explore, []), undefined);
 	assert.equal(technicalFailure("failed", { failureKind: "hinted-refused" }, explore, []), undefined);
 	assert.equal(technicalFailure("done", { success: true }, explore, []), undefined);
 });

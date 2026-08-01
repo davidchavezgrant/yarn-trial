@@ -482,12 +482,20 @@ export function failureKind(
  * `failureKind` already draws the line: "crashed" means terminal with no run log at all, while
  * "gave-up" means the agent ran to its own verdict. `orphaned` is the runner dying under a run.
  * Deliberately NOT technical: `stopped` (an operator's decision, and auto-retrying what a human
- * killed is the wrong instinct), `unready` (a sign-in gate, which already re-dispatches itself)
- * and `hinted-refused` (the measurement rule working).
+ * killed is the wrong instinct) and `hinted-refused` (the measurement rule working).
+ *
+ * `unready` IS technical (changed 2026-08-01; it was excluded on the grounds that the sign-in
+ * gate "re-dispatches itself" — but that self-re-dispatch is the Electron shell's portal flow,
+ * which the bench path never goes through). An exit-3 run refused at the home-state gate before
+ * measuring anything; counting it as a sample silently under-sampled the arm, and the archive
+ * shows the scale: 41 of 140 job records — 29% — died exactly this way. Freeing the slot means
+ * a re-run of the phase re-submits it once the host is signed in; the risk of re-buying failure
+ * on a still-signed-out host is what the autopilot's stop-on-unready guard is for.
  */
 export function technicalFailure(state: string, metrics: RunMetrics, arm: Arm | undefined, notes: string[]): ManifestEntry["technical"] {
 	if (state === "orphaned") return { kind: "orphaned", detail: "the runner died under this run; nothing about the agent was measured" };
 	if (metrics.failureKind === "crashed") return { kind: "crashed", detail: "terminal with no run log — died before writing anything measurable" };
+	if (metrics.failureKind === "unready") return { kind: "unready", detail: "refused at the home-state gate (exit 3) — a host problem; sign the app in, then re-run the phase" };
 	// Explore arms have no run log to miss; their primary artifact is the appmap, and
 	// failureKind is not computed for them at all.
 	// An explore arm's product is a PUBLISHED map — that is what the next phase reads. A pass that
