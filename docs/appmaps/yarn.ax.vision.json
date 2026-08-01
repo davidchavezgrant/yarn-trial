@@ -1,0 +1,588 @@
+{
+  "app": "Yarn",
+  "capturedAt": "2026-08-01T00:41:51.127Z",
+  "provenance": "explore-vision",
+  "proseSha256": "df76b244c35c",
+  "elapsed": "29m",
+  "coverage": {
+    "seen": 168,
+    "actuated": 112,
+    "dismissed": 56,
+    "surfaces": 8,
+    "chapters": 15,
+    "stopped": "frontier-empty",
+    "dismissals": [
+      "These would change current preference state; values and current selections were already mapped, so avoid altering settings.",
+      "Upgrade is account/billing-affecting and Sign out changes account state; unsafe to operate.",
+      "Voice entries are selectable voice options that would change narration settings for the current draft; no selection was made to preserve document state.",
+      "These commands mutate, duplicate, relocate, or destructively delete a document; the menu was mapped but no command should be executed during exploration.",
+      "Creates a new document/draft and is unsafe to invoke during mapping because deletion/discard cannot be guaranteed.",
+      "Creating a workspace would change account/workspace state and is outside safe exploration.",
+      "Remaining account/workspace commands are unsafe: do not sign out or create/change workspaces during exploration.",
+      "Creates a new document; existing drafts provide editor coverage without adding irreversible/repetitive content.",
+      "Creates a new draft and would leave persistent content; creation is outside safe exploration.",
+      "These controls would create content, publish externally, submit an agent request, or modify the current template; no changes were made because the template must be left unchanged.",
+      "Add scene would mutate the template; Brand Kit and Invite Members were already confirmed as no-ops in this workspace; the extra title entry is a legacy duplicate of the inline title control already tested.",
+      "These timeline controls create or duplicate template content; operating them would mutate the template, so they were intentionally not executed.",
+      "These controls create or submit new content; operating them would modify the workspace/draft or trigger an external agent action, so they were deliberately not used.",
+      "All three are destructive deletion controls; they were deliberately not operated to preserve the existing draft and timeline."
+    ],
+    "gatedRead": 0,
+    "gatedRefused": 0
+  },
+  "nodes": [
+    {
+      "id": "settings",
+      "title": "Settings",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Modal/preferences surface opened from lower-left sidebar."
+    },
+    {
+      "id": "settings/auto-add-screen-zooms",
+      "title": "Auto-Add Screen Zooms",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "auto-add-screen-zooms",
+      "options": [
+        "On",
+        "Off"
+      ],
+      "notes": "On selected during exploration."
+    },
+    {
+      "id": "settings/theme",
+      "title": "Theme",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "theme",
+      "options": [
+        "Dark",
+        "Light",
+        "System"
+      ],
+      "notes": "System selected; shortcut Shift+Command+\\."
+    },
+    {
+      "id": "settings/agent-model",
+      "title": "Agent model",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "agent-model",
+      "options": [
+        "Opus 5"
+      ],
+      "notes": "Default for new chats/recordings."
+    },
+    {
+      "id": "settings/agent-effort",
+      "title": "Agent effort",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "agent-effort",
+      "options": [
+        "High"
+      ],
+      "notes": "Default; no per-document override confirmed."
+    },
+    {
+      "id": "settings/agent-fast-mode",
+      "title": "Agent Fast Mode",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "agent-fast-mode",
+      "options": [
+        "On",
+        "Off"
+      ],
+      "notes": "Checked during exploration."
+    },
+    {
+      "id": "settings/workspace-settings",
+      "title": "Workspace settings",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "workspace-settings",
+      "notes": "Section visible lower in Settings."
+    },
+    {
+      "id": "library",
+      "title": "Your Library",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Ordinary landing view with cards and persistent sidebar."
+    },
+    {
+      "id": "draft-editor",
+      "title": "Draft editor",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Script/Agent pane, canvas, and timeline."
+    },
+    {
+      "id": "draft-editor/script",
+      "title": "Script",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "editor-left-tab",
+      "options": [
+        "Agent",
+        "Script"
+      ]
+    },
+    {
+      "id": "draft-editor/agent",
+      "title": "Agent",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "editor-left-tab",
+      "options": [
+        "Agent",
+        "Script"
+      ]
+    },
+    {
+      "id": "draft-editor/export",
+      "title": "Export",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "export"
+    },
+    {
+      "id": "draft-editor/add-bg",
+      "title": "Add BG",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "background",
+      "notes": "No visible popover in tested state."
+    },
+    {
+      "id": "draft-editor/color",
+      "title": "Color",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "color",
+      "notes": "No visible popover in tested state."
+    },
+    {
+      "id": "draft-editor/agent-effort",
+      "title": "High",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "agent-effort",
+      "options": [
+        "High"
+      ],
+      "notes": "Matches workspace default, but clicking did not expose an override."
+    },
+    {
+      "id": "draft-editor/captions",
+      "title": "Captions",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "captions",
+      "notes": "No visible popover in tested state."
+    },
+    {
+      "id": "draft-editor/music",
+      "title": "Music",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "music",
+      "notes": "No visible popover in tested state."
+    },
+    {
+      "id": "draft-editor/language",
+      "title": "Language",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "language",
+      "notes": "No visible popover in tested state."
+    },
+    {
+      "id": "draft-editor/canvas-view",
+      "title": "Canvas view",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "canvas-view",
+      "notes": "No visible popover in tested state."
+    },
+    {
+      "id": "draft-editor/voice-picker",
+      "title": "Voice picker",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Popover with English, World, and Creative tabs."
+    },
+    {
+      "id": "draft-editor/voice",
+      "title": "Voice",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "narration-voice",
+      "options": [
+        "Annie",
+        "Brynn",
+        "Cassidy",
+        "Fay",
+        "Jacob",
+        "Jada",
+        "James",
+        "Jeff",
+        "Kendra",
+        "Miranda",
+        "Robert",
+        "Sarah"
+      ],
+      "notes": "Sarah current in tested draft."
+    },
+    {
+      "id": "draft-editor/voice-speed",
+      "title": "Default Speed",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "narration-speed",
+      "notes": "Shown at bottom of voice picker."
+    },
+    {
+      "id": "draft-editor/brand-kit",
+      "title": "Brand Kit",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "brand-kit",
+      "notes": "Visible sidebar route but no-op in tested workspace."
+    },
+    {
+      "id": "library/draft-context-menu",
+      "title": "Draft context menu",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Open reliably by right-clicking a draft card."
+    },
+    {
+      "id": "library/draft-move",
+      "title": "Move to David's",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "draft-location"
+    },
+    {
+      "id": "library/draft-rename",
+      "title": "Rename",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "draft-title"
+    },
+    {
+      "id": "library/draft-copy",
+      "title": "Make a copy",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "draft-copy"
+    },
+    {
+      "id": "library/draft-delete",
+      "title": "Delete",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "draft-delete",
+      "notes": "Destructive; not executed."
+    },
+    {
+      "id": "library/new-collection",
+      "title": "New Collection",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "collection-create",
+      "notes": "Produced no visible UI in tested state."
+    },
+    {
+      "id": "drafts",
+      "title": "Drafts",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Your Drafts grid overview."
+    },
+    {
+      "id": "drafts/list",
+      "title": "List",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "drafts-view",
+      "options": [
+        "List",
+        "Grid"
+      ],
+      "notes": "Gray/disabled in tested state."
+    },
+    {
+      "id": "drafts/grid",
+      "title": "Grid",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "drafts-view",
+      "options": [
+        "List",
+        "Grid"
+      ],
+      "notes": "Usable overview layout."
+    },
+    {
+      "id": "workspace-menu",
+      "title": "Workspace menu",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Opened by clicking workspace name at upper left."
+    },
+    {
+      "id": "workspace-menu/current",
+      "title": "Current workspace",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "current-workspace",
+      "notes": "Selection did not visibly navigate."
+    },
+    {
+      "id": "workspace-menu/new",
+      "title": "New workspace",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "workspace-create",
+      "notes": "Not executed."
+    },
+    {
+      "id": "workspace-menu/sign-out",
+      "title": "Sign out",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "sign-out",
+      "notes": "Not executed."
+    },
+    {
+      "id": "template-editor",
+      "title": "Template editor",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Template-specific editor with Agent/Layers and right inspector."
+    },
+    {
+      "id": "template-editor/title",
+      "title": "Template title",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "template-title",
+      "notes": "Ellipsis activates inline editing; Escape cancels."
+    },
+    {
+      "id": "template-editor/duration",
+      "title": "Duration",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "duration"
+    },
+    {
+      "id": "template-editor/opacity",
+      "title": "Opacity",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "opacity"
+    },
+    {
+      "id": "template-editor/layout",
+      "title": "Layout",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "layout",
+      "options": [
+        "Layout 1",
+        "Layout 2",
+        "Layout 3"
+      ],
+      "notes": "Three visual choices were shown."
+    },
+    {
+      "id": "template-editor/background",
+      "title": "Background Add",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "background"
+    },
+    {
+      "id": "template-editor/motion-blur",
+      "title": "Motion Blur Add",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "motion-blur"
+    },
+    {
+      "id": "template-editor/description",
+      "title": "Description",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "description"
+    },
+    {
+      "id": "template-editor/webcam-preview",
+      "title": "Webcam Preview",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "webcam-preview"
+    },
+    {
+      "id": "template-editor/project-bg-preview",
+      "title": "Project BG Preview",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "project-bg-preview"
+    },
+    {
+      "id": "template-editor/publish",
+      "title": "Publish Template",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "template-publish",
+      "notes": "Externally visible action; not executed."
+    },
+    {
+      "id": "template-editor/agent-effort",
+      "title": "High",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "agent-effort",
+      "options": [
+        "High"
+      ],
+      "notes": "Click did not expose an override."
+    },
+    {
+      "id": "template-editor/fit-canvas",
+      "title": "Fit canvas",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "fit-canvas"
+    },
+    {
+      "id": "template-editor/play",
+      "title": "Play",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "playback"
+    },
+    {
+      "id": "draft-editor/comment",
+      "title": "Comment",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "timeline-comment",
+      "notes": "Click produced no visible panel in tested commented draft."
+    },
+    {
+      "id": "draft-editor/agent-composer",
+      "title": "Agent composer",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "agent-prompt",
+      "notes": "Ask, edit, or make something…; submission would invoke agent."
+    },
+    {
+      "id": "draft-editor/script-input",
+      "title": "Type script or # for new scene",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "scene-script",
+      "notes": "Would create/modify draft content."
+    }
+  ],
+  "edges": [
+    {
+      "from": "library",
+      "to": "settings",
+      "action": "click \"Settings\" in the left sidebar"
+    },
+    {
+      "from": "library",
+      "to": "draft-editor",
+      "action": "click a draft card"
+    },
+    {
+      "from": "draft-editor",
+      "to": "library",
+      "action": "click Library in the left sidebar"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/voice-picker",
+      "action": "click ellipsis beside the voice name in the Script pane"
+    },
+    {
+      "from": "library",
+      "to": "library/draft-context-menu",
+      "action": "right-click an Untitled Draft card"
+    },
+    {
+      "from": "library",
+      "to": "drafts",
+      "action": "click sidebar “Your Drafts” (the attempted click on “Untitled Template” landed/navigation resolved to Drafts)"
+    },
+    {
+      "from": "drafts",
+      "to": "workspace-menu",
+      "action": "click workspace name “David's Workspa...” at top-left"
+    },
+    {
+      "from": "library",
+      "to": "template-editor",
+      "action": "Open a template card in Library."
+    },
+    {
+      "from": "drafts",
+      "to": "draft-editor",
+      "action": "double-click a draft card, including one with a comment badge"
+    },
+    {
+      "from": "root",
+      "to": "library",
+      "action": "open Yarn or click “Library” in the persistent sidebar"
+    },
+    {
+      "from": "library",
+      "to": "settings",
+      "action": "click “Settings” at lower left"
+    },
+    {
+      "from": "library",
+      "to": "drafts",
+      "action": "click “Your Drafts” in the sidebar"
+    },
+    {
+      "from": "drafts",
+      "to": "library/draft-context-menu",
+      "action": "right-click a draft card"
+    },
+    {
+      "from": "library",
+      "to": "library/draft-context-menu",
+      "action": "right-click a draft card"
+    },
+    {
+      "from": "library",
+      "to": "draft-editor",
+      "action": "double-click a draft card"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/voice-picker",
+      "action": "in Script, click the ellipsis beside the current voice"
+    },
+    {
+      "from": "library",
+      "to": "template-editor",
+      "action": "open the template card"
+    },
+    {
+      "from": "library",
+      "to": "workspace-menu",
+      "action": "click the workspace name at top left"
+    }
+  ]
+}

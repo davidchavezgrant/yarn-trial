@@ -588,7 +588,10 @@ function resolveGraph(
 	// appmapSlug, not appSlug: a web arm's `app` is a URL, and appSlug turns
 	// https://app.notion.com into `https-app.notion.com` while the pass wrote
 	// `web-app.notion.com`. The dash then reported no map for a 471-node map that existed.
-	const slug = appmapSlug(app);
+	// Same backend-aware naming the pass writes with; the plain slug remains as the fallback
+	// inside the live lookup below for curated and pre-split maps.
+	const arm = MATRIX.find((a) => a.id === exploreArmId);
+	const slug = appmapSlug(app, arm?.dispatch.backend ? { backend: arm.dispatch.backend } : {});
 	const live = readJsonFile(path.join(dataDir, "docs", "appmaps", `${slug}.json`));
 	if (live?.nodes) return { graph: shapeGraph(live), source: `docs/appmaps/${slug}.json (live)` };
 

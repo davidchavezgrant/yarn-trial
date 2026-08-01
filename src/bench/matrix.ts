@@ -26,6 +26,8 @@
 
 export type BenchBackend = "ax" | "cdp";
 export type ArmKind = "task" | "explore" | "replay" | "compile";
+import { appmapSlug } from "../core/target.js";
+
 export type Phase = 1 | 2 | 3 | 4 | 5;
 
 /**
@@ -478,6 +480,25 @@ export const phaseRunCount = (phase: Phase): number => phaseArms(phase).reduce((
  * Rendered alongside the raw flags rather than instead of them: the flags are what you would
  * type, this is what the arm means.
  */
+/**
+ * The appmap slug an arm reads and writes. ONE derivation for the whole bench.
+ *
+ * Three things vary independently — target, backend, perception tier — and any two arms
+ * sharing a filename means the later pass silently overwrites the earlier. That happened
+ * twice: first with every Yarn explore writing yarn.json (ax 156 nodes, cdp 196, no-vision
+ * 180, last writer wins), then again in the first fix, which added the backend but not the
+ * tier so p1-explore-ax and p1-explore-no-vision still collided.
+ *
+ * Callers must not assemble the options themselves — that is exactly how the second collision
+ * survived a check script that computed the slug its own way.
+ */
+export const armAppmapSlug = (arm: Arm): string =>
+	appmapSlug(arm.app, {
+		visionOnly: Boolean(arm.dispatch.noAx),
+		noVision: Boolean(arm.dispatch.noVision),
+		...(arm.dispatch.backend ? { backend: arm.dispatch.backend } : {}),
+	});
+
 export function perceptionLine(arm: Arm): string {
 	const { noAx, noVision } = arm.dispatch;
 	// Refused by the explore CLI (a window title and nothing else), but rendered honestly if a

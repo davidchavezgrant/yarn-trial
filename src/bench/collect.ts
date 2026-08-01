@@ -372,7 +372,7 @@ function collectEntry(entry: ManifestEntry, job: JobRecord | undefined, dataDir:
 		// running pre-unification code recorded `https-app.notion.com.md` for a pass that wrote
 		// `web-app.notion.com.md`, and honoring the stale record over the shared derivation
 		// re-froze empty metrics on every re-collect. The record wins only when its file is there.
-		const derived = path.join(dataDir, `docs/appmaps/${appmapSlug(arm.app, { visionOnly: Boolean(arm.dispatch.noAx) })}.md`);
+		const derived = path.join(dataDir, `docs/appmaps/${appmapSlug(arm.app, { visionOnly: Boolean(arm.dispatch.noAx), noVision: Boolean(arm.dispatch.noVision), ...(arm.dispatch.backend ? { backend: arm.dispatch.backend } : {}) })}.md`);
 		const recorded = job?.artifacts?.appmap ? path.join(dataDir, job.artifacts.appmap) : undefined;
 		const md = recorded && fs.existsSync(recorded) ? recorded : derived;
 		const recordedGraph = job?.artifacts?.appmapGraph ? path.join(dataDir, job.artifacts.appmapGraph) : undefined;

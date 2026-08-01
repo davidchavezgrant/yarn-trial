@@ -84,34 +84,37 @@
 			}
 		},
 		{
-			"armId": "p1-explore-vision",
-			"jobId": "explore-2026-08-01T00-12-26-311-yarn",
-			"host": "mac2",
-			"submittedAt": "2026-08-01T00:12:26.453Z",
-			"state": "done",
-			"collected": true,
-			"metrics": {
-				"startedAt": "2026-08-01T00:12:26.312Z",
-				"endedAt": "2026-08-01T00:41:51.164Z",
-				"runSec": 1765,
-				"exploreActions": 162,
-				"exploreElapsed": "29m",
-				"inputTokens": 597258,
-				"outputTokens": 43631,
-				"cacheReadTokens": 2171392,
-				"cacheCreationTokens": 0,
-				"modelCalls": 221,
-				"surfaces": 8,
-				"graphNodes": 53,
-				"graphEdges": 18,
-				"scopeAmbiguities": 1
-			}
-		},
-		{
 			"armId": "p1-explore-no-vision",
 			"jobId": "explore-2026-08-01T00-18-28-757-yarn",
 			"host": "mac3",
 			"submittedAt": "2026-08-01T00:18:28.757Z",
+			"state": "done",
+			"collected": true,
+			"metrics": {
+				"startedAt": "2026-08-01T00:18:28.758Z",
+				"endedAt": "2026-08-01T00:48:48.394Z",
+				"runSec": 1820,
+				"exploreActions": 163,
+				"exploreElapsed": "30m",
+				"inputTokens": 1316890,
+				"outputTokens": 54149,
+				"cacheReadTokens": 11244544,
+				"cacheCreationTokens": 0,
+				"modelCalls": 328,
+				"controlsActuated": 52,
+				"controlsDismissed": 1021,
+				"controlsSeen": 1070,
+				"surfaces": 30,
+				"graphNodes": 180,
+				"graphEdges": 48,
+				"scopeAmbiguities": 1
+			}
+		},
+		{
+			"armId": "p1-explore-vision",
+			"jobId": "explore-2026-08-01T00-48-36-901-yarn",
+			"host": "mac2",
+			"submittedAt": "2026-08-01T00:48:36.985Z",
 			"state": "running",
 			"collected": false
 		}

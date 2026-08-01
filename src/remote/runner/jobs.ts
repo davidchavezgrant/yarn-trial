@@ -274,7 +274,7 @@ function artifactsFor(id: string, init: JobInit): JobArtifacts {
 		// ONE derivation, shared with the pass that writes the file (explore/state.ts) and every
 		// reader that looks for it — see appmapSlug's header for the four-way divergence this
 		// replaced, and why each divergence surfaced as "no appmap" for a map that existed.
-		const slug = appmapSlug(init.url ?? init.app, { visionOnly: Boolean(init.noAx) });
+		const slug = appmapSlug(init.url ?? init.app, { visionOnly: Boolean(init.noAx), noVision: Boolean(init.noVision), ...(init.backend ? { backend: init.backend } : {}) });
 
 		return {
 			log,

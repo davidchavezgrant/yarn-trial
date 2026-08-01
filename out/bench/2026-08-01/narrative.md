@@ -34,3 +34,15 @@ On one pass each, Yarn CDP used 1.70× more output tokens and 1.64× more model 
 ## 2026-08-01T00:42:26.568Z — 4 collected (gpt-5.6-sol)
 
 Screenshot-only Yarn exploration produced 4.7× fewer surfaces and 3.6× fewer graph nodes per action than AX, despite taking 1.22× more actions and 1.06× longer overall. It used 21% fewer model calls per action, while output tokens per action were essentially flat at 1.02× AX. On Notion, CDP saw 5.0× fewer controls per action than on Yarn yet actuated 0.97× as many, raising conversion from 2.8% to 13.5% (one pass each). Notion CDP also used 39% fewer output tokens, 34% fewer calls, and 9.4× fewer scope ambiguities per action than Yarn CDP.
+
+## 2026-08-01T00:53:50.282Z — 4 collected (gpt-5.6-sol)
+
+On AX, screenshots cut controls seen per action by 52% but raised seen-to-actuated conversion from 4.9% to 11.0%, with one pass each. Vision also produced 27% more surfaces and 6% more graph nodes per action while requiring 14% fewer model calls and 21% fewer output tokens per action. The vision-enabled pass finished 9% faster with 18% fewer actions.
+
+## 2026-08-01T00:54:41.373Z — 4 collected (gpt-5.6-sol)
+
+Against AX, CDP saw 5.4× more controls per action and 2.3× more surfaces, but converted only 2.8% of seen controls into actuations versus 11.0%. Its graph had 42% more nodes per action, while scope ambiguities per action were 17× higher. CDP also used 64% more model calls, 69% more output tokens, and 47% more elapsed time per action; comparisons are one pass per backend. On Notion, CDP converted 13.5% of seen controls, 4.9× its 2.8% conversion on Yarn, while using 34% fewer calls and 39% fewer tokens per action.
+
+## 2026-08-01T00:56:25.285Z — 4 collected (gpt-5.6-sol)
+
+In one pass per arm, removing vision from AX doubled controls seen per action but cut seen-to-actuated conversion from 11.0% to 4.9%, with 8% fewer actuations per action. No-vision AX used 17% more calls and 26% more output tokens per action, despite 11% lower elapsed time per action. It also found 21% fewer surfaces and 6% fewer graph nodes per action, while scope ambiguity remained negligible.

@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import fs from "node:fs";
 import { failedProvider, mergeGraph, newDeclaredLedger, newFrontier, OUT, runKey } from "../harness.js";
 import { appmapsDir } from "../../paths.js";
-import { type Target, targetSlug } from "../target.js";
+import { appmapSlug, type Target, targetSlug } from "../target.js";
 import type { AppMap, AppMapEdge, AppMapHome, AppMapNode, GatedBoundary } from "../../types.js";
 
 /** The payload of the "finish" tool — the pass's entire output, prose plus graph. */
@@ -12,13 +12,14 @@ export type StopReason = "frontier-empty" | "action-ceiling" | "frontier-concede
 
 export const newPass = (target: Target, app: string, backendKind: string, vision: boolean, guidance: string | undefined, visionOnly = false) => {
 	const findings: string[] = [];
-	const slug = targetSlug(target);
-	// A vision-only pass writes to its own `.vision.*` pair, NEVER over the element-grounded
-	// map: the two are different grounding tiers and the benchmark compares them, so one
-	// overwriting the other would destroy the very artifact it is measured against.
-	const variant = visionOnly ? ".vision" : "";
-	const outPath = `${appmapsDir()}/${slug}${variant}.md`;
-	const graphPath = `${appmapsDir()}/${slug}${variant}.json`;
+	// Per BACKEND and per perception tier, never one shared slot: a vision-only pass must not
+	// overwrite the element-grounded map (the benchmark compares the tiers), and an ax map must
+	// not overwrite a cdp one (the two name the same surfaces differently, so a run grounded on
+	// the wrong vocabulary fails to resolve controls for reasons that look like backend
+	// weakness). appmapSlug owns the naming so writers and readers cannot drift.
+	const slug = appmapSlug(targetSlug(target), { visionOnly, noVision: !vision, backend: backendKind });
+	const outPath = `${appmapsDir()}/${slug}.md`;
+	const graphPath = `${appmapsDir()}/${slug}.json`;
 	fs.mkdirSync(appmapsDir(), { recursive: true });
 	fs.mkdirSync(`${OUT}/runs`, { recursive: true });
 

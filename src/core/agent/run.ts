@@ -230,7 +230,10 @@ export async function main(): Promise<void> {
 	const rec = newRecording();
 
 	const slug = targetSlug(target);
-	const grounding = loadGrounding(slug);
+	// The backend picks the map: ax and cdp passes name the same surfaces differently, and a
+	// run resolves controls by name, so grounding on the other backend's vocabulary fails to
+	// resolve for reasons that read as backend weakness. Falls back to the plain slug.
+	const grounding = loadGrounding(slug, backendKind);
 	// What the log records: provenance + path + content hash, not the full text — enough
 	// to pin exactly which appmap version grounded the run without bloating every log.
 	const groundingMeta: Record<string, unknown> = {

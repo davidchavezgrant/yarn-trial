@@ -25,7 +25,7 @@ import {
 	updateEntry,
 	writeManifest,
 } from "../src/bench/manifest.js";
-import { armById, BACKENDS, MATRIX, phaseArms, phaseRunCount, perceptionLine } from "../src/bench/matrix.js";
+import { armAppmapSlug, armById, BACKENDS, MATRIX, phaseArms, phaseRunCount, perceptionLine } from "../src/bench/matrix.js";
 import type { DispatchOptions } from "../src/remote/control/dispatch.js";
 import { dateArg,
 	auditPhase,
@@ -912,4 +912,41 @@ test("dateArg__PinsAPassToOneManifest__When__ItWillCrossMidnight", () => {
 		assert.equal(dateArg(["phase", "2", "--date", bad]), undefined, bad);
 	}
 	assert.equal(dateArg(["phase", "2", "--date"]), undefined, "a trailing --date has no value");
+});
+
+test("armAppmapSlug__GivesEveryExploreArmItsOwnFile__When__TheMatrixIsWalked", () => {
+	// Two arms sharing a filename means the later pass silently overwrites the earlier, and
+	// the survivor is decided by explore ordering. That happened twice on 2026-08-01: first
+	// every Yarn explore wrote yarn.json (ax 156 nodes, cdp 196, no-vision 180 — last writer
+	// won), then the first fix added the BACKEND but not the perception tier, so
+	// p1-explore-ax and p1-explore-no-vision still collided. Neither was visible in any test
+	// because the arms individually looked fine; only the pair was wrong.
+	const explores = MATRIX.filter((a) => a.kind === "explore");
+	const byslug = new Map<string, string[]>();
+	for (const a of explores) byslug.set(armAppmapSlug(a), [...(byslug.get(armAppmapSlug(a)) ?? []), a.id]);
+	const clashes = [...byslug].filter(([, ids]) => ids.length > 1);
+	assert.deepEqual(clashes, [], `arms sharing an appmap file: ${clashes.map(([s, ids]) => `${s} <- ${ids.join(" + ")}`).join("; ")}`);
+
+	// And every dimension that varies must actually appear in the name, or a future arm
+	// varying only in that dimension collides silently.
+	const yarnAx = explores.find((a) => a.id === "p1-explore-ax");
+	assert.ok(yarnAx);
+	assert.equal(armAppmapSlug(yarnAx), "yarn.ax", "backend in the name");
+	assert.equal(armAppmapSlug(explores.find((a) => a.id === "p1-explore-no-vision")!), "yarn.ax.novision", "perception tier in the name");
+	assert.equal(armAppmapSlug(explores.find((a) => a.id === "p1-explore-vision")!), "yarn.ax.vision", "vision-only tier in the name");
+	assert.equal(armAppmapSlug(explores.find((a) => a.id === "p1-explore-web-cdp")!), "web-app.notion.com.cdp", "web host + backend");
+});
+
+test("armAppmapSlug__IsWhatTaskArmsWillRead__When__TheyGroundOnAPass", () => {
+	// The grounded TASK arms have to read the map their matching explore wrote, or phase 2
+	// measures the wrong vocabulary — the ax and cdp passes name the same surface `editor`
+	// and `draft-editor`, so a run grounded on the other backend's map fails to resolve
+	// controls for reasons that read as backend weakness.
+	const exploreFor = (backend: string) => MATRIX.find((a) => a.kind === "explore" && a.dispatch.backend === backend && !a.dispatch.noAx && !a.dispatch.noVision && a.app === "Yarn");
+	for (const backend of ["ax", "cdp"]) {
+		const task = MATRIX.find((a) => a.id === `p2-${backend}-grounded`);
+		const explore = exploreFor(backend);
+		assert.ok(task && explore, backend);
+		assert.equal(armAppmapSlug(task), armAppmapSlug(explore), `p2-${backend}-grounded must read what p1-explore-${backend} wrote`);
+	}
 });

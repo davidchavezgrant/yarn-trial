@@ -13,13 +13,18 @@ export interface GroundingMeta {
 	notes?: string;
 }
 
-export function loadGrounding(slug: string): GroundingMeta {
+export function loadGrounding(slug: string, backend?: string): GroundingMeta {
 	if (process.env.NO_GROUNDING) return { provenance: "none" }; // A/B measurement escape hatch
 
 	// docs/appmaps/ holds ONLY explore.ts output (stamped with a provenance header);
 	// docs/recipes/ holds hand-curated notes. Both ground the agent, but they are
 	// different classes of input and the run log must say which one was used.
-	const explorePath = `${appmapsDir()}/${slug}${appmapVariant()}.md`;
+	// Backend-specific first, plain second. A map is not backend-portable — the ax and cdp
+	// passes name the same surfaces differently, and a run resolves controls by name — but
+	// legacy and hand-curated maps live under the plain slug and must keep working.
+	const variant = appmapVariant();
+	const candidates = [...(backend ? [`${appmapsDir()}/${slug}.${backend}${variant}.md`] : []), `${appmapsDir()}/${slug}${variant}.md`];
+	const explorePath = candidates.find((c) => fs.existsSync(c)) ?? candidates[candidates.length - 1];
 	const recipePath = `${recipesDir()}/${slug}.md`;
 	const useRecipe = process.env.USE_RECIPE ? fs.existsSync(recipePath) : false;
 	const path = useRecipe ? recipePath : fs.existsSync(explorePath) ? explorePath : undefined;

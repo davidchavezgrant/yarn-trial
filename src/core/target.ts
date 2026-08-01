@@ -162,8 +162,22 @@ export function isBrowserApp(name: string): boolean {
  * `visionOnly` selects the `.vision` pair a screenshots-only pass writes, which is a separate
  * artifact precisely so it cannot overwrite the element-grounded map.
  */
-export function appmapSlug(appOrUrl: string, opts: { visionOnly?: boolean } = {}): string {
-	const variant = opts.visionOnly ? ".vision" : "";
+export function appmapSlug(appOrUrl: string, opts: { visionOnly?: boolean; noVision?: boolean; backend?: string } = {}): string {
+	// The BACKEND is part of the filename because a map is not backend-portable. The ax pass
+	// and the cdp pass name the same place differently — `editor` vs `draft-editor`, measured
+	// 2026-08-01 — and a grounded run resolves controls BY NAME. Grounding an ax run on a
+	// cdp-derived map therefore fails to resolve for vocabulary reasons that read as backend
+	// weakness, corrupting the one comparison the backend arms exist for.
+	//
+	// Before this, every Yarn explore wrote docs/appmaps/yarn.json and the last one to finish
+	// won: ax (156 nodes), cdp (196), no-vision (180) all overwrote each other, so which map
+	// phase 2 grounded on was decided by explore ordering.
+	// BOTH the backend and the perception tier, because all three vary independently and any
+	// two arms sharing a filename means the later pass silently overwrites the earlier. An
+	// earlier version of this fix included only the backend, and p1-explore-ax and
+	// p1-explore-no-vision — same backend, different perception — collided exactly as before.
+	const tier = opts.visionOnly ? ".vision" : opts.noVision ? ".novision" : "";
+	const variant = `${opts.backend ? `.${opts.backend}` : ""}${tier}`;
 	// A URL is recognised by being one, not by a caller remembering to say so.
 	if (/^https?:\/\//i.test(appOrUrl.trim())) {
 		try {
