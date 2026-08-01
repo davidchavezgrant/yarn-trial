@@ -179,3 +179,24 @@ test("AxBackend__TriesSiblingWindows__When__TheFrontOneIsSilent", () => {
 	// different states ("gone" vs "alive but silent") and one is not a substitute for the other.
 	assert.match(src, /const heldAlive = all\.some/, "the dead-window recovery must survive alongside it");
 });
+
+test("AxBackend__ReactivatesTheApp__When__NoWindowExposesAnything", () => {
+	// The third crash of 2026-08-01, and the one the sibling-window switch does NOT cover. Its
+	// step note reads "the coordinate drag unexpectedly changed foreground focus", and the next
+	// observation reported "the screenshot is Yarn but accessibility is exposing only menus".
+	//
+	// That is a signature this repo has already diagnosed: an AppKit app that is not KEY/MAIN has
+	// menu validation disable everything and its AX tree collapses to the menu bar. acquire()
+	// performs one System Events activation at run start for exactly that reason (Hex Fiend:
+	// 0/15, DISABLED throughout, until it did). What was missing is that activation was treated
+	// as a START-UP concern — nothing re-established it when a run knocked it loose.
+	//
+	// When no window of the app can answer, the problem is the app, not the window choice.
+	const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "backends", "ax.ts"), "utf8");
+	assert.match(src, /const woken = await activate\(this\.app, this\.currentWin\.pid\)/, "the re-activation recovery is gone");
+	assert.match(src, /re-activated it and recovered/, "the recovery must announce itself — a silent one is unreviewable");
+
+	// It must sit AFTER the sibling-window loop: activation costs an osascript round trip, so it
+	// may only run once every window has already come back empty, never on the happy path.
+	assert.ok(src.indexOf("had no AX content — switching to") < src.indexOf("const woken = await activate("), "re-activation must be the last resort, not the first");
+});

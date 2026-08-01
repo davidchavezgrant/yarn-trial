@@ -167,9 +167,39 @@ export class AxBackend {
 
 					return other;
 				}
-				// Nothing of this app can answer. Fall through to the ordinary path so the real
-				// error — with ensureObservable's recovery story attached — is what surfaces,
-				// rather than a shape invented here.
+				/**
+				 * NO WINDOW OF THIS APP CAN ANSWER — so the problem is not which window we hold,
+				 * it is the app itself, and there is one known cause with a known remedy.
+				 *
+				 * An AppKit app that is not KEY/MAIN has menu validation disable everything and
+				 * its AX tree collapses to the menu bar. That is the activation-policy finding
+				 * from the native-apps investigation, and it is why acquire() performs one
+				 * genuine System Events activation at run start (Hex Fiend: 0/15, DISABLED
+				 * throughout, until it did).
+				 *
+				 * On 2026-08-01 a pass hit the same signature MID-RUN. Its own step note reads
+				 * "the coordinate drag unexpectedly changed foreground focus", and the next
+				 * observation reported "the screenshot is Yarn but accessibility is exposing only
+				 * menus" — the app lost activation and never got it back. Activation was treated
+				 * as a start-up concern; nothing re-established it when a run knocked it loose.
+				 *
+				 * Once per observation at most, and only when every window has already come back
+				 * empty: this costs an osascript round trip, so it must not run on the happy path.
+				 * A refusal is non-fatal — the fall-through below reports the real error with
+				 * ensureObservable's recovery story attached.
+				 */
+				const woken = await activate(this.app, this.currentWin.pid);
+				if (woken.applied) {
+					const after = await observe(this.driver, this.currentWin, name, {}).catch(() => undefined);
+					if (after && after.appContent > 0) {
+						console.log(`  window follow: "${this.app}" exposed no AX content — re-activated it and recovered (${after.appContent} elements)`);
+
+						return after;
+					}
+				}
+				// Still nothing. Fall through to the ordinary path so the real error — with
+				// ensureObservable's recovery story attached — is what surfaces, rather than a
+				// shape invented here.
 			}
 			if (front && front.window_id !== this.currentWin.windowId) {
 				console.log(`  window follow: "${this.lastTitle ?? ""}" -> "${front.title}" (id ${this.currentWin.windowId} -> ${front.window_id})`);
