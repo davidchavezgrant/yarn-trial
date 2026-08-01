@@ -95,6 +95,23 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 	const web = p.target.kind === "web";
 	const summary = () => (vo ? declaredSummary(p.declared) : frontierSummary(p.ledger));
 	const remaining = () => (vo ? declaredRemaining(p.declared) : frontierRemaining(p.ledger));
+	// Cumulative discovery counters — one shape for the progress heartbeat and every finish
+	// event, because the dash folds events.jsonl into a convergence series (frontier
+	// burn-down, map growth over time) and a series needs the same counters on every point,
+	// endpoint included. `frontier` alone cannot separate a pass that OPERATED its frontier
+	// from one that dismissed it en masse, hence actuated/dismissed ride along; token
+	// counters make discovery-per-token curves possible without touching collected metrics.
+	const discoveryCounters = () => ({
+		frontier: remaining().length,
+		seen: vo ? p.declared.seen.size : p.ledger.seen.size,
+		actuated: vo ? p.declared.operated.size : p.ledger.actuated.size,
+		dismissed: vo ? p.declared.dismissed.size : p.ledger.dismissed.size,
+		nodes: p.graphNodes.size,
+		tokensIn: p.usage.inputTokens,
+		tokensOut: p.usage.outputTokens,
+		tokensCacheRead: p.usage.cacheReadTokens,
+		tokensCacheCreation: p.usage.cacheCreationTokens,
+	});
 	// The mechanical ledger stays EMPTY on a vision-only pass rather than being fed silently:
 	// the stamp's tallies must be the declared ones, and two ledgers would be two answers to
 	// "what did this pass cover".
@@ -240,7 +257,7 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 		// because forty minutes of exploration are worth more written down than discarded.
 		if (interrupted()) {
 			console.log(`\nstopped after ${p.actions} actions — asking for the map now`);
-			runEvent(p.stamp, "finish", { stopped: "interrupted", actions: p.actions });
+			runEvent(p.stamp, "finish", { stopped: "interrupted", actions: p.actions, ...discoveryCounters() });
 			await requestFinish(p, client, model, "The run was stopped. Call finish NOW with the map you have.", "interrupted", true);
 
 			return;
@@ -248,7 +265,7 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 
 		if (p.actions >= MAX_ACTIONS) {
 			console.log(`\naction ceiling (${MAX_ACTIONS}) reached — asking for the map now`);
-			runEvent(p.stamp, "finish", { stopped: "action-ceiling", actions: p.actions });
+			runEvent(p.stamp, "finish", { stopped: "action-ceiling", actions: p.actions, ...discoveryCounters() });
 			await requestFinish(p, client, model, `The action ceiling of ${MAX_ACTIONS} has been reached. Call finish NOW with the map you have.`, "action-ceiling", false);
 
 			return;
@@ -332,7 +349,7 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 				stopped: unfinished ? "frontier-conceded" : "frontier-empty",
 				actions: p.actions,
 				findings: p.findings.length,
-				nodes: p.graphNodes.size,
+				...discoveryCounters(),
 			});
 			writeArtifacts(p, toolUse.input as FinishInput, unfinished ? "frontier-conceded" : "frontier-empty");
 
@@ -866,8 +883,7 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 		if (p.actions % 10 === 0)
 			runEvent(p.stamp, "progress", {
 				actions: p.actions,
-				frontier: rest.length,
-				seen: vo ? p.declared.seen.size : p.ledger.seen.size,
+				...discoveryCounters(),
 				elapsed: hm(Date.now() - p.startedAt),
 			});
 
