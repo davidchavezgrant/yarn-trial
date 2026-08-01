@@ -185,9 +185,13 @@
 		font-size: 10px; border: 1px solid var(--border); border-radius: 8px; padding: 0 5px;
 		margin-right: 6px; color: var(--ink-2); cursor: help; font-variant-numeric: tabular-nums;
 	}
-	/* The Runs column: the run-selector chips, one per run (statusChip keeps them minimal). */
+	/* The Runs column: the run's status chip (statusChip keeps it minimal). */
 	td.runs { max-width: 260px; }
 	td.treecell { text-align: center; white-space: nowrap; }
+	/* A multi-run variant splits after the identity columns — one line per run, the five
+	   identity cells rowspanned across the group. Internal separators go dashed so the
+	   group still reads as one variant; the solid grid line returns on its last run. */
+	tr.splitrow > td { border-bottom: 1px dashed var(--grid); }
 	td.task { color: var(--muted); max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 	/* row detail: the appmap + the run's path through it */
@@ -362,13 +366,10 @@ const AMB_TIP = "this setting exists at TWO scopes under one identity (same sett
 // Vision-only (--no-ax) passes have no element list to count against, so their tallies are
 // self-reported. One explainer, two homes: the row's ⚠ and the rank dot's tooltip.
 const DECLARED_TIP = "DECLARED — the vision-only pass has no element list to count against, so these tallies are the model's own report; not comparable like-for-like with mechanically counted passes.";
-// The multi-pass matrix runs n>1 explores per arm; the explore columns aggregate as medians.
-const MED_TIP = "median across N passes — medians resist a degenerate pass (an 8-node husk map happened)";
-// Live column cells: a metric column with NOTHING collected borrows the in-flight runs'
-// event-log counters instead of rendering "–" for the whole run. ~tilde + --running tint +
-// this tip keep a provisional number from ever reading as a collected one; the moment a
-// pass collects, the real aggregate takes the cell back and the live value retreats to the
-// remaining uncollected runs' chips/dropdowns.
+// Live cells: an uncollected run's metric cells read the run's OWN event-log counters
+// (EntryView.live) instead of rendering "–" until collect. ~tilde + --running tint + this
+// tip keep a provisional number from ever reading as a collected one; the moment collect
+// banks the run, the run log's numbers take the line back.
 const LIVE_CELL_TIP = "LIVE — off the running run's own event log; provisional until collected";
 const STATUS = { good: "var(--good)", warning: "var(--warning)", serious: "var(--serious)", critical: "var(--critical)" };
 // Every status the wire can put on an entry has an explicit entry here; statusChip renders
@@ -743,7 +744,7 @@ function statusChip(e, rowKey, selected) {
 	if (dead) label = esc(statusLabel(pane.state)) + (took != null ? " " + fmtDur(took) : "") + " — uncollected";
 	// Same rule for a self-reported verdict: its own label, never a green dot on "Awaiting collect".
 	if (claimed) label = (claimed.success ? "Succeeded" : "Failed") + (took != null ? " " + fmtDur(took) : "") + " — self-reported";
-	// Chips stay minimal: the live counters moved to the metric COLUMNS (liveAgg/liveNumCell
+	// Chips stay minimal: the live counters moved to the metric COLUMNS (the per-run cells
 	// — David, 2026-08-01: "actions should be its own column"). Only a mid-run fatal stays
 	// on the chip — it is status, not a metric, and the columns have nowhere to say it.
 	if (e.status === "running" && lp && lp.fatal) label += " · ⚠ fatal";
@@ -898,12 +899,14 @@ function armOf(jobId) {
 // passes compare down the page — they were one colspan-5 inline-labeled blob, unscannable.
 // Task rows show "–" there; explore rows show "–" under Success/Steps (no success field —
 // rendering one as "0/1 ok" read as a failure — and Actions IS the explore's steps).
+// Every metric column is PER RUN: a multi-run variant splits after the identity columns
+// into one line per run (passRows), the identity cells rowspanned across the group.
 // Flags live in the arm tooltip (the display name is derived from them) and per-run
 // completion lives on the chips, so neither needs a column.
 // cls "num-h" right-aligns a numeric column's header so it sits over its right-aligned cells.
 const th = (label, tip, cls) => `<th${cls ? ` class="${cls}"` : ""}${tip ? ` data-tip="${esc(tip)}"` : ""}>${label}</th>`;
-const VARIANT_TIP = "hover for the arm id, flags and the decision this cell informs · click to expand the selected run's dropdown (stats · prompt · live log) · pick the run via its chip in the Runs column";
-const RUNS_TIP = "one chip per run — click a chip to select that run: the row's dropdown and ⤢ map follow the selected chip";
+const VARIANT_TIP = "hover for the arm id, flags and the decision this cell informs · a variant with several runs splits into one line per run — click a line to open that run's dropdown (stats · prompt · live log)";
+const RUNS_TIP = "the run's status — click to open/collapse its dropdown; the line, dropdown and ⤢ map all follow this run";
 // No target column: the app scope picker above the board carries the target, and inside a
 // lineage group every row shares the group's target anyway.
 // Ordering: the two wide prose cells (Variant, Task) together at the left, then the three
@@ -919,15 +922,15 @@ const TASK_HEAD = "<tr>" + th("Variant", VARIANT_TIP) +
 	th("Sees", "what the agent SEES: AX tree or DOM elements, plus vision — or pixels only") +
 	th("Acts With", "what injects the input: AX (cua driver) or CDP") +
 	th("Model", "what actually ran, off the run logs") +
-	th("Success", "self-reported: succeeded / collected (the judge's verdict lives in the Judge card)", "num-h") +
-	th("Steps", "mean actions per run", "num-h") + th("Time", "mean wall-clock per run", "num-h") +
-	th("Tokens", "mean OUTPUT tokens per run", "num-h") + th("Cost", "published-rate estimate across collected runs — not an invoice · +N? = N runs missing pricing", "num-h") +
-	th("Actions", "explore rows — actions the grounding pass took (x̃ = median across the arm's passes; hover the cell for elapsed)", "num-h") +
+	th("Success", "self-reported, per run: ✓ succeeded · ✗ failed · ~ = the running run's own claim off its event log (the judge's verdict lives in the Judge card)", "num-h") +
+	th("Steps", "actions the run took (hover for the verified count)", "num-h") + th("Time", "wall-clock per run — ticking while the run executes", "num-h") +
+	th("Tokens", "OUTPUT tokens the run spent", "num-h") + th("Cost", "published-rate estimate per run — not an invoice · ? = tokens recorded but no pricing", "num-h") +
+	th("Actions", "explore rows — actions the grounding pass took", "num-h") +
 	th("Controls", "explore rows — actuated/dismissed/seen (the stamp's own order): of every control the pass observed (seen), how many it operated (actuated) vs swept off the frontier without operating (dismissed). The pass ends when the frontier empties, and dismissing is a legitimate way to empty it", "num-h") +
 	th("Surfaces", "explore rows — distinct screens/panels/tabs/dialogs controls were SEEN on: what you navigate BETWEEN; controls live ON them. The distilled appmap graph (Map column) typically keeps fewer surface nodes than this", "num-h") +
-	th("Nodes", "explore rows — distilled appmap graph nodes (hover the cell for edges)", "num-h") +
+	th("Nodes", "explore rows — distilled appmap graph nodes", "num-h") +
 	th("Ambig", "explore rows — settings editable at two scopes under one identity (same settingKey, different scope) — the wrong-scope trap; each gets a prompt warning", "num-h") +
-	th("Started", "when the row's LATEST run began — collected runs off the run log, running runs derived from their ticking elapsed; a queued run shows – until it starts. Hover lists every run") +
+	th("Started", "when this run began — collected runs off the run log, running runs derived from their ticking elapsed; a queued run shows – until it starts") +
 	th("Runs", RUNS_TIP) +
 	th("Map", "the appmap as a full node-link tree — edge thickness = traversal heat, blue = the run's path") + "</tr>";
 
@@ -945,7 +948,7 @@ const displayName = (a) => a.title || a.id;
 const normModel = (m) => m.replace(/^[a-z-]+[:/]/i, "").replace(/:[a-z-]+$/i, "");
 const rowId = (a, p) => `${a.id}|${p.model}`;
 
-function modelCell(p) {
+function modelCell(p, span = "") {
 	// "(default)" is only the dispatch label — show what it resolves to (this machine's
 	// key precedence) until collected runs report what ACTUALLY ran, which always wins.
 	const fallback = p.model === "(default)" ? (state.defaultModel ? normModel(state.defaultModel) : "default") : p.model;
@@ -954,20 +957,15 @@ function modelCell(p) {
 	// default for a pass dispatched as azure/… contradicted the cell one pixel up.
 	const expected = p.model === "(default)" ? (state.defaultModel ?? "unknown") : p.model;
 	const tip = (p.ranModels ? `ran: ${p.ranModels.join(", ")}` : `expected (uncollected): ${expected}`) + `\ndispatched as: ${p.model}`;
-	return `<td class="txt" data-tip="${esc(tip)}">${esc(shown)}</td>`;
+	return `<td class="txt"${span} data-tip="${esc(tip)}">${esc(shown)}</td>`;
 }
 
-// Which run a row's detail (and its tree button) shows: the explicitly selected one, else
-// the first collected, else the first submitted.
+// Which run a row's detail shows: the explicitly selected one, else the first collected,
+// else the first submitted.
 function selJob(p, key) {
 	if (typeof openRows[key] === "string") return openRows[key];
 	const c = p.entries.find((e) => e.collected) || p.entries[0];
 	return c && c.jobId;
-}
-
-function treeCell(p, key) {
-	const job = selJob(p, key);
-	return `<td class="treecell">${job ? `<button class="btnv" data-viewtree="${esc(job)}">⤢</button>` : ""}</td>`;
 }
 
 const ordinal = (n) => { const s = ["th", "st", "nd", "rd"], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };
@@ -987,9 +985,9 @@ function rankDot(a, p) {
 	return `<span class="rankbadge" style="border-color:${color}" data-tip="${esc(tip)}">${rank}/${of}</span>`;
 }
 
-// The run selector: minimal chips (dot + Status + ticking elapsed while Running) in their
-// own trailing column — clicking one selects that run for the row's dropdown (selJob/openRows).
-// Chips drain like the board itself: finished → running → queued, oldest first in each band.
+// COMPILE rows only: every chip in one cell (their entries are inert file transforms with
+// no per-run line to live on). Task/explore rows split per run — passRows puts one chip
+// on each run's own line.
 function runsCell(p, key) {
 	const sel = openRows[key] ? selJob(p, key) : undefined;
 	const ordered = p.entries.slice().sort((a, b) => entryBand(a) - entryBand(b) || entryTime(a) - entryTime(b));
@@ -1035,140 +1033,174 @@ function startStamp(t) {
 // truncating at 14 chars cut every same-hour stamp to one identical string ("2026-07-31T05-…").
 const shortJob = (id) => String(id).replace(/\d{4}-\d{2}-\d{2}T/, "");
 
-// The cell shows the LATEST relevant start among the row's entries; the tooltip accounts
-// for every entry — started / queued (submitted …) / finished — so a "–" is explained.
-function startedCell(p) {
-	const starts = p.entries.map(entryStart).filter((t) => t != null);
-	const lines = p.entries.map((e) => {
-		const dur = e.elapsedSec != null ? e.elapsedSec : e.runSec != null ? e.runSec : (liveMem[e.jobId] || {}).elapsed;
-		const st = entryStart(e);
-		// "finished <submit time>" was a lie for collected runs whose log carried no
-		// endedAt — say what the timestamp actually is.
-		return shortJob(e.jobId) + " — " +
-			(e.collected ? (e.endedAt ? "finished " + startStamp(Date.parse(e.endedAt) || null)
-				: "collected (submitted " + startStamp(Date.parse(e.submittedAt) || null) + ")") + (dur != null ? ` — took ${fmtDur(dur)}` : "")
-			: st != null ? "started " + startStamp(st) + (e.status !== "running" && dur != null ? ` — ran ${fmtDur(dur)}` : "")
-			: `${e.status} (submitted ${startStamp(Date.parse(e.submittedAt) || null)})`);
-	}).join("\n");
-	return `<td class="txt" data-tip="${esc(lines)}">${startStamp(starts.length ? Math.max(...starts) : null)}</td>`;
+// One entry's Started story — started / queued (submitted …) / finished — so a "–" cell
+// is always explained. "finished <submit time>" was a lie for collected runs whose log
+// carried no endedAt — say what the timestamp actually is.
+function entryStartLine(e) {
+	const dur = e.elapsedSec != null ? e.elapsedSec : e.runSec != null ? e.runSec : (liveMem[e.jobId] || {}).elapsed;
+	const st = entryStart(e);
+	return shortJob(e.jobId) + " — " +
+		(e.collected ? (e.endedAt ? "finished " + startStamp(Date.parse(e.endedAt) || null)
+			: "collected (submitted " + startStamp(Date.parse(e.submittedAt) || null) + ")") + (dur != null ? ` — took ${fmtDur(dur)}` : "")
+		: st != null ? "started " + startStamp(st) + (e.status !== "running" && dur != null ? ` — ran ${fmtDur(dur)}` : "")
+		: `${e.status} (submitted ${startStamp(Date.parse(e.submittedAt) || null)})`);
 }
 
-function armCell(a, p) {
+// COMPILE rows only (same reason as runsCell): the latest start among the entries, every
+// entry's line in the tip. Split rows carry their own run's start via startedCellFor.
+function startedCell(p) {
+	const starts = p.entries.map(entryStart).filter((t) => t != null);
+	return `<td class="txt" data-tip="${esc(p.entries.map(entryStartLine).join("\n"))}">${startStamp(starts.length ? Math.max(...starts) : null)}</td>`;
+}
+
+// The split line's own Started cell: this run's start, its full story in the tip.
+const startedCellFor = (e) => `<td class="txt" data-tip="${esc(entryStartLine(e))}">${startStamp(entryStart(e))}</td>`;
+
+// The five identity cells (Variant…Model) — identical for every run of the pass, so on a
+// multi-run variant they render once with `span` (a rowspan attr) covering the group.
+function armCell(a, p, span = "") {
 	const tip = [a.id, a.informs || "", `flags: ${a.flags || "(none)"}`].filter(Boolean).join("\n");
 	const taskCell = a.task
-		? `<td class="task" data-tip="${esc(a.task)}">${esc(a.task)}</td>`
+		? `<td class="task"${span} data-tip="${esc(a.task)}">${esc(a.task)}</td>`
 		: a.kind === "explore"
-			? `<td class="task" data-tip="Explore pass — no task prompt. The objective is coverage: operate every safe control until the frontier of un-operated controls empties, then write the appmap (docs/appmaps/)">Explore</td>`
-			: `<td class="task">–</td>`;
+			? `<td class="task"${span} data-tip="Explore pass — no task prompt. The objective is coverage: operate every safe control until the frontier of un-operated controls empties, then write the appmap (docs/appmaps/)">Explore</td>`
+			: `<td class="task"${span}>–</td>`;
 	// Phase badge on task/replay rows only: lineage groups interleave phases 2–5, so the row
 	// says which phase it belongs to. Explore group headers are all phase 1 — no badge.
 	const badge = a.kind !== "explore"
 		? `<span class="pbadge" data-tip="phase ${a.phase} arm — lineage groups interleave phases">P${a.phase}</span>`
 		: "";
-	return `<td class="arm" data-tip="${esc(tip)}">${rankDot(a, p)}<span class="dn">${esc(displayName(a))}</span>${badge}</td>
+	return `<td class="arm"${span} data-tip="${esc(tip)}">${rankDot(a, p)}<span class="dn">${esc(displayName(a))}</span>${badge}</td>
 		${taskCell}
-		<td class="txt">${esc(a.perception || "–")}</td>
-		<td class="txt">${esc(a.actuation || "–")}</td>
-		${modelCell(p)}`;
+		<td class="txt"${span}>${esc(a.perception || "–")}</td>
+		<td class="txt"${span}>${esc(a.actuation || "–")}</td>
+		${modelCell(p, span)}`;
 }
 
 // The five explore-discovery columns, dashed on task/replay rows so every row spans the
 // same 18 columns without colspan bookkeeping.
 const NO_EXPLORE_CELLS = `<td class="num">–</td>`.repeat(5);
 
-// Cost cell, report costCell parity: "$X +N?" when some runs priced and N weren't (a bare
-// "$X" over a half-unpriced pass read as fully priced — the cheap-matrix lie), "?×N" when
-// none priced, "–" when nothing to price.
-const costCell = (p) => p.usd ? fmtMoney(p.usd) + (p.unpriced ? " +" + p.unpriced + "?" : "")
-	: p.unpriced ? "?×" + p.unpriced : "–";
-
-// Live aggregates for a pass's IN-FLIGHT runs (EntryView.live): the median across them,
-// the same aggregation shape the collected columns use, so a live cell means the same
-// thing its collected successor will. null when nothing is in flight.
-function liveAgg(p) {
-	const ls = p.entries.filter((e) => !e.collected && e.live).map((e) => e.live);
-	if (!ls.length) return null;
-	const med = (k) => {
-		const v = ls.map((l) => l[k]).filter((n) => typeof n === "number").sort((a, b) => a - b);
-		if (!v.length) return null;
-		const m = Math.floor(v.length / 2);
-		return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
-	};
-	return { actions: med("actions"), frontier: med("frontier"), seen: med("seen"), nodes: med("nodes"), steps: med("steps"), verified: med("verified") };
-}
-
 // A metric cell carrying a live value: ~ marks it approximate, .livecell tints it --running.
 const liveNumCell = (label, extraTip) =>
 	`<td class="num livecell" data-tip="${esc(LIVE_CELL_TIP + (extraTip ? "\n" + extraTip : ""))}">${esc(label)}</td>`;
 
-function taskRow(a, p) {
-	const key = rowId(a, p);
-	const lv = liveAgg(p);
-	// Same collected-wins rule as exploreRow: the live steps stand in only while the mean
-	// has nothing collected behind it.
-	const stepsCell = p.meanSteps != null
-		? `<td class="num">${fmtNum(p.meanSteps)}</td>`
-		: lv && lv.steps != null
-			? liveNumCell(`~${fmtNum(lv.steps)}${lv.verified != null ? ` (${fmtNum(lv.verified)}✓)` : ""}`, "steps so far (verified in parens)")
-			: `<td class="num">–</td>`;
-	return `<tr class="mrow" data-toggle="${esc(key)}">${armCell(a, p)}
-		<td class="num">${p.collected ? p.successes + "/" + p.collected : "–"}</td>
-		${stepsCell}
-		<td class="num">${p.meanElapsedSec != null ? fmtDur(p.meanElapsedSec) : "–"}</td>
-		<td class="num">${fmtK(p.meanOutputTokens)}</td>
-		<td class="num">${costCell(p)}</td>
-		${NO_EXPLORE_CELLS}${startedCell(p)}${runsCell(p, key)}${treeCell(p, key)}</tr>` + (openRows[key] ? detailRowHtml(a, p, key) : "");
+/* Per-run metric cells. Per cell, collected always wins: the run's own event-log counters
+   (EntryView.live) stand in ONLY while the run is uncollected, marked ~/tinted per
+   LIVE_CELL_TIP, so a provisional number can never blend with a banked one. */
+
+// ✓/✗ for a collected run; the running run's own done() claim as ~✓/~✗ the moment its
+// verdict event lands; "–" until either exists.
+function successCellFor(e) {
+	if (e.collected) {
+		if (e.success === true) return `<td class="num"><span class="ok-v">✓</span></td>`;
+		if (e.success === false) return `<td class="num" data-tip="${esc(e.failureKind ? "failure: " + e.failureKind : "failed")}"><span class="bad-v">✗</span></td>`;
+		return `<td class="num">–</td>`;
+	}
+	const v = e.live && e.live.verdict;
+	return v ? liveNumCell(v.success ? "~✓" : "~✗", "the run's own done() claim — self-reported, pre-collect, pre-judge") : `<td class="num">–</td>`;
 }
 
-// The explore GROUP-HEADER row. Its discovery numbers are MEDIANS (x̃) across the arm's
-// collected passes and live in their own columns (Actions…Ambig) so passes compare down
-// the page; the column semantics live in the sticky header's tips, the cell tips keep the
-// per-value extras (elapsed, edges, the seen/actuated/dismissed breakdown) plus MED_TIP.
-// Time/Tokens/Cost are the shared rollup()'s means — the same numbers, same semantics, as
-// the task rows' cells (report parity) — a grounding pass spends real minutes and money,
-// and the old spanning blob threw those away. Success and Steps stay "–": an explore has
-// no success field (rendering one as "0/1 ok" read as a failure) and Actions is its step
-// count. `first` marks the group's first row for .gsep air.
-function exploreRow(a, p, first) {
+function stepsCellFor(e) {
+	if (e.steps != null)
+		return `<td class="num"${e.verifiedSteps != null ? ` data-tip="${esc(`${e.verifiedSteps} of ${e.steps} steps verified`)}"` : ""}>${fmtNum(e.steps)}</td>`;
+	const lp = !e.collected && e.live;
+	return lp && lp.steps != null
+		? liveNumCell(`~${fmtNum(lp.steps)}${lp.verified != null ? ` (${fmtNum(lp.verified)}✓)` : ""}`, "steps so far (verified in parens)")
+		: `<td class="num">–</td>`;
+}
+
+// Wall-clock: the run log's duration once collected; a RUNNING run ticks live (the same
+// 1s ticker that advances its chip); a finished-but-uncollected run serves the remembered
+// live elapsed (liveMem — the same fallback the chip uses) so the number survives the
+// awaiting-collect window.
+function timeCellFor(e) {
+	const took = e.collected ? (e.elapsedSec != null ? e.elapsedSec : e.runSec) : null;
+	if (took != null) return `<td class="num">${fmtDur(took)}</td>`;
+	if (e.status === "running") {
+		const base = e.elapsedSec != null ? e.elapsedSec
+			: (liveMem[e.jobId] || {}).start != null ? (receivedAt - liveMem[e.jobId].start) / 1000 : null;
+		if (base != null) return `<td class="num livecell" data-tip="${esc(LIVE_CELL_TIP)}">${elapsedSpan(base)}</td>`;
+	}
+	const mem = (liveMem[e.jobId] || {}).elapsed;
+	return !e.collected && PRE_COLLECT_TERMINAL.has(e.status) && mem != null
+		? liveNumCell(`~${fmtDur(mem)}`)
+		: `<td class="num">–</td>`;
+}
+
+// Tokens/cost land only at collect (no mid-run token events), so uncollected runs show "–".
+const tokensCellFor = (e) => `<td class="num">${fmtK(e.outputTokens)}</td>`;
+// Per-run cost: "?" = tokens recorded but no pricing (the report's unpriced), "–" = nothing
+// to price (queued, running, or a tokenless entry).
+const costCellFor = (e) => e.usd != null ? `<td class="num">${fmtMoney(e.usd)}</td>`
+	: e.collected && e.outputTokens != null
+		? `<td class="num" data-tip="tokens recorded but no pricing for this run's model">?</td>`
+		: `<td class="num">–</td>`;
+
+// The five explore-discovery cells for ONE pass (EntryView.exploreStamp); an in-flight
+// pass serves its heartbeat counters (actions/frontier/seen/nodes — surfaces and ambig are
+// stamped only at finish).
+function exploreCellsFor(a, e) {
+	const num = (value, tip) => `<td class="num"${tip ? ` data-tip="${esc(tip)}"` : ""}>${value}</td>`;
+	const st = e.exploreStamp;
+	if (st) {
+		// A vision-only pass (--no-ax) has no element list to count against, so its tallies
+		// are self-reported — flagged so they never read as mechanically counted. Flag
+		// sniffing is display-only here; the arm's dispatch stays the authority.
+		const declared = a.flags && a.flags.includes("--no-ax")
+			? ` <span data-tip="${esc(DECLARED_TIP)}">⚠</span>`
+			: "";
+		return num(fmtNum(st.actions))
+			+ (st.controlsSeen != null
+				? num(`${st.controlsActuated}/${st.controlsDismissed}/${st.controlsSeen}${declared}`,
+					`actuated ${st.controlsActuated} · dismissed ${st.controlsDismissed} · seen ${st.controlsSeen}`)
+				: num("–"))
+			+ num(fmtNum(st.surfaces)) + num(fmtNum(st.graphNodes)) + num(fmtNum(st.scopeAmbiguities));
+	}
+	const lp = !e.collected && e.live;
+	return (lp && lp.actions != null
+			? liveNumCell(`~${fmtNum(lp.actions)}`, lp.frontier != null ? `frontier: ${fmtNum(lp.frontier)} controls left un-operated (the pass ends when this empties)` : "")
+			: num("–"))
+		+ (lp && lp.seen != null ? liveNumCell(`~${fmtNum(lp.seen)} seen`) : num("–"))
+		+ num("–")
+		+ (lp && lp.nodes != null ? liveNumCell(`~${fmtNum(lp.nodes)}`) : num("–"))
+		+ num("–");
+}
+
+// A variant with several runs SPLITS after the identity columns (David, 2026-08-01): the
+// five identity cells (Variant…Model) are identical across a pass's runs, so they render
+// once and rowspan the group; everything run-dependent (Success…Started, chip, ⤢) gets one
+// line per run, reading that run's OWN numbers. Line order = the chips' drain order
+// (finished → running → queued, oldest first in each band). Each line carries the chip's
+// click semantics on the whole row (data-row + data-job): click a line to open/select its
+// run's dropdown, click it again to collapse. The detail row rides AFTER the group — a
+// colspan row inside a rowspan region would shear the columns. `first` marks a group's
+// first explore row for .gsep air; non-final lines wear .splitrow (dashed separator).
+function passRows(a, p, first, metricCells) {
 	const key = rowId(a, p);
-	const ex = p.explore || {};
-	const lv = liveAgg(p);
-	// A vision-only pass (--no-ax) has no element list to count against, so its tallies are
-	// self-reported — flagged so they never read as mechanically counted. Flag sniffing is
-	// display-only here; the arm's dispatch stays the authority for what actually ran.
-	const declared = a.flags && a.flags.includes("--no-ax")
-		? ` <span data-tip="${esc(DECLARED_TIP)}">⚠</span>`
-		: "";
-	const num = (value, tip) => `<td class="num" data-tip="${esc(tip)}">${value}</td>`;
-	// Per cell, collected always wins: a live number stands in ONLY where the column has
-	// nothing collected — the columns keep one semantic (collected aggregate) and the live
-	// stand-in is marked ~/tinted, so the two can never blend.
-	const actionsCell = ex.actions != null
-		? num(fmtNum(ex.actions), "actions x̃ across the arm's passes" + (ex.elapsed ? "\nelapsed (first pass) " + ex.elapsed : "") + "\n" + MED_TIP)
-		: lv && lv.actions != null
-			? liveNumCell(`~${fmtNum(lv.actions)}`, lv.frontier != null ? `frontier: ${fmtNum(lv.frontier)} controls left un-operated (the pass ends when this empties)` : "")
-			: num("–", MED_TIP);
-	const controlsCell = ex.controlsSeen != null
-		? num(`${ex.controlsActuated}/${ex.controlsDismissed}/${ex.controlsSeen}${declared}`,
-			`actuated ${ex.controlsActuated} · dismissed ${ex.controlsDismissed} · seen ${ex.controlsSeen}\n` + MED_TIP)
-		: lv && lv.seen != null
-			// The heartbeat carries seen only — actuated/dismissed are stamped at finish.
-			? liveNumCell(`~${fmtNum(lv.seen)} seen`)
-			: num("–", MED_TIP);
-	const nodesCell = ex.graphNodes != null
-		? num(fmtNum(ex.graphNodes), (ex.graphEdges != null ? ex.graphEdges + " edges\n" : "") + MED_TIP)
-		: lv && lv.nodes != null ? liveNumCell(`~${fmtNum(lv.nodes)}`) : num("–", MED_TIP);
-	return `<tr class="mrow exp-row${first ? " gsep" : ""}" data-toggle="${esc(key)}">${armCell(a, p)}
-		<td class="num">–</td>
-		<td class="num">–</td>
-		<td class="num">${p.meanElapsedSec != null ? fmtDur(p.meanElapsedSec) : "–"}</td>
-		<td class="num">${fmtK(p.meanOutputTokens)}</td>
-		<td class="num">${costCell(p)}</td>
-		${actionsCell}
-		${controlsCell}
-		${num(fmtNum(ex.surfaces), MED_TIP)}
-		${nodesCell}
-		${num(fmtNum(ex.scopeAmbiguities), MED_TIP)}${startedCell(p)}${runsCell(p, key)}${treeCell(p, key)}</tr>` + (openRows[key] ? detailRowHtml(a, p, key) : "");
+	const sel = openRows[key] ? selJob(p, key) : undefined;
+	const runs = p.entries.slice().sort((x, y) => entryBand(x) - entryBand(y) || entryTime(x) - entryTime(y));
+	const span = runs.length > 1 ? ` rowspan="${runs.length}"` : "";
+	const expCls = a.kind === "explore" ? " exp-row" : "";
+	const rows = runs.map((e, i) =>
+		`<tr class="mrow${expCls}${i === 0 && first ? " gsep" : ""}${i < runs.length - 1 ? " splitrow" : ""}" data-row="${esc(key)}" data-job="${esc(e.jobId)}">${i === 0 ? armCell(a, p, span) : ""}
+		${metricCells(e)}
+		${startedCellFor(e)}
+		<td class="runs">${statusChip(e, key, e.jobId === sel)}</td>
+		<td class="treecell"><button class="btnv" data-viewtree="${esc(e.jobId)}">⤢</button></td></tr>`).join("");
+	return rows + (openRows[key] ? detailRowHtml(a, p, key) : "");
+}
+
+function taskRow(a, p) {
+	return passRows(a, p, false, (e) =>
+		successCellFor(e) + stepsCellFor(e) + timeCellFor(e) + tokensCellFor(e) + costCellFor(e) + NO_EXPLORE_CELLS);
+}
+
+// The explore GROUP-HEADER rows. Success and Steps stay "–": an explore has no success
+// field (rendering one as "0/1 ok" read as a failure) and Actions IS its step count.
+function exploreRow(a, p, first) {
+	return passRows(a, p, first, (e) =>
+		`<td class="num">–</td><td class="num">–</td>` + timeCellFor(e) + tokensCellFor(e) + costCellFor(e) + exploreCellsFor(a, e));
 }
 
 // Compile arms (phase 3/4 recipe compiles) are local, instant file transforms recorded as
@@ -2063,17 +2095,11 @@ $("board").addEventListener("click", (ev) => {
 	const job = ev.target.closest("[data-job][data-row]");
 	if (job) {
 		const { row, job: id } = job.dataset;
-		// A chip toggles ITS run's view: click once to open/select, click the same run's
-		// chip again to collapse. Clicking anywhere else on the row also collapses.
+		// A run's LINE (and its chip — same data attrs) toggles ITS run's view: click once
+		// to open/select, click the same run's line again to collapse; clicking a sibling
+		// line switches the dropdown to that run.
 		if (openRows[row] === id) delete openRows[row];
 		else openRows[row] = id;
-		render();
-		return;
-	}
-	const t = ev.target.closest("[data-toggle]");
-	if (t) {
-		const k = t.dataset.toggle;
-		if (openRows[k]) delete openRows[k]; else openRows[k] = true;
 		render();
 	}
 });
