@@ -70,6 +70,18 @@ export interface PhaseOptions {
 	outRoot?: string;
 	/** Injected by tests. Production lazily loads the real dispatch/compile. */
 	dispatchFn?: DispatchFn;
+	/**
+	 * Pin every run in this phase to one Mac instead of letting `auto` choose.
+	 *
+	 * Exists because the alternative was bypassing bench entirely, and dispatching directly
+	 * skips BOTH things bench does around a submit: writing the manifest entry (so collect can
+	 * find the run) and syncing the fleet (so the run uses current code). Both were lost that
+	 * way on 2026-08-01 — one vision retry became invisible to collect, and another ran the
+	 * pre-sweep explore loop because the fix never reached the Macs.
+	 *
+	 * The real need is mundane: one Mac is sick and `auto` keeps picking it.
+	 */
+	host?: string;
 	compileFn?: CompileFn;
 	log?: (line: string) => void;
 }
@@ -414,7 +426,7 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 	let refused = 0;
 	for (const p of ready) {
 		const recipe = p.arm.kind === "replay" ? recipeFor(manifest, p.arm, opts.model) : undefined;
-		const result = await dispatchFn(dispatchOptionsFor(p.arm, recipe, opts.model));
+		const result = await dispatchFn({ ...dispatchOptionsFor(p.arm, recipe, opts.model), ...(opts.host ? { host: opts.host } : {}) });
 		if (!result.ok) {
 			refused++;
 			log(`✗ ${p.arm.id} [${p.sample + 1}/${p.arm.n}]: ${result.error}`);
@@ -527,7 +539,7 @@ function warnRollover(date: string, outRoot: string, log: (s: string) => void): 
 }
 
 const USAGE = `usage: ./run bench plan
-       ./run bench phase <1|2|3|4|5> [--model <id>] [--date YYYY-MM-DD] [--go] [--force]
+       ./run bench phase <1|2|3|4|5> [--model <id>] [--date YYYY-MM-DD] [--host <mac>] [--go] [--force]
        ./run bench collect [--date YYYY-MM-DD]
        ./run bench judge [--cross] [--date YYYY-MM-DD]
        ./run bench truecost [--since <RFC3339>] [--bucket 1m|1h|1d]
@@ -546,6 +558,9 @@ phase    dispatch that phase's runs to the fleet queue. WITHOUT --go: preview an
          phase runs for hours, so a long pass crosses midnight and a fresh manifest then
          reads every collected arm as unsubmitted — the gate refuses and a re-run
          re-dispatches finished work. Pin it for anything that will not finish inside the day.
+         --host pins every run to one Mac instead of auto. Use it when a Mac is sick and
+         auto keeps choosing it — dispatching around bench instead loses the manifest entry
+         AND the pre-dispatch code sync, which has cost two runs already.
          --force skips the "phase-1 maps collected this pass" gate (phases 2 and 5).
          Phase 5 is the FILMED pass and must run last: --record injects demo conduct,
          swaps in an act tool without set_value, and changes actuation, so a filmed run
@@ -602,10 +617,12 @@ async function main(argv: string[]): Promise<number> {
 			return EXIT_REFUSED;
 		}
 
+		const hi = argv.indexOf("--host");
+		const pinnedHost = hi >= 0 && argv[hi + 1] && !argv[hi + 1].startsWith("--") ? argv[hi + 1] : undefined;
 		const pinned = dateArg(argv);
 		if (!pinned) warnRollover(utcDate(), outDir(), console.log);
 
-		return runPhase(phase as Phase, { go: argv.includes("--go"), force: argv.includes("--force"), ...(model ? { model } : {}), ...(pinned ? { date: pinned } : {}) });
+		return runPhase(phase as Phase, { go: argv.includes("--go"), force: argv.includes("--force"), ...(model ? { model } : {}), ...(pinned ? { date: pinned } : {}), ...(pinnedHost ? { host: pinnedHost } : {}) });
 	}
 	if (cmd === "challenger") {
 		const mi = argv.indexOf("--model");

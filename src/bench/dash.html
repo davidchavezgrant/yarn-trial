@@ -645,7 +645,8 @@ function mapTree(d) {
 // layout, the id hierarchy IS the structure). Two overlays, deliberately on different
 // channels: EDGE THICKNESS is aggregate heat (how often collected runs on this graph
 // traversed to that node — hot paths thick, cold hairline), COLOR is the selected run
-// (blue = this run went there, numbers = its step order, orange ring = it mutated this).
+// (blue = this run went there, numbers = its step order, magenta ring = it mutated this;
+// orange ring = dual-scope, a fact of the map, not the run).
 function treeSvg(d) {
 	const { parentOf, nodeSteps, surfSteps, mutated, gated, scopesByKey, ctrlsBySurf, surfaces } = graphIndex(d);
 	const heat = d.heat || { surfaces: {}, controls: {}, runs: 0 };
@@ -684,16 +685,20 @@ function treeSvg(d) {
 		// Shape carries the kind (filled dot = surface, hollow = control); color matches the
 		// discovery chart's semantics as far as the map's data allows: green = seen (every
 		// mapped control is), blue = actuated BY THIS RUN, red = gated (the pass refused it —
-		// the per-node "declined" signal; per-control actuated/dismissed is not recorded).
+		// the per-node "declined" signal; per-control actuated/dismissed is not recorded),
+		// orange = dual-scope, magenta = mutated by this run. One ring per node, so the
+		// ternary order IS the precedence: mutated > gated > dual-scope > seen — run-specific
+		// facts outrank map-intrinsic ones; the ⚠ glyph and the tooltip keep carrying
+		// dual-scope whenever a higher state claims the ring.
 		const fill = steps.length ? "var(--s1)" : n.kind === "surface" ? "var(--ink-2)" : "none";
-		const stroke = isMut ? "var(--s2)" : isGated ? "#e66767" : n.kind === "control" && !steps.length ? "#199e70" : "none";
+		const stroke = isMut ? "var(--s5)" : isGated ? RED : amb ? "var(--s2)" : n.kind === "control" && !steps.length ? "#199e70" : "none";
 		const tip = [
 			`${n.kind}: ${n.id}`,
 			n.settingKey ? `setting: ${n.settingKey} (${n.scope} scope)` : n.scope ? `${n.scope} scope` : "",
 			`visits: ${visits} across ${heat.runs} collected run(s)`,
 			steps.length ? `this run: step ${steps.join(", ")}` : "",
 			isGated ? "🛑 gated — the explore pass refused to operate this (destructive/external)" : "",
-			amb ? "⚠ dual-scope setting" : "",
+			amb ? "⚠ dual-scope — " + AMB_TIP : "",
 			isMut ? "mutated by this run" : "",
 		].filter(Boolean).join("\n");
 		nodes += `<g data-tip="${esc(tip)}"><circle cx="${X(p)}" cy="${Y(p)}" r="${n.kind === "surface" ? 4.5 : 3}" fill="${fill}"${stroke !== "none" ? ` stroke="${stroke}" stroke-width="${isMut ? 2 : 1.2}"` : ""}/>` +
@@ -715,8 +720,20 @@ function openTree(job) {
 	// payload, so say the distinction without it.
 	const nS = d.graph.nodes.filter((n) => n.kind === "surface").length;
 	const nC = d.graph.nodes.filter((n) => n.kind === "control").length;
-	$("tm-sub").textContent = `${d.armId} · ${job} · ${d.graphSource || ""}   —   ${nS} surfaces · ${nC} controls in the distilled map (the row's "surfaces" column counts every surface the pass SAW — a larger universe) · ● surface (a place) · ○ control · thick edge = traversed often across ${d.heat ? d.heat.runs : 0} collected run(s) · blue = this run's path · orange = mutated · ⚠ dual-scope`;
-	$("tm-body").innerHTML = treeSvg(d);
+	$("tm-sub").textContent = `${d.armId} · ${job} · ${d.graphSource || ""}   —   ${nS} surfaces · ${nC} controls in the distilled map (the row's "surfaces" column counts every surface the pass SAW — a larger universe)`;
+	// The legend used to be crammed into the #tm-sub one-liner; it now leads the body as a
+	// swatch strip (the charts' .legend/.sw classes). The dual-scope item carries the full
+	// wrong-scope-trap explainer as its tooltip.
+	const ring = (c) => `<span class="sw" style="background:none;border:2px solid ${c};border-radius:50%"></span>`;
+	$("tm-body").innerHTML = `<div class="legend" style="padding:10px 16px 0;margin:0">`
+		+ `<span><span class="sw" style="background:var(--ink-2);border-radius:50%"></span>surface (a place)</span>`
+		+ `<span>${ring("#199e70")}seen control</span>`
+		+ `<span><span class="sw" style="background:var(--s1);border-radius:50%"></span>this run's path (numbers = step order)</span>`
+		+ `<span data-tip="${esc(AMB_TIP)}" style="cursor:help;text-decoration:underline dotted">${ring("var(--s2)")}⚠ dual-scope</span>`
+		+ `<span>${ring(RED)}gated (pass refused)</span>`
+		+ `<span>${ring("var(--s5)")}mutated by this run</span>`
+		+ `<span>thick edge = traversed often across ${d.heat ? d.heat.runs : 0} collected run(s)</span>`
+		+ `</div>` + treeSvg(d);
 	$("treeModal").classList.add("on");
 }
 

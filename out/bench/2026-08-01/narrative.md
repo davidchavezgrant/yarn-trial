@@ -58,3 +58,7 @@ In one pass per arm, removing screenshots from AX doubled controls seen per acti
 ## 2026-08-01T01:01:32.582Z — 4 collected (gpt-5.6-sol)
 
 In single passes, CDP saw 5.4× more controls per action than AX but converted only 2.8% versus 11.0%, yielding just 35% more actuations per action. CDP mapped 2.3× more surfaces and 42% more nodes per action, but incurred 17× more scope ambiguities, 64% more calls, 69% more output tokens, and 47% more time per action. On Notion, CDP sustained 0.45 actuations per action versus 0.47 on Yarn while conversion rose 4.9× and scope ambiguities per action fell 89%.
+
+## 2026-08-01T01:02:34.101Z — 5 collected (gpt-5.6-sol)
+
+In single passes, removing vision from AX exposed 2.1× more controls per action but actuated 8% fewer, cutting conversion from 11.0% to 4.9%. No-vision AX produced 6% fewer nodes and 21% fewer surfaces per action while using 17% more calls and 26% more output tokens. Vision-only mapping yielded 82% fewer surfaces and 75% fewer nodes per action than full AX, despite only 25% fewer calls, virtually identical tokens, and 15% less time per action.
