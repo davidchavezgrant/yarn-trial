@@ -839,6 +839,28 @@ function exploreRow(a, p, first) {
 		<td class="exp-sum" colspan="5">${summary}</td>${startedCell(p)}${runsCell(p, key)}${treeCell(p, key)}</tr>` + (openRows[key] ? detailRowHtml(a, p, key) : "");
 }
 
+// Compile arms (phase 3/4 recipe compiles) are local, instant file transforms recorded as
+// already-collected manifest entries — they count in the hero Submitted/Collected numbers,
+// so hiding them made the totals disagree with the visible rows. One slim line each: no
+// model runs, no steps, no tokens, so every metric column is honestly a dash. The Task
+// column shows the SOURCE run's stamp — a compile entry's jobId IS its source stamp
+// (manifest.ts), and the recipe file path never rides the wire. Deliberately inert: no
+// .mrow (no pointer/hover), no data-toggle, and runsCell gets no row key so the chips
+// carry tooltips (incl. a "compile refused: …" note) but select nothing — there is no log
+// pane or map behind a local file transform.
+function compileRow(a, p) {
+	const tip = [a.id, a.informs || "", `flags: ${a.flags || "(none)"}`].filter(Boolean).join("\n");
+	const badge = `<span class="pbadge" data-tip="phase ${a.phase} arm — lineage groups interleave phases">P${a.phase}</span>`;
+	const src = p.entries[0];
+	const srcCell = src
+		? `<td class="task" data-tip="compiled from this source run's log (a compile entry's jobId is its source stamp; the recipe file path is not on the wire)">src ${esc(shortJob(src.jobId))}</td>`
+		: `<td class="task">–</td>`;
+	return `<tr class="crow"><td class="arm" data-tip="${esc(tip)}"><span class="dn">${esc(displayName(a))}</span>${badge}</td>
+		<td class="num">–</td><td class="num">–</td>${srcCell}<td class="num">–</td>
+		<td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num">–</td>
+		${startedCell(p)}${runsCell(p, null)}<td class="treecell"></td></tr>`;
+}
+
 /* ---- row detail: appmap + path ------------------------------------------------------- */
 
 const detailCache = {};
@@ -1259,18 +1281,20 @@ function timelineRows(arms) {
 // the group header, carrying its own discovery metrics in a spanning summary cell), and
 // beneath it sit the task/replay arms that consumed its map (groundedBy on the wire — the
 // same resolution orchestrate applies), in drain-timeline order. Ungrounded (NO_GROUNDING)
-// arms close the board under "No Explore Pass". Phases interleave inside a group, hence the
-// per-row phase badge.
+// arms sit under "No Explore Pass"; compile arms close the board under "Compiles". Phases
+// interleave inside a group, hence the per-row phase badge.
 function renderBoard(progress) {
 	// Snapshot which map surfaces are open BEFORE the re-render wipes them, so a push
 	// doesn't collapse the tree someone is reading.
 	prevOpenSurfs = new Set([...document.querySelectorAll(".surf[open]")].map((el) => el.dataset.sid));
-	const arms = visibleArms().filter((a) => a.kind !== "compile");
+	const arms = visibleArms();
 	const deps = {};
 	const ungrounded = [];
+	const compiles = [];
 	for (const a of arms) {
 		if (a.kind === "explore" || !a.passes.length) continue;
-		if (a.groundedBy) (deps[a.groundedBy] = deps[a.groundedBy] || []).push(a);
+		if (a.kind === "compile") compiles.push(a);
+		else if (a.groundedBy) (deps[a.groundedBy] = deps[a.groundedBy] || []).push(a);
 		else ungrounded.push(a);
 	}
 	// ONE sticky header row for the whole board (thead so it sticks above the body rows);
@@ -1295,6 +1319,17 @@ function renderBoard(progress) {
 	if (ungrounded.length) {
 		html += `<tr class="phase-h"><td colspan="13">No Explore Pass</td></tr>`;
 		html += timelineRows(ungrounded).map(({ a, p }) => taskRow(a, p)).join("");
+	}
+	// Compiles get their own labeled line at the board's end, NOT a lineage group: the wire
+	// gives a compile arm neither groundedBy (dash.ts omits it for explore/compile kinds)
+	// nor its sourceArm, so placing one under its lineage would mean parsing arm-id strings —
+	// a display-artifact parse this file already refuses (see displayName). Charts stay
+	// compile-free via their OWN filters (outcomes: task/replay kinds; grounding/attention:
+	// p2 ids; explore: phase 1) — keep it that way: compile entries carry zero metrics, and
+	// folding their nothing into means would drag every average toward zero.
+	if (compiles.length) {
+		html += `<tr class="phase-h"><td colspan="13">Compiles — local recipe compiles, no model in the loop</td></tr>`;
+		html += timelineRows(compiles).map(({ a, p }) => compileRow(a, p)).join("");
 	}
 	$("board").innerHTML = html + "</tbody></table>";
 	const scope = targetFilter === "All" ? "" : `${targetLabel(targetFilter)} only · `;
