@@ -7,7 +7,8 @@ import { test } from "node:test";
 import { enrollHosts } from "../src/remote/control/enroll.js";
 import { type FleetRow, fleetStatus, pickIdleHost, pickShortestQueue, stranded } from "../src/remote/control/fleet.js";
 import { type HostEntry, type Inventory, HOSTS_SCHEMA, importHosts, loadHosts, parseRtsz, resolveHost } from "../src/remote/control/hosts.js";
-import { applyCredentials, parseCredentials, TEAM_SCHEMA } from "../src/remote/control/team.js";
+import { hasScreenShareLogin } from "../src/remote/control/signin.js";
+import { applyCredentials, parseCredentials, seedVncKeychain, TEAM_SCHEMA } from "../src/remote/control/team.js";
 import { loadRunnerEnv } from "../src/remote/runner/spawn.js";
 import { decodeSpec, encodeSpec, keyFingerprint, runnerArgv, sshArgv, tunnelArgv, writeKnownHosts } from "../src/remote/control/ssh.js";
 import { host, inventory, withTemp } from "./fixtures.js";
@@ -735,6 +736,102 @@ test("parseCredentials__CarriesTheScreenSharingPassword__When__TheBundleHasOne",
 	// Typed rather than coerced: a number here would reach `security` as "1234" and store a
 	// password nobody can reproduce by typing it.
 	assert.throws(() => parseCredentials(JSON.stringify({ ...bundle, vncPassword: 1234 })), /vncPassword must be a string/);
+});
+
+test("applyCredentials__TrustsBothScreenSharingLocations__When__SeedingTheKeychain", () => {
+	// The app moved: /System/Applications/Utilities on modern macOS, /System/Library/
+	// CoreServices historically. An ACL naming only the dead path grants nothing, and the
+	// operator gets the "allow access?" prompt -T exists to remove — so BOTH ride along.
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "yarn-team-"));
+	const prev = process.env.YARN_RUNNER_HOME;
+	process.env.YARN_RUNNER_HOME = dir;
+	const calls: string[][] = [];
+	try {
+		const real = fs.readFileSync(genKey(dir), "utf8");
+		applyCredentials(
+			{ schema: TEAM_SCHEMA, sshPrivateKey: real, vncPassword: "hunter2" },
+			{ hosts: VNC_HOSTS.slice(0, 1), runSecurity: (args) => (calls.push(args), true) },
+		);
+		const trusted = calls[0].flatMap((a, i) => (calls[0][i - 1] === "-T" ? [a] : []));
+		assert.deepEqual(trusted, [
+			"/System/Applications/Utilities/Screen Sharing.app",
+			"/System/Library/CoreServices/Screen Sharing.app",
+		]);
+	} finally {
+		if (prev === undefined) delete process.env.YARN_RUNNER_HOME;
+		else process.env.YARN_RUNNER_HOME = prev;
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+/**
+ * seedVncKeychain reads the bundle where findCredentials looks; the env override pins the
+ * lookup to a temp file so a real team-credentials.json in the checkout can never leak into
+ * (or fail) these tests.
+ */
+function withBundleEnv<T>(bundlePath: string, fn: () => T): T {
+	const prev = process.env.YARN_TEAM_CREDENTIALS;
+	process.env.YARN_TEAM_CREDENTIALS = bundlePath;
+	try {
+		return fn();
+	} finally {
+		if (prev === undefined) delete process.env.YARN_TEAM_CREDENTIALS;
+		else process.env.YARN_TEAM_CREDENTIALS = prev;
+	}
+}
+
+test("seedVncKeychain__SeedsFromTheRetainedBundle__When__ItCarriesAPassword", () => {
+	// The on-demand half of passwordless screen sharing: a caller (the dash's peek fallback)
+	// re-seeds right before opening the viewer, without re-running identity provisioning —
+	// no ssh-keygen, no ~/.yarn-runner writes, just the keychain items.
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "yarn-vnc-"));
+	const file = path.join(dir, "team-credentials.json");
+	fs.writeFileSync(file, JSON.stringify({ schema: TEAM_SCHEMA, sshPrivateKey: "-----BEGIN OPENSSH PRIVATE KEY-----\nx\n", vncPassword: "hunter2" }));
+	const calls: string[][] = [];
+	try {
+		const out = withBundleEnv(file, () => seedVncKeychain(VNC_HOSTS, (args) => (calls.push(args), true)));
+		assert.deepEqual(out, { hadBundle: true, hadPassword: true, seeded: ["mac1", "mac2"] });
+		assert.equal(calls.length, 2);
+		assert.equal(calls[0][calls[0].indexOf("-w") + 1], "hunter2");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("seedVncKeychain__ReportsTheGapWithoutTouchingTheKeychain__When__BundleOrPasswordIsMissing", () => {
+	// The two honest refusals, distinguished so a caller's message can say WHICH thing to fix:
+	// no bundle on this machine at all, versus a bundle exported without YARN_VNC_PASSWORD.
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "yarn-vnc-"));
+	const calls: string[][] = [];
+	try {
+		const missing = withBundleEnv(path.join(dir, "nope.json"), () => seedVncKeychain(VNC_HOSTS, (args) => (calls.push(args), true)));
+		assert.deepEqual(missing, { hadBundle: false, hadPassword: false, seeded: [] });
+
+		const file = path.join(dir, "team-credentials.json");
+		fs.writeFileSync(file, JSON.stringify({ schema: TEAM_SCHEMA, sshPrivateKey: "-----BEGIN OPENSSH PRIVATE KEY-----\nx\n" }));
+		const passwordless = withBundleEnv(file, () => seedVncKeychain(VNC_HOSTS, (args) => (calls.push(args), true)));
+		assert.deepEqual(passwordless, { hadBundle: true, hadPassword: false, seeded: [] });
+		assert.equal(calls.length, 0, "neither refusal may reach `security`");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("hasScreenShareLogin__AsksMetadataOnly__When__ProbingTheKeychain", async () => {
+	// The probe answers "will vnc:// prompt?" for the dash's offer line. Metadata-only is the
+	// load-bearing property: a -w/-g read of the secret trips a keychain ACL prompt, which
+	// would make the probe itself the annoyance it exists to predict.
+	const seen: string[][] = [];
+	const yes = await hasScreenShareLogin(VNC_HOSTS[0] as any, async (args) => (seen.push(args), { code: 0 }));
+	assert.equal(yes, true);
+	const [args] = seen;
+	assert.equal(args[0], "find-internet-password");
+	assert.equal(args[args.indexOf("-s") + 1], "10.0.0.1");
+	assert.equal(args[args.indexOf("-r") + 1], "vnc ");
+	assert.equal(args[args.indexOf("-a") + 1], "administrator");
+	assert.ok(!args.includes("-w") && !args.includes("-g"), "the probe must never read the secret");
+
+	assert.equal(await hasScreenShareLogin(VNC_HOSTS[0] as any, async () => ({ code: 44 })), false);
 });
 
 /** A real ed25519 key, because applyCredentials shells out to ssh-keygen to derive the public half. */

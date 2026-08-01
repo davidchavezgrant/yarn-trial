@@ -170,7 +170,10 @@ function applyVncPassword(password: string | undefined, hosts: HostEntry[] | und
 			"-w", password,
 			"-U",
 			// Screen Sharing reads the item without prompting for keychain access. Omit this and
-			// the operator trades a password prompt for an "allow access?" prompt.
+			// the operator trades a password prompt for an "allow access?" prompt. BOTH paths:
+			// the app moved to /System/Applications/Utilities on modern macOS (verified absent
+			// from CoreServices on 26.2), and an ACL naming only the dead path grants nothing.
+			"-T", "/System/Applications/Utilities/Screen Sharing.app",
 			"-T", "/System/Library/CoreServices/Screen Sharing.app",
 		]);
 		if (ok) seeded.push(host.name);
@@ -196,6 +199,34 @@ function inventoryHosts(): HostEntry[] {
 	} catch {
 		return [];
 	}
+}
+
+export interface VncSeedOutcome {
+	/** A team bundle exists on this machine (env override, resources root, or ~/.yarn-runner). */
+	hadBundle: boolean;
+	/** That bundle carries a vncPassword — absent means every vnc:// connection may prompt. */
+	hadPassword: boolean;
+	/** Hosts whose screen-sharing password is now (re)written in the login keychain. */
+	seeded: string[];
+}
+
+/**
+ * (Re)seed the screen-sharing keychain items from the retained team bundle — and ONLY those:
+ * no identity install, no model key. Exists for callers that want passwordless vnc:// on
+ * demand (the dash's peek fallback) without re-running full provisioning; `-U` makes it
+ * idempotent, so calling it right before opening Screen Sharing costs one `security` exec per
+ * host and repairs a stale or missing item in the same motion.
+ *
+ * Throws on a malformed bundle (same contract as parseCredentials) — a bundle that exists but
+ * cannot be read is worth surfacing, not eating.
+ */
+export function seedVncKeychain(hosts?: HostEntry[], exec: (args: string[]) => boolean = runSecurity): VncSeedOutcome {
+	const file = findCredentials();
+	if (!file) return { hadBundle: false, hadPassword: false, seeded: [] };
+	const creds = parseCredentials(fs.readFileSync(file, "utf8"));
+	if (!creds.vncPassword) return { hadBundle: true, hadPassword: false, seeded: [] };
+
+	return { hadBundle: true, hadPassword: true, seeded: applyVncPassword(creds.vncPassword, hosts, exec) };
 }
 
 /**
