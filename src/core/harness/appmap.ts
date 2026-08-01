@@ -315,7 +315,7 @@ export async function resetToHome(
  */
 export function findScopeAmbiguities(map: AppMap): ScopeAmbiguity[] {
 	const byKey = new Map<string, Array<{ id: string; scope: SurfaceScope }>>();
-	for (const n of map.nodes) {
+	for (const n of unifySettingKeys(map).nodes) {
 		if (!n.settingKey) continue;
 		const list = byKey.get(n.settingKey) ?? [];
 		list.push({ id: n.id, scope: n.scope });
@@ -328,6 +328,56 @@ export function findScopeAmbiguities(map: AppMap): ScopeAmbiguity[] {
 	}
 
 	return out.sort((a, b) => a.settingKey.localeCompare(b.settingKey));
+}
+
+/** Titles compare on letters and digits only: "Cursor Style", "cursor style" and "Cursor  Style" are one setting. */
+const normTitle = (t: string): string => t.toLowerCase().replace(/[^a-z0-9]+/g, "");
+
+/**
+ * Repair settings that the explore model gave DIFFERENT keys at different scopes.
+ *
+ * `settingKey` is free text the model invents, and nothing validated it. The pairing is the
+ * entire mechanism by which the next agent learns a setting has two stores — so a split key
+ * does not degrade the warning, it DELETES it, silently and indistinguishably from a setting
+ * that genuinely lives in one place.
+ *
+ * Measured on 2026-08-01, same app, same two controls:
+ *   yarn.cdp  brand `cursor-style`              document `cursor-style`              -> paired
+ *   yarn.ax   brand `screen-clip-cursor-style`  document `cursor-style`              -> SPLIT
+ * The canonical task is "show me how to change the cursor type", so the ax-grounded arm would
+ * have received no warning at all and the report would have read "CDP grounding prevents the
+ * wrong-scope failure, AX grounding does not" — a backend conclusion caused by one prefix in
+ * one transcript. Re-running does not fix that; it re-rolls the dice.
+ *
+ * The repair is deliberately narrow. Two nodes merge only when BOTH already carry a
+ * settingKey (the model already judged each a setting), their titles match once punctuation
+ * and case are stripped, and their scopes DIFFER. That last condition is what keeps it safe:
+ * two same-scope controls sharing a title are two editors of one store, which is not an
+ * ambiguity and must not become one. A false merge here can only ever produce a warning that
+ * a setting exists at two scopes — which, given the scopes differ, is true.
+ */
+export function unifySettingKeys(map: AppMap): AppMap {
+	const byTitle = new Map<string, AppMapNode[]>();
+	for (const n of map.nodes) {
+		if (!n.settingKey || !n.title) continue;
+		const k = normTitle(n.title);
+		byTitle.set(k, [...(byTitle.get(k) ?? []), n]);
+	}
+
+	const rewrite = new Map<string, string>();
+	for (const [, nodes] of byTitle) {
+		const keys = new Set(nodes.map((n) => n.settingKey as string));
+		const scopes = new Set(nodes.map((n) => n.scope));
+		if (keys.size < 2 || scopes.size < 2) continue;
+		// Shortest key wins: the split is invariably one side carrying a surface prefix
+		// ("screen-clip-cursor-style" vs "cursor-style"), and the unprefixed one is the
+		// setting's own name. Ties break alphabetically so the choice is deterministic.
+		const canonical = [...keys].sort((a, b) => a.length - b.length || a.localeCompare(b))[0];
+		for (const k of keys) if (k !== canonical) rewrite.set(k, canonical);
+	}
+	if (!rewrite.size) return map;
+
+	return { ...map, nodes: map.nodes.map((n) => (n.settingKey && rewrite.has(n.settingKey) ? { ...n, settingKey: rewrite.get(n.settingKey) as string } : n)) };
 }
 
 /**

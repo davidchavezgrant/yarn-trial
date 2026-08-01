@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";
 import { Driver } from "../src/core/driver.js";
-import { checkHome, findScopeAmbiguities, resetToHome, rootControlLabels, rootSurface, scopeWarnings } from "../src/core/harness.js";
+import { unifySettingKeys, checkHome, findScopeAmbiguities, resetToHome, rootControlLabels, rootSurface, scopeWarnings } from "../src/core/harness.js";
 import type { ActionRequest, AppMap, AppMapEdge, AppMapNode } from "../src/types.js";
 
 // --- appmap graph: the structured companion to the prose map. It earns its place by
@@ -423,4 +423,63 @@ test("homeVisible__CannotAnswer__When__NoAppmap", () => {
 	const r = homeVisible("Nowhere", wallObs, undefined);
 	assert.equal(r.ready, undefined);
 	assert.match(r.detail, /no appmap/);
+});
+
+test("unifySettingKeys__PairsASettingTheModelKeyedTwoWays__When__ScopesDiffer", () => {
+	// settingKey is free text the model invents and nothing validated it. Measured on
+	// 2026-08-01, same app and the same two controls: the cdp pass keyed both `cursor-style`
+	// and paired them; the ax pass keyed the brand one `screen-clip-cursor-style` and the
+	// document one `cursor-style`, so the pair vanished. A split key does not weaken the
+	// warning, it DELETES it — indistinguishable from a setting that lives in one place.
+	const map: any = {
+		nodes: [
+			{ id: "brand-kit/screen-clips/cursor-style", title: "Cursor Style", kind: "control", scope: "brand", settingKey: "screen-clip-cursor-style" },
+			{ id: "editor/screen-clips/cursor-style", title: "Cursor Style", kind: "control", scope: "document", settingKey: "cursor-style" },
+		],
+		edges: [],
+	};
+	assert.deepEqual(findScopeAmbiguities(map).map((a) => a.settingKey), ["cursor-style"]);
+	// The unprefixed key wins: the split is always one side carrying a surface prefix, and the
+	// setting's own name is the shorter one.
+	assert.equal(unifySettingKeys(map).nodes.every((n: any) => n.settingKey === "cursor-style"), true);
+});
+
+test("unifySettingKeys__LeavesSameScopeControlsAlone__When__TheyShareATitle", () => {
+	// Two editors of ONE store is not an ambiguity, and inventing one would send the agent
+	// hunting for a second scope that does not exist. This is the condition that keeps the
+	// repair safe: a merge requires the scopes to DIFFER.
+	const map: any = {
+		nodes: [
+			{ id: "brand-kit/type/font", title: "Font", kind: "control", scope: "brand", settingKey: "brand-font" },
+			{ id: "brand-kit/overview/font", title: "Font", kind: "control", scope: "brand", settingKey: "font" },
+		],
+		edges: [],
+	};
+	assert.deepEqual(findScopeAmbiguities(map), []);
+	assert.deepEqual(unifySettingKeys(map).nodes.map((n: any) => n.settingKey), ["brand-font", "font"]);
+});
+
+test("unifySettingKeys__IgnoresNodesTheModelDidNotCallSettings__When__TitlesCollide", () => {
+	// A merge requires BOTH nodes to already carry a settingKey — the model judged each one a
+	// setting. Two "Delete" buttons at different scopes share a title and are not a setting.
+	const map: any = {
+		nodes: [
+			{ id: "brand-kit/delete", title: "Delete", kind: "control", scope: "brand" },
+			{ id: "editor/delete", title: "Delete", kind: "control", scope: "document" },
+		],
+		edges: [],
+	};
+	assert.deepEqual(findScopeAmbiguities(map), []);
+});
+
+test("findScopeAmbiguities__StillPairsOnAnExactKeyMatch__When__NoRepairIsNeeded", () => {
+	// The original mechanism is untouched; the repair only adds pairs it would have missed.
+	const map: any = {
+		nodes: [
+			{ id: "a/x", title: "X", kind: "control", scope: "brand", settingKey: "x" },
+			{ id: "b/x", title: "Different Label", kind: "control", scope: "document", settingKey: "x" },
+		],
+		edges: [],
+	};
+	assert.deepEqual(findScopeAmbiguities(map).map((a) => a.settingKey), ["x"]);
 });
