@@ -1108,6 +1108,35 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 	}
 
 	/**
+	 * Bring up the web-Chrome debug endpoint for a dash peek — the browser leg only.
+	 *
+	 * Exists because a peek is deliberately runner-less (the dash tunnels straight to the debug
+	 * ports), so it inherits whatever endpoint state the last run or liveview left behind. The
+	 * one state nothing else repairs is a flagless Chrome: an OAuth handoff or a human's Dock
+	 * click launches one, LaunchServices keeps delivering to it, and no later flagged launch can
+	 * open the port — the singleton swallows the argv and exits. mac1 sat in exactly that state
+	 * (flagless since a 17:45 launch, 22 days unrebooted) while its peek waited forever,
+	 * 2026-08-01. Only liveview called ensureBrowser until now, so a fleet Mac that never hosted
+	 * a sign-in had no repair path.
+	 *
+	 * The app leg (:9222) is deliberately not touched: it self-heals on the next job (the
+	 * profile swap quits the app, electron-attach relaunches it flagged), and this verb cannot
+	 * know which app a view-only stream will want — launching one on spec would be wrong.
+	 *
+	 * Busy is not an error: a running job owns this machine's endpoints, and pruning could kill
+	 * the run's own browser. Report, touch nothing; the run's endpoints are the peek's feed.
+	 */
+	async function peekPrep(): Promise<RunnerResponse> {
+		const { holder } = inspect(runnerDir);
+		if (holder) return { ok: true, touched: false, busy: true, app: holder.lease.app, operator: holder.lease.operator };
+
+		const browser = await ensureBrowserFor({ port: CDP_BROWSER_PORT, profileDir: browserProfileDir(), prune: true });
+		log(`peek-prep: Chrome listening for CDP on ${browser.endpoint}${browser.relaunched ? " (relaunched — it was running without the flag)" : ""}`);
+
+		return { ok: true, touched: true, endpoint: browser.endpoint, port: browser.port, relaunched: browser.relaunched };
+	}
+
+	/**
 	 * Sign an app out for one operator on this Mac: quit it and delete THEIR data — the live
 	 * copy only if owners.json says they own it, plus their parked profile. Another operator's
 	 * live session is never touched; `clearOperatorData` documents the split.
@@ -1548,6 +1577,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			signin: () => signin(params),
 			liveview: () => liveview(params),
 			"liveview-stop": () => liveviewStop(),
+				"peek-prep": () => peekPrep(),
 			ready: () => ready(params),
 			// Lowercase on the wire: `runnerArgv` only carries bare [a-z0-9-] subcommands, so the
 			// method name IS the subcommand and cannot carry a capital.

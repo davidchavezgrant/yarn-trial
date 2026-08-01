@@ -1252,6 +1252,73 @@ test("liveviewStop__ReportsTheOutcome__When__CalledInEveryPortState", async () =
 	});
 });
 
+/**
+ * The dash's peek is runner-less (it tunnels straight to the debug ports), so this verb is
+ * its one repair path for the state nothing else fixes: a flagless Chrome owning the
+ * singleton, which no later flagged launch can ever open a port on. prune: true is the
+ * assertion that matters — without it the stray instance survives and keeps swallowing
+ * LaunchServices handoffs (the mac1 wedge, 2026-08-01).
+ */
+test("peekPrep__RelaunchesChromeFlagged__When__TheHostIsIdle", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const calls: Array<{ port: number; profileDir: string; prune?: boolean }> = [];
+		const runner = await startRunner(dir, {
+			...noSwap,
+			log: () => {},
+			ensureBrowser: async (opts) => {
+				calls.push(opts);
+
+				return { endpoint: `http://127.0.0.1:${opts.port}`, port: opts.port, relaunched: true };
+			},
+		});
+		try {
+			const [res] = await request(runner.socketPath, "peek-prep");
+			assert.equal(res.ok, true);
+			assert.equal(res.touched, true);
+			assert.equal(res.relaunched, true);
+			assert.equal(res.endpoint, "http://127.0.0.1:9777");
+			assert.equal(calls.length, 1);
+			assert.equal(calls[0].port, 9777, "must match the cdp backend's web-Chrome default — the port the peek tunnels to");
+			assert.equal(calls[0].prune, true, "a fleet Mac's stray Chromes are the wedge being repaired — they must go");
+		} finally {
+			await runner.close();
+		}
+	});
+});
+
+/** A running job owns this machine's endpoints; pruning could kill the run's own browser. */
+test("peekPrep__TouchesNothing__When__ARunHoldsTheLease", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		let ensured = 0;
+		const spawner = fakeSpawner();
+		const runner = await startRunner(dir, {
+			...noSwap,
+			...noOpen,
+			log: () => {},
+			spawn: spawner.spawn,
+			ensureBrowser: async ({ port }: { port: number }) => {
+				ensured++;
+
+				return { endpoint: `http://127.0.0.1:${port}`, port, relaunched: false };
+			},
+		});
+		let pid = 0;
+		try {
+			const [run] = await request(runner.socketPath, "submit", { kind: "task", app: "Yarn", task: "show me how to change the cursor type", operator: "sam" });
+			pid = run.pid;
+			const [res] = await request(runner.socketPath, "peek-prep");
+			assert.equal(res.ok, true, "busy is an answer, not an error — the run's endpoints are the peek's feed");
+			assert.equal(res.touched, false);
+			assert.equal(res.busy, true);
+			assert.equal(res.operator, "sam");
+			assert.equal(ensured, 0, "prep must not prune or relaunch anything out from under a live run");
+		} finally {
+			if (pid) try { process.kill(pid, "SIGKILL"); } catch {}
+			await runner.close();
+		}
+	});
+});
+
 /** A run in flight means a recording is capturing; a login stream would capture over it. Refuse. */
 test("liveview__Refuses__When__ARunHoldsTheLease", async () => {
 	await withTempAsync("yr-serve-", async (dir) => {

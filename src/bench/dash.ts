@@ -9,7 +9,7 @@ import { readJournal } from "../core/journal.js";
 import type { FleetRow } from "../remote/control/fleet.js";
 import type { EngineHandle } from "../remote/liveview.js";
 import { readJob as readLocalJob, readLog } from "../remote/runner/jobs.js";
-import { ARCHIVE_DIR, LIVE_DIR, OLD_ARCHIVE_DIR, OLD_LIVE_DIR, RUN_FILES, appSlug, dataRoot, outDir, runFile } from "../paths.js";
+import { ARCHIVE_DIR, LIVE_DIR, OLD_ARCHIVE_DIR, OLD_LIVE_DIR, RUN_FILES, appSlug, dataRoot, outDir, runFile, runPath } from "../paths.js";
 import { appmapSlug } from "../core/target.js";
 import { archiveDirFor } from "./collect.js";
 import { estimateCost } from "./cost.js";
@@ -226,8 +226,8 @@ export interface DashState {
 		visual: { pass: number; fail: number; unproven: number };
 		disagreements: Array<{ armId: string; jobId: string; success?: boolean; judgeTrajectory?: string; judgeScope?: string }>;
 	};
-	/** The narrator's latest plain-English read of the data. Model-written; verify before quoting. */
-	narrative?: { updatedAt: string; text: string; model: string };
+	/** The narrator's newest per-run note (see narrate()). Model-written; verify before quoting. */
+	narrative?: Narrative;
 	events: DashEvent[];
 }
 
@@ -442,6 +442,10 @@ export interface Narrative {
 	updatedAt: string;
 	text: string;
 	model: string;
+	/** The run whose landing triggered this note. Absent on events minted before per-run notes. */
+	runKey?: string;
+	/** How many runs were collected when the note was minted — what "the field to date" meant. */
+	collected?: number;
 }
 
 /**
@@ -1484,6 +1488,10 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	const HEARTBEAT_MS = 5000; // {ev:"ping"} cadence to viewers — the client's staleness watchdog feeds on it
 	const IDLE_TEARDOWN_MS = 30_000; // last-viewer linger, long enough for a reload to rejoin the live session
 	const TUNNEL_RESPAWN_MS = [1000, 2000, 5000]; // backoff for dead tunnel children (cap at last)
+	// peek-prep budget: ensureBrowserEndpoint may quit a flagless Chrome and wait out its
+	// relaunch poll (LAUNCH_TIMEOUT_MS = 20s in electron-attach), so the fleet's 4s default
+	// would kill every repair mid-flight and report nothing.
+	const PEEK_PREP_TIMEOUT_MS = 30_000;
 
 	type PeekState = "probing" | "waiting" | "streaming";
 	interface Peek {
@@ -1815,6 +1823,28 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		p.heartbeatTimer = setInterval(() => castJson(p, { ev: "ping" }), HEARTBEAT_MS);
 		setStatus(p, "probing", `connecting — opening ssh tunnels to ${hostName}…`);
 		void attachLoop(p); // detached — the upgrade handler must NOT wait for attach
+		// Detached repair of the browser leg: a peek is runner-less by design, so it inherits
+		// whatever endpoint state the last run or liveview left on the Mac. The one state the
+		// re-probe loop can never wait out is a flagless Chrome — no later flagged launch can
+		// open the port (the singleton swallows the argv and exits), so an idle host's peek
+		// stays "waiting" until a human intervenes (mac1, 2026-08-01: flagless for days). The
+		// runner's peek-prep verb prunes and relaunches it flagged when the host is idle, and
+		// touches nothing when a job holds the lease — the run owns the endpoints then. Once
+		// per session, not per re-probe: the 3s reprobe attaches as soon as the port appears.
+		// Failure is the status quo the session already handles (keep waiting), so it logs at
+		// most one feed line; an un-provisioned runnerctl rejects the verb on stderr with
+		// nothing on stdout, which reads as "no frame" and stays quiet by construction.
+		void (async () => {
+			try {
+				const { runSsh, runnerArgv, lastFrame } = await import("../remote/control/ssh.js");
+				const frame = lastFrame((await runSsh(host, runnerArgv("peek-prep"), { timeoutMs: PEEK_PREP_TIMEOUT_MS })).stdout);
+				if (peeks.get(hostName) !== p || p.closing) return;
+				if (frame?.relaunched) addEvent(`view: ${hostName}'s Chrome was running without the debug flag — relaunched flagged`);
+				else if (frame?.ok === false) addEvent(`view: endpoint prep on ${hostName} refused — ${String(frame.error).slice(0, 120)}`);
+			} catch {
+				// ssh itself failed; the fleet poll already reports unreachable hosts.
+			}
+		})();
 
 		return { ok: true, session: p };
 	};
