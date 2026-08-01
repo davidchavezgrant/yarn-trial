@@ -133,8 +133,15 @@
 	}
 	#treeModal .tm-body { flex: 1; overflow: auto; background: var(--plane); }
 	.peekpanel { margin-top: 8px; background: #000; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+	/* The singleton holder is a grid child of <main>, so the grid gap already spaces it
+	   beneath the fleet cards — zero the panel's own in-card margin there. */
+	#peek-holder .peekpanel { margin-top: 0; }
 	.peekbar { display: flex; align-items: center; gap: 8px; padding: 3px 8px; background: var(--surface); font-size: 11px; }
+	.peekbar .name { color: var(--ink); font-weight: 600; }
+	/* Only the FIRST button takes the auto margin — two autos would split the free space
+	   and strand the buttons mid-bar; the flex gap keeps them 8px apart. */
 	.peekbar .btnv { margin-left: auto; }
+	.peekbar .btnv ~ .btnv { margin-left: 0; }
 	.peekpanel img { display: block; width: 100%; }
 	.peekpanel:fullscreen { display: flex; flex-direction: column; background: #000; }
 	.peekpanel:fullscreen img { flex: 1; min-height: 0; width: 100%; height: 100%; object-fit: contain; }
@@ -174,6 +181,20 @@
 </header>
 <main>
 	<section id="fleet"></section>
+	<!-- Singleton peek panel, OUTSIDE every re-rendered region: fullscreen survives SSE
+	     pushes, the decoded frame stays painted, and the ✕ exists even when the peeked host
+	     drops out of the fleet poll. Created once, never re-rendered. -->
+	<div id="peek-holder" hidden>
+		<div class="peekpanel" id="peek-panel">
+			<div class="peekbar">
+				<span class="name" id="peek-host"></span>
+				<span class="meta" id="peek-status">connecting…</span>
+				<button class="btnv" data-peekfull data-tip="fullscreen">⛶</button>
+				<button class="btnv" data-peekstop data-tip="stop peeking">✕</button>
+			</div>
+			<img id="peek-img" alt="live view">
+		</div>
+	</div>
 
 	<section class="card">
 		<h2>Matrix</h2>
@@ -407,19 +428,14 @@ function renderFleet() {
 		const queue = r.queue && r.queue.length
 			? `<div class="q">queue: ${r.queue.map((q) => esc(armOf(q.jobId) || q.app || q.jobId)).join(" → ")}</div>` : "";
 		const tcc = r.tccOk === false ? `<div class="warn">no TCC grants</div>` : "";
-		const peekBtn = r.reachable
+		// A peeked host that flips unreachable must keep its stop button.
+		const peekBtn = (r.reachable || peekState.host === r.name)
 			? `<button class="btnv" data-peek="${esc(r.name)}" data-tip="view-only live stream of this Mac's Chromium target (CDP screencast over the ssh tunnel) — one host at a time">${peekState.host === r.name ? "⏹ stop" : "▶ peek"}</button>`
-			: "";
-		const panel = peekState.host === r.name
-			? `<div class="peekpanel" id="peek-panel"><div class="peekbar"><span class="meta" id="peek-status">connecting…</span><button class="btnv" data-peekfull>⛶</button></div><img id="peek-img" alt="live view of ${esc(r.name)}"></div>`
 			: "";
 		return `<div class="host"><div class="row"><span class="dot" style="background:${color}"></span><span class="name">${esc(r.name)}</span>
 			<span class="meta">${esc(r.reachable ? r.state : "unreachable")}${r.operator ? " · " + esc(r.operator) : ""}</span>${peekBtn}</div>
-			${busy}${queue}${tcc}${r.reason ? `<div class="q">${esc(r.reason)}</div>` : ""}${panel}</div>`;
+			${busy}${queue}${tcc}${r.reason ? `<div class="q">${esc(r.reason)}</div>` : ""}</div>`;
 	}).join("");
-	// A re-render replaced the <img>; repaint the last frame so the stream doesn't blink.
-	if (peekState.lastUrl) { const img = $("peek-img"); if (img && !img.src) img.src = peekState.lastUrl; }
-	if (peekState.lastStatus) { const st = $("peek-status"); if (st) st.textContent = peekState.lastStatus; }
 }
 
 function armOf(jobId) {
@@ -969,58 +985,133 @@ $("board").addEventListener("click", (ev) => {
 });
 
 /* ---- fleet peek: view-only live stream of a colo Mac ---------------------------------- */
+// View-only invariant: this client NEVER sends application data over the WS — it only
+// opens and closes the socket; the server drops inbound text frames on the floor anyway.
 
-const peekState = { host: null, ws: null, lastUrl: null, lastStatus: null };
+const peekState = {
+	host: null,        // host being peeked (armed), or null
+	ws: null,
+	gen: 0,            // generation counter: bumped by togglePeek/stopPeek; every ws callback
+	                   //  and every timer captures its gen and no-ops if stale (replaces the
+	                   //  ws-identity check AND invalidates pending retry timers in one move)
+	retry: 0,          // consecutive failed connects; reset to 0 on ANY received message
+	retryTimer: null,
+	lastUrl: null,     // current blob: URL (revoked when replaced)
+	lastMsgAt: 0,      // Date.now() of last WS message of any kind (staleness watchdog input)
+	watchdog: null,    // interval id
+};
+
+function showPanel() { $("peek-holder").hidden = false; $("peek-host").textContent = peekState.host || ""; }
+function hidePanel() { $("peek-holder").hidden = true; }
+function setPeekStatus(text) { $("peek-status").textContent = text; }
+
+// Connection factory — togglePeek, boot resume and the retry timer all reuse it.
+function connectPeek() {
+	if (!peekState.host) return;
+	const myGen = peekState.gen;
+	const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/peek?host=${encodeURIComponent(peekState.host)}`);
+	ws.binaryType = "blob";
+	peekState.ws = ws;
+	peekState.lastMsgAt = Date.now();
+	setPeekStatus(peekState.retry ? `reconnecting (attempt ${peekState.retry + 1})…` : "connecting…");
+	ws.onmessage = (ev) => {
+		if (peekState.gen !== myGen) return;
+		peekState.lastMsgAt = Date.now();
+		peekState.retry = 0;                                  // healthy traffic resets backoff
+		if (typeof ev.data === "string") { handlePeekText(ev.data); return; }
+		// Binary frame = a JPEG: paint the new frame first, then revoke the replaced URL.
+		const url = URL.createObjectURL(ev.data);
+		$("peek-img").src = url;
+		if (peekState.lastUrl) URL.revokeObjectURL(peekState.lastUrl);
+		peekState.lastUrl = url;
+	};
+	ws.onclose = (ev) => { if (peekState.gen !== myGen) return; handlePeekClose(ev); };
+	ws.onerror = () => {};                                   // onclose always follows; classify there
+}
+
+// Honest status rendering: the server's typed diagnoses are the whole point — never
+// collapse kind/detail into a generic "stream error".
+function handlePeekText(raw) {
+	let d;
+	try { d = JSON.parse(raw); } catch { return; }
+	if (d.ev === "ping") return;                             // traffic only — already counted by lastMsgAt
+	if (d.ev === "status") {
+		// "waiting" is NOT an error — the server keeps tunnels up and attaches automatically
+		// when a target appears; render it calm, never with ✗.
+		setPeekStatus((d.state === "waiting" ? "⏳ " : "") + (d.message || d.state));
+	} else if (d.ev === "window") {
+		setPeekStatus(`${d.app || ""}${d.title ? " · " + d.title : ""}`.trim() || "live");
+	} else if (d.ev === "error") {
+		const text = d.message || [d.kind, d.detail].filter(Boolean).join(": ") || "stream error";
+		if (d.kind === "stream-ended" || d.kind === "stream-stopped" || d.kind === "tunnel-died")
+			setPeekStatus("⏳ " + text);                      // self-recovering: server returns to waiting / respawns
+		else setPeekStatus("✗ " + text);                     // cdp-unreachable, no-page, capture-failed, superseded, dash-authored
+	}
+}
+
+// Classify by close code. FATAL = {4400 unknown host, 4409 superseded} — auto-retrying a
+// 4409 would ping-pong two viewers. Everything else (1001 server restart, 1006 bare TCP
+// drop, …) retries with backoff, INDEFINITELY: attach-when-available makes an open socket
+// against an idle host a cheap quiet poll, and the user's ✕ is the exit.
+function handlePeekClose(ev) {
+	const myGen = peekState.gen;                             // captured at scheduling time; stale gen = user stopped/switched
+	if (ev.code === 4400 || ev.code === 4409) {
+		setPeekStatus("✗ " + (ev.reason || (ev.code === 4409 ? "preempted by another peek" : "rejected")));
+		sessionStorage.removeItem("peekHost");
+		peekState.host = null;
+		peekState.ws = null;
+		render();                                            // panel stays visible showing the reason until the user clicks ✕
+		return;
+	}
+	if (!peekState.host) return;
+	peekState.retry++;
+	const delay = Math.min(15000, 1000 * 2 ** (peekState.retry - 1)); // 1s,2s,4s,8s,15s cap, indefinite
+	setPeekStatus(`⏳ ${ev.reason || "connection lost"} — reconnecting in ${Math.round(delay / 1000)}s (attempt ${peekState.retry})…`);
+	peekState.retryTimer = setTimeout(() => { if (peekState.gen === myGen && peekState.host) connectPeek(); }, delay);
+}
 
 function stopPeek() {
+	peekState.gen++;                                          // invalidates ALL callbacks and pending retry timers
+	clearTimeout(peekState.retryTimer); peekState.retryTimer = null;
 	if (peekState.ws) { try { peekState.ws.close(); } catch {} }
-	if (peekState.lastUrl) URL.revokeObjectURL(peekState.lastUrl);
-	peekState.host = null; peekState.ws = null; peekState.lastUrl = null; peekState.lastStatus = null;
+	if (peekState.lastUrl) { URL.revokeObjectURL(peekState.lastUrl); peekState.lastUrl = null; }
+	peekState.ws = null; peekState.host = null; peekState.retry = 0;
+	sessionStorage.removeItem("peekHost");
+	hidePanel();
 }
 
 function togglePeek(host) {
 	if (peekState.host === host) { stopPeek(); render(); return; }
-	stopPeek();
+	stopPeek();                                               // also bumps gen — kills the old connection cleanly
 	peekState.host = host;
-	peekState.lastStatus = "connecting…";
-	const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/peek?host=${encodeURIComponent(host)}`);
-	ws.binaryType = "blob";
-	peekState.ws = ws;
-	ws.onmessage = (ev) => {
-		if (peekState.ws !== ws) return;
-		if (typeof ev.data === "string") {
-			let d = {};
-			try { d = JSON.parse(ev.data); } catch {}
-			if (d.ev === "error") peekState.lastStatus = "✗ " + (d.message || d.err || "stream error");
-			else if (d.ev === "window") peekState.lastStatus = `${d.app || ""}${d.title ? " · " + d.title : ""}`.trim() || "live";
-			const st = $("peek-status");
-			if (st) st.textContent = peekState.lastStatus;
-			return;
-		}
-		// Binary frame = a JPEG. The board re-renders around us, so look the <img> up fresh.
-		const url = URL.createObjectURL(ev.data);
-		const img = $("peek-img");
-		if (img) img.src = url;
-		if (peekState.lastUrl) URL.revokeObjectURL(peekState.lastUrl);
-		peekState.lastUrl = url;
-		if (!peekState.lastStatus || peekState.lastStatus === "connecting…") {
-			peekState.lastStatus = "live";
-			const st = $("peek-status");
-			if (st) st.textContent = "live";
-		}
-	};
-	ws.onclose = () => {
-		if (peekState.ws !== ws) return;
-		peekState.lastStatus = (peekState.lastStatus || "") + " · stream closed";
-		const st = $("peek-status");
-		if (st) st.textContent = peekState.lastStatus;
-	};
-	render();
+	// sessionStorage, NOT localStorage: per-tab, dies with the tab, so tomorrow's session
+	// doesn't resurrect a stale peek.
+	sessionStorage.setItem("peekHost", host);
+	showPanel();
+	setPeekStatus("connecting…");
+	connectPeek();
+	render();                                                 // update button labels
 }
+
+// Staleness watchdog: the server heartbeats every 5s; 12s silent = 2 missed beats. Force-
+// closing enters the retry path — this converts a frozen frame labeled "live" (wedged ssh
+// link) into a visible, self-healing reconnect. Always running, cheap.
+peekState.watchdog = setInterval(() => {
+	if (!peekState.host || !peekState.ws || peekState.ws.readyState !== WebSocket.OPEN) return;
+	if (Date.now() - peekState.lastMsgAt > 12000) {
+		setPeekStatus("⏳ stalled — no data for 12s, reconnecting…");
+		try { peekState.ws.close(); } catch {}                // triggers handlePeekClose → backoff loop
+	}
+}, 2000);
 
 $("fleet").addEventListener("click", (ev) => {
 	const pk = ev.target.closest("[data-peek]");
-	if (pk) { togglePeek(pk.dataset.peek); return; }
+	if (pk) togglePeek(pk.dataset.peek);
+});
+
+// The panel owns its own buttons — it lives outside the re-rendered fleet region.
+$("peek-holder").addEventListener("click", (ev) => {
+	if (ev.target.closest("[data-peekstop]")) { stopPeek(); render(); return; }
 	if (ev.target.closest("[data-peekfull]")) $("peek-panel")?.requestFullscreen?.();
 });
 
@@ -1044,6 +1135,12 @@ es.onmessage = (ev) => {
 };
 es.onopen = () => { if (esErrored) location.reload(); };
 es.onerror = () => { esErrored = true; $("conn").classList.remove("ok"); };
+
+// Boot-time resume: an armed peek survives page reloads AND tsx-watch restarts. A reload
+// within the server's 30s idle linger rejoins the live session with zero tunnel/engine
+// setup — both reload boundaries become non-events.
+const resumeHost = sessionStorage.getItem("peekHost");
+if (resumeHost) { peekState.host = resumeHost; showPanel(); setPeekStatus("resuming…"); connectPeek(); }
 
 // Elapsed tickers between pushes: every js-elapsed span (fleet cards AND matrix run chips)
 // advances from the last push's base — the page reads as live even between SSE frames.

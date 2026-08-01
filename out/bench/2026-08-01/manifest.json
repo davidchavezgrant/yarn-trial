@@ -115,8 +115,27 @@
 			"jobId": "explore-2026-08-01T01-04-43-906-yarn",
 			"host": "mac2",
 			"submittedAt": "2026-08-01T01:04:43.983Z",
-			"state": "running",
-			"collected": false
+			"state": "done",
+			"collected": true,
+			"metrics": {
+				"startedAt": "2026-08-01T01:04:43.907Z",
+				"endedAt": "2026-08-01T01:48:09.416Z",
+				"runSec": 2606,
+				"exploreActions": 71,
+				"exploreElapsed": "13m",
+				"inputTokens": 280082,
+				"outputTokens": 18625,
+				"cacheReadTokens": 883712,
+				"cacheCreationTokens": 0,
+				"modelCalls": 92,
+				"controlsActuated": 48,
+				"controlsDismissed": 86,
+				"controlsSeen": 134,
+				"surfaces": 3,
+				"graphNodes": 21,
+				"graphEdges": 15,
+				"scopeAmbiguities": 0
+			}
 		}
 	]
 }

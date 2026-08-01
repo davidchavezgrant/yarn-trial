@@ -1006,8 +1006,12 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	 * Fleet peek: a view-only live stream of a colo Mac's Chromium target, embedded in its
 	 * host card. CDP-transport ONLY, on purpose: the debug port needs no TCC and no runner
 	 * involvement — the dash tunnels to it (tunnelArgv, the repo's one ssh builder) and hosts
-	 * the screencast engine itself, so nothing ships to the fleet mid-drain. An ax-arm run on
-	 * an unflagged app has no endpoint and says so; the SCK path needs a runner verb and waits.
+	 * the screencast engine itself, so nothing ships to the fleet mid-drain.
+	 *
+	 * A missing endpoint is never a socket-terminating error: the session lifecycle is
+	 * probing → streaming ⇄ waiting. An ax-arm run on an unflagged app has no endpoint — the
+	 * session says so and keeps re-probing until a debuggable target appears. Teardown happens
+	 * ONLY on host switch (4409), 30s zero-viewer idle, or process exit.
 	 *
 	 * View-only is structural: the viewer's messages are never forwarded to the engine, so a
 	 * stray click cannot corrupt a live benchmark run. One peek at a time — a second host's
@@ -1015,26 +1019,108 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	 * EPHEMERAL local port, so nothing on the laptop — a stale ControlMaster forward, a local
 	 * debug-flagged Chrome, another dash — can ever collide with it.
 	 */
-	interface Peek {
-		host: string;
-		tunnels: ChildProcess[];
-		engine?: EngineHandle;
-		sockets: Set<Duplex>;
-		idleTimer?: NodeJS.Timeout;
-	}
-	let peek: Peek | undefined;
+	// Loaded ONCE — every cast, close frame, handshake, and decoder reuses the same codec.
+	const wslib = await import("../remote/liveview-ws.js");
+	const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 	const PEEK_PORTS = [9222, 9777]; // app target · web-Chrome, matching the cdp backend's defaults
 	const MAX_QUEUED_PEEK_BYTES = 1.5 * 1024 * 1024;
+	const PROBE_STEP_MS = 400; // initial-attach probe spacing
+	const PROBE_BUDGET_MS = 8000; // initial-attach budget (covers ~478ms tunnel bind + churn)
+	const WAIT_REPROBE_MS = 3000; // re-probe cadence in "waiting" state
+	const HEARTBEAT_MS = 5000; // {ev:"ping"} cadence to viewers — the client's staleness watchdog feeds on it
+	const IDLE_TEARDOWN_MS = 30_000; // last-viewer linger, long enough for a reload to rejoin the live session
+	const TUNNEL_RESPAWN_MS = [1000, 2000, 5000]; // backoff for dead tunnel children (cap at last)
+	// ssh.ts's tunnelArgv appends its anti-mux options AFTER sshBaseArgv's ControlMaster=auto block,
+	// and OpenSSH is FIRST-value-wins — so those overrides are dead letters and peek tunnels join the
+	// fleet-poll's mux master (no keepalives, kill() doesn't cancel forwards). ssh.ts is shared/read-only;
+	// prepending here wins under first-value-wins.
+	const TUNNEL_OVERRIDES = ["-o", "ControlPath=none", "-o", "ControlMaster=no", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-o", "ExitOnForwardFailure=yes"];
 
-	const teardownPeek = (): void => {
+	type PeekState = "probing" | "waiting" | "streaming";
+	interface Peek {
+		host: string;
+		/** The loadHosts() entry — tunnel respawn rebuilds argv from it. */
+		hostCfg: any;
+		locals: Array<{ remote: number; local: number }>;
+		/** Slot-indexed, parallel to locals. */
+		tunnels: Array<ChildProcess | undefined>;
+		/** Per-slot, reset on a successful probe through that slot. */
+		respawnCounts: number[];
+		respawnTimers: Array<NodeJS.Timeout | undefined>;
+		engine?: EngineHandle;
+		/** Set on the first frame from the CURRENT engine attach — flips waiting→streaming once. */
+		gotFrame: boolean;
+		state: PeekState;
+		sockets: Set<Duplex>;
+		idleTimer?: NodeJS.Timeout;
+		reprobeTimer?: NodeJS.Timeout;
+		heartbeatTimer?: NodeJS.Timeout;
+		/** Last status/error JSON frame, replayed to late joiners so they render state instantly. */
+		lastStatus?: Buffer;
+		/** Last {ev:"window"} frame, replayed to late joiners. */
+		lastWindow?: Buffer;
+		/** Set by teardown so child-exit handlers no-op instead of respawning. */
+		closing: boolean;
+	}
+	let peek: Peek | undefined;
+	// Serializes ensurePeek — without it two racing upgrades interleave the old session's
+	// teardown with the new one's construction (the strand/demolish races).
+	let ensureChain: Promise<unknown> = Promise.resolve();
+
+	const cast = (p: Peek, payload: Buffer, kind: "binary" | "text"): void => {
+		for (const s of p.sockets) {
+			// Backpressure: skip FRAMES for a slow viewer rather than buffering unboundedly;
+			// text (status/errors) is small enough to always send.
+			if (kind === "binary" && (s as any).writableLength > MAX_QUEUED_PEEK_BYTES) continue;
+			try {
+				s.write(wslib.encodeFrame(payload, kind));
+			} catch {
+				s.destroy();
+			}
+		}
+	};
+	const castJson = (p: Peek, obj: unknown): Buffer => {
+		const b = Buffer.from(JSON.stringify(obj));
+		cast(p, b, "text");
+
+		return b;
+	};
+	const setStatus = (p: Peek, state: PeekState, message: string): void => {
+		p.state = state;
+		p.lastStatus = castJson(p, { ev: "status", state, message });
+	};
+	// A REAL close frame (code uint16 BE + reason ≤120 bytes) so the client can classify
+	// retryable vs fatal — a bare destroy reads as 1006 and gets retried even when it
+	// should be abandoned.
+	const closeSocket = (s: Duplex, code: number, reason: string): void => {
+		try {
+			const rb = Buffer.from(reason, "utf8").subarray(0, 120);
+			const payload = Buffer.alloc(2 + rb.length);
+			payload.writeUInt16BE(code, 0);
+			rb.copy(payload, 2);
+			s.write(wslib.encodeFrame(payload, "close"));
+		} catch {}
+		s.end();
+		setTimeout(() => s.destroy(), 1000).unref?.();
+	};
+
+	const teardownPeek = (code = 1001, reason = "peek closed"): void => {
 		if (!peek) return;
 		const p = peek;
 		peek = undefined;
+		p.closing = true; // BEFORE killing tunnels, so their exit handlers don't respawn
 		clearTimeout(p.idleTimer);
+		clearTimeout(p.reprobeTimer);
+		clearTimeout(p.heartbeatTimer);
+		for (const t of p.respawnTimers) clearTimeout(t);
 		p.engine?.close();
-		for (const t of p.tunnels) t.kill("SIGTERM");
-		for (const s of p.sockets) s.destroy();
-		addEvent(`peek: closed (${p.host})`);
+		p.engine = undefined;
+		// With TUNNEL_OVERRIDES prepended these are real non-mux clients, so SIGTERM actually
+		// closes the forwards (a mux client's kill() leaves the master's forward standing).
+		for (const t of p.tunnels) t?.kill("SIGTERM");
+		for (const s of p.sockets) closeSocket(s, code, reason);
+		addEvent(`peek: closed (${p.host}) — ${reason}`);
 	};
 
 	const endpointUp = async (port: number): Promise<boolean> => {
@@ -1061,9 +1147,164 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		});
 	};
 
-	async function ensurePeek(hostName: string): Promise<{ ok: true } | { ok: false; error: string }> {
-		if (peek?.host === hostName && peek.engine) return { ok: true };
-		teardownPeek();
+	type TunnelArgvFn = (host: any, remotePort: number, localPort: number) => string[];
+	const spawnTunnel = (p: Peek, slot: number, tunnelArgv: TunnelArgvFn): void => {
+		const { remote, local } = p.locals[slot];
+		const child = spawn("ssh", [...TUNNEL_OVERRIDES, ...tunnelArgv(p.hostCfg, remote, local)], { stdio: "ignore" });
+		p.tunnels[slot] = child;
+		child.once("exit", (codeOrNull) => {
+			if (p.closing || peek !== p) return; // teardown killed it — expected
+			addEvent(`peek: tunnel :${remote} on ${p.host} exited (${codeOrNull ?? "signal"})`);
+			p.lastStatus = castJson(p, { ev: "error", kind: "tunnel-died", message: `ssh tunnel for :${remote} on ${p.host} dropped — respawning` });
+			const n = Math.min(p.respawnCounts[slot], TUNNEL_RESPAWN_MS.length - 1);
+			p.respawnCounts[slot]++;
+			p.respawnTimers[slot] = setTimeout(() => {
+				void (async () => {
+					if (p.closing || peek !== p) return;
+					// FRESH ephemeral port — never rebind the old one (TOCTOU: anything may
+					// have grabbed it between the tunnel dying and this respawn firing).
+					p.locals[slot] = { remote, local: await freeLocalPort() };
+					if (p.closing || peek !== p) return;
+					spawnTunnel(p, slot, tunnelArgv);
+				})();
+			}, TUNNEL_RESPAWN_MS[n]);
+		});
+	};
+	// A dead endpoint tunnel also kills the CDP websocket riding it, so the engine fires
+	// onExit → the waiting/reprobe loop picks up the respawned tunnel's new local port
+	// automatically. No extra wiring needed; the composition is the design.
+
+	const probeOnce = async (p: Peek): Promise<{ endpoint: string; browserEndpoint: string } | undefined> => {
+		// Probe slot 0 (app :9222) first; the first answering local port is primary.
+		for (const slot of [0, 1]) {
+			const { local } = p.locals[slot];
+			if (await endpointUp(local)) {
+				p.respawnCounts[slot] = 0;
+				const other = p.locals[slot === 0 ? 1 : 0].local;
+				// ALWAYS pass the other tunnel's local port as browserEndpoint even if it never
+				// answered: the engine's own lazy re-probe (its documented design) picks it up when
+				// it appears, and never passing it would make the engine default to the LAPTOP'S
+				// OWN 127.0.0.1:9777 — which can silently stream the operator's local Chrome into
+				// the panel.
+				return { endpoint: `http://127.0.0.1:${p.locals[slot].local}`, browserEndpoint: `http://127.0.0.1:${other}` };
+			}
+		}
+
+		return undefined;
+	};
+
+	const tryConnect = async (p: Peek, eps: { endpoint: string; browserEndpoint: string }): Promise<boolean> => {
+		const { connectCdpEngine } = await import("../remote/liveview-cdp.js");
+		const engine = await connectCdpEngine({ endpoint: eps.endpoint, browserEndpoint: eps.browserEndpoint, quality: 80, maxWidth: 1600, app: p.host });
+		if (peek !== p || p.closing) {
+			engine.close();
+
+			return false;
+		}
+		p.gotFrame = false;
+		p.engine = engine;
+		engine.onFrame((jpeg) => {
+			if (peek !== p || p.engine !== engine) return;
+			if (!p.gotFrame) {
+				p.gotFrame = true;
+				setStatus(p, "streaming", `streaming ${p.host}`);
+			}
+			cast(p, jpeg, "binary");
+		});
+		engine.onEvent((ev: any) => {
+			if (peek !== p || p.engine !== engine) return;
+			if (ev?.ev === "window") p.lastWindow = castJson(p, ev);
+			else castJson(p, ev);
+			// Inert-handle detection: connect-time deaths resolve to an engine whose exit NEVER
+			// fires; the only signal is this first buffered error event. Treat it as a failed attach.
+			if (ev?.ev === "error" && !p.gotFrame && (ev.kind === "cdp-unreachable" || ev.kind === "no-page" || ev.kind === "capture-failed")) {
+				engine.close();
+				if (p.engine === engine) p.engine = undefined;
+				enterWaiting(p, `attach failed (${ev.kind}) — waiting for a debuggable target on ${p.host}`);
+			}
+		});
+		engine.onExit(() => {
+			if (peek !== p || p.engine !== engine) return; // stale corpse callback — ignore
+			p.engine = undefined;
+			p.lastStatus = castJson(p, { ev: "error", kind: "stream-ended", message: "target closed — waiting for it to come back" });
+			enterWaiting(p, `waiting for a debuggable target on ${p.host}`);
+		});
+		setStatus(p, "streaming", `streaming ${p.host}`);
+		addEvent(`peek: streaming ${p.host} via ${eps.endpoint} (+${eps.browserEndpoint})`);
+
+		return true;
+	};
+
+	const enterWaiting = (p: Peek, message: string): void => {
+		if (peek !== p || p.closing) return;
+		setStatus(p, "waiting", message);
+		clearTimeout(p.reprobeTimer);
+		p.reprobeTimer = setTimeout(() => {
+			void reprobeTick(p);
+		}, WAIT_REPROBE_MS);
+	};
+
+	const reprobeTick = async (p: Peek): Promise<void> => {
+		try {
+			if (peek !== p || p.closing || p.engine) return;
+			const eps = await probeOnce(p);
+			if (peek !== p || p.closing) return;
+			if (eps && (await tryConnect(p, eps))) return;
+			if (peek !== p || p.closing || p.engine) return;
+			p.reprobeTimer = setTimeout(() => {
+				void reprobeTick(p);
+			}, WAIT_REPROBE_MS);
+		} catch (err) {
+			enterWaiting(p, `attach error — retrying (${String(err).slice(0, 120)})`);
+		}
+	};
+
+	const attachLoop = async (p: Peek): Promise<void> => {
+		try {
+			// Initial attach: a REAL time budget. A fresh non-mux ssh tunnel binds its -L listener
+			// only after connect+auth (~0.5s measured); refused probes return in ~2ms, so without
+			// the sleep the whole budget burns in ~30ms.
+			const deadline = Date.now() + PROBE_BUDGET_MS;
+			while (peek === p && !p.closing && Date.now() < deadline) {
+				const eps = await probeOnce(p);
+				if (peek !== p || p.closing) return;
+				if (eps && (await tryConnect(p, eps))) return;
+				if (peek !== p || p.closing || p.engine) return;
+				await sleep(PROBE_STEP_MS);
+			}
+			if (peek !== p || p.closing || p.engine) return;
+			// Budget exhausted: do NOT tear down. Keep tunnels up, arm the re-probe, and attach
+			// when a target appears. The fleet snapshot can be a poll interval (~20s) stale, so
+			// the busy/idle diagnosis is best-effort, not ground truth.
+			const row = fleet.rows.find((r) => r.name === p.host);
+			const msg = row?.state === "busy"
+				? `no CDP endpoint on ${p.host} yet — the current run may be an ax-arm (no debug port); will attach when one appears`
+				: row?.state === "idle"
+					? `${p.host} is idle — will attach when a debuggable target appears (next cdp-arm run, or a web run's Chrome)`
+					: `no CDP endpoint on ${p.host} and its runner state is unknown — will keep trying (check ./run hosts)`;
+			enterWaiting(p, msg);
+		} catch (err) {
+			enterWaiting(p, `attach error — retrying (${String(err).slice(0, 120)})`);
+		}
+	};
+
+	type EnsureResult = { ok: true; session: Peek } | { ok: false; error: string };
+	const ensurePeek = (hostName: string): Promise<EnsureResult> => {
+		const r = ensureChain.then(() => doEnsurePeek(hostName), () => doEnsurePeek(hostName));
+		ensureChain = r.catch(() => {});
+
+		return r;
+	};
+
+	const doEnsurePeek = async (hostName: string): Promise<EnsureResult> => {
+		// FAST PATH: same host joins the live session regardless of engine liveness or state —
+		// the attach loop owns recovery for the session's entire life, and a joining socket
+		// learns the current state from the late-joiner replay.
+		if (peek && peek.host === hostName) return { ok: true, session: peek };
+		if (peek) {
+			castJson(peek, { ev: "error", kind: "superseded", message: `preempted by a peek of ${hostName}` });
+			teardownPeek(4409, `preempted by a peek of ${hostName}`);
+		}
 		const [{ loadHosts }, { tunnelArgv }] = await Promise.all([import("../remote/control/hosts.js"), import("../remote/control/ssh.js")]);
 		const host = loadHosts().hosts.find((h) => h.name === hostName);
 		if (!host) return { ok: false, error: `unknown host ${JSON.stringify(hostName)}` };
@@ -1075,62 +1316,19 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		const locals: Array<{ remote: number; local: number }> = [];
 		for (const remote of PEEK_PORTS) locals.push({ remote, local: await freeLocalPort() });
 
-		const p: Peek = { host: hostName, tunnels: [], sockets: new Set() };
+		const p: Peek = { host: hostName, hostCfg: host, locals, tunnels: [], respawnCounts: [0, 0], respawnTimers: [], gotFrame: false, state: "probing", sockets: new Set(), closing: false };
 		peek = p;
-		for (const { remote, local } of locals) p.tunnels.push(spawn("ssh", tunnelArgv(host, remote, local), { stdio: "ignore" }));
+		// No await from here to attachLoop: the caller's socket must attach before any engine
+		// event can fire (the buffered-inert-error-to-zero-sockets bug, fixed structurally —
+		// attach is fully asynchronous and this function never probes or connects).
+		spawnTunnel(p, 0, tunnelArgv);
+		spawnTunnel(p, 1, tunnelArgv);
+		p.heartbeatTimer = setInterval(() => castJson(p, { ev: "ping" }), HEARTBEAT_MS);
+		setStatus(p, "probing", `connecting — opening ssh tunnels to ${hostName}…`);
+		void attachLoop(p); // detached — the upgrade handler must NOT wait for attach
 
-		// Which REMOTE debug port answers (probed through its tunnel's local port) decides what
-		// we watch: 9222 is the app the run drives, 9777 the web-Chrome. Poll briefly — the
-		// tunnel itself takes a moment to come up.
-		let endpoint: string | undefined;
-		let browserEndpoint: string | undefined;
-		for (let tries = 0; tries < 5 && !endpoint; tries++) {
-			for (const { local } of locals)
-				if (!endpoint && (await endpointUp(local))) endpoint = `http://127.0.0.1:${local}`;
-				else if (endpoint && endpoint !== `http://127.0.0.1:${local}` && (await endpointUp(local))) browserEndpoint = `http://127.0.0.1:${local}`;
-		}
-		if (peek !== p) return { ok: false, error: "superseded by a newer peek" };
-		if (!endpoint) {
-			teardownPeek();
-			// Blame the right thing: "an ax-arm run" is nonsense on an idle Mac. The fleet
-			// snapshot can be up to a poll interval (~20s) stale, so this branch is a
-			// best-effort diagnosis, not ground truth.
-			const row = fleet.rows.find((r) => r.name === hostName);
-			const error = row?.state === "busy"
-				? `no CDP debug endpoint reachable on ${hostName} — the current run is likely an ax-arm driving an unflagged app; peek covers Chromium targets only for now`
-				: row?.state === "idle"
-					? `nothing debug-flagged is listening on ${hostName} — the host is idle; peek needs a live Chromium target (a cdp-arm run, or the web Chrome a web run leaves up)`
-					: `no CDP debug endpoint reachable on ${hostName} and its runner state is unknown — check ./run hosts`;
-
-			return { ok: false, error };
-		}
-
-		const { connectCdpEngine } = await import("../remote/liveview-cdp.js");
-		const engine = await connectCdpEngine({ endpoint, ...(browserEndpoint ? { browserEndpoint } : {}), quality: 80, maxWidth: 1600, app: hostName });
-		if (peek !== p) {
-			engine.close();
-
-			return { ok: false, error: "superseded by a newer peek" };
-		}
-		p.engine = engine;
-		const { encodeFrame } = await import("../remote/liveview-ws.js");
-		const cast = (payload: Buffer, kind: "binary" | "text") => {
-			for (const s of p.sockets) {
-				if (kind === "binary" && (s as any).writableLength > MAX_QUEUED_PEEK_BYTES) continue;
-				try {
-					s.write(encodeFrame(payload, kind));
-				} catch {
-					s.destroy();
-				}
-			}
-		};
-		engine.onFrame((jpeg) => cast(jpeg, "binary"));
-		engine.onEvent((ev) => cast(Buffer.from(JSON.stringify(ev)), "text"));
-		engine.onExit(() => cast(Buffer.from(JSON.stringify({ ev: "error", message: "stream ended — the target closed or the tunnel dropped" })), "text"));
-		addEvent(`peek: streaming ${hostName} via ${endpoint}${browserEndpoint ? ` (+${browserEndpoint})` : ""}`);
-
-		return { ok: true };
-	}
+		return { ok: true, session: p };
+	};
 
 	const htmlPath = resolveHtml();
 
@@ -1188,36 +1386,58 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 
 			return;
 		}
-		const { encodeFrame, handshakeResponse, WsDecoder } = await import("../remote/liveview-ws.js");
-		socket.write(handshakeResponse(key));
+		socket.write(wslib.handshakeResponse(key));
 		const say = (obj: unknown) => {
 			try {
-				socket.write(encodeFrame(Buffer.from(JSON.stringify(obj)), "text"));
+				socket.write(wslib.encodeFrame(Buffer.from(JSON.stringify(obj)), "text"));
 			} catch {
 				socket.destroy();
 			}
 		};
-		const r = await ensurePeek(url.searchParams.get("host") ?? "");
+		// Resolves fast — no probe inside. A thrown setup error (unreadable hosts file, import
+		// failure) must become a close-frame rejection, not an unhandled rejection that kills
+		// the dash: the contract is handshake-then-attach-or-reject, always.
+		const r = await ensurePeek(url.searchParams.get("host") ?? "").catch((err): EnsureResult => ({ ok: false, error: `peek setup failed — ${String(err).slice(0, 200)}` }));
 		if (!r.ok) {
 			say({ ev: "error", message: r.error });
-			socket.end();
+			closeSocket(socket, 4400, r.error);
 
 			return;
 		}
-		const session = peek;
-		if (!session) {
-			socket.end();
+		// NEVER re-read the global `peek` here: ensurePeek returned THIS socket's session. If a
+		// newer peek preempted it during the await, this socket belongs to the loser and must
+		// not attach to the winner.
+		const session = r.session;
+		if (peek !== session) {
+			say({ ev: "error", kind: "superseded", message: "superseded by a newer peek" });
+			closeSocket(socket, 4409, "superseded by a newer peek");
 
 			return;
 		}
 		clearTimeout(session.idleTimer);
 		session.sockets.add(socket);
-		const decoder = new WsDecoder();
+		// Late-joiner replay: the most recent status/error frame, then the most recent window
+		// frame — a reconnecting client renders correct state before the next live frame.
+		if (session.lastStatus) {
+			try {
+				socket.write(wslib.encodeFrame(session.lastStatus, "text"));
+			} catch {
+				socket.destroy();
+			}
+		}
+		if (session.lastWindow) {
+			try {
+				socket.write(wslib.encodeFrame(session.lastWindow, "text"));
+			} catch {
+				socket.destroy();
+			}
+		}
+		const decoder = new wslib.WsDecoder();
 		socket.on("data", (chunk: Buffer) => {
 			try {
 				for (const frame of decoder.push(chunk)) {
 					if (frame.opcode === "close") socket.end();
-					else if (frame.opcode === "ping") socket.write(encodeFrame(frame.payload, "pong"));
+					else if (frame.opcode === "ping") socket.write(wslib.encodeFrame(frame.payload, "pong"));
 					// text frames: dropped — the peek is view-only by construction.
 				}
 			} catch {
@@ -1230,8 +1450,8 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			// tunnels — an idle capture stream against a colo Mac serves nobody.
 			if (session.sockets.size === 0 && peek === session)
 				session.idleTimer = setTimeout(() => {
-					if (peek === session && session.sockets.size === 0) teardownPeek();
-				}, 30_000);
+					if (peek === session && session.sockets.size === 0) teardownPeek(1001, "peek idle — no viewers");
+				}, IDLE_TEARDOWN_MS);
 		};
 		socket.on("close", gone);
 		socket.on("error", gone);
@@ -1252,11 +1472,13 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	// Orphaned ssh tunnels outlive a dead parent silently — kill them with the process. The
 	// signal handlers matter: "exit" does NOT fire on an unhandled SIGTERM/SIGINT, which is
 	// exactly how a dash restart (kill + relaunch) leaks its tunnels as stray processes
-	// holding live forwards to a colo Mac nobody is watching.
-	process.on("exit", teardownPeek);
+	// holding live forwards to a colo Mac nobody is watching. The 1001 close frame is what
+	// lets the client render "server restarting — reconnecting…" and auto-retry instead of
+	// dead-ending on a bare 1006.
+	process.on("exit", () => teardownPeek(1001, "dash exiting"));
 	for (const sig of ["SIGINT", "SIGTERM"] as const)
 		process.on(sig, () => {
-			teardownPeek();
+			teardownPeek(1001, "dash restarting — reconnect shortly");
 			process.exit(0);
 		});
 

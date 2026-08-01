@@ -422,7 +422,20 @@ export function scopeWarnings(map: AppMap): string {
  * (`explore --no-ax`) — a benchmark arm, so the run log's grounding meta must say which
  * variant was used. Read per call, not at import, so a test can flip it.
  */
-export const appmapVariant = (): string => (process.env.APPMAP_VARIANT === "vision" ? ".vision" : "");
+export const appmapVariant = (): string => {
+	const v = process.env.APPMAP_VARIANT;
+
+	// `novision` selects the pair an element-only pass wrote (`explore --no-vision`). The same
+	// argument as `vision`: a run that cannot see the screen cannot act on guidance phrased as
+	// "the button in the top-right", so it should ground on a map written by a pass that could
+	// not see the screen either. Without this the element-only map was written and read by
+	// nothing — 30 minutes and $14 of pass producing an artifact with no consumer.
+	//
+	// Deliberately NOT auto-derived from the run's own perception: p2-vision-only-grounded-axmap
+	// is a vision-only run that must read the ELEMENT map on purpose, and inferring the tier
+	// would silently break exactly that arm.
+	return v === "vision" ? ".vision" : v === "novision" ? ".novision" : "";
+};
 
 /**
  * Takes the artifact SLUG, not an app name: a web target's slug is derived from its origin

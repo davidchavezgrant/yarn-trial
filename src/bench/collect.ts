@@ -294,8 +294,12 @@ export async function collect(opts: CollectOptions = {}): Promise<CollectOutcome
  */
 export function archiveDirFor(benchRoot: string, entry: ManifestEntry): string {
 	const model = (entry.model ?? "default").replace(/[^A-Za-z0-9._-]+/g, "-");
-
-	return path.join(benchRoot, "appmaps", model, entry.armId);
+	// Per JOB, not per arm. An explore arm with n>1 runs the same pass twice, and both write
+	// the same live filename (yarn.ax.md) on their own Macs — so an arm-keyed archive keeps
+	// only whichever was collected last, discarding the second sample and with it the entire
+	// reason for repeating. The repeats exist to give the backend comparison an error bar;
+	// an archive that holds one of two is worse than not repeating, because it looks complete.
+	return path.join(benchRoot, "appmaps", model, entry.armId, entry.jobId);
 }
 
 /** Consecutive identical failures on one host before it is called poisoned. */

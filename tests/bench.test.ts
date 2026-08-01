@@ -26,7 +26,7 @@ import {
 	updateEntry,
 	writeManifest,
 } from "../src/bench/manifest.js";
-import { armTitle, armAppmapSlug, armById, BACKENDS, MATRIX, phaseArms, phaseRunCount, perceptionLine } from "../src/bench/matrix.js";
+import { type Arm, armTitle, armAppmapSlug, armById, BACKENDS, MATRIX, phaseArms, phaseRunCount, perceptionLine } from "../src/bench/matrix.js";
 import type { DispatchOptions } from "../src/remote/control/dispatch.js";
 import { dateArg,
 	auditPhase,
@@ -62,14 +62,17 @@ test("MATRIX__HasUniqueArmIds__When__Defined", () => {
 });
 
 test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
-	// Phase 1: ax + cdp Yarn explores and BOTH single-channel grounding passes. The web
+	// Phase 1: ax and cdp explores at n=2 each — every number here was a point estimate with
+	// no error bar, and the vision arm gave 8 surfaces then 3 under identical code, so a
+	// backend gap of 63-vs-31 could not be told from noise. Free in wall-clock: four arms on
+	// three Macs is already two waves and six is still two. Plus the two single-channel passes. The web
 	// (Notion) explore was dropped 2026-08-01 — the prompt and frontier fixes force a re-run
 	// of every grounding pass, and at 1h14m it was the longest in the matrix. Its data is
 	// kept as a one-off; only the re-running stopped. The vision-only one landed 2026-07-31 (three vision-only TASK arms
 	// existed with no vision-only GROUNDING); the element-only one 2026-08-01, closing the
 	// mirror gap — phase 2 tested dropping screenshots during a task but never during
 	// grounding, which is where they cost the most.
-	assert.equal(phaseRunCount(1), 4);
+	assert.equal(phaseRunCount(1), 6);
 	// Phase 2: core 2 backends × 2 grounding × 3, plus 6 slices × 3. Two blocks were cut
 	// 2026-07-31 after their prerequisites were CHECKED rather than assumed (matrix.ts holds
 	// the full reasoning at each site): the Notion Calendar slice (4 arms × 2 = 8 runs — the
@@ -241,8 +244,8 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		const fake = fakeDispatch();
 		const code = await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
 		assert.equal(code, EXIT_OK);
-		// Four: ax + cdp Yarn explores and both single-channel passes.
-		assert.equal(fake.calls.length, 4);
+		// Six: ax x2, cdp x2, and the two single-channel passes.
+		assert.equal(fake.calls.length, 6);
 		// The two single-channel passes must differ ONLY in which channel they drop — same
 		// backend, same app — or they are not a comparison.
 		const single = fake.calls.filter((c) => c.noAx || c.noVision);
@@ -267,7 +270,7 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		assert.ok(fake.calls.every((c) => c.app === "Yarn"), "every phase-1 arm targets Yarn");
 		// Every accepted job landed in the manifest, uncollected.
 		const m = readManifest(DATE, dir);
-		assert.equal(m.entries.length, 4);
+		assert.equal(m.entries.length, 6);
 		assert.ok(m.entries.every((e) => !e.collected && e.host === "mac1"));
 	});
 });
@@ -358,8 +361,9 @@ test("runPhase__SubmitsOnlyMissingSamples__When__ManifestAlreadyHoldsSome", asyn
 		const fake = fakeDispatch();
 		const code = await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
 		assert.equal(code, EXIT_OK);
-		// Only the one un-submitted arm goes out; the three already in the manifest are skipped.
-		assert.equal(fake.calls.length, 1);
+		// ax and cdp are n=2, so seeding one sample of each leaves one of each outstanding,
+		// plus the un-seeded no-vision pass.
+		assert.equal(fake.calls.length, 3);
 	});
 });
 
@@ -793,12 +797,12 @@ test("runPhase__ScopesSampleCountsToTheModelPass__When__TwoModelsRunTheMatrix", 
 	await withTempAsync("bench-", async (dir) => {
 		const a = fakeDispatch();
 		await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: a.fn, log: () => {}, model: "openai/gpt-5.6-sol:nitro" });
-		assert.equal(a.calls.length, 4, "pass A submits the full phase");
+		assert.equal(a.calls.length, 6, "pass A submits the full phase");
 		for (const c of a.calls) assert.equal(c.model, "openai/gpt-5.6-sol:nitro");
 
 		const b = fakeDispatch();
 		await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: b.fn, log: () => {}, model: "claude-fable-5" });
-		assert.equal(b.calls.length, 4, "pass B submits the full phase again — pass A's entries are not its samples");
+		assert.equal(b.calls.length, 6, "pass B submits the full phase again — pass A's entries are not its samples");
 		for (const c of b.calls) assert.equal(c.model, "claude-fable-5");
 
 		// And a re-run of pass A tops up nothing.
@@ -825,13 +829,20 @@ test("runPhase__GatesPhase2OnThisPassesExplores__When__AnotherModelAlreadyExplor
 	});
 });
 
-test("archiveDirFor__KeysOnModelAndArm__When__TwoPassesShareOneManifest", () => {
+test("archiveDirFor__KeysOnModelArmAndJob__When__PassesOrSamplesShareOneManifest", () => {
 	const base = { armId: "p1-explore-ax", jobId: "j", host: "mac1", submittedAt: "", state: "done", collected: true };
 	const sol = archiveDirFor("/bench/2026-07-31", { ...base, model: "openai/gpt-5.6-sol:nitro" });
 	const fable = archiveDirFor("/bench/2026-07-31", { ...base, model: "claude-fable-5" });
-	assert.notEqual(sol, fable, "each pass archives its own maps");
-	assert.match(sol, /appmaps\/openai-gpt-5.6-sol-nitro\/p1-explore-ax$/);
-	assert.match(archiveDirFor("/b", base), /appmaps\/default\/p1-explore-ax$/);
+	assert.notEqual(sol, fable, "each model pass archives its own maps");
+	assert.match(sol, /appmaps\/openai-gpt-5.6-sol-nitro\/p1-explore-ax\/j$/);
+	assert.match(archiveDirFor("/b", base), /appmaps\/default\/p1-explore-ax\/j$/);
+
+	// And per JOB, because an explore arm now runs n=2: both samples write the same live
+	// filename on their own Macs, so an arm-keyed archive would keep only the one collected
+	// last — discarding the second sample and the entire reason for repeating.
+	const a = archiveDirFor("/b", { ...base, jobId: "explore-A" });
+	const b = archiveDirFor("/b", { ...base, jobId: "explore-B" });
+	assert.notEqual(a, b, "two samples of one arm must not share an archive directory");
 });
 
 test("failureKind__ClassifiesEachShape__When__RunsFailDifferently", () => {
@@ -972,4 +983,26 @@ test("armTitle__NamesTheArmWithoutRepeatingPerception__When__ShownBesideIt", () 
 	// Derived from the DISPATCH, never from the rendered flags string — the dash used to parse
 	// flagsLine output, which fails silently the moment the wording changes.
 	for (const a of MATRIX) assert.ok(armTitle(a).length > 0 && !armTitle(a).includes("undefined"), a.id);
+});
+
+test("MATRIX__ConsumesEveryMapItProduces__When__ExploresAndTaskArmsArePaired", () => {
+	// A grounding pass costs ~30 minutes and ~$14. One whose map no arm reads is that spent
+	// for a comparison alone — which is what p1-explore-no-vision was until APPMAP_VARIANT
+	// learned "novision". The reverse is worse: an arm reading a map nothing writes finds
+	// nothing, and loadGrounding degrades a miss to provenance "none" — ungrounded under a
+	// grounded label, the failure mode this matrix has hit three separate ways.
+	const reads = (a: Arm): string => {
+		const v = a.env?.APPMAP_VARIANT;
+		const tier = v === "vision" ? ".vision" : v === "novision" ? ".novision" : "";
+
+		return `${appmapSlug(a.app)}.${a.dispatch.backend}${tier}`;
+	};
+	const written = new Set(MATRIX.filter((a) => a.kind === "explore").map(armAppmapSlug));
+	const consumers = MATRIX.filter((a) => a.kind === "task" && !a.dispatch.noGrounding && !a.dispatch.useRecipe);
+
+	// Every grounded arm's map exists.
+	for (const a of consumers) assert.ok(written.has(reads(a)), `${a.id} grounds on ${reads(a)}, which no explore arm writes`);
+	// And every map written is read by someone.
+	const read = new Set(consumers.map(reads));
+	for (const w of written) assert.ok(read.has(w), `${w} is written by an explore arm and read by nothing`);
 });

@@ -166,7 +166,20 @@ const PHASE1: Arm[] = [
 		phase: 1,
 		kind: "explore",
 		app: BENCH_APP,
-		n: 1,
+		/**
+		 * TWO passes, not one. Every phase-1 number was a point estimate with no error bar,
+		 * and we know the spread can be brutal: the vision arm gave 8 surfaces on one run and
+		 * 3 on the next under identical code. Without a repeat, "cdp found 63 surfaces and ax
+		 * found 31" cannot be told apart from two draws of a wide distribution — and that
+		 * comparison is the headline of the whole discovery question.
+		 *
+		 * Free in wall-clock: four arms across three Macs is already two waves, and six is
+		 * still two. It costs tokens, not time.
+		 *
+		 * Only these two repeat. They are the ones every other comparison is measured
+		 * against; the single-channel arms are read relative to them.
+		 */
+		n: 2,
 		dispatch: { backend },
 		informs: "controls seen/actuated/dismissed, obs latency, pass duration, map size, scope ambiguities",
 	})),
@@ -243,7 +256,11 @@ const PHASE2_CORE: Arm[] = BACKENDS.flatMap((backend) => [
 /** Phase 2 permutation slices — each maps to a fork in the implementation Aman inherits. */
 const PHASE2_SLICES: Arm[] = [
 	task("p2-ax-grounded-axdom-off", { backend: "ax", axdomOff: true }, "is the Swift sidecar worth shipping (outcomes, not naming counts)"),
-	task("p2-ax-grounded-no-vision", { backend: "ax", noVision: true }, "what the screenshot channel buys on ax"),
+	// Grounds on the map an element-only pass wrote, so the map's vocabulary matches what this
+	// run can perceive — the same reason the vision arm reads the vision map. Also the only
+	// thing that consumes p1-explore-no-vision's output; without it that pass writes an
+	// artifact nobody reads.
+	task("p2-ax-grounded-no-vision", { backend: "ax", noVision: true }, "what the screenshot channel buys on ax", { env: { APPMAP_VARIANT: "novision" } }),
 	task("p2-cdp-grounded-no-vision", { backend: "cdp", noVision: true }, "same on cdp — DOM snapshot is text-rich; fleet-scale cost"),
 	task("p2-ax-curated", { backend: "ax", useRecipe: true }, "explore pass vs 10 minutes of human notes"),
 	// Vision-only is ax-backend-only by construction: cdp observations ARE ref lists.

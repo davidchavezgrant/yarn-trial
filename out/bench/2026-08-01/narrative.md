@@ -82,3 +82,43 @@ In one AX pass per arm, removing vision exposed 2.56× more controls but actuate
 ## 2026-08-01T01:41:45.740Z — 4 collected (gpt-5.6-sol)
 
 In one pass per backend, CDP needed 0.89× as many actions but 1.47× the time, 1.64× the calls, and 1.69× the output tokens per action as AX. CDP saw 4.75× more controls and 2.03× more surfaces but actuated only 1.20× more controls, cutting seen-to-actuated conversion to 0.25× AX’s. Its map had 1.26× the nodes but 0.95× the edges, yielding 0.75× AX’s edge density, while scope ambiguities rose 15×.
+
+## 2026-08-01T01:49:47.977Z — 5 collected (gpt-5.6-sol)
+
+Screenshot-only exploration used 0.53× the actions and 0.46× the pass time of AX but found just 0.10× the surfaces and 0.13× the graph nodes. Adding vision to AX cut actions to 0.82×, calls to 0.70×, and output tokens to 0.65× versus tree-only exploration while preserving 0.88× the actuated controls and 1.03× the surfaces. Tree-only AX saw 2.56× more controls than vision-assisted AX, but its seen-to-actuated conversion fell to 0.44×. These are single-pass comparisons.
+
+## 2026-08-01T02:00:18.920Z — 5 collected (gpt-5.6-sol)
+
+In a single-pass comparison, CDP used 0.89× the actions but took 1.29× as long, with 1.45× the model calls and 1.50× the output tokens of AX. CDP saw 4.75× the controls, 2.03× the surfaces, and 1.26× the graph nodes, but had 15× the scope ambiguities and only 0.25× AX’s seen-to-actuated conversion.
+
+## 2026-08-01T02:01:12.553Z — 5 collected (gpt-5.6-sol)
+
+Tree-only AX saw 2.56× the controls and 1.15× the graph nodes of standard AX, but converted seen controls at just 0.44× the rate. It also cost 1.23× the actions, 1.43× the calls, 1.55× the output tokens, and 1.10× the wall time. Vision-only found just 0.10× the surfaces, 0.13× the nodes, and 0.26× the edges of standard AX. Despite using 0.40× the calls and 0.53× the tokens, vision-only took 1.57× as long. These are single-pass comparisons.
+
+## 2026-08-01T02:01:26.429Z — 5 collected (gpt-5.6-sol)
+
+Against AX, CDP saw 4.75× as many controls and 2.03× as many surfaces, but only 1.26× the graph nodes and 0.95× the edges. It actuated 1.20× as many controls, so its seen-to-actuated conversion was just 0.25× AX’s, while scope ambiguities rose 15×. CDP used 0.89× the actions yet required 1.45× the model calls, 1.50× the output tokens, and 1.30× the wall time. These backend comparisons are single-pass.
+
+## 2026-08-01T02:01:33.646Z — 5 collected (gpt-5.6-sol)
+
+Removing screenshots saw 2.56× as many controls as AX with vision but actuated only 1.13×, cutting seen-to-actuated conversion to 0.44×. No-vision preserved 0.97× the surfaces, 1.15× the nodes, and 0.84× the edges, but cost 1.23× the actions, 1.43× the calls, and 1.55× the output tokens. Vision-only produced just 0.10× the surfaces, 0.13× the nodes, and 0.26× the edges; despite 0.40× the calls and 0.53× the tokens, wall time was 1.57× AX. These are single-pass comparisons.
+
+## 2026-08-01T02:02:15.588Z — 5 collected (gpt-5.6-sol)
+
+Against AX, CDP saw 4.75× as many controls but actuated only 1.20×, dropping seen-to-actuated conversion to 0.25×. CDP found 2.03× the surfaces and 1.26× the nodes, but only 0.95× the edges and 15× the scope ambiguities. Its broader discovery used 0.89× the actions but 1.45× the calls, 1.50× the output tokens, and 1.30× the elapsed time; these are single-pass ratios.
+
+## 2026-08-01T02:02:46.696Z — 5 collected (gpt-5.6-sol)
+
+In single-pass comparisons, adding vision to AX cut controls seen to 0.39× while retaining 0.88× actuations, raising seen-to-actuated conversion 2.27×. Vision-assisted AX preserved 1.03× the surfaces and 1.00× scope ambiguities, with 0.87× the nodes but 1.19× the edges. It also used 0.82× the actions, 0.70× the calls, 0.65× the output tokens, and 0.91× the elapsed time. Screenshot-only exploration found just 0.10× the surfaces, 0.13× the nodes, and 0.26× the edges of AX. Its duration metrics conflict: telemetry was 1.57× AX, while declared explore duration was 0.46×.
+
+## 2026-08-01T02:07:18.791Z — 5 collected (gpt-5.6-sol)
+
+Against AX, CDP saw 4.75× more controls and 2.03× more surfaces but actuated only 1.20× as many, cutting seen-to-actuated conversion to 0.25×. CDP produced 1.26× the nodes but 0.95× the edges and 15× the scope ambiguities. Despite using 0.89× the actions, CDP required 1.45× the calls, 1.50× the output tokens, and 1.30× the elapsed time; with one pass per arm, the backend choice remains provisional.
+
+## 2026-08-01T02:08:10.552Z — 5 collected (gpt-5.6-sol)
+
+Screenshot-only exploration was map-blind but action-efficient versus AX: it found 0.32× the controls, 0.10× the surfaces, and 0.13× the nodes, yet actuated 1.04× as many controls with 0.53× the actions and 3.25× the seen-to-actuated conversion. Removing vision from AX found 2.56× more controls but only 1.13× more actuations, reducing conversion to 0.44× while costing 1.23× the actions, 1.43× the calls, and 1.55× the output tokens. These vision conclusions remain directional at one pass per arm.
+
+## 2026-08-01T02:08:36.203Z — 5 collected (gpt-5.6-sol)
+
+CDP exploration was broader than AX, seeing 4.75× the controls, 2.03× the surfaces, and 1.26× the graph nodes, but actuating only 1.20× as many controls. Its seen-to-actuated conversion was 0.25× AX’s, while scope ambiguities were 15× higher. Despite using 0.89× the actions, CDP took 1.30× longer, 1.45× the model calls, and 1.50× the output tokens, so its observations were not leaner in this one-pass comparison.
