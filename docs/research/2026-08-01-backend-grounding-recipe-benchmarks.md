@@ -23,28 +23,28 @@
 
 ## Phase 2 — backend × grounding (core)
 
-| arm | model | flags | done | success | failures | steps x̄ | s x̄ | calls x̄ | out-tok x̄ | $ | rejections | doc-scope muts | obs-nodes x̄ | shown x̄ | depth x̄ | max idx | unnormalised |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| p2-ax-ungrounded | azure/gpt-5.6-sol | --backend ax NO_GROUNDING=1 | 3/3 | 1/3 | gave-up 2 | 9 | 151.7 | 18 | 2816.3 | $2.52 | 0 | 0 | 165.2 | 295.4 | 40% | 202 | 0 |
-| p2-ax-grounded | azure/gpt-5.6-sol | --backend ax | 3/3 | 3/3 | — | 10 | 113.7 | 13.3 | 1536 | $3.32 | 0 | 0 | 181.4 | 333.5 | 53% | 226 | 0 |
-| p2-cdp-ungrounded | azure/gpt-5.6-sol | --backend cdp NO_GROUNDING=1 | 3/3 | 3/3 | — | 11 | 107 | 17.7 | 1629.3 | $1.23 | 0 | 0 | 54.1 | 60.1 | — | — | ⚠ 3 |
-| p2-cdp-grounded | azure/gpt-5.6-sol | --backend cdp | 3/3 | 3/3 | — | 9 | 83.3 | 15 | 1400 | $0.92 | 0 | 0 | 49.8 | 55.8 | — | — | ⚠ 3 |
+| arm | model | tier | map | flags | done | success | failures | steps x̄ | s x̄ | calls x̄ | out-tok x̄ | $ | rejections | doc-scope muts | obs-nodes x̄ | shown x̄ | depth x̄ | max idx | unnormalised |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| p2-ax-ungrounded | azure/gpt-5.6-sol | none | 166 | --backend ax NO_GROUNDING=1 | 3/3 | 1/3 | gave-up 2 | 9 | 151.7 | 18 | 2816.3 | $2.52 | 0 | 0 | 165.2 | 295.4 | 40% | 202 | 0 |
+| p2-ax-grounded | azure/gpt-5.6-sol | explore | 166 | --backend ax | 3/3 | 3/3 | — | 10 | 113.7 | 13.3 | 1536 | $3.32 | 0 | 0 | 181.4 | 333.5 | 53% | 226 | 0 |
+| p2-cdp-ungrounded | azure/gpt-5.6-sol | none | 144 | --backend cdp NO_GROUNDING=1 | 3/3 | 3/3 | — | 11 | 107 | 17.7 | 1629.3 | $1.23 | 0 | 0 | 54.1 | 60.1 | — | — | ⚠ 3 |
+| p2-cdp-grounded | azure/gpt-5.6-sol | explore | 144 | --backend cdp | 3/3 | 3/3 | — | 9 | 83.3 | 15 | 1400 | $0.92 | 0 | 0 | 49.8 | 55.8 | — | — | ⚠ 3 |
 
 ## Phase 2 — permutation slices
 
-| arm | model | flags | done | success | failures | steps x̄ | s x̄ | calls x̄ | out-tok x̄ | $ | rejections | doc-scope muts | obs-nodes x̄ | shown x̄ | depth x̄ | max idx | unnormalised |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| p2-ax-grounded-axdom-off | azure/gpt-5.6-sol | --backend ax AXDOM=0 | 3/3 | 3/3 | — | 10.3 | 116.3 | 14 | 1400.7 | $2.31 | 0 | 0 | 183.7 | 304.2 | 57% | 228 | 0 |
-| p2-ax-noaxdom-ungrounded | azure/gpt-5.6-sol | --backend ax AXDOM=0 NO_GROUNDING=1 | 3/3 | 3/3 | — | 10.7 | 129.7 | 13.7 | 1512 | $2.67 | 0 | 0 | 165.7 | 279.9 | 57% | 251 | 0 |
-| p2-ax-grounded-no-vision | azure/gpt-5.6-sol | --backend ax --no-vision APPMAP_VARIANT=novision | 3/3 | 3/3 | — | 8.7 | 98 | 11.7 | 1340.7 | $1.68 | 0 | 0 | 174.5 | 309.9 | 53% | 214 | 0 |
-| p2-cdp-grounded-no-vision | azure/gpt-5.6-sol | --backend cdp --no-vision APPMAP_VARIANT=novision | 3/3 | 3/3 | — | 9 | 65.7 | 15.7 | 1489.3 | $0.66 | 0 | 3 | 70.6 | 76.6 | — | — | ⚠ 3 |
-| p2-min-context-grounded | azure/gpt-5.6-sol | --backend ax --no-vision AXDOM=0 APPMAP_VARIANT=novision | 3/3 | 3/3 | — | 7.3 | 69.7 | 10.3 | 1260.3 | $1.15 | 0 | 0 | 149.3 | 245.6 | 47% | 200 | 0 |
-| p2-min-context-ungrounded | azure/gpt-5.6-sol | --backend ax --no-vision AXDOM=0 NO_GROUNDING=1 | 3/3 | 2/3 | gave-up 1 | 12 | 96 | 14.3 | 1950 | $2.16 | 0 | 0 | 186.6 | 292.9 | 47% | 216 | 0 |
-| p2-curated | azure/gpt-5.6-sol | --backend cdp USE_RECIPE=1 | 3/3 | 3/3 | — | 5.7 | 65.7 | 10 | 817.3 | $0.69 | 0 | 0 | 75.5 | 81.5 | — | — | ⚠ 3 |
-| p2-vision-only-ungrounded | azure/gpt-5.6-sol | --backend ax --no-ax NO_GROUNDING=1 | 3/3 | 0/3 | gave-up 3 | 15 | 185.3 | 16 | 5085.7 | $1.45 | 0 | 0 | 169.5 | 0 | — | — | 0 |
-| p2-vision-only-grounded-axmap | azure/gpt-5.6-sol | --backend ax --no-ax | 3/3 | 0/3 | gave-up 3 | 15 | 174 | 16.3 | 4793.3 | $1.56 | 0 | 0 | 177.1 | 0 | — | — | 0 |
-| p2-vision-only-grounded-visionmap | azure/gpt-5.6-sol | --backend ax --no-ax APPMAP_VARIANT=vision | 3/3 | 0/3 | gave-up 3 | 15 | 217 | 15 | 5671 | $1.48 | 0 | 0 | 222.2 | 0 | — | — | 0 |
-| p2-vision-only-curated | azure/gpt-5.6-sol | --backend ax --no-ax USE_RECIPE=1 | 3/3 | 2/3 | gave-up 1 | 13 | 146.3 | 15 | 3692.7 | $1.23 | 0 | 0 | 176.1 | 0 | — | — | 0 |
+| arm | model | tier | map | flags | done | success | failures | steps x̄ | s x̄ | calls x̄ | out-tok x̄ | $ | rejections | doc-scope muts | obs-nodes x̄ | shown x̄ | depth x̄ | max idx | unnormalised |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| p2-ax-grounded-axdom-off | azure/gpt-5.6-sol | explore | 140 | --backend ax AXDOM=0 | 3/3 | 3/3 | — | 10.3 | 116.3 | 14 | 1400.7 | $2.31 | 0 | 0 | 183.7 | 304.2 | 57% | 228 | 0 |
+| p2-ax-noaxdom-ungrounded | azure/gpt-5.6-sol | none | 140 | --backend ax AXDOM=0 NO_GROUNDING=1 | 3/3 | 3/3 | — | 10.7 | 129.7 | 13.7 | 1512 | $2.67 | 0 | 0 | 165.7 | 279.9 | 57% | 251 | 0 |
+| p2-ax-grounded-no-vision | azure/gpt-5.6-sol | explore | 234 | --backend ax --no-vision APPMAP_VARIANT=novision | 3/3 | 3/3 | — | 8.7 | 98 | 11.7 | 1340.7 | $1.68 | 0 | 0 | 174.5 | 309.9 | 53% | 214 | 0 |
+| p2-cdp-grounded-no-vision | azure/gpt-5.6-sol | explore | 170 | --backend cdp --no-vision APPMAP_VARIANT=novision | 3/3 | 3/3 | — | 9 | 65.7 | 15.7 | 1489.3 | $0.66 | 0 | 3 | 70.6 | 76.6 | — | — | ⚠ 3 |
+| p2-min-context-grounded | azure/gpt-5.6-sol | explore | 230 | --backend ax --no-vision AXDOM=0 APPMAP_VARIANT=novision | 3/3 | 3/3 | — | 7.3 | 69.7 | 10.3 | 1260.3 | $1.15 | 0 | 0 | 149.3 | 245.6 | 47% | 200 | 0 |
+| p2-min-context-ungrounded | azure/gpt-5.6-sol | none | 140 | --backend ax --no-vision AXDOM=0 NO_GROUNDING=1 | 3/3 | 2/3 | gave-up 1 | 12 | 96 | 14.3 | 1950 | $2.16 | 0 | 0 | 186.6 | 292.9 | 47% | 216 | 0 |
+| p2-curated | azure/gpt-5.6-sol | curated | 144 | --backend cdp USE_RECIPE=1 | 3/3 | 3/3 | — | 5.7 | 65.7 | 10 | 817.3 | $0.69 | 0 | 0 | 75.5 | 81.5 | — | — | ⚠ 3 |
+| p2-vision-only-ungrounded | azure/gpt-5.6-sol | none | 166 | --backend ax --no-ax NO_GROUNDING=1 | 3/3 | 0/3 | gave-up 3 | 15 | 185.3 | 16 | 5085.7 | $1.45 | 0 | 0 | 169.5 | 0 | — | — | 0 |
+| p2-vision-only-grounded-axmap | azure/gpt-5.6-sol | explore | 166 | --backend ax --no-ax | 3/3 | 0/3 | gave-up 3 | 15 | 174 | 16.3 | 4793.3 | $1.56 | 0 | 0 | 177.1 | 0 | — | — | 0 |
+| p2-vision-only-grounded-visionmap | azure/gpt-5.6-sol | explore-vision | 89 | --backend ax --no-ax APPMAP_VARIANT=vision | 3/3 | 0/3 | gave-up 3 | 15 | 217 | 15 | 5671 | $1.48 | 0 | 0 | 222.2 | 0 | — | — | 0 |
+| p2-vision-only-curated | azure/gpt-5.6-sol | curated | 166 | --backend ax --no-ax USE_RECIPE=1 | 3/3 | 2/3 | gave-up 1 | 13 | 146.3 | 15 | 3692.7 | $1.23 | 0 | 0 | 176.1 | 0 | — | — | 0 |
 
 ## Phase 3 — recipes
 
@@ -58,10 +58,10 @@ Compiles: p3-compile-ax: not run; p3-compile-cdp: not run
 
 ## Phase 4 — second-task spot check (optional)
 
-| arm | model | flags | done | success | failures | steps x̄ | s x̄ | calls x̄ | out-tok x̄ | $ | rejections | doc-scope muts | obs-nodes x̄ | shown x̄ | depth x̄ | max idx | unnormalised |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| p4-ungrounded | (default) | --backend cdp NO_GROUNDING=1 | 0/2 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
-| p4-grounded | (default) | --backend cdp | 0/2 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
+| arm | model | tier | map | flags | done | success | failures | steps x̄ | s x̄ | calls x̄ | out-tok x̄ | $ | rejections | doc-scope muts | obs-nodes x̄ | shown x̄ | depth x̄ | max idx | unnormalised |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| p4-ungrounded | (default) | — | — | --backend cdp NO_GROUNDING=1 | 0/2 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
+| p4-grounded | (default) | — | — | --backend cdp | 0/2 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
 
 | arm | model | flags | done | success | recipe steps | rescued x̄ | calls x̄ | s x̄ |
 |---|---|---|---|---|---|---|---|---|
@@ -76,29 +76,29 @@ Compiles: p3-compile-ax: not run; p3-compile-cdp: not run
 > config, so a reorder is a prompt to re-measure that arm filmed, not a conclusion.
 > Cursor compositing is a separate manual step (`npm run humanize -- <stamp>`).
 
-| arm | model | flags | done | success | failures | steps x̄ | s x̄ | calls x̄ | out-tok x̄ | $ | rejections | doc-scope muts | obs-nodes x̄ | shown x̄ | depth x̄ | max idx | unnormalised |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| p5-ax-ungrounded-filmed | (default) | --backend ax NO_GROUNDING=1 | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
-| p5-ax-grounded-filmed | (default) | --backend ax | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
-| p5-cdp-ungrounded-filmed | (default) | --backend cdp NO_GROUNDING=1 | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
-| p5-cdp-grounded-filmed | (default) | --backend cdp | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
-| p5-ax-grounded-axdom-off-filmed | (default) | --backend ax AXDOM=0 | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
-| p5-ax-noaxdom-ungrounded-filmed | (default) | --backend ax AXDOM=0 NO_GROUNDING=1 | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
-| p5-ax-grounded-no-vision-filmed | (default) | --backend ax --no-vision APPMAP_VARIANT=novision | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
-| p5-cdp-grounded-no-vision-filmed | (default) | --backend cdp --no-vision APPMAP_VARIANT=novision | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
-| p5-min-context-grounded-filmed | (default) | --backend ax --no-vision AXDOM=0 APPMAP_VARIANT=novision | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
-| p5-min-context-ungrounded-filmed | (default) | --backend ax --no-vision AXDOM=0 NO_GROUNDING=1 | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
-| p5-curated-filmed | (default) | --backend cdp USE_RECIPE=1 | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
-| p5-vision-only-ungrounded-filmed | (default) | --backend ax --no-ax NO_GROUNDING=1 | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
-| p5-vision-only-grounded-axmap-filmed | (default) | --backend ax --no-ax | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
-| p5-vision-only-grounded-visionmap-filmed | (default) | --backend ax --no-ax APPMAP_VARIANT=vision | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
-| p5-vision-only-curated-filmed | (default) | --backend ax --no-ax USE_RECIPE=1 | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
-| p5-ungrounded-filmed | (default) | --backend cdp NO_GROUNDING=1 | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
-| p5-grounded-filmed | (default) | --backend cdp | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
-| p5-ax-procedure-from-ungrounded-filmed | (default) | --backend ax USE_PROCEDURES=1 PROCEDURE_LINEAGE=ungrounded | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
-| p5-cdp-procedure-from-ungrounded-filmed | (default) | --backend cdp USE_PROCEDURES=1 PROCEDURE_LINEAGE=ungrounded | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
-| p5-ax-procedure-filmed | (default) | --backend ax USE_PROCEDURES=1 | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
-| p5-cdp-procedure-filmed | (default) | --backend cdp USE_PROCEDURES=1 | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
+| arm | model | tier | map | flags | done | success | failures | steps x̄ | s x̄ | calls x̄ | out-tok x̄ | $ | rejections | doc-scope muts | obs-nodes x̄ | shown x̄ | depth x̄ | max idx | unnormalised |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| p5-ax-ungrounded-filmed | (default) | — | — | --backend ax NO_GROUNDING=1 | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
+| p5-ax-grounded-filmed | (default) | — | — | --backend ax | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
+| p5-cdp-ungrounded-filmed | (default) | — | — | --backend cdp NO_GROUNDING=1 | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
+| p5-cdp-grounded-filmed | (default) | — | — | --backend cdp | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
+| p5-ax-grounded-axdom-off-filmed | (default) | — | — | --backend ax AXDOM=0 | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
+| p5-ax-noaxdom-ungrounded-filmed | (default) | — | — | --backend ax AXDOM=0 NO_GROUNDING=1 | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
+| p5-ax-grounded-no-vision-filmed | (default) | — | — | --backend ax --no-vision APPMAP_VARIANT=novision | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
+| p5-cdp-grounded-no-vision-filmed | (default) | — | — | --backend cdp --no-vision APPMAP_VARIANT=novision | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
+| p5-min-context-grounded-filmed | (default) | — | — | --backend ax --no-vision AXDOM=0 APPMAP_VARIANT=novision | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
+| p5-min-context-ungrounded-filmed | (default) | — | — | --backend ax --no-vision AXDOM=0 NO_GROUNDING=1 | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
+| p5-curated-filmed | (default) | — | — | --backend cdp USE_RECIPE=1 | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
+| p5-vision-only-ungrounded-filmed | (default) | — | — | --backend ax --no-ax NO_GROUNDING=1 | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
+| p5-vision-only-grounded-axmap-filmed | (default) | — | — | --backend ax --no-ax | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
+| p5-vision-only-grounded-visionmap-filmed | (default) | — | — | --backend ax --no-ax APPMAP_VARIANT=vision | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
+| p5-vision-only-curated-filmed | (default) | — | — | --backend ax --no-ax USE_RECIPE=1 | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
+| p5-ungrounded-filmed | (default) | — | — | --backend cdp NO_GROUNDING=1 | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
+| p5-grounded-filmed | (default) | — | — | --backend cdp | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
+| p5-ax-procedure-from-ungrounded-filmed | (default) | — | — | --backend ax USE_PROCEDURES=1 PROCEDURE_LINEAGE=ungrounded | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
+| p5-cdp-procedure-from-ungrounded-filmed | (default) | — | — | --backend cdp USE_PROCEDURES=1 PROCEDURE_LINEAGE=ungrounded | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
+| p5-ax-procedure-filmed | (default) | — | — | --backend ax USE_PROCEDURES=1 | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
+| p5-cdp-procedure-filmed | (default) | — | — | --backend cdp USE_PROCEDURES=1 | 0/1 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
 
 | arm | model | flags | done | success | recipe steps | rescued x̄ | calls x̄ | s x̄ |
 |---|---|---|---|---|---|---|---|---|
@@ -121,7 +121,27 @@ Compiles: p3-compile-ax: not run; p3-compile-cdp: not run
 
 ## Judge
 
-_No run has judge metrics yet — run `./run bench judge` after runs land, then re-collect._
+| arm | model | judged | trajectory P/F/U | visual P/F/U |
+|---|---|---|---|---|
+| p2-ax-ungrounded | azure/gpt-5.6-sol | 3 | 1/2/0 | 1/0/0 |
+| p2-ax-grounded | azure/gpt-5.6-sol | 3 | 3/0/0 | 3/0/0 |
+| p2-cdp-ungrounded | azure/gpt-5.6-sol | 3 | 3/0/0 | 3/0/0 |
+| p2-cdp-grounded | azure/gpt-5.6-sol | 3 | 3/0/0 | 3/0/0 |
+| p2-ax-grounded-axdom-off | azure/gpt-5.6-sol | 3 | 3/0/0 | 3/0/0 |
+| p2-ax-noaxdom-ungrounded | azure/gpt-5.6-sol | 3 | 3/0/0 | 3/0/0 |
+| p2-ax-grounded-no-vision | azure/gpt-5.6-sol | 3 | 3/0/0 | 3/0/0 |
+| p2-cdp-grounded-no-vision | azure/gpt-5.6-sol | 3 | 3/0/0 | 3/0/0 |
+| p2-min-context-grounded | azure/gpt-5.6-sol | 3 | 3/0/0 | 2/0/1 |
+| p2-min-context-ungrounded | azure/gpt-5.6-sol | 3 | 2/1/0 | 2/0/0 |
+| p2-curated | azure/gpt-5.6-sol | 3 | 3/0/0 | 3/0/0 |
+| p2-vision-only-ungrounded | azure/gpt-5.6-sol | 3 | 0/3/0 | 0/0/0 |
+| p2-vision-only-grounded-axmap | azure/gpt-5.6-sol | 3 | 0/3/0 | 0/0/0 |
+| p2-vision-only-grounded-visionmap | azure/gpt-5.6-sol | 3 | 0/3/0 | 0/0/0 |
+| p2-vision-only-curated | azure/gpt-5.6-sol | 3 | 2/1/0 | 2/0/0 |
+
+### Disagreements
+
+_None — every judged run's verdict matches its self-report._
 
 ## Timing (queue wait vs run, from job records)
 

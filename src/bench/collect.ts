@@ -256,6 +256,11 @@ export async function collect(opts: CollectOptions = {}): Promise<CollectOutcome
 	const collected: string[] = [];
 	const pending: string[] = [];
 
+	// Post-terminal writers land AFTER a run is banked, and `collected` closes the entry
+	// forever — so their output never reached the manifest. Refresh reopens it for local
+	// re-reads only. See refreshCollected.
+	manifest = refreshCollected(manifest, dataDir, log);
+
 	for (const entry of manifest.entries) {
 		if (entry.collected) continue;
 		// Local compiles are recorded collected at compile time; an uncollected "local" entry
@@ -565,6 +570,54 @@ export function evictFailedRun(entry: ManifestEntry, outRoot: string, log: (line
  * technicalFailure, and a unit test that feeds the classifier a note directly — which the
  * original did — passes happily while production does the wrong thing.
  */
+/**
+ * Fold artifacts written AFTER a run was banked into its already-collected entry.
+ *
+ * `collect` skips `entry.collected` outright, which is correct for the expensive half — no
+ * re-pull, no fleet contact. But a run's record keeps being written after it terminates, and
+ * every one of those writers was silently dropped:
+ *
+ * - `judge.json` — the documented order is runs land → `bench judge` → `bench collect`, and it
+ *   NEVER worked, because the watcher collects continuously while the phase drains. By the time
+ *   the judge runs, all 45 entries are banked and closed. 45 verdicts landed on disk and none
+ *   reached the manifest. The comment at the read site promised "a later pass folds the verdict
+ *   in"; there was no such pass.
+ * - Metrics added to the parser later (`blackouts`, `groundingNodes`) — the stamp on disk has
+ *   always carried them, but a run collected before the field existed keeps the older shape,
+ *   and nothing re-reads it.
+ *
+ * This is the same defect as the codebase's "post-terminal writers must re-link the backup"
+ * rule, one tree over: a terminated run is not a finished record.
+ *
+ * MERGE-ONLY-ABSENT, deliberately. A re-parse may add a key, never overwrite one — so a banked
+ * number cannot silently change under a later pass, and "collected values win" still holds. It
+ * reads local files only and is idempotent: a second call adds nothing.
+ */
+export function refreshCollected(manifest: Manifest, dataDir: string, log: (s: string) => void = () => {}): Manifest {
+	const out = path.join(dataDir, "out");
+	let touched = 0;
+	const entries = manifest.entries.map((entry) => {
+		if (!entry.collected) return entry;
+		const add: RunMetrics = {};
+		const judge = readJson(runFile(entry.jobId, RUN_FILES.judge, out));
+		if (judge) Object.assign(add, parseJudgeMetrics(judge));
+		const runLog = readJson(runFile(entry.jobId, RUN_FILES.log, out));
+		if (runLog) Object.assign(add, parseRunMetrics(runLog));
+		// Explore arms only carry a stamp; a task run has no appmap of its own.
+		const md = runFile(entry.jobId, RUN_FILES.appmap, out);
+		if (md && fs.existsSync(md)) Object.assign(add, parseAppmapStamp(fs.readFileSync(md, "utf8")));
+		const have = entry.metrics ?? {};
+		const missing = Object.entries(add).filter(([k, v]) => v !== undefined && (have as Record<string, unknown>)[k] === undefined);
+		if (!missing.length) return entry;
+		touched++;
+
+		return { ...entry, metrics: { ...have, ...Object.fromEntries(missing) } };
+	});
+	if (touched) log(`refreshed ${touched} collected entr${touched === 1 ? "y" : "ies"} from artifacts written after collection`);
+
+	return { ...manifest, entries };
+}
+
 export function collectEntry(entry: ManifestEntry, job: JobRecord | undefined, dataDir: string, state: string, benchRoot?: string): ManifestEntry {
 	const arm = armById(entry.armId);
 	const notes: string[] = [];
