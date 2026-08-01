@@ -1449,15 +1449,19 @@ const costCellFor = (e) => e.usd != null ? `<td class="num">${fmtMoney(e.usd)}</
 // The five explore-discovery cells for ONE pass (EntryView.exploreStamp); an uncollected
 // pass serves its heartbeat counters — the heartbeat carries the full set (actions,
 // seen/actuated/dismissed, nodes, scope ambiguities), so every cell is live.
-// Column hues per David (2026-08-01): Nodes green, Activated blue, Dismissed red, Ambig
-// yellow. Activated/Dismissed are PERCENTAGES over `seen` (the pass's total observed
+// Column hues follow the Phase-1 chart's series palette (per David, 2026-08-01): the board
+// and the chart describe the same funnel, so a hue means one thing everywhere — Activated
+// wears the chart's blue, Dismissed its orange (NOT danger red: dismissing is a documented-
+// legitimate way to empty the frontier), Nodes the chart's green, Ambig the series gold
+// (status ambers stay reserved for actual state).
+// Activated/Dismissed are PERCENTAGES over `seen` (the pass's total observed
 // controls — the only denominator that keeps both in [0,100]; the distilled node count
 // can't be one, a mass dismissal sweeps controls the graph never keeps); Ambig is a share
 // of the graph's own nodes. The raw counts stay in each cell's tooltip. Spans set their
 // own color, so inside a livecell the numbers keep their column hue while the ~ keeps the
 // running tint. Both paths share the helpers, so a value never changes format or color
 // when a run's collect lands.
-const EXPLORE_HUES = { nodes: "var(--good)", activated: SERIES[0], dismissed: "var(--critical)", ambig: "var(--warning)" };
+const EXPLORE_HUES = { nodes: SERIES[2], activated: SERIES[0], dismissed: SERIES[1], ambig: SERIES[3] };
 const hued = (color, text) => `<span style="color:${color}">${text}</span>`;
 const pctOf = (part, total) => part == null || total == null || !total ? null : (100 * part) / total;
 const fmtPct = (p) => p == null ? "–" : (p >= 10 || p === 0 ? Math.round(p) : p.toFixed(1)) + "%";
@@ -2225,15 +2229,20 @@ function renderExplore() {
 	const arms = visibleArms().filter((a) => a.phase === 1 && a.passes.some((p) => p.explore && p.explore.controlsSeen != null));
 	if (!arms.length) { $("chart-explore").innerHTML = `<div class="empty">waiting for a collected explore…</div>`; return; }
 	// Funnel order (seen ≥ actuated+dismissed); colors follow the series, not the position.
-	// Group labels mirror the board's "perceives" column; web arms append "(web)" so the
-	// two DOM+Vision explores (Yarn app vs the web target) stay distinguishable — the exact
-	// host adds nothing a chart label needs. HORIZONTAL on purpose: these labels are long,
-	// per-model passes multiply the groups, and vBars' centered x-labels stepped on each
-	// other until the axis was unreadable. The gutter fits the full words (the old "+vis"
-	// compaction hack is gone) and the model rides its own muted sub-line.
+	// Group labels speak the board's Variant names (per David, 2026-08-01) — one vocabulary
+	// between table and chart. A title two arms share (both backends run a "Baseline") gets
+	// the actuation appended, the same axis the board's Acts With column disambiguates by;
+	// web arms append "(web)". HORIZONTAL on purpose: these labels are long, per-model
+	// passes multiply the groups, and vBars' centered x-labels stepped on each other until
+	// the axis was unreadable. The gutter fits the full words and the model rides its own
+	// muted sub-line.
 	// The ⚠ declared marker rides the LABEL here (SVG text can't carry a tooltip): a
 	// Vision-only arm's tallies are self-reported, and the board flags the same numbers.
-	const exploreLabel = (a) => (!a.perception ? a.id.replace("p1-explore-", "") : a.url ? `${a.perception} (web)` : a.perception)
+	const titleCounts = {};
+	for (const a of arms) titleCounts[displayName(a)] = (titleCounts[displayName(a)] || 0) + 1;
+	const exploreLabel = (a) => displayName(a)
+		+ (titleCounts[displayName(a)] > 1 && a.actuation ? ` (${a.actuation})` : "")
+		+ (a.url ? " (web)" : "")
 		+ (a.flags && a.flags.includes("--no-ax") ? " ⚠ declared" : "");
 	const groups = arms.flatMap((a) => a.passes.filter((p) => p.explore && p.explore.controlsSeen != null).map((p) => ({
 		label: exploreLabel(a),
