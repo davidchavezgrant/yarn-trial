@@ -133,6 +133,15 @@ function graphFields(
  * the app — so a click whose target reads the same value afterwards, or whose target is gone
  * from the next observation (a menu that closed), is not a mutation.
  */
+/**
+ * Roles whose click commits to their OWNING control, never to themselves. CDP ai-mode names
+ * (`option`, `menuitemradio`); AX menu items are absent deliberately — an AX menu closes with
+ * the click, so the vanish check routes them to the same scan, and widening this set to roles
+ * that toggle THEMSELVES (menuitemcheckbox) would send a self-mutation hunting for an owner
+ * that does not exist.
+ */
+const OPTION_ROLES = new Set(["option", "menuitemradio"]);
+
 export function detectMutation(
 	action: any,
 	prevObs: ObservationBundle,
@@ -150,6 +159,15 @@ export function detectMutation(
 	// journaled mutation: an unrestorable change is better left unclaimed than fabricated against
 	// the wrong control.
 	if (!target.name) return undefined;
+
+	// An option's commit always lands on a DIFFERENT control — the combobox/list it belongs
+	// to — so role routes it to the option-commit scan directly. Presence cannot: the vanish
+	// check below catches the AX shape (the menu closes and takes the option with it), but a
+	// native <select> over CDP keeps its options in the snapshot permanently, so the clicked
+	// option is still "present" and the target-only diff would inspect the option itself,
+	// which has no value of its own to change. The 2026-08-01 cursor-restore run mutated
+	// exactly this way and journaled nothing.
+	if (OPTION_ROLES.has(target.role)) return optionCommit(target.name, prevObs, nextObs, graph, step);
 
 	const after = nextObs.interactive.filter((e) => e.name === target.name && e.surface === target.surface);
 	// The clicked element is gone from the next observation. Usually that is a menu closing —

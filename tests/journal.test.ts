@@ -202,6 +202,27 @@ test("detectMutation__JournalsTheCombobox__When__TheClickedOptionVanishedWithIts
 	assert.equal(m?.after, "Arrow-first");
 });
 
+test("detectMutation__JournalsTheCombobox__When__TheClickedOptionPersists", () => {
+	// The CDP twin of the vanished-option case above: a native <select>'s options are DOM
+	// children and never leave the snapshot, so the vanish check cannot hand off — the clicked
+	// option is still "present" and a target-only diff inspects the option itself, which has no
+	// value of its own to change. The 2026-08-01 cursor-restore run mutated exactly this way
+	// and journaled nothing. Role decides, not presence: an option's commit always lands on the
+	// owning control.
+	const prev = obsWith([
+		ie("Cursor Style", "Screen Clip Settings", { handle: 5, value: "Pointer-first", role: "combobox" }),
+		ie("Arrow-first", "Screen Clip Settings", { handle: 110, role: "option" }),
+	]);
+	const next = obsWith([
+		ie("Cursor Style", "Screen Clip Settings", { handle: 7, value: "Arrow-first", role: "combobox" }),
+		ie("Arrow-first", "Screen Clip Settings", { handle: 112, role: "option" }),
+	]);
+	const m = detectMutation({ name: "click", ref: 110 }, prev, next, undefined, 2);
+	assert.equal(m?.control, "Cursor Style");
+	assert.equal(m?.before, "Pointer-first");
+	assert.equal(m?.after, "Arrow-first");
+});
+
 test("detectMutation__JournalsNothing__When__TwoControlsCommitTheSameOptionLabel", () => {
 	// Two comboboxes newly reading the clicked label: (name, surface) evidence cannot say
 	// which one the option belonged to, and a guess would send teardown to the wrong control.
