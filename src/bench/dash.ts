@@ -306,11 +306,22 @@ function entryView(e: ManifestEntry, fleet: FleetView): EntryView {
 			host: e.host,
 			submittedAt: e.submittedAt,
 			collected: true,
-			// With metrics, the run log speaks. WITHOUT metrics (compiles — pure local file
-			// transforms), the manifest's own state is the only signal: a REFUSED compile is
-			// recorded state "failed" and must render as Refused, not Collected.
+			// With metrics, the run log speaks — failureKind FIRST: grounding-mismatch is the one
+			// kind that can sit on a success-true run (the number is real but mislabelled, and
+			// collect evicts the row as a non-sample), so the run's own verdict must not paint it
+			// green. Explore failures carry NO success/failureKind at all (collect computes
+			// neither for explores) — their failure lives in `technical` and the manifest state,
+			// which used to be ignored the moment metrics existed: a failed pass rendered as gray
+			// Collected after collection. `technical` maps to "crashed", collect's own vocabulary
+			// for died-not-measured. WITHOUT metrics (compiles — pure local file transforms), the
+			// manifest's own state is the only signal: a REFUSED compile renders Refused.
 			status: m
-				? (m.success === true ? "succeeded" : (m.failureKind ?? (m.success === false ? "failed" : "collected")))
+				? (m.failureKind
+					?? (m.success === true ? "succeeded"
+						: m.success === false ? "failed"
+						: e.technical ? "crashed"
+						: e.state === "failed" ? "failed"
+						: "collected"))
 				: (e.state === "failed" ? "refused" : "collected"),
 			...(m?.success !== undefined ? { success: m.success } : {}),
 			...(m?.failureKind ? { failureKind: m.failureKind } : {}),

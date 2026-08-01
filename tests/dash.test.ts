@@ -272,6 +272,55 @@ test("BuildState__MarksCompileRefused__When__CollectedEntryFailedWithoutMetrics"
 	assert.equal(armView(s, "p3-compile-cdp")?.passes[0]?.entries[0]?.status, "collected");
 });
 
+test("BuildState__MarksEntryCrashed__When__CollectedFailureCarriesOnlyTechnical", () => {
+	// The live case (explore-2026-08-01T08-01-31-073-yarn): a failed explore pass HAS metrics
+	// (whatever the stamp parse salvaged) but no success/failureKind — collect computes neither
+	// for explores. Its failure lives in `technical` + state "failed", which entryView used to
+	// ignore once metrics existed: the board painted the failure as a gray Collected chip the
+	// moment it was collected, and no client color map could ever redden a "collected" status.
+	const s = buildState(
+		manifest(entry({
+			armId: "p1-explore-ax",
+			jobId: "explore-dead",
+			state: "failed",
+			collected: true,
+			technical: { kind: "crashed", detail: "explore produced no published map — nothing for a later phase to ground on" },
+			metrics: { exploreActions: 4 },
+		})),
+		fleet([]),
+		[],
+		true,
+	);
+	assert.equal(armView(s, "p1-explore-ax")?.passes[0]?.entries[0]?.status, "crashed");
+});
+
+test("BuildState__MarksEntryFailed__When__CollectedEntryFailedWithMetricsButNoVerdict", () => {
+	// An explore that died AFTER publishing its map: state "failed", no technical ruling, and
+	// metrics carrying only the stamp. The manifest's own state is still a failure signal —
+	// metrics existing must not silence it.
+	const s = buildState(
+		manifest(entry({ armId: "p1-explore-ax", jobId: "explore-late-death", state: "failed", collected: true, metrics: { graphNodes: 150 } })),
+		fleet([]),
+		[],
+		true,
+	);
+	assert.equal(armView(s, "p1-explore-ax")?.passes[0]?.entries[0]?.status, "failed");
+});
+
+test("BuildState__MarksGroundingMismatch__When__SuccessTrueRunGotTheWrongGrounding", () => {
+	// grounding-mismatch is the one failureKind that can sit on a success-true run (the number
+	// is real but mislabelled; collect evicts the row as a non-sample). failureKind must
+	// outrank the run's own success verdict or the board shows green Succeeded on a row the
+	// arm's averages refuse to count.
+	const s = buildState(
+		manifest(entry({ jobId: "job-mislabelled", state: "done", collected: true, metrics: { success: true, failureKind: "grounding-mismatch" } })),
+		fleet([]),
+		[],
+		true,
+	);
+	assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.entries[0]?.status, "grounding-mismatch");
+});
+
 test("BuildState__ReportsDisagreement__When__SelfReportContradictsJudge", () => {
 	const s = buildState(
 		manifest(entry({ jobId: "job-lie", state: "done", collected: true, metrics: { success: true, judgeTrajectory: "FAIL", judgeScope: "document" } })),

@@ -867,28 +867,33 @@ function entryStart(e) {
 		if (e.endedAt && dur != null) return (Date.parse(e.endedAt) - dur * 1000) || null;
 		return Date.parse(e.submittedAt) || null;
 	}
-	if (e.status === "running" && e.elapsedSec != null) return receivedAt - e.elapsedSec * 1000;
-	// Finished-but-uncollected (or a blipped poll): the remembered live start keeps the
-	// Started column steady across the run's transitions instead of blinking to "–".
+	// The pinned first-sighting start outranks re-deriving from the ticking elapsed — the
+	// pin exists precisely so a supposedly fixed timestamp doesn't wobble across pushes
+	// (memorizeLive has already pinned it by render time).
 	const m = liveMem[e.jobId];
 	if (m && m.start != null) return m.start;
+	if (e.status === "running" && e.elapsedSec != null) return receivedAt - e.elapsedSec * 1000;
 
 	return null;
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-// Local 12-hour time with AM/PM ("2:18 AM"), prefixed with its day ("Jul 31 11:58 PM")
-// when the start falls on a previous local day — an overnight bench must not read as
-// this morning.
+// Started column + its tooltips: local 12-hour time with AM/PM ("2:18 PM" — a bare "02:18"
+// left morning and evening runs indistinguishable at a glance; David, 2026-08-01), prefixed
+// with its day ("Jul 31 11:58 PM") when the start falls on a previous local day — an
+// overnight bench must not read as this morning. The events feed and the cost axis keep the
+// compact hhmm clock: their stamps sit dense and near-now, where AM/PM is only width.
 function startStamp(t) {
 	if (t == null) return "–";
 	const d = new Date(t), now = new Date();
 	const today = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
-	const h = d.getHours(), time = (h % 12 || 12) + ":" + String(d.getMinutes()).padStart(2, "0") + (h < 12 ? " AM" : " PM");
+	const time = (d.getHours() % 12 || 12) + ":" + String(d.getMinutes()).padStart(2, "0") + " " + (d.getHours() < 12 ? "AM" : "PM");
 	return (today ? "" : MONTHS[d.getMonth()] + " " + d.getDate() + " ") + time;
 }
 
-const shortJob = (id) => String(id).length > 14 ? String(id).slice(0, 14) + "…" : String(id);
+// Shorten by stripping the DATE — the dash is already scoped to one date — never the tail:
+// truncating at 14 chars cut every same-hour stamp to one identical string ("2026-07-31T05-…").
+const shortJob = (id) => String(id).replace(/\d{4}-\d{2}-\d{2}T/, "");
 
 // The cell shows the LATEST relevant start among the row's entries; the tooltip accounts
 // for every entry — started / queued (submitted …) / finished — so a "–" is explained.
