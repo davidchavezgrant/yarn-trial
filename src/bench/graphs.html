@@ -95,6 +95,12 @@
 	.panelgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 	@media (max-width: 800px) { .panelgrid { grid-template-columns: 1fr; } }
 	.paneltitle { color: var(--muted); font-size: 11px; margin: 2px 0 2px; }
+	/* convergence header: legend left, axis toggle right — same row so the toggle reads as
+	   part of the chart, not a page control */
+	.convhead { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+	.convaxis { white-space: nowrap; display: inline-flex; align-items: baseline; gap: 8px; }
+	.convaxis .chip { cursor: pointer; color: var(--muted); }
+	.convaxis .chip.sel { color: var(--ink); border-color: var(--ink-2); }
 </style>
 </head>
 <body>
@@ -248,6 +254,11 @@ let data;            // /api/graphs/data payload
 let motion;          // /api/graphs/motion payload (fetched once, lazily)
 let motionState = "idle"; // idle | loading | absent
 let selRun = "all";  // the one page-level filter
+// One x-axis choice shared by every convergence panel on the page (same idiom as selRun).
+// The two axes answer different questions: "time" is the throughput view, model latency
+// included; "actions" isolates exploration strategy from how fast the model thinks. A
+// model can win one and lose the other.
+let convAxis = "time";
 
 const filteredRuns = () => (data?.runs ?? []).filter((r) => selRun === "all" || r.jobId === selRun);
 const stepRuns = () => filteredRuns().filter((r) => Array.isArray(r.steps) && r.steps.length);
@@ -905,63 +916,164 @@ function renderMotion() {
 }
 
 /* ================= 11 · discovery convergence (explore rows) ================= */
+// Fixed categorical order, never cycled: a series keeps its hue whether or not the others
+// plotted. Panel 0 is the convergence family (one magnitude: does the frontier burn down
+// while actuated and the map climb to meet it). Panel 1 is the ledger ceiling — seen and
+// dismissed leap an order of magnitude on a mass dismissal, which is exactly the event
+// that must not crush panel 0's scale, so they get their own axis (never a second scale
+// on the same panel).
+const CONV_PANELS = [
+	[{ key: "frontier", name: "frontier", color: "var(--s1)" }, { key: "actuated", name: "actuated", color: "var(--s2)" }, { key: "nodes", name: "map nodes", color: "var(--s3)" }],
+	[{ key: "seen", name: "seen", color: "var(--s4)" }, { key: "dismissed", name: "dismissed", color: "var(--s5)" }],
+];
+
+// Actions coordinate for points that lack one (chapter marks carry no action count):
+// interpolate between the bracketing heartbeats by wall-clock, so chapter-borne data —
+// the only source of `nodes` on pre-enrichment logs — still plots on the actions axis.
+function convActionsAt(pts) {
+	const known = pts.filter((p) => p.actions != null).map((p) => ({ t: p.t, a: p.actions }));
+	return pts.map((p) => {
+		if (p.actions != null) return p.actions;
+		let prev = null, next = null;
+		for (const q of known) { if (q.t <= p.t) prev = q; if (q.t >= p.t && !next) next = q; }
+		if (prev && next) return next.t === prev.t ? prev.a : prev.a + ((next.a - prev.a) * (p.t - prev.t)) / (next.t - prev.t);
+		return prev ? prev.a : next ? next.a : null;
+	});
+}
+
+// Everything one point carried, as tooltip rows — the marker's table view. Fields the
+// event lacked are absent, so pre-enrichment logs simply read shorter.
+function convTipRows(p) {
+	const rows = [[
+		p.actions != null ? `action ${p.actions}` : null,
+		fmtDur(p.t / 1000),
+		p.kind === "chapter" ? `chapter ${p.chapter ?? "?"} (context reset)` : null,
+	].filter(Boolean).join(" · ")];
+	for (const sd of CONV_PANELS.flat()) if (p[sd.key] != null) rows.push({ color: sd.color, value: String(p[sd.key]), label: sd.name });
+	if (p.tokensIn != null || p.tokensOut != null) rows.push({ value: `${fmtK(p.tokensIn)} in · ${fmtK(p.tokensOut)} out`, label: "tokens" });
+	return rows;
+}
+
+// Round axis numbers (0/50/100/150/200) instead of max-fractions (63/125/188): the
+// tightest of a 3- or 4-division scale built from a 1/2/5×10^k step ladder.
+function convNiceScale(m) {
+	let best = null;
+	for (const div of [3, 4]) {
+		const raw = m / div;
+		const pow = 10 ** Math.floor(Math.log10(raw));
+		const s = raw / pow;
+		const total = (s <= 1 ? 1 : s <= 2 ? 2 : s <= 5 ? 5 : 10) * pow * div;
+		if (!best || total < best.max) best = { max: total, div };
+	}
+	return best;
+}
+
 function renderConvergence() {
 	const runs = filteredRuns().filter((r) => Array.isArray(r.series) && r.series.length);
 	if (data.arm.kind !== "explore" && !runs.length) return; // task rows: card absent, not empty
 	const { body, tableMode } = card("c-conv", "Discovery convergence", "the shape of each explore pass: frontier burning down while the map climbs to meet it — ticks mark context resets; seen/dismissed ride their own panel so mass dismissals can't crush the scale");
 	if (!runs.length) return empty(body, "no discovery series pulled for this row yet");
 	if (tableMode)
-		return tableView(body, ["run", "t", "kind", "actions", "frontier", "actuated", "nodes", "seen", "dismissed"],
-			runs.flatMap((r) => r.series.map((pt) => ({ run: shortJob(r.jobId), t: fmtDur(pt.t / 1000), kind: pt.kind, actions: pt.actions ?? "", frontier: pt.frontier ?? "", actuated: pt.actuated ?? "", nodes: pt.nodes ?? "", seen: pt.seen ?? "", dismissed: pt.dismissed ?? "" }))));
-	const PANELS = [
-		[{ key: "frontier", color: "var(--s1)" }, { key: "actuated", color: "var(--s2)" }, { key: "nodes", color: "var(--s3)" }],
-		[{ key: "seen", color: "var(--s4)" }, { key: "dismissed", color: "var(--s5)" }],
-	];
+		return tableView(body, ["run", "t", "kind", "actions", "frontier", "actuated", "nodes", "seen", "dismissed", "tok-in", "tok-out"],
+			runs.flatMap((r) => r.series.map((pt) => ({ run: shortJob(r.jobId), t: fmtDur(pt.t / 1000), kind: pt.kind, actions: pt.actions ?? "", frontier: pt.frontier ?? "", actuated: pt.actuated ?? "", nodes: pt.nodes ?? "", seen: pt.seen ?? "", dismissed: pt.dismissed ?? "", "tok-in": pt.tokensIn ?? "", "tok-out": pt.tokensOut ?? "" }))));
+	// Header row: the combined legend doubles as the panels' title; the axis toggle rides the
+	// right edge and only appears when some run recorded action counts to plot against.
+	const head = html("div", "convhead");
+	head.appendChild(legendEl(CONV_PANELS.flat().map((sd) => ({ name: sd.name, color: sd.color, line: true }))));
+	if (runs.some((r) => r.series.some((pt) => pt.actions != null))) {
+		const tg = html("span", "convaxis");
+		for (const [key, tipText] of [["time", "x = wall clock — throughput view, model latency included"], ["actions", "x = actions taken — strategy view, model latency removed"]]) {
+			const c = html("span", `chip${convAxis === key ? " sel" : ""}`, key);
+			hover(c, [tipText]);
+			c.onclick = () => { convAxis = key; renderAll(); };
+			tg.appendChild(c);
+		}
+		head.appendChild(tg);
+	}
+	body.appendChild(head);
 	for (const r of runs) {
+		const acts = convActionsAt(r.series);
+		const useActions = convAxis === "actions" && acts.some((a) => a != null);
+		const items = r.series.map((p, i) => ({ p, x: useActions ? acts[i] : p.t })).filter((it) => it.x != null);
+		if (!items.length) continue;
 		const beats = r.series.filter((pt) => pt.kind === "progress").length;
-		body.appendChild(html("div", "paneltitle", `${shortJob(r.jobId)}${beats < 3 ? ` — sparse pass (${beats} heartbeat${beats === 1 ? "" : "s"}); the curve needs a longer run to mean much` : ""}`));
+		// How the pass ended rides the run's title — a vertical end-line is useless geometry
+		// when the endpoint is by definition the domain's right edge. Fatal is status, so it
+		// wears the status color with an icon, never a bare hue.
+		const title = html("div", "paneltitle", `${shortJob(r.jobId)}${beats < 3 ? ` — sparse pass (${beats} heartbeat${beats === 1 ? "" : "s"}); the curve needs a longer run to mean much` : ""}`);
+		const endPt = [...r.series].reverse().find((p) => p.kind === "finish" || p.kind === "fatal");
+		if (endPt) {
+			const endEl = html("span", "", endPt.kind === "fatal" ? " · ✕ fatal" : ` · ${endPt.stopped || "finished"}`);
+			if (endPt.kind === "fatal") endEl.style.color = STATUS.critical;
+			hover(endEl, [endPt.kind === "fatal" ? (endPt.fatal || "fatal") : "how the pass stopped"]);
+			title.appendChild(endEl);
+		}
+		body.appendChild(title);
 		// X-domain spans the DATA, not the run: a lone late heartbeat on a 0..end axis draws
 		// as dots crammed into the right edge of a 90%-empty plot.
-		const plotted = r.series.filter((pt) => PANELS.flat().some((sd) => pt[sd.key] != null));
-		const tMin = plotted.length ? Math.min(...plotted.map((pt) => pt.t)) : 0;
-		const maxT = Math.max(...r.series.map((pt) => pt.t), tMin + 1);
-		for (const series of PANELS) {
-			const W = 1080, H = 130, padL = 44, padB = 20, padT = 6, padR = 10;
+		const plottable = items.filter((it) => CONV_PANELS.flat().some((sd) => it.p[sd.key] != null));
+		const xMin = plottable.length ? Math.min(...plottable.map((it) => it.x)) : 0;
+		const xMax = Math.max(...items.map((it) => it.x), xMin + 1);
+		const chapters = items.filter((it) => it.p.kind === "chapter");
+		let firstPanel = true;
+		for (const series of CONV_PANELS) {
+			const W = 1080, H = 134, padL = 44, padB = 20, padT = 10, padR = 44;
+			const sdata = series.map((sd) => ({ ...sd, data: items.filter((it) => it.p[sd.key] != null).map((it) => ({ x: it.x, y: it.p[sd.key], p: it.p })) }));
 			// A panel earns its axis only when something in it can draw a LINE — a lone point
 			// per series renders as floating dots over a vacant band, which reads as breakage.
-			const drawable = series.some((sd) => r.series.filter((pt) => pt[sd.key] != null).length >= 2);
-			if (!drawable) continue;
-			const vals = r.series.flatMap((pt) => series.map((sd) => pt[sd.key]).filter((v) => v != null));
-			if (!vals.length) continue;
-			const maxV = Math.max(...vals, 1);
-			const X = (t) => padL + ((Math.max(t, tMin) - tMin) / (maxT - tMin)) * (W - padL - padR);
+			if (!sdata.some((s) => s.data.length >= 2)) continue;
+			const vals = sdata.flatMap((s) => s.data.map((d) => d.y));
+			const { max: maxV, div } = convNiceScale(Math.max(1, ...vals));
+			const X = (x) => padL + ((Math.max(x, xMin) - xMin) / (xMax - xMin)) * (W - padL - padR);
 			const Y = (v) => padT + (1 - v / maxV) * (H - padT - padB);
 			const s = svg(W, H);
-			s.appendChild(el("line", { x1: padL, y1: H - padB, x2: W - padR, y2: H - padB, class: "axis" }));
-			s.appendChild(el("text", { x: 2, y: padT + 10 }, fmtK(maxV)));
-			for (let i = 0; i <= 4; i++) {
-				const tv = tMin + ((maxT - tMin) * i) / 4;
-				s.appendChild(el("text", { x: i === 4 ? X(tv) : X(tv) - 8, y: H - 6, ...(i === 4 ? { "text-anchor": "end" } : {}) }, fmtDur(tv / 1000)));
+			for (let i = 0; i <= div; i++) {
+				const tv = (maxV * i) / div, ty = Y(tv);
+				s.appendChild(el("line", { x1: padL, x2: W - padR, y1: ty, y2: ty, stroke: i === 0 ? "var(--baseline)" : "var(--grid)", "stroke-width": 1 }));
+				s.appendChild(el("text", { x: padL - 6, y: ty + 3, "text-anchor": "end" }, fmtK(Math.round(tv))));
 			}
-			for (const pt of r.series.filter((q) => q.kind === "chapter"))
-				s.appendChild(el("line", { x1: X(pt.t), y1: padT, x2: X(pt.t), y2: H - padB, stroke: "var(--baseline)", "stroke-width": 1 }));
-			for (const sd of series) {
-				const pts = r.series.filter((pt) => pt[sd.key] != null);
-				if (!pts.length) continue;
+			const xlab = (x) => (useActions ? String(Math.round(x)) : fmtDur(x / 1000));
+			for (let i = 0; i <= 4; i++) {
+				const tv = xMin + ((xMax - xMin) * i) / 4;
+				s.appendChild(el("text", { x: i === 4 ? X(tv) : X(tv) - 8, y: H - 6, ...(i === 4 ? { "text-anchor": "end" } : {}) }, xlab(tv) + (i === 4 && useActions ? " actions" : "")));
+			}
+			// Chapter marks: context resets as top-edge ticks on the first panel — annotations,
+			// not gridlines. The tick's own hit target is a fat invisible circle; the nearby
+			// heartbeat markers carry the same tooltip.
+			if (firstPanel)
+				for (const it of chapters) {
+					s.appendChild(el("line", { x1: X(it.x).toFixed(1), x2: X(it.x).toFixed(1), y1: padT - 7, y2: padT - 2, stroke: "var(--baseline)", "stroke-width": 1 }));
+					const hit = el("circle", { cx: X(it.x).toFixed(1), cy: padT - 4, r: 9, fill: "transparent" });
+					hover(hit, () => convTipRows(it.p));
+					s.appendChild(hit);
+				}
+			const usedLabelYs = [];
+			for (const sd of sdata) {
+				if (!sd.data.length) continue;
 				let d = "";
-				pts.forEach((pt, i) => { d += `${i ? "L" : "M"} ${X(pt.t)} ${Y(pt[sd.key])} `; });
-				s.appendChild(el("path", { d, fill: "none", stroke: sd.color, "stroke-width": 2, "stroke-linejoin": "round" }));
-				const lastPt = pts[pts.length - 1];
-				s.appendChild(el("circle", { cx: X(lastPt.t), cy: Y(lastPt[sd.key]), r: 6, fill: "var(--surface)" }));
-				s.appendChild(el("circle", { cx: X(lastPt.t), cy: Y(lastPt[sd.key]), r: 4, fill: sd.color }));
-				const hit = el("circle", { cx: X(lastPt.t), cy: Y(lastPt[sd.key]), r: 13, fill: "transparent" });
-				hover(hit, () => [sd.key, { value: String(lastPt[sd.key]), label: `at ${fmtDur(lastPt.t / 1000)}`, color: sd.color }]);
-				s.appendChild(hit);
+				sd.data.forEach((q, i) => { d += `${i ? "L" : "M"}${X(q.x).toFixed(1)},${Y(q.y).toFixed(1)}`; });
+				s.appendChild(el("path", { d, fill: "none", stroke: sd.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+				// Every heartbeat is a mark with the point's full tooltip — the chart's inline
+				// table view — behind a hit target bigger than the 4px dot.
+				for (const q of sd.data) {
+					s.appendChild(el("circle", { cx: X(q.x).toFixed(1), cy: Y(q.y).toFixed(1), r: 4, fill: sd.color, stroke: "var(--surface)", "stroke-width": 2 }));
+					const hit = el("circle", { cx: X(q.x).toFixed(1), cy: Y(q.y).toFixed(1), r: 10, fill: "transparent" });
+					hover(hit, () => convTipRows(q.p));
+					s.appendChild(hit);
+				}
+				// Endpoint value label (identity stays with the legend); skipped when it would
+				// land on a neighbour's — collided labels read as noise, the tooltip still has it.
+				const last = sd.data[sd.data.length - 1];
+				const ly = Math.max(padT + 4, Math.min(padT + (H - padT - padB) - 2, Y(last.y) + 3));
+				if (!usedLabelYs.some((u) => Math.abs(u - ly) < 11)) {
+					usedLabelYs.push(ly);
+					s.appendChild(el("text", { x: X(last.x) + 8, y: ly }, fmtK(last.y)));
+				}
 			}
 			body.appendChild(s);
+			firstPanel = false;
 		}
 	}
-	body.appendChild(legendEl([{ name: "frontier", color: "var(--s1)", line: true }, { name: "actuated", color: "var(--s2)", line: true }, { name: "map nodes", color: "var(--s3)", line: true }, { name: "seen", color: "var(--s4)", line: true }, { name: "dismissed", color: "var(--s5)", line: true }]));
 }
 
 /* ================= orchestration ================= */
