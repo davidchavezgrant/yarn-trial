@@ -1251,19 +1251,23 @@ const ARM_TITLE_COPY: Record<string, string> = {
 };
 
 /**
- * Explore variants name their perception CONDITION ("Element-Only Explore") — a bare
- * "Explore" was redundant with the Task cell, which already reads "Explore" on these rows
- * (David, 2026-08-01). Never the backend: Acts carries that, and folding actuation into
- * the label is how "vision-only explore (AX)" got misread as vision + AX on 2026-07-31.
+ * Explore variants name their perception CONDITION alone — the word "Explore" is dropped
+ * entirely (David, 2026-08-01): the Task cell already reads "Explore" on these rows, so
+ * repeating it in the Variant cell said everything twice. Never the backend as actuation:
+ * Acts carries that, and folding actuation into the label is how "vision-only explore (AX)"
+ * got misread as vision + AX on 2026-07-31. The one backend-discriminated branch is
+ * noVision, which used to render ONE label ("Element-Only") for two different arms —
+ * ax-without-screenshots and cdp-without-screenshots — so the pair now say what the model
+ * is left with: "No Vision" (AX + DOM attrs remain) vs "CDP Only" (the CDP ref list alone).
  * Derived from the dispatch object, same rule as armTitle — new cells name themselves.
  */
 function exploreTitle(arm: Arm): string {
 	const d = arm.dispatch;
-	const base = d.noAx ? "Vision-Only Explore"
-		: d.axdomOff && d.noVision ? "Bare-Tree Explore"
-		: d.axdomOff ? "No-Sidecar Explore"
-		: d.noVision ? "Element-Only Explore"
-		: "Baseline Explore";
+	const base = d.noAx ? "Vision Only"
+		: d.axdomOff && d.noVision ? "AX Only"
+		: d.axdomOff ? "No Sidecar"
+		: d.noVision ? (d.backend === "cdp" ? "CDP Only" : "No Vision")
+		: "Baseline";
 
 	return base + (d.url ? " (Web)" : "");
 }

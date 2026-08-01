@@ -130,6 +130,16 @@ const shortJob = (j) => String(j).replace(/^explore-/, "").replace(/-[a-z.]+$/i,
 const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : undefined);
 const median = (xs) => { if (!xs.length) return undefined; const s = [...xs].sort((a, b) => a - b); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 const quantile = (sorted, q) => { if (!sorted.length) return undefined; const i = Math.min(sorted.length - 1, Math.max(0, Math.round(q * (sorted.length - 1)))); return sorted[i]; };
+/* Clean axis ticks: 1/2/5 ladder, each LABEL drawn at its own value's position — a rounded
+   label at an unrounded position quietly lies about the scale. */
+function ticks(max, want = 5) {
+	if (!(max > 0)) return [0];
+	const raw = max / want, mag = 10 ** Math.floor(Math.log10(raw));
+	const step = [1, 2, 5, 10].map((m) => m * mag).find((s) => s >= raw);
+	const out = [];
+	for (let v = 0; v <= max + 1e-9; v += step) out.push(Math.round(v * 1e6) / 1e6);
+	return out;
+}
 
 /* SVG element builder — attributes only, text via textContent (labels are untrusted data). */
 const SVGNS = "http://www.w3.org/2000/svg";
@@ -247,7 +257,8 @@ function renderHeader() {
 	const a = data.arm, p = data.pass;
 	document.title = `graphs — ${a.id}`;
 	$("title").textContent = `${a.title ?? a.id}${data.model ? ` · ${data.model}` : ""}`;
-	const flags = (a.flags ?? []).join(" ");
+	// flags is a STRING on the wire (flagsLine output), not an array.
+	const flags = Array.isArray(a.flags) ? a.flags.join(" ") : (a.flags ?? "");
 	$("subtitle").textContent = [a.app, a.task ? `“${a.task}”` : "", a.perception, a.actuation, flags].filter(Boolean).join(" · ");
 	const tiles = [];
 	const tile = (l, v, d) => tiles.push({ l, v, d });
@@ -312,16 +323,23 @@ function renderTouch() {
 			pts.map((p) => ({ run: shortJob(p.r.jobId), step: p.s.index, action: p.s.name, target: p.s.targetName ?? "", x: Math.round(p.cx), y: Math.round(p.cy), verified: p.s.verified ? "✓" : "✗" })));
 
 	const shot = [...runs.flatMap((r) => r.steps)].reverse().find((s) => s.screenshotFile)?.screenshotFile;
+	// card() reuses one .body per card, so a stale async img.onload from a superseded render
+	// would append a second chart built from the OLD filter's points. Generation token guards it.
+	const gen = (renderTouch.gen = (renderTouch.gen ?? 0) + 1);
 	const draw = (w, h, href) => {
+		if (gen !== renderTouch.gen) return;
 		const s = svg(w, h);
 		if (href) s.appendChild(el("image", { href, width: w, height: h, opacity: 0.35, preserveAspectRatio: "none" }));
 		else s.appendChild(el("rect", { width: w, height: h, fill: "var(--plane)" }));
+		// Marks and hit areas live in VIEWBOX pixels — a 2880px-wide screenshot rendered at
+		// ~1100px would shrink a fixed radius below the 24px hover minimum, so scale by width.
+		const k = Math.max(1, w / 1100);
 		for (const p of pts) {
 			if (p.s.toX != null && p.s.toY != null)
-				s.appendChild(el("line", { x1: p.cx, y1: p.cy, x2: p.s.toX, y2: p.s.toY, stroke: p.s.verified ? STATUS.good : STATUS.critical, "stroke-width": 2, opacity: 0.85 }));
-			const ring = el("circle", { cx: p.cx, cy: p.cy, r: 7, fill: "var(--surface)" });
-			const dot = el("circle", { cx: p.cx, cy: p.cy, r: 5, fill: p.s.verified ? STATUS.good : STATUS.critical });
-			const hit = el("circle", { cx: p.cx, cy: p.cy, r: 13, fill: "transparent" });
+				s.appendChild(el("line", { x1: p.cx, y1: p.cy, x2: p.s.toX, y2: p.s.toY, stroke: p.s.verified ? STATUS.good : STATUS.critical, "stroke-width": 2 * k, opacity: 0.85 }));
+			const ring = el("circle", { cx: p.cx, cy: p.cy, r: 7 * k, fill: "var(--surface)" });
+			const dot = el("circle", { cx: p.cx, cy: p.cy, r: 5 * k, fill: p.s.verified ? STATUS.good : STATUS.critical });
+			const hit = el("circle", { cx: p.cx, cy: p.cy, r: 13 * k, fill: "transparent" });
 			hover(hit, () => [`step ${p.s.index} · ${p.s.name}`,
 				{ value: p.s.targetName ?? "(no element)", label: p.s.targetRole ?? "" },
 				{ value: p.s.verified ? "verified" : "unverified", label: p.s.channel ?? "", color: p.s.verified ? STATUS.good : STATUS.critical },
@@ -331,12 +349,18 @@ function renderTouch() {
 		body.appendChild(s);
 		body.appendChild(legendEl([{ name: "verified", color: STATUS.good }, { name: "unverified", color: STATUS.critical }]));
 	};
-	if (shot) {
+	// Draw immediately on the plain canvas, then REDRAW with the backdrop when it arrives —
+	// a stalled image request must never leave the card blank (progressive enhancement, and
+	// draw() itself drops stale generations). A shot that 404'd once (archived runs shed
+	// their frames) is remembered, or every SSE refresh would re-request it forever.
+	renderTouch.dead ??= new Set();
+	draw(1440, 900);
+	if (shot && !renderTouch.dead.has(shot)) {
 		const img = new Image();
-		img.onload = () => draw(img.naturalWidth, img.naturalHeight, img.src);
-		img.onerror = () => draw(1440, 900);
+		img.onload = () => { if (gen === renderTouch.gen) { body.replaceChildren(); draw(img.naturalWidth, img.naturalHeight, img.src); } };
+		img.onerror = () => renderTouch.dead.add(shot);
 		img.src = `/api/graphs/shot?f=${encodeURIComponent(shot)}`;
-	} else draw(1440, 900);
+	}
 }
 
 /* ================= 2 · scope-trap ladder ================= */
@@ -353,25 +377,53 @@ function renderTraps() {
 	const traps = [...byKey.entries()].filter(([, ns]) => new Set(ns.map((n) => n.scope)).size > 1);
 	const muts = [];
 	for (const r of filteredRuns()) for (const m of r.journal ?? []) if (m.settingKey) muts.push({ ...m, jobId: r.jobId, disclosed: r.judge?.scopeDisclosed });
+	// One predicate for both views: a mutation counts against a node's chip only when the
+	// journal attributed its scope; scope-unset mutations (the tie-break-failed case
+	// journal.ts documents for exactly these dual-scope keys) get ONE "scope unknown" marker
+	// per settingKey instead of a ⚠ on every chip — double attribution would present a
+	// guess as fact on the one card whose whole point is scope honesty.
+	const scopedHits = (k, scope) => muts.filter((m) => m.settingKey === k && m.scope === scope);
+	const unknownHits = (k) => muts.filter((m) => m.settingKey === k && !m.scope);
 	if (tableMode)
 		return tableView(body, ["settingKey", "node", "scope", "mutated by"],
-			traps.flatMap(([k, ns]) => ns.map((n) => ({ settingKey: k, node: n.title, scope: n.scope, "mutated by": muts.filter((m) => m.settingKey === k && m.scope === n.scope).map((m) => shortJob(m.jobId)).join(", ") }))));
+			traps.flatMap(([k, ns]) => [
+				...ns.map((n) => ({ settingKey: k, node: n.title, scope: n.scope, "mutated by": scopedHits(k, n.scope).map((m) => shortJob(m.jobId)).join(", ") })),
+				...(unknownHits(k).length ? [{ settingKey: k, node: "(scope unknown)", scope: "?", "mutated by": unknownHits(k).map((m) => shortJob(m.jobId)).join(", ") }] : []),
+			]));
 	if (!traps.length) return empty(body, `no dual-scope settings in this map (${byKey.size} settingKeys, all single-scope) — that itself is a finding`);
 	for (const [k, ns] of traps) {
 		const row = html("div", "trap");
 		row.appendChild(html("span", "k", k));
 		const chips = html("div", "chips");
+		// One chip per SCOPE, not per node: the ladder's question is "how many places edit
+		// this setting", and two same-scope nodes rendered as twin chips read as a glitch.
+		const byScope = new Map();
 		for (const n of ns) {
-			const hits = muts.filter((m) => m.settingKey === k && (!m.scope || m.scope === n.scope));
+			if (!byScope.has(n.scope)) byScope.set(n.scope, []);
+			byScope.get(n.scope).push(n);
+		}
+		for (const [scope, group] of byScope) {
+			const hits = scopedHits(k, scope);
 			const chip = html("span", "nchip");
-			const d = html("span", "dot"); d.style.background = SCOPE_COLOR[n.scope] ?? OTHER;
+			const d = html("span", "dot"); d.style.background = SCOPE_COLOR[scope] ?? OTHER;
 			chip.appendChild(d);
-			chip.appendChild(html("span", "", `${n.title} · ${n.scope}`));
+			chip.appendChild(html("span", "", `${group[0].title}${group.length > 1 ? ` ×${group.length}` : ""} · ${scope}`));
 			if (hits.length) chip.appendChild(html("span", "mut", ` ⚠${hits.length > 1 ? hits.length : ""}`));
 			hover(chip, () => [k,
-				{ value: n.scope, label: n.title, color: SCOPE_COLOR[n.scope] ?? OTHER },
-				...(n.options ? [`options: ${n.options.join(", ")}`] : []),
+				{ value: scope, label: group.map((n) => n.title).join(" · "), color: SCOPE_COLOR[scope] ?? OTHER },
+				...group.flatMap((n) => (n.options ? [`${n.title} options: ${n.options.join(", ")}`] : [])),
 				...hits.map((m) => `⚠ ${shortJob(m.jobId)} step ${m.step} mutated it — disclosure: ${m.disclosed ?? "unjudged"}`)]);
+			chips.appendChild(chip);
+		}
+		const unk = unknownHits(k);
+		if (unk.length) {
+			const chip = html("span", "nchip");
+			const d = html("span", "dot"); d.style.background = OTHER;
+			chip.appendChild(d);
+			chip.appendChild(html("span", "", "scope unknown"));
+			chip.appendChild(html("span", "mut", ` ⚠${unk.length > 1 ? unk.length : ""}`));
+			hover(chip, () => [k, "mutated, but the journal could not attribute WHICH scope",
+				...unk.map((m) => `⚠ ${shortJob(m.jobId)} step ${m.step} — disclosure: ${m.disclosed ?? "unjudged"}`)]);
 			chips.appendChild(chip);
 		}
 		row.appendChild(chips);
@@ -441,17 +493,21 @@ function renderProof() {
 		r.steps.forEach((st, j) => {
 			const x = padL + j * cw;
 			const color = st.verified ? (EVIDENCE[st.channel] ?? EVIDENCE.geometry) : EVIDENCE.none;
-			const rect = el("rect", { x, y, width: Math.max(cw - 2, 1), height: cellH, rx: 2, fill: color });
-			hover(rect, () => [`step ${st.index} · ${st.name}`,
-				{ value: st.verified ? (st.channel ?? "verified") : "unverified", color },
-				...(st.targetName ? [{ value: st.targetName, label: st.targetRole ?? "" }] : []),
-				...(st.note ? [st.note] : []), ...(cited.has(st.index) ? ["▲ cited by the judge"] : [])]);
-			s.appendChild(rect);
+			s.appendChild(el("rect", { x, y, width: Math.max(cw - 2, 1), height: cellH, rx: 2, fill: color }));
 			if (st.pixelDelta != null) {
 				const alpha = 0.12 + Math.min(1, Math.sqrt(st.pixelDelta)) * 0.88; // sqrt: tiny repaints must still register
 				s.appendChild(el("rect", { x, y: y + cellH + 2, width: Math.max(cw - 2, 1), height: heatH, fill: `rgba(217,89,38,${alpha.toFixed(2)})` }));
 			}
 			if (cited.has(st.index)) s.appendChild(el("text", { x: x + cw / 2 - 4, y: y + cellH + heatH + 12, fill: "var(--ink-2)" }, "▲"));
+			// Hit target spans the cell + heat strip + gaps, on top of both, so a 16px cell
+			// still offers a ~24px hover area.
+			const hit = el("rect", { x, y: y - 2, width: cw, height: cellH + heatH + 8, fill: "transparent" });
+			hover(hit, () => [`step ${st.index} · ${st.name}`,
+				{ value: st.verified ? (st.channel ?? "verified") : "unverified", color },
+				...(st.pixelDelta != null ? [{ value: `${(st.pixelDelta * 100).toFixed(1)}%`, label: "pixels changed", color: "var(--s2)" }] : []),
+				...(st.targetName ? [{ value: st.targetName, label: st.targetRole ?? "" }] : []),
+				...(st.note ? [st.note] : []), ...(cited.has(st.index) ? ["▲ cited by the judge"] : [])]);
+			s.appendChild(hit);
 		});
 	});
 	body.appendChild(s);
@@ -525,20 +581,18 @@ function renderCost() {
 		s.appendChild(el("text", { x: 4, y: gy + 4 }, fmtMoney(maxY * (1 - i / 4))));
 	}
 	s.appendChild(el("line", { x1: padL, y1: H - padB, x2: W - padR, y2: H - padB, class: "axis" }));
-	for (let i = 0; i <= 5; i++) s.appendChild(el("text", { x: X(maxX * i / 5) - 4, y: H - 10 }, Math.round(maxX * i / 5)));
+	for (const t of ticks(maxX)) s.appendChild(el("text", { x: X(t) - 4, y: H - 10 }, t));
 	s.appendChild(el("text", { x: W / 2 - 40, y: H - 0.5, class: "lbl" }, "verified steps"));
-	for (const p of all.filter((p) => !p.mine)) {
-		const d = el("circle", { cx: X(p.x), cy: Y(p.y), r: 4, fill: OTHER, opacity: 0.7 });
-		hover(d, () => [p.label, { value: fmtMoney(p.y), label: `${p.x} verified steps` }]);
-		s.appendChild(d);
-	}
-	for (const p of all.filter((p) => p.mine)) {
-		const hl = selRun !== "all" && p.label === shortJob(selRun);
-		s.appendChild(el("circle", { cx: X(p.x), cy: Y(p.y), r: hl ? 8 : 6, fill: "var(--surface)" }));
-		const d = el("circle", { cx: X(p.x), cy: Y(p.y), r: hl ? 6.5 : 4.5, fill: "var(--s1)" });
-		hover(d, () => [p.label, { value: fmtMoney(p.y), label: `${p.x} verified steps`, color: "var(--s1)" }, p.ok === true ? "success" : p.ok === false ? "failed" : ""]);
-		s.appendChild(d);
-	}
+	// Visible mark first, then a ≥24px transparent hit circle on top — nobody lands a 9px dot.
+	const mark = (p, r, fill, ring) => {
+		if (ring) s.appendChild(el("circle", { cx: X(p.x), cy: Y(p.y), r: r + 1.5, fill: "var(--surface)" }));
+		s.appendChild(el("circle", { cx: X(p.x), cy: Y(p.y), r, fill, opacity: ring ? 1 : 0.7 }));
+		const hit = el("circle", { cx: X(p.x), cy: Y(p.y), r: 13, fill: "transparent" });
+		hover(hit, () => [p.label, { value: fmtMoney(p.y), label: `${p.x} verified steps`, color: fill }, p.ok === true ? "success" : p.ok === false ? "failed" : ""]);
+		s.appendChild(hit);
+	};
+	for (const p of all.filter((p) => !p.mine)) mark(p, 4, OTHER, false);
+	for (const p of all.filter((p) => p.mine)) mark(p, selRun !== "all" && p.label === shortJob(selRun) ? 6.5 : 4.5, "var(--s1)", true);
 	body.appendChild(s);
 	body.appendChild(legendEl([{ name: "this row", color: "var(--s1)" }, { name: "rest of the board", color: OTHER }]));
 }
@@ -555,9 +609,12 @@ function renderEcdf() {
 		const rows = [0.5, 0.75, 0.9, 0.95, 0.99, 1].map((q) => ({ quantile: `p${Math.round(q * 100)}`, "chosen index ≤": quantile(idx, q) }));
 		return tableView(body, ["quantile", "chosen index ≤"], rows);
 	}
-	const maxX = idx[idx.length - 1];
+	// Axis clamps at 3×p99 (floor 20): one garbage element_index in the hundreds must not
+	// flatten the readable part of the curve. The clamp is announced, never silent.
+	const rawMax = idx[idx.length - 1];
+	const maxX = Math.min(rawMax, Math.max(20, 3 * (quantile(idx, 0.99) ?? 1)));
 	const W = 1080, H = 240, padL = 46, padB = 44, padT = 8, padR = 14;
-	const X = (v) => padL + (v / Math.max(maxX, 1)) * (W - padL - padR);
+	const X = (v) => padL + (Math.min(v, maxX) / Math.max(maxX, 1)) * (W - padL - padR);
 	const Y = (v) => padT + (1 - v) * (H - padT - padB);
 	const s = svg(W, H);
 	for (const fy of [0.25, 0.5, 0.75, 1]) {
@@ -565,10 +622,18 @@ function renderEcdf() {
 		s.appendChild(el("text", { x: 4, y: Y(fy) + 4 }, `${fy * 100}%`));
 	}
 	s.appendChild(el("line", { x1: padL, y1: H - padB, x2: W - padR, y2: H - padB, class: "axis" }));
-	for (let i = 0; i <= 5; i++) s.appendChild(el("text", { x: X(maxX * i / 5) - 4, y: H - padB + 14 }, Math.round(maxX * i / 5)));
-	s.appendChild(el("text", { x: W / 2 - 60, y: H - padB + 28, class: "lbl" }, "element index chosen"));
-	let dPath = `M ${X(0)} ${Y(idx.filter((v) => v <= 0).length / idx.length)}`;
-	for (let k = 1; k <= maxX; k++) dPath += ` L ${X(k)} ${Y(idx.filter((v) => v <= k).length / idx.length)}`;
+	for (const t of ticks(maxX)) s.appendChild(el("text", { x: X(t) - 4, y: H - padB + 14 }, t));
+	s.appendChild(el("text", { x: W / 2 - 60, y: H - padB + 28, class: "lbl" }, `element index chosen${rawMax > maxX ? ` (axis clipped at ${maxX}; max seen ${rawMax})` : ""}`));
+	// True step function over DISTINCT values — the ECDF only changes at data points, so
+	// iterating every integer up to an unvalidated model-emitted index was pure waste.
+	let dPath = "", prevF = 0;
+	for (let j = 0; j < idx.length; j++) {
+		if (j < idx.length - 1 && idx[j + 1] === idx[j]) continue;
+		const f = (j + 1) / idx.length, v = idx[j];
+		dPath += dPath ? ` L ${X(v)} ${Y(prevF)} L ${X(v)} ${Y(f)}` : `M ${X(v)} ${Y(f)}`;
+		prevF = f;
+	}
+	dPath += ` L ${X(maxX)} ${Y(1)}`;
 	s.appendChild(el("path", { d: dPath, fill: "none", stroke: "var(--s1)", "stroke-width": 2, "stroke-linejoin": "round" }));
 	const cutG = el("g");
 	s.appendChild(cutG);
@@ -576,13 +641,19 @@ function renderEcdf() {
 	const ctl = html("div", "ctl");
 	const lab = html("span");
 	const range = document.createElement("input");
-	range.type = "range"; range.min = "1"; range.max = String(maxX); range.value = String(Math.min(quantile(idx, 0.95) ?? maxX, maxX));
+	// The chosen K survives SSE-triggered re-renders (stored like renderMapDiff.a) — a live
+	// board refreshes every few seconds, and a cutoff that resets each tick is unusable.
+	range.type = "range"; range.min = "1"; range.max = String(maxX);
+	range.value = String(Math.min(renderEcdf.K ?? quantile(idx, 0.95) ?? maxX, maxX));
 	const applyCut = () => {
 		const K = Number(range.value);
+		renderEcdf.K = K;
 		const cover = idx.filter((v) => v <= K).length / idx.length;
+		// Past mid-chart the annotation flips to the left of its line instead of clipping.
+		const flip = X(K) > padL + (W - padL - padR) * 0.6;
 		cutG.replaceChildren(
-			el("line", { x1: X(K), y1: padT, x2: X(K), y2: H - padB, stroke: "var(--ink-2)", "stroke-width": 1, "stroke-dasharray": null }),
-			el("text", { x: X(K) + 5, y: padT + 12, class: "lbl" }, `K=${K} covers ${(cover * 100).toFixed(1)}%`),
+			el("line", { x1: X(K), y1: padT, x2: X(K), y2: H - padB, stroke: "var(--ink-2)", "stroke-width": 1 }),
+			el("text", { x: flip ? X(K) - 5 : X(K) + 5, y: padT + 12, class: "lbl", "text-anchor": flip ? "end" : "start" }, `K=${K} covers ${(cover * 100).toFixed(1)}%`),
 		);
 		lab.textContent = meanShown != null
 			? `truncate the list at K=${K}: keeps ${(cover * 100).toFixed(1)}% of picks · saves x̄ ${Math.max(0, meanShown - K).toFixed(0)} of ${meanShown.toFixed(0)} prompt lines/step`
@@ -648,7 +719,8 @@ function renderMapDiff() {
 			const list = g.n === "both" ? r.lists.both : g.n.startsWith(`only ${A.slug}`) ? r.lists.onlyA : r.lists.onlyB;
 			hover(rect, () => [g.n, { value: String(g.v), label: r.label, color: g.col }, list.slice(0, 14).map((n) => n.title).join(" · ") + (list.length > 14 ? ` +${list.length - 14}` : "")]);
 			s.appendChild(rect);
-			if (w > 34) s.appendChild(el("text", { x: x + 6, y: y + 15, class: "lbl" }, g.v));
+			// In-fill labels pick white, not the muted text token — ~2.1:1 on these fills.
+			if (w > 34) s.appendChild(el("text", { x: x + 6, y: y + 15, fill: "#fff" }, g.v));
 			x += w;
 		}
 	});
@@ -658,7 +730,7 @@ function renderMapDiff() {
 
 /* ================= 9 · wall-clock anatomy ================= */
 function renderAnatomy() {
-	const { body, tableMode } = card("c-anatomy", "Where the time went", "attributed per run: live typing and waits are measured; actuation+settle is ≈0.9s/step; the remainder is model thinking + observation");
+	const { body, tableMode } = card("c-anatomy", "Where the time went", "attributed per run: live typing is measured from keystroke spans; waits and actuation+settle are estimates (run logs don't persist a wait's requested seconds); the remainder is model thinking + observation");
 	const runs = stepRuns().filter((r) => r.elapsedSec != null || r.steps.some((s) => s.timestamp));
 	if (!runs.length) return empty(body, "no timed runs with step records");
 	const parts = runs.map((r) => {
@@ -711,10 +783,18 @@ function renderMotion() {
 	}
 	const segs = motion.segments ?? [], syn = motion.synthesized ?? [];
 	const pick = (arr, n) => { const step = Math.max(1, Math.floor(arr.length / n)); return arr.filter((_, i) => i % step === 0).slice(0, n); };
+	// Peak over PATH-mean speed, with perp included: par alone measures net displacement, and
+	// 571/1654 corpus segments backtrack — the parallel-only version overstated the human
+	// median ~9% vs the corpus's own fitted peakSpeedRatio (2.67 vs 2.45).
 	const ratioOf = (g) => {
-		let peak = 0;
-		for (let i = 1; i < g.t.length; i++) { const dt = g.t[i] - g.t[i - 1]; if (dt > 0) peak = Math.max(peak, (g.par[i] - g.par[i - 1]) / dt); }
-		return peak * g.durationMs;
+		let peak = 0, pl = 0;
+		for (let i = 1; i < g.t.length; i++) {
+			const dt = g.t[i] - g.t[i - 1];
+			const ds = Math.hypot(g.par[i] - g.par[i - 1], g.perp[i] - g.perp[i - 1]);
+			pl += ds;
+			if (dt > 0) peak = Math.max(peak, ds / dt);
+		}
+		return pl > 0 ? peak / (pl / g.durationMs) : 0;
 	};
 	const bendOf = (g) => Math.max(...g.perp.map(Math.abs)) * 100;
 	if (tableMode) {
@@ -797,8 +877,13 @@ function renderMotion() {
 		const maxB = Math.max(...bins, 1);
 		const s = svg(W, H);
 		const bw = (W - padL - padR) / BINS;
+		const plotH = H - padT - padB - 5; // headroom so the tallest bar never kisses the frame
+		s.appendChild(el("line", { x1: padL, y1: H - padB - plotH, x2: W - padR, y2: H - padB - plotH, class: "gridl" }));
+		s.appendChild(el("text", { x: 2, y: H - padB - plotH + 4 }, maxB));
+		s.appendChild(el("line", { x1: padL, y1: H - padB - plotH / 2, x2: W - padR, y2: H - padB - plotH / 2, class: "gridl" }));
+		s.appendChild(el("text", { x: 2, y: H - padB - plotH / 2 + 4 }, Math.round(maxB / 2)));
 		bins.forEach((b, i) => {
-			const bh = (b / maxB) * (H - padT - padB);
+			const bh = (b / maxB) * plotH;
 			const rect = el("rect", { x: padL + i * bw, y: H - padB - bh, width: Math.max(bw - 2, 1), height: Math.max(bh, 0.5), rx: 2, fill: "var(--s1)" });
 			hover(rect, () => [`${fmt(lo + (i / BINS) * (hi - lo))} – ${fmt(lo + ((i + 1) / BINS) * (hi - lo))}`, { value: String(b), label: "human segments", color: "var(--s1)" }]);
 			s.appendChild(rect);
@@ -808,7 +893,11 @@ function renderMotion() {
 			s.appendChild(el("line", { x1: x, y1: padT, x2: x, y2: H - padB, stroke: "var(--s2)", "stroke-width": 2, opacity: 0.8 }));
 		}
 		s.appendChild(el("line", { x1: padL, y1: H - padB, x2: W - padR, y2: H - padB, class: "axis" }));
-		for (let i = 0; i <= 4; i++) s.appendChild(el("text", { x: padL + (i / 4) * (W - padL - padR) - 6, y: H - 8 }, fmt(lo + (i / 4) * (hi - lo))));
+		// Rightmost tick anchors end so its label never clips at the SVG edge.
+		for (let i = 0; i <= 4; i++) {
+			const tx = padL + (i / 4) * (W - padL - padR);
+			s.appendChild(el("text", { x: i === 4 ? tx : tx - 6, y: H - 8, ...(i === 4 ? { "text-anchor": "end" } : {}) }, fmt(lo + (i / 4) * (hi - lo))));
+		}
 		wrap.appendChild(s);
 		wrap.appendChild(legendEl([{ name: "human corpus", color: "var(--s1)" }, { name: "synthetic", color: "var(--s2)", line: true }]));
 		return wrap;
@@ -829,19 +918,31 @@ function renderConvergence() {
 		[{ key: "seen", color: "var(--s4)" }, { key: "dismissed", color: "var(--s5)" }],
 	];
 	for (const r of runs) {
-		body.appendChild(html("div", "paneltitle", shortJob(r.jobId)));
-		const maxT = Math.max(...r.series.map((pt) => pt.t), 1);
+		const beats = r.series.filter((pt) => pt.kind === "progress").length;
+		body.appendChild(html("div", "paneltitle", `${shortJob(r.jobId)}${beats < 3 ? ` — sparse pass (${beats} heartbeat${beats === 1 ? "" : "s"}); the curve needs a longer run to mean much` : ""}`));
+		// X-domain spans the DATA, not the run: a lone late heartbeat on a 0..end axis draws
+		// as dots crammed into the right edge of a 90%-empty plot.
+		const plotted = r.series.filter((pt) => PANELS.flat().some((sd) => pt[sd.key] != null));
+		const tMin = plotted.length ? Math.min(...plotted.map((pt) => pt.t)) : 0;
+		const maxT = Math.max(...r.series.map((pt) => pt.t), tMin + 1);
 		for (const series of PANELS) {
 			const W = 1080, H = 130, padL = 44, padB = 20, padT = 6, padR = 10;
+			// A panel earns its axis only when something in it can draw a LINE — a lone point
+			// per series renders as floating dots over a vacant band, which reads as breakage.
+			const drawable = series.some((sd) => r.series.filter((pt) => pt[sd.key] != null).length >= 2);
+			if (!drawable) continue;
 			const vals = r.series.flatMap((pt) => series.map((sd) => pt[sd.key]).filter((v) => v != null));
 			if (!vals.length) continue;
 			const maxV = Math.max(...vals, 1);
-			const X = (t) => padL + (t / maxT) * (W - padL - padR);
+			const X = (t) => padL + ((Math.max(t, tMin) - tMin) / (maxT - tMin)) * (W - padL - padR);
 			const Y = (v) => padT + (1 - v / maxV) * (H - padT - padB);
 			const s = svg(W, H);
 			s.appendChild(el("line", { x1: padL, y1: H - padB, x2: W - padR, y2: H - padB, class: "axis" }));
 			s.appendChild(el("text", { x: 2, y: padT + 10 }, fmtK(maxV)));
-			for (let i = 0; i <= 4; i++) s.appendChild(el("text", { x: X(maxT * i / 4) - 8, y: H - 6 }, fmtDur(maxT * i / 4 / 1000)));
+			for (let i = 0; i <= 4; i++) {
+				const tv = tMin + ((maxT - tMin) * i) / 4;
+				s.appendChild(el("text", { x: i === 4 ? X(tv) : X(tv) - 8, y: H - 6, ...(i === 4 ? { "text-anchor": "end" } : {}) }, fmtDur(tv / 1000)));
+			}
 			for (const pt of r.series.filter((q) => q.kind === "chapter"))
 				s.appendChild(el("line", { x1: X(pt.t), y1: padT, x2: X(pt.t), y2: H - padB, stroke: "var(--baseline)", "stroke-width": 1 }));
 			for (const sd of series) {
@@ -851,10 +952,11 @@ function renderConvergence() {
 				pts.forEach((pt, i) => { d += `${i ? "L" : "M"} ${X(pt.t)} ${Y(pt[sd.key])} `; });
 				s.appendChild(el("path", { d, fill: "none", stroke: sd.color, "stroke-width": 2, "stroke-linejoin": "round" }));
 				const lastPt = pts[pts.length - 1];
-				const dot = el("circle", { cx: X(lastPt.t), cy: Y(lastPt[sd.key]), r: 4, fill: sd.color });
-				hover(dot, () => [sd.key, { value: String(lastPt[sd.key]), label: `at ${fmtDur(lastPt.t / 1000)}`, color: sd.color }]);
 				s.appendChild(el("circle", { cx: X(lastPt.t), cy: Y(lastPt[sd.key]), r: 6, fill: "var(--surface)" }));
-				s.appendChild(dot);
+				s.appendChild(el("circle", { cx: X(lastPt.t), cy: Y(lastPt[sd.key]), r: 4, fill: sd.color }));
+				const hit = el("circle", { cx: X(lastPt.t), cy: Y(lastPt[sd.key]), r: 13, fill: "transparent" });
+				hover(hit, () => [sd.key, { value: String(lastPt[sd.key]), label: `at ${fmtDur(lastPt.t / 1000)}`, color: sd.color }]);
+				s.appendChild(hit);
 			}
 			body.appendChild(s);
 		}
@@ -865,9 +967,10 @@ function renderConvergence() {
 /* ================= orchestration ================= */
 function renderAll() {
 	if (!data) return;
-	renderHeader();
-	renderFilters();
+	tipHide(); // a tooltip anchored to a mark this repaint removes would otherwise stick forever
 	const safe = (fn) => { try { fn(); } catch (e) { console.error(fn.name, e); } };
+	safe(renderHeader);
+	safe(renderFilters);
 	safe(renderConvergence);
 	safe(renderTouch);
 	safe(renderTraps);
@@ -882,7 +985,8 @@ function renderAll() {
 	$("updated").textContent = `updated ${new Date().toLocaleTimeString()}`;
 }
 
-let fetching = false;
+let fetching = false, retryTimer;
+const retrySoon = () => { clearTimeout(retryTimer); retryTimer = setTimeout(loadData, 5000); };
 async function loadData() {
 	if (fetching) return;
 	fetching = true;
@@ -890,11 +994,20 @@ async function loadData() {
 	try {
 		const res = await fetch(`/api/graphs/data?arm=${encodeURIComponent(ARM)}${MODEL ? `&model=${encodeURIComponent(MODEL)}` : ""}`);
 		const body = await res.json();
-		if (!res.ok) { $("title").textContent = body.error ?? "error"; return; }
+		if (!res.ok) {
+			// A mid-wave board flaps: a resubmission can empty an arm's passes for a moment.
+			// Show the reason, keep any charts we already have, and retry on our own clock —
+			// SSE pushes usually beat this timer, but a dead stream must not strand the page.
+			$("subtitle").textContent = `${body.error ?? "error"} — retrying…`;
+			if (!data) $("title").textContent = "waiting for this row to exist";
+			retrySoon();
+			return;
+		}
 		data = body;
 		renderAll();
 	} catch (e) {
 		console.error(e);
+		retrySoon();
 	} finally {
 		fetching = false;
 		$("cards").classList.remove("stale");
@@ -902,10 +1015,12 @@ async function loadData() {
 }
 
 /* Realtime: ride the board's own SSE stream; any state push means something may have landed.
-   Debounced — collect can push several frames in a burst. Same 45s staleness idiom as the board. */
-let esTimer, lastBeat = Date.now();
+   Debounced — collect can push several frames in a burst. Same 45s staleness idiom as the
+   board: ONE module-level watchdog owning ONE module-level EventSource — a per-connect
+   interval would leak on every reconnect and orphan the socket it no longer closes over. */
+let es, esTimer, lastBeat = Date.now();
 function connectES() {
-	const es = new EventSource("/events");
+	es = new EventSource("/events");
 	es.onmessage = (ev) => {
 		lastBeat = Date.now();
 		try {
@@ -917,8 +1032,14 @@ function connectES() {
 		esTimer = setTimeout(loadData, 800);
 	};
 	es.onerror = () => {};
-	setInterval(() => { if (Date.now() - lastBeat > 45_000) { lastBeat = Date.now(); es.close(); connectES(); } }, 5000);
 }
+setInterval(() => {
+	if (Date.now() - lastBeat > 45_000) {
+		lastBeat = Date.now();
+		try { es?.close(); } catch {}
+		connectES();
+	}
+}, 5000);
 
 loadData();
 connectES();
