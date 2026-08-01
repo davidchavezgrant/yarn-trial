@@ -326,7 +326,7 @@
 	<h1><span id="conn"></span>bench dash <span id="conn-word" class="meta"></span></h1>
 	<span class="meta" id="metaline">Connecting…</span>
 	<div class="hero">
-		<div class="tile"><div class="v" id="h-elapsed">–</div><div class="k" data-tip="wall-clock for the whole pipeline — earliest submit to now while anything is queued or running; freezes at the last run's finish once every run is terminal">Pipeline</div></div>
+		<div class="tile"><div class="v" id="h-elapsed">–</div><div class="k" data-tip="active pipeline time — the union of every run's submit→finish span; gaps where nothing was running or queued don't count. Ticks while anything is live; frozen once every run is terminal">Pipeline</div></div>
 		<div class="tile"><div class="v" id="h-submitted">–</div><div class="k">Submitted / Planned</div></div>
 		<div class="tile"><div class="v" id="h-live">–</div><div class="k">Running · Queued</div></div>
 		<div class="tile"><div class="v" id="h-collected">–</div><div class="k" data-tip="terminal runs — ended on their host, success or failure; banking by a collect pass never moves this number">Finished</div><div class="k" id="h-success"></div></div>
@@ -2313,17 +2313,28 @@ function render() {
 		// collect-pass count internally, but collect is plumbing the page stopped surfacing.
 		const entries = visibleArms().flatMap((a) => a.passes.flatMap((q) => q.entries));
 		$("h-collected").textContent = String(entries.filter((e) => entryBand(e) === 0).length);
-		// Pipeline wall-clock: earliest submit → now while anything still moves (the shared
-		// 1s js-elapsed ticker advances it between pushes); once every run is terminal it
-		// freezes at the last entry's finish — a pass viewed tomorrow must not read as a
-		// 30-hour run still climbing.
-		const firstSubmit = Math.min(...entries.map((e) => Date.parse(e.submittedAt) || Infinity));
-		if (!isFinite(firstSubmit)) $("h-elapsed").textContent = "–";
-		else if (entries.some((e) => entryBand(e) > 0)) $("h-elapsed").innerHTML = elapsedSpan((receivedAt - firstSubmit) / 1000);
-		else {
-			const lastEnd = Math.max(...entries.map(entryTime).filter(isFinite));
-			$("h-elapsed").textContent = lastEnd > firstSubmit ? fmtDur((lastEnd - firstSubmit) / 1000) : "–";
+		// Pipeline ACTIVE time, not wall-clock (David, 2026-08-01): the union of every
+		// run's submit→finish span, so idle gaps between rounds — everything finished,
+		// next phase not yet dispatched — drop out, retroactively. Terminal spans end at
+		// the run's recorded finish (entryTime; its submit-time fallback yields a
+		// zero-length span, harmless); live spans stay open to the push, and the shared
+		// 1s js-elapsed ticker advances the readout between pushes — the union's open
+		// tail grows 1s/s no matter how many runs overlap it, which is exactly what the
+		// ticker adds.
+		const spans = entries.map((e) => {
+			const start = Date.parse(e.submittedAt) || entryStart(e);
+			if (start == null) return null;
+
+			return entryBand(e) === 0 ? [start, Math.max(start, entryTime(e) || start)] : [start, receivedAt];
+		}).filter(Boolean).sort((a, b) => a[0] - b[0]);
+		let active = 0, coveredTo = -Infinity;
+		for (const [s, e] of spans) {
+			active += Math.max(0, e - Math.max(s, coveredTo));
+			coveredTo = Math.max(coveredTo, e);
 		}
+		if (!spans.length || !(active > 0)) $("h-elapsed").textContent = "–";
+		else if (entries.some((e) => entryBand(e) > 0)) $("h-elapsed").innerHTML = elapsedSpan(active / 1000);
+		else $("h-elapsed").textContent = fmtDur(active / 1000);
 		// "Succeeded", the word every other surface uses — and marked self-reported, the
 		// distinction the judge pipeline exists to expose.
 		$("h-success").textContent = `${p.successes} Succeeded`;
