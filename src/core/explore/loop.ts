@@ -103,6 +103,21 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 	} finally {
 		overlay.setDriving(false);
 	}
+	/**
+	 * A cold start can land on something that is not the app: a permissions gate, an
+	 * onboarding wall, a window that has not painted. Mapping one of those produces a
+	 * PLAUSIBLE artifact — on 2026-08-01 a pass mapped Yarn's "Recording Setup" screen and
+	 * another mapped the macOS menu bar, both reporting frontier-empty and success, and both
+	 * only detectable afterwards by reading the surface names in the stamp.
+	 *
+	 * So the first observation has to look like an application. The blindStreak check below
+	 * catches a collapsed tree mid-run, but only after three consecutive failures — by which
+	 * point a short pass may already have "finished". This is the same check applied once, up
+	 * front, where the answer is unambiguous and the run has cost nothing yet.
+	 */
+	if (obs.appContent === 0)
+		throw new TargetNotObservableError(p.app, "the first observation has no app content — a cold start that lands on a permissions gate, an onboarding wall, or an unpainted window maps that instead of the app");
+
 	ingest(obs);
 	p.messages.push({
 		role: "user",

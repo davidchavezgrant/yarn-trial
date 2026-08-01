@@ -42,6 +42,39 @@ async function main(): Promise<void> {
 	const p = newPass(target, app, backendKind, vision, guidance, noAx);
 
 	try {
+		/**
+		 * COLD START. Quit the app before acquiring, so acquisition relaunches it and every
+		 * pass begins from the same place.
+		 *
+		 * Explore never normalised its start state — resetToHome is the task agent's, and an
+		 * exploration pass is the thing that DISCOVERS home, so on a first pass there is
+		 * nothing to reset to. The cost showed up as soon as phase 1 ran more passes than
+		 * Macs: wave 2 begins wherever wave 1 left that box, and the ax and cdp arms run
+		 * TWICE specifically to measure run-to-run variance — which, unreset, would include
+		 * start-state variance and measure the wrong thing.
+		 *
+		 * A kill is better than a navigate-home (David's suggestion, and it is the right one):
+		 * it needs no map, so it behaves identically on all nine arms including tiers whose
+		 * map has no home recorded; and it clears in-memory state a navigation cannot reach —
+		 * open modals, scroll positions, undo stacks, half-filled fields.
+		 *
+		 * quitApp already asks politely, falls back to pkill, and verifies the process is
+		 * gone. APP TARGETS ONLY: on a web target the "app" is the profile Chrome that HOLDS
+		 * the signed-in session, and killing it between passes is how you turn a grounding run
+		 * into a sign-in run. COLD_START=0 disables.
+		 */
+		if (target.kind === "app" && process.env.COLD_START !== "0") {
+			const { quitApp } = await import("./appctl.js");
+			try {
+				await quitApp(app);
+				console.log(`cold start: quit "${app}" — acquisition relaunches it`);
+			} catch (err) {
+				// Non-fatal: an app that will not quit is a dirtier start, not a dead run, and
+				// the alternative is refusing to explore over a normalisation nicety.
+				console.log(`cold start: could not quit "${app}" (${err instanceof Error ? err.message.slice(0, 80) : err}) — starting from the state it is in`);
+			}
+		}
+
 		// On the CDP backend there is no driver and no window: the page is the target, and
 		// acquisition (launch-or-attach, tab pick, navigate) lives in CdpBackend.acquire —
 		// which is also the whole web-target story now that the driver-owned browser path
