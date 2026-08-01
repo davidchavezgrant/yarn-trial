@@ -345,7 +345,9 @@ var receivedAt = 0;
 // visibleArms()/visibleStats(). The chip list derives from the wire's targetKey per arm —
 // no app names live in this file. sessionStorage, NOT localStorage: per-tab, dies with the
 // tab.
-var targetFilter = sessionStorage.getItem("dashTarget") || "All";
+// No "All" view (per David): the page is always scoped to exactly one application. A
+// stored filter that no longer names a real target falls back to the first one present.
+var targetFilter = sessionStorage.getItem("dashTarget") || "";
 
 const targetLabel = (k) => k.replace(/^https?:\/\//, "");
 
@@ -355,8 +357,17 @@ function targetKeys() {
 	return keys;
 }
 
+function currentTarget() {
+	const keys = targetKeys();
+	if (keys.includes(targetFilter)) return targetFilter;
+
+	return keys[0] || "";
+}
+
 function visibleArms() {
-	return targetFilter === "All" ? state.arms : state.arms.filter((a) => a.targetKey === targetFilter);
+	const t = currentTarget();
+
+	return t ? state.arms.filter((a) => a.targetKey === t) : state.arms;
 }
 
 /**
@@ -365,7 +376,9 @@ function visibleArms() {
  * over the same manifest — and a filter recomputes the same shapes over the visible arms.
  */
 function visibleStats() {
-	if (targetFilter === "All")
+	// Single-target world: only one target present means the server's own numbers pass
+	// through verbatim (the page must not disagree with the report over the same manifest).
+	if (targetKeys().length <= 1)
 		return { progress: state.progress, cost: state.cost, costSeries: state.costSeries, judge: state.judge };
 	const arms = visibleArms();
 	const entries = arms.flatMap((a) => a.passes.flatMap((p) => p.entries));
@@ -419,9 +432,10 @@ function visibleStats() {
 
 function renderTargetPicker() {
 	const keys = targetKeys();
-	$("target-picker").innerHTML = ["All", ...keys].map((k) => {
-		const tip = k === "All" ? "every arm in the matrix" : `only arms targeting ${targetLabel(k)} — filters the board, every chart and the hero tiles`;
-		return `<span class="chip${k === targetFilter ? " sel" : ""}" data-target="${esc(k)}" data-tip="${esc(tip)}">${esc(targetLabel(k))}</span>`;
+	const sel = currentTarget();
+	$("target-picker").innerHTML = keys.map((k) => {
+		const tip = `arms targeting ${targetLabel(k)} — scopes the board, every chart and the hero tiles`;
+		return `<span class="chip${k === sel ? " sel" : ""}" data-target="${esc(k)}" data-tip="${esc(tip)}">${esc(targetLabel(k))}</span>`;
 	}).join("");
 }
 
@@ -1365,8 +1379,9 @@ function renderBoard(progress) {
 		html += timelineRows(compiles).map(({ a, p }) => compileRow(a, p)).join("");
 	}
 	$("board").innerHTML = html + "</tbody></table>";
-	const scope = targetFilter === "All" ? "" : `${targetLabel(targetFilter)} only · `;
-	$("board-sub").textContent = `${scope}${progress.submitted} submitted of ${progress.planned} planned runs · ${progress.collected} collected · grouped by the explore pass that grounded them · within a group: finished first, then running, then queued — oldest first in each · click an arm to see its map + path`;
+	// No explainer sentence (per David) — the heroes carry the numbers and the tooltips
+	// carry the semantics.
+	$("board-sub").textContent = "";
 }
 
 /* ---- off-matrix strip ---------------------------------------------------------------- */
@@ -1555,9 +1570,9 @@ function safe(name, elId, fn) {
 function render() {
 	if (!state) return;
 	// A stored selection the data no longer contains must not blank the page — fall back to
-	// All BEFORE anything reads the filter (leave storage alone; the key may return on the
-	// next manifest).
-	if (targetFilter !== "All" && !targetKeys().includes(targetFilter)) targetFilter = "All";
+	// Normalize BEFORE anything reads the filter (leave storage alone; the key may return
+	// on the next manifest) — currentTarget() resolves "" to the first real target.
+	if (targetFilter && !targetKeys().includes(targetFilter)) targetFilter = "";
 	// One aggregate for everything scope-aware: hero tiles, board sub, cost, judge. The
 	// fleet, off-matrix strip, narrative and events stay global — they are not arm-scoped.
 	// The filtered recompute can trip on a malformed datum; the "All" path only aliases
