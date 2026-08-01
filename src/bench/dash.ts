@@ -607,7 +607,12 @@ function heatFor(
 export function groundingArmId(arm: Arm): string {
 	if (arm.dispatch.url || arm.id.startsWith("p2-web")) return "p1-explore-web-cdp";
 	if (arm.env?.APPMAP_VARIANT === "vision") return "p1-explore-vision";
-	if (arm.env?.APPMAP_VARIANT === "novision") return "p1-explore-no-vision";
+	// The variant alone doesn't name the map — the backend does too: the cdp no-vision arm
+	// consumes the map the CDP no-vision pass wrote, not the ax one. Same for axdom-off,
+	// which reads the noaxdom pass's map. Wrong nesting here pollutes lineage groups AND
+	// the tree view's heat (runs would aggregate against a map they never read).
+	if (arm.env?.APPMAP_VARIANT === "novision") return arm.dispatch.backend === "cdp" ? "p1-explore-cdp-no-vision" : "p1-explore-no-vision";
+	if (arm.dispatch.axdomOff) return "p1-explore-ax-noaxdom";
 	if (arm.dispatch.backend === "cdp") return "p1-explore-cdp";
 
 	return "p1-explore-ax";
@@ -792,7 +797,8 @@ const FLEET_POLL_SEC = Number(process.env.DASH_FLEET_SEC ?? 20);
 const COLLECT_SEC = Number(process.env.DASH_COLLECT_SEC ?? 60);
 
 /** /api/logs job ids become path segments locally and a spec field remotely — same shape jobs.ts pins. */
-const LOG_JOB_RE = /^[A-Za-z0-9._-]+$/;
+// At least one non-dot character: "." and ".." pass the alphabet but are path tricks, not ids.
+const LOG_JOB_RE = /^(?!\.+$)[A-Za-z0-9._-]+$/;
 /** A first read (offset 0) of a huge log forwards only this much tail — the pane wants recent lines, not 10MB. */
 const LOG_TAIL_BYTES = 64 * 1024;
 
@@ -1546,11 +1552,11 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		if (logsInflight.has(guard)) return json(429, { error: "a read for this job is already in flight" });
 		logsInflight.add(guard);
 		try {
-			const { loadHosts } = await import("../remote/control/hosts.js");
-			const host = loadHosts().hosts.find((h) => h.name === hostName);
-			if (!host) return json(400, { error: `unknown host ${JSON.stringify(hostName)}` });
 			const tail = (buf: Buffer): Buffer => (offset === 0 && buf.length > LOG_TAIL_BYTES ? buf.subarray(buf.length - LOG_TAIL_BYTES) : buf);
 
+			// The local fast path answers BEFORE host validation: it shells nothing, and the
+			// synthetic "local" fleet row (plus pulled runs queried with a stale host) would
+			// otherwise 400 on inventory lookup while the log sits right here on disk.
 			if (fs.existsSync(jobLogPath(job))) {
 				// Local fast path — plain fs, covers pulled/collected runs and a runner on this
 				// machine. readLog's default root is the same <dataRoot>/out/jobs tree.
@@ -1568,6 +1574,12 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 					...(params.get("meta") === "1" && rec ? { task: rec.task, app: rec.app, kind: rec.kind } : {}),
 				});
 			}
+
+			// Remote path only from here — NOW the host must be in the pinned inventory
+			// (this is the branch that shells ssh).
+			const { loadHosts } = await import("../remote/control/hosts.js");
+			const host = loadHosts().hosts.find((h) => h.name === hostName);
+			if (!host) return json(400, { error: `unknown host ${JSON.stringify(hostName)}` });
 
 			const { runSsh, runnerArgv, lastFrame, firstLine } = await import("../remote/control/ssh.js");
 			const r = await runSsh(host, runnerArgv("logs", { jobId: job, fromByte: offset }), { timeoutMs: 10_000 });
