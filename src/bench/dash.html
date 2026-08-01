@@ -57,13 +57,49 @@
 	.empty { color: var(--muted); font-size: 12px; padding: 18px 0; }
 
 	/* fleet */
-	#fleet { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+	#fleet { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
 	.host { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
 	.host .name { color: var(--ink); font-weight: 600; }
 	.host .row { display: flex; gap: 8px; align-items: center; margin-top: 4px; font-size: 12px; }
+	/* The Peek/Stop control anchors to every card's right edge — same spot on all three
+	   cards, the primary affordance. The ⚠ (last fatal peek failure) huddles just left of it. */
+	.host .row .btnv { margin-left: auto; }
+	.pk-err { color: var(--warning); cursor: help; }
 	.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
 	.q { color: var(--muted); font-size: 11px; margin-top: 4px; }
 	.warn { color: var(--warning); font-size: 11px; }
+
+	/* peek panel: one per card, fixed 16:10 — idle, waiting and live all occupy the SAME box,
+	   so a stream starting or dying never shifts the layout. */
+	.peekbox { position: relative; margin-top: 8px; aspect-ratio: 16 / 10; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+	.peekbox .pk-idle, .peekbox .pk-wait { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; color: var(--muted); font-size: 11px; }
+	.peekbox[data-state="idle"] .pk-idle { display: flex; }
+	.peekbox[data-state="wait"] .pk-wait { display: flex; flex-direction: column; gap: 8px; }
+	.peekbox .pk-msg { max-width: 90%; text-align: center; }
+	.spinner { width: 18px; height: 18px; border: 2px solid var(--grid); border-top-color: var(--ink-2); border-radius: 50%; animation: pk-spin .8s linear infinite; }
+	@keyframes pk-spin { to { transform: rotate(360deg); } }
+	/* The <img> exists from birth but only shows once a real frame has painted — no
+	   broken-image state, no alt-text flash. */
+	.peekbox .pk-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: none; }
+	.peekbox[data-state="live"] { background: #000; }
+	.peekbox[data-state="live"] .pk-img { display: block; }
+	/* Video-player chrome, live-only and hover-revealed: fullscreen top-right, the
+	   {ev:"window"} caption bottom-left. */
+	.peekbox .pk-full, .peekbox .pk-cap { display: none; position: absolute; opacity: 0; transition: opacity .15s; }
+	.peekbox[data-state="live"] .pk-full { display: block; top: 6px; right: 6px; background: rgba(0, 0, 0, 0.55); }
+	.peekbox[data-state="live"] .pk-cap {
+		display: block; left: 8px; bottom: 6px; max-width: 70%; overflow: hidden; text-overflow: ellipsis;
+		white-space: nowrap; font-size: 11px; color: var(--ink-2); background: rgba(0, 0, 0, 0.55); border-radius: 4px; padding: 1px 6px;
+	}
+	.peekbox[data-state="live"]:hover .pk-full, .peekbox[data-state="live"]:focus-within .pk-full,
+	.peekbox[data-state="live"]:hover .pk-cap { opacity: 1; }
+	.peekbox:fullscreen { border: none; border-radius: 0; }
+
+	/* logs disclosure shell — the log-tailing wave fills .hostlogs-body (keyed by the
+	   #host-logs-<name> id + data-job) without restructuring the card. */
+	.hostlogs { margin-top: 6px; }
+	.hostlogs summary { cursor: pointer; font-size: 11px; color: var(--muted); }
+	.hostlogs summary:hover { color: var(--ink-2); }
 
 	/* matrix board */
 	table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
@@ -146,8 +182,6 @@
 		padding: 8px 10px; font-family: ui-monospace, monospace; font-size: 11px; line-height: 1.45;
 		white-space: pre-wrap; overflow-wrap: anywhere; max-height: 340px; overflow-y: auto; color: var(--ink-2);
 	}
-	.hostlogs { margin-top: 6px; }
-	.hostlogs > summary { cursor: pointer; font-size: 11px; color: var(--muted); }
 	.btnv {
 		background: none; border: 1px solid var(--border); color: var(--ink-2);
 		border-radius: 6px; padding: 2px 10px; font-size: 11px; cursor: pointer; font: inherit;
@@ -160,20 +194,6 @@
 		background: var(--surface); border-bottom: 1px solid var(--border); color: var(--ink);
 	}
 	#treeModal .tm-body { flex: 1; overflow: auto; background: var(--plane); }
-	.peekpanel { margin-top: 8px; background: #000; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
-	/* The singleton holder is a grid child of <main>, so the grid gap already spaces it
-	   beneath the fleet cards — zero the panel's own in-card margin there. */
-	#peek-holder .peekpanel { margin-top: 0; }
-	.peekbar { display: flex; align-items: center; gap: 8px; padding: 3px 8px; background: var(--surface); font-size: 11px; }
-	.peekbar .name { color: var(--ink); font-weight: 600; }
-	/* Only the FIRST button takes the auto margin — two autos would split the free space
-	   and strand the buttons mid-bar; the flex gap keeps them 8px apart. */
-	.peekbar .btnv { margin-left: auto; }
-	.peekbar .btnv ~ .btnv { margin-left: 0; }
-	.peekpanel img { display: block; width: 100%; }
-	.peekpanel:fullscreen { display: flex; flex-direction: column; background: #000; }
-	.peekpanel:fullscreen img { flex: 1; min-height: 0; width: 100%; height: 100%; object-fit: contain; }
-
 	/* charts */
 	svg { display: block; width: 100%; height: auto; }
 	.legend { display: flex; gap: 14px; flex-wrap: wrap; margin: 2px 0 8px; font-size: 11px; color: var(--ink-2); }
@@ -208,21 +228,10 @@
 	</div>
 </header>
 <main>
+	<!-- Every fleet card carries its own always-rendered peek panel; the cards are
+	     reconciled in place (never innerHTML-wiped as a section), so a streaming frame and
+	     an active fullscreen survive SSE pushes. -->
 	<section id="fleet"></section>
-	<!-- Singleton peek panel, OUTSIDE every re-rendered region: fullscreen survives SSE
-	     pushes, the decoded frame stays painted, and the ✕ exists even when the peeked host
-	     drops out of the fleet poll. Created once, never re-rendered. -->
-	<div id="peek-holder" hidden>
-		<div class="peekpanel" id="peek-panel">
-			<div class="peekbar">
-				<span class="name" id="peek-host"></span>
-				<span class="meta" id="peek-status">Connecting…</span>
-				<button class="btnv" data-peekfull data-tip="fullscreen">⛶</button>
-				<button class="btnv" data-peekstop data-tip="stop peeking">✕</button>
-			</div>
-			<img id="peek-img" alt="live view">
-		</div>
-	</div>
 
 	<section class="card">
 		<h2>Matrix</h2>
@@ -529,34 +538,86 @@ function elapsedSpan(sec) {
 
 function renderFleet() {
 	const f = state.fleet;
-	if (!f.rows.length) {
-		$("fleet").innerHTML = `<div class="card empty">Fleet: ${esc(f.error || "no poll yet")}</div>`;
+	const rows = f.rows.slice();
+	// A peeked host that drops out of the fleet poll keeps its card — the panel and its
+	// ⏹ Stop affordance must outlive the row that spawned them.
+	if (peekState.host && !rows.some((r) => r.name === peekState.host))
+		rows.push({ name: peekState.host, reachable: false, state: "unknown", reason: "not in the fleet poll" });
+	const box = $("fleet");
+	if (!rows.length) {
+		box.innerHTML = `<div class="card empty">fleet: ${esc(f.error || "no poll yet")}</div>`;
 		return;
 	}
-	$("fleet").innerHTML = f.rows.map((r) => {
-		const color = !r.reachable ? STATUS.critical : r.state === "busy" ? SERIES[0] : r.state === "idle" ? STATUS.good : STATUS.warning;
-		const busy = r.state === "busy"
-			? `<div class="row"><span class="num">${esc(r.app || "?")}</span><span class="meta">${elapsedSpan(r.elapsedSec)}</span></div>
-			   <div class="q">${esc(r.jobId || "")}${r.stalled ? ' <span class="warn">⚠ Stalled ' + fmtDur(r.logSilenceSec) + ' silent</span>' : ""}</div>`
-			: "";
-		const queue = r.queue && r.queue.length
-			? `<div class="q">Queue: ${r.queue.map((q) => esc(armOf(q.jobId) || q.app || q.jobId)).join(" → ")}</div>` : "";
-		const tcc = r.tccOk === false ? `<div class="warn">No TCC grants</div>` : "";
-		// Minimal live-log disclosure under a busy card: the #host-logs-<name> + data-job
-		// element is the pane filler's mount contract (a parallel shell providing the same
-		// element binds identically — mountLogPanes scans by that shape, not this markup).
-		const logs = r.state === "busy" && r.jobId
-			? `<details class="hostlogs" data-hostlogs="${esc(r.name)}"${openHostLogs.has(r.name) ? " open" : ""}><summary>Logs</summary>
-			   <div id="host-logs-${esc(r.name)}" data-job="${esc(r.jobId)}"></div></details>`
-			: "";
-		// A peeked host that flips unreachable must keep its stop button.
-		const peekBtn = (r.reachable || peekState.host === r.name)
-			? `<button class="btnv" data-peek="${esc(r.name)}" data-tip="view-only live stream of this Mac's Chromium target (CDP screencast over the ssh tunnel) — one host at a time">${peekState.host === r.name ? "⏹ Stop" : "▶ Peek"}</button>`
-			: "";
-		return `<div class="host"><div class="row"><span class="dot" style="background:${color}"></span><span class="name">${esc(r.name)}</span>
-			<span class="meta">${esc(statusLabel(r.reachable ? r.state : "unreachable"))}${r.operator ? " · " + esc(r.operator) : ""}</span>${peekBtn}</div>
-			${busy}${queue}${logs}${tcc}${r.reason ? `<div class="q">${esc(r.reason)}</div>` : ""}</div>`;
-	}).join("");
+	// Clear the rowless placeholder (the only non-.host child this container ever holds).
+	if (box.firstElementChild && !box.firstElementChild.classList.contains("host")) box.innerHTML = "";
+	// Reconcile cards against rows instead of innerHTML-replacing the section: each card's
+	// .peekbox (streaming <img>, its blob URL, an active fullscreen) and its .hostlogs
+	// open/closed state must survive SSE pushes, so only .hostinfo re-renders per push.
+	const names = new Set(rows.map((r) => r.name));
+	for (const el of [...box.querySelectorAll(".host")]) if (!names.has(el.dataset.host)) el.remove();
+	let prev = null;
+	for (const r of rows) {
+		let card = box.querySelector(`.host[data-host="${CSS.escape(r.name)}"]`);
+		if (!card) {
+			card = hostCard(r.name);
+			box.insertBefore(card, prev ? prev.nextSibling : box.firstChild);
+		} else if ((prev ? prev.nextSibling : box.firstChild) !== card) {
+			// Only move when order actually changed — a DOM move would kick the card out of
+			// fullscreen and blank a decoded frame for a paint.
+			box.insertBefore(card, prev ? prev.nextSibling : box.firstChild);
+		}
+		prev = card;
+		card.querySelector(".hostinfo").innerHTML = hostInfoHtml(r);
+		const logs = card.querySelector(".hostlogs");
+		logs.hidden = r.state !== "busy";
+		if (r.state === "busy") logs.dataset.job = r.jobId || "";
+		else logs.removeAttribute("data-job");
+	}
+	updatePeekPanels();
+}
+
+// The persistent card skeleton: .hostinfo re-renders per push; .peekbox and .hostlogs are
+// created once and mutated in place. The logs disclosure is a placeholder SHELL — the log
+// tailing wave fills .hostlogs-body, addressing the card by #host-logs-<name> + data-job.
+function hostCard(name) {
+	const card = document.createElement("div");
+	card.className = "host";
+	card.dataset.host = name;
+	card.innerHTML = `<div class="hostinfo"></div>
+		<div class="peekbox" data-state="idle">
+			<div class="pk-idle">Idle</div>
+			<div class="pk-wait"><div class="spinner"></div><div class="pk-msg"></div></div>
+			<img class="pk-img" alt="">
+			<button class="btnv pk-full" data-peekfull data-tip="fullscreen">⛶</button>
+			<div class="pk-cap"></div>
+		</div>
+		<details class="hostlogs" id="host-logs-${esc(name)}" data-hostlogs="${esc(name)}" hidden>
+			<summary>Logs</summary>
+			<div class="hostlogs-body q">Log tailing lands with the next wave</div>
+		</details>`;
+	return card;
+}
+
+function hostInfoHtml(r) {
+	const color = !r.reachable ? STATUS.critical : r.state === "busy" ? SERIES[0] : r.state === "idle" ? STATUS.good : STATUS.warning;
+	const busy = r.state === "busy"
+		? `<div class="row"><span class="num">${esc(r.app || "?")}</span><span class="meta">${elapsedSpan(r.elapsedSec)}</span></div>
+		   <div class="q">${esc(r.jobId || "")}${r.stalled ? ' <span class="warn">⚠ Stalled ' + fmtDur(r.logSilenceSec) + ' silent</span>' : ""}</div>`
+		: "";
+	const queue = r.queue && r.queue.length
+		? `<div class="q">Queue: ${r.queue.map((q) => esc(armOf(q.jobId) || q.app || q.jobId)).join(" → ")}</div>` : "";
+	const tcc = r.tccOk === false ? `<div class="warn">No TCC grants</div>` : "";
+	const peeking = peekState.host === r.name;
+	// A fatal peek failure surfaces HERE, compact: ⚠ beside the button with the reason in
+	// its tip — the panel itself stays a quiet Idle box, never an error dump.
+	const err = !peeking && peekErrors[r.name] ? `<span class="pk-err" data-tip="${esc(peekErrors[r.name])}">⚠</span>` : "";
+	// A peeked host that flips unreachable must keep its stop button.
+	const peekBtn = (r.reachable || peeking)
+		? `${err}<button class="btnv" data-peek="${esc(r.name)}" data-tip="view-only live stream of this Mac's Chromium target (CDP screencast over the ssh tunnel) — one host at a time">${peeking ? "⏹ Stop" : "▶ Peek"}</button>`
+		: err;
+	return `<div class="row"><span class="dot" style="background:${color}"></span><span class="name">${esc(r.name)}</span>
+		<span class="meta">${esc(statusLabel(r.reachable ? r.state : "unreachable"))}${r.operator ? " · " + esc(r.operator) : ""}</span>${peekBtn}</div>
+		${busy}${queue}${tcc}${r.reason ? `<div class="q">${esc(r.reason)}</div>` : ""}`;
 }
 
 function armOf(jobId) {
@@ -707,14 +768,7 @@ function fetchDetail(job) {
 // detailBody/mapTree remain below as code for other views.
 function detailRowHtml(a, p, key) {
 	const sel = selJob(p, key);
-<<<<<<< ours
-	let body;
-	if (!sel) body = `<div class="empty">nothing submitted yet</div>`;
-	else if (!detailCache[sel]) { fetchDetail(sel); body = `<div class="empty">loading ${esc(sel)}…</div>`; }
-	else body = detailBody(detailCache[sel]);
-	return `<tr class="detail-row"><td colspan="11">${body}</td></tr>`;
-=======
-	if (!sel) return `<tr class="detail-row"><td colspan="12"><div class="empty">nothing submitted yet</div></td></tr>`;
+	if (!sel) return `<tr class="detail-row"><td colspan="11"><div class="empty">nothing submitted yet</div></td></tr>`;
 	const e = p.entries.find((x) => x.jobId === sel) || {};
 	// The detail is still fetched: the ⤢ modal reads its graph, and its payload carries the
 	// run log's own task — the prompt fallback for arms that carry none (replays).
@@ -726,9 +780,8 @@ function detailRowHtml(a, p, key) {
 		: a.kind === "replay" ? (d && d.task ? `<span class="k">Replay — recipe task</span>${esc(d.task)}` : `<span class="meta">Replay — recipe task not collected yet</span>`)
 		: d && d.task ? `<span class="k">Prompt</span>${esc(d.task)}`
 		: `<span class="meta">no task prompt recorded</span>`;
-	return `<tr class="detail-row"><td colspan="12"><div class="d-prompt">${prompt}</div>
+	return `<tr class="detail-row"><td colspan="11"><div class="d-prompt">${prompt}</div>
 		<div class="logwrap" data-logjob="${esc(sel)}" data-loghost="${esc(e.host || "")}"></div></td></tr>`;
->>>>>>> theirs
 }
 
 function detailBody(d) {
@@ -936,8 +989,12 @@ function logMounts() {
 		out.push({ el, job: el.dataset.logjob, host: el.dataset.loghost || "" });
 	});
 	document.querySelectorAll('[id^="host-logs-"][data-job]').forEach((el) => {
-		if (el.offsetParent === null) return;
-		out.push({ el, job: el.dataset.job, host: el.id.slice("host-logs-".length) });
+		// The peek shell keys the <details> itself; paint into its .hostlogs-body so the
+		// <summary> survives, and gate on the BODY's visibility (a closed <details> keeps
+		// its summary on screen — only the body nulls out).
+		const body = el.querySelector(".hostlogs-body") || el;
+		if (body.offsetParent === null) return;
+		out.push({ el: body, job: el.dataset.job, host: el.id.slice("host-logs-".length) });
 	});
 	return out;
 }
@@ -1280,12 +1337,8 @@ function render() {
 	renderFleet(); renderTargetPicker(); renderBoard(p); renderOffMatrix(); renderExplore(); renderOutcomes();
 	groundingChart("chart-steps", (x) => x.meanSteps, fmtNum);
 	groundingChart("chart-tokens", (x) => x.meanOutputTokens, fmtK);
-<<<<<<< ours
 	renderAttention(); renderCost(vs.cost, vs.costSeries); renderJudge(vs.judge); renderNarrative(); renderEvents();
-=======
-	renderAttention(); renderCost(); renderJudge(); renderNarrative(); renderEvents();
 	mountLogPanes(); // re-attach log panes into the fresh DOM (their state lives in logPanes)
->>>>>>> theirs
 }
 
 /* ---- wiring -------------------------------------------------------------------------- */
@@ -1325,6 +1378,12 @@ $("board").addEventListener("click", (ev) => {
 /* ---- fleet peek: view-only live stream of a colo Mac ---------------------------------- */
 // View-only invariant: this client NEVER sends application data over the WS — it only
 // opens and closes the socket; the server drops inbound text frames on the floor anyway.
+//
+// TODO(server one-peek invariant): David wants all three hosts streaming AT ONCE. The server
+// allows exactly ONE peek session (ensurePeek in dash.ts preempts the previous with close
+// 4409), so this client renders a panel per host but arms only one — the others sit Idle.
+// Lifting that is a dash.ts change (per-host sessions, tunnels, engines); the grid here is
+// already per-host, so when it lands the client is one connection-per-host away.
 
 const peekState = {
 	host: null,        // host being peeked (armed), or null
@@ -1337,11 +1396,52 @@ const peekState = {
 	lastUrl: null,     // current blob: URL (revoked when replaced)
 	lastMsgAt: 0,      // Date.now() of last WS message of any kind (staleness watchdog input)
 	watchdog: null,    // interval id
+	streaming: false,  // true once a binary frame ARRIVED this connection — this gates the <img>
+	statusText: "",    // last status line, repainted onto the panel after re-renders
+	caption: "",       // last {ev:"window"} app · title
 };
+// host → reason of the last FATAL peek failure (close 4400/4409): rendered as the compact ⚠
+// beside that host's Peek button (reason in the tip), cleared on the next attempt.
+const peekErrors = {};
 
-function showPanel() { $("peek-holder").hidden = false; $("peek-host").textContent = peekState.host || ""; }
-function hidePanel() { $("peek-holder").hidden = true; }
-function setPeekStatus(text) { $("peek-status").textContent = text; }
+function peekCard() {
+	return peekState.host ? document.querySelector(`.host[data-host="${CSS.escape(peekState.host)}"]`) : null;
+}
+
+// Both setters tolerate a missing card: boot resume connects before the first SSE push has
+// built the fleet cards, and updatePeekPanels repaints from peekState once they exist.
+function setPeekStatus(text) {
+	peekState.statusText = text;
+	const el = peekCard()?.querySelector(".pk-msg");
+	if (el) el.textContent = text;
+}
+
+function setStreaming(on) {
+	if (peekState.streaming === on) return;
+	peekState.streaming = on;
+	const box = peekCard()?.querySelector(".peekbox");
+	if (box) box.dataset.state = on ? "live" : "wait";
+}
+
+/** Repaint every card's panel from peek state — called by renderFleet after reconcile. */
+function updatePeekPanels() {
+	document.querySelectorAll("#fleet .host").forEach((card) => {
+		const box = card.querySelector(".peekbox");
+		const mine = peekState.host === card.dataset.host;
+		box.dataset.state = mine ? (peekState.streaming ? "live" : "wait") : "idle";
+		const img = box.querySelector(".pk-img");
+		if (mine) {
+			box.querySelector(".pk-msg").textContent = peekState.statusText;
+			box.querySelector(".pk-cap").textContent = peekState.caption;
+			// A frame that arrived before this card existed (boot resume racing the first SSE
+			// push) is retained in lastUrl — paint it now instead of waiting for the next one,
+			// which a static screen might not send for a long while.
+			if (peekState.streaming && peekState.lastUrl && !img.getAttribute("src")) img.src = peekState.lastUrl;
+		} else if (img.getAttribute("src")) {
+			img.removeAttribute("src");
+		}
+	});
+}
 
 // Connection factory — togglePeek, boot resume and the retry timer all reuse it.
 function connectPeek() {
@@ -1351,6 +1451,7 @@ function connectPeek() {
 	ws.binaryType = "blob";
 	peekState.ws = ws;
 	peekState.lastMsgAt = Date.now();
+	setStreaming(false);
 	setPeekStatus(peekState.retry ? `Reconnecting (attempt ${peekState.retry + 1})…` : "Connecting…");
 	ws.onmessage = (ev) => {
 		if (peekState.gen !== myGen) return;
@@ -1359,7 +1460,9 @@ function connectPeek() {
 		if (typeof ev.data === "string") { handlePeekText(ev.data); return; }
 		// Binary frame = a JPEG: paint the new frame first, then revoke the replaced URL.
 		const url = URL.createObjectURL(ev.data);
-		$("peek-img").src = url;
+		const img = peekCard()?.querySelector(".pk-img");
+		if (img) img.src = url;
+		setStreaming(true);                                   // the FRAME reveals the <img>, not the server's "streaming" status
 		if (peekState.lastUrl) URL.revokeObjectURL(peekState.lastUrl);
 		peekState.lastUrl = url;
 	};
@@ -1367,68 +1470,79 @@ function connectPeek() {
 	ws.onerror = () => {};                                   // onclose always follows; classify there
 }
 
-// Honest status rendering: the server's typed diagnoses are the whole point — never
-// collapse kind/detail into a generic "stream error".
+// Status routing: transient states AND self-recovering errors all land as the one muted line
+// under the spinner — the panel never renders an error dump. Only a FATAL close surfaces
+// differently (compact ⚠ at the host's button; see handlePeekClose).
 function handlePeekText(raw) {
 	let d;
 	try { d = JSON.parse(raw); } catch { return; }
 	if (d.ev === "ping") return;                             // traffic only — already counted by lastMsgAt
 	if (d.ev === "status") {
-		// "waiting" is NOT an error — the server keeps tunnels up and attaches automatically
-		// when a target appears; render it calm, never with ✗.
-		setPeekStatus((d.state === "waiting" ? "⏳ " : "") + (d.message || d.state));
+		// The server flips to "streaming" BEFORE the first frame; the <img> stays hidden until
+		// one actually arrives (setStreaming in the binary path). Any other state means frames
+		// stopped being current — drop back to the spinner.
+		if (d.state !== "streaming") setStreaming(false);
+		setPeekStatus(d.message || d.state);
 	} else if (d.ev === "window") {
-		setPeekStatus(`${d.app || ""}${d.title ? " · " + d.title : ""}`.trim() || "live");
+		peekState.caption = `${d.app || ""}${d.title ? " · " + d.title : ""}`.trim();
+		const cap = peekCard()?.querySelector(".pk-cap");
+		if (cap) cap.textContent = peekState.caption;
 	} else if (d.ev === "error") {
-		const text = d.message || [d.kind, d.detail].filter(Boolean).join(": ") || "stream error";
-		if (d.kind === "stream-ended" || d.kind === "stream-stopped" || d.kind === "tunnel-died")
-			setPeekStatus("⏳ " + text);                      // self-recovering: server returns to waiting / respawns
-		else setPeekStatus("✗ " + text);                     // cdp-unreachable, no-page, capture-failed, superseded, dash-authored
+		// Every non-fatal error kind self-recovers server-side (back to "waiting" / tunnel
+		// respawn), so it renders as a calm status line while the spinner keeps spinning.
+		setStreaming(false);
+		setPeekStatus(d.message || [d.kind, d.detail].filter(Boolean).join(": ") || "stream error");
 	}
 }
 
-// Classify by close code. FATAL = {4400 unknown host, 4409 superseded} — auto-retrying a
-// 4409 would ping-pong two viewers. Everything else (1001 server restart, 1006 bare TCP
-// drop, …) retries with backoff, INDEFINITELY: attach-when-available makes an open socket
-// against an idle host a cheap quiet poll, and the user's ✕ is the exit.
+// Classify by close code. FATAL = {4400 unknown host / setup failed, 4409 superseded} —
+// auto-retrying a 4409 would ping-pong two viewers. Everything else (1001 server restart,
+// 1006 bare TCP drop, …) retries with backoff, INDEFINITELY: attach-when-available makes an
+// open socket against an idle host a cheap quiet poll, and the host's ⏹ Stop is the exit.
 function handlePeekClose(ev) {
 	const myGen = peekState.gen;                             // captured at scheduling time; stale gen = user stopped/switched
+	setStreaming(false);
 	if (ev.code === 4400 || ev.code === 4409) {
-		setPeekStatus("✗ " + (ev.reason || (ev.code === 4409 ? "preempted by another peek" : "rejected")));
-		sessionStorage.removeItem("peekHost");
-		peekState.host = null;
-		peekState.ws = null;
-		render();                                            // panel stays visible showing the reason until the user clicks ✕
+		// Fatal: disarm quietly. The panel returns to Idle; the reason lives in the ⚠ beside
+		// the host's Peek button, never as an error dump in the panel.
+		peekErrors[peekState.host] = ev.reason || (ev.code === 4409 ? "preempted by another peek" : "peek rejected");
+		disarmPeek();
+		render();
 		return;
 	}
 	if (!peekState.host) return;
 	peekState.retry++;
 	const delay = Math.min(15000, 1000 * 2 ** (peekState.retry - 1)); // 1s,2s,4s,8s,15s cap, indefinite
-	setPeekStatus(`⏳ ${ev.reason || "Connection lost"} — reconnecting in ${Math.round(delay / 1000)}s (attempt ${peekState.retry})…`);
+	setPeekStatus(`${ev.reason || "Connection lost"} — reconnecting in ${Math.round(delay / 1000)}s (attempt ${peekState.retry})…`);
 	peekState.retryTimer = setTimeout(() => { if (peekState.gen === myGen && peekState.host) connectPeek(); }, delay);
 }
 
 function stopPeek() {
-	peekState.gen++;                                          // invalidates ALL callbacks and pending retry timers
+	disarmPeek();
+}
+
+/** Shared disarm: gen bump invalidates ALL callbacks and pending retry timers. */
+function disarmPeek() {
+	peekState.gen++;
 	clearTimeout(peekState.retryTimer); peekState.retryTimer = null;
 	if (peekState.ws) { try { peekState.ws.close(); } catch {} }
 	if (peekState.lastUrl) { URL.revokeObjectURL(peekState.lastUrl); peekState.lastUrl = null; }
 	peekState.ws = null; peekState.host = null; peekState.retry = 0;
+	peekState.streaming = false; peekState.statusText = ""; peekState.caption = "";
 	sessionStorage.removeItem("peekHost");
-	hidePanel();
 }
 
 function togglePeek(host) {
 	if (peekState.host === host) { stopPeek(); render(); return; }
 	stopPeek();                                               // also bumps gen — kills the old connection cleanly
+	delete peekErrors[host];                                  // a fresh attempt retires the old ⚠
 	peekState.host = host;
 	// sessionStorage, NOT localStorage: per-tab, dies with the tab, so tomorrow's session
 	// doesn't resurrect a stale peek.
 	sessionStorage.setItem("peekHost", host);
-	showPanel();
 	setPeekStatus("Connecting…");
 	connectPeek();
-	render();                                                 // update button labels
+	render();                                                 // repaints buttons + panels
 }
 
 // Staleness watchdog: the server heartbeats every 5s; 12s silent = 2 missed beats. Force-
@@ -1437,14 +1551,19 @@ function togglePeek(host) {
 peekState.watchdog = setInterval(() => {
 	if (!peekState.host || !peekState.ws || peekState.ws.readyState !== WebSocket.OPEN) return;
 	if (Date.now() - peekState.lastMsgAt > 12000) {
-		setPeekStatus("⏳ Stalled — no data for 12s, reconnecting…");
+		setStreaming(false);
+		setPeekStatus("Stalled — no data for 12s, reconnecting…");
 		try { peekState.ws.close(); } catch {}                // triggers handlePeekClose → backoff loop
 	}
 }, 2000);
 
 $("fleet").addEventListener("click", (ev) => {
 	const pk = ev.target.closest("[data-peek]");
-	if (pk) togglePeek(pk.dataset.peek);
+	if (pk) { togglePeek(pk.dataset.peek); return; }
+	// Fullscreen rides the panel itself (video-player idiom); the panels live inside the
+	// fleet container, so its one delegated handler covers them.
+	const fs = ev.target.closest("[data-peekfull]");
+	if (fs) fs.closest(".peekbox")?.requestFullscreen?.();
 });
 
 // Fleet log disclosures: capture phase because `toggle` does not bubble. The open-state set
@@ -1455,12 +1574,6 @@ $("fleet").addEventListener("toggle", (ev) => {
 	if (d.open) openHostLogs.add(d.dataset.hostlogs); else openHostLogs.delete(d.dataset.hostlogs);
 	mountLogPanes();
 }, true);
-
-// The panel owns its own buttons — it lives outside the re-rendered fleet region.
-$("peek-holder").addEventListener("click", (ev) => {
-	if (ev.target.closest("[data-peekstop]")) { stopPeek(); render(); return; }
-	if (ev.target.closest("[data-peekfull]")) $("peek-panel")?.requestFullscreen?.();
-});
 
 $("tm-close").addEventListener("click", () => $("treeModal").classList.remove("on"));
 document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") $("treeModal").classList.remove("on"); });
@@ -1485,9 +1598,10 @@ es.onerror = () => { esErrored = true; $("conn").classList.remove("ok"); };
 
 // Boot-time resume: an armed peek survives page reloads AND tsx-watch restarts. A reload
 // within the server's 30s idle linger rejoins the live session with zero tunnel/engine
-// setup — both reload boundaries become non-events.
+// setup — both reload boundaries become non-events. The fleet cards don't exist until the
+// first SSE push; setPeekStatus tolerates that and updatePeekPanels repaints once they do.
 const resumeHost = sessionStorage.getItem("peekHost");
-if (resumeHost) { peekState.host = resumeHost; showPanel(); setPeekStatus("Resuming…"); connectPeek(); }
+if (resumeHost) { peekState.host = resumeHost; setPeekStatus("Resuming…"); connectPeek(); }
 
 // Elapsed tickers between pushes: every js-elapsed span (fleet cards AND matrix run chips)
 // advances from the last push's base — the page reads as live even between SSE frames.

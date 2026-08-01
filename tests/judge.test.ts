@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import {
+import { JUDGE_SYSTEM,
 	buildJudgePrompt,
 	buildRubric,
 	judgeReportPath,
@@ -366,4 +366,41 @@ test("judgeReportPath__AppendsJudgeSuffix__When__GivenLogPath", () => {
 		judgeReportPath("/data/out/runs/2026-07-29T18-58-28-yarn.json"),
 		"/data/out/runs/2026-07-29T18-58-28-yarn.judge.json",
 	);
+});
+
+test("parseJudgeVerdict__ReadsDisclosureSeparatelyFromScope__When__BothLinesArePresent", () => {
+	// The graded question since 2026-08-01 is whether the run SAID which scope it changed,
+	// not which one it chose. scopeWarnings has told the agent "an unstated choice is the
+	// actual failure" since 2026-07-29; the judge was written later against a different
+	// standard ("an unqualified task means the widest scope") and had been failing runs for a
+	// convention they were never given.
+	const v = parseJudgeVerdict(
+		["TRAJECTORY: PASS", "SCOPE: brand-kit/screen-clips", "SCOPE_DISCLOSED: yes", "CITATION: step 4: opened Brand Kit"].join("\n"),
+	);
+	assert.equal(v?.trajectory, "PASS");
+	// SCOPE_DISCLOSED also begins with SCOPE — the plain matcher must not swallow it.
+	assert.equal(v?.scope, "brand-kit/screen-clips");
+	assert.equal(v?.scopeDisclosed, "yes");
+});
+
+test("parseJudgeVerdict__LeavesDisclosureUnset__When__NoScopedSettingWasInPlay", () => {
+	// n/a is not "no": a task touching no multi-scope setting has nothing to disclose, and
+	// recording that as a disclosure failure would penalise most of the matrix.
+	const na = parseJudgeVerdict(["TRAJECTORY: PASS", "SCOPE: n/a", "SCOPE_DISCLOSED: n/a", "CITATION: step 1: done"].join("\n"));
+	assert.equal(na?.scopeDisclosed, undefined);
+	// And an older judge artifact with no such line parses unchanged.
+	const legacy = parseJudgeVerdict(["TRAJECTORY: FAIL", "SCOPE: editor", "CITATION: step 2: wrong pane"].join("\n"));
+	assert.equal(legacy?.scope, "editor");
+	assert.equal(legacy?.scopeDisclosed, undefined);
+});
+
+test("JUDGE_SYSTEM__GradesDisclosureNotChoice__When__ASettingHasTwoScopes", () => {
+	// The old text made "the right value at the WRONG scope" a FAIL "even when the claim names
+	// that scope accurately" — precisely the run the agent was instructed to produce.
+	assert.match(JUDGE_SYSTEM, /judge DISCLOSURE, not choice/);
+	assert.match(JUDGE_SYSTEM, /operating one is never itself a failure/);
+	assert.doesNotMatch(JUDGE_SYSTEM, /means the widest default the rubric offers/);
+	// A task that DOES name its scope is still a hard requirement — ambiguity is the carve-out,
+	// not a general licence.
+	assert.match(JUDGE_SYSTEM, /that is a stated requirement, not an ambiguity/);
 });
