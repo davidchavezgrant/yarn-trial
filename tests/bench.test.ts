@@ -90,13 +90,18 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// second, larger app — on a target that needs a login rather than an install.
 	// Phase 2: core 12 plus 8 slices x 3. The two web arms went with the web explore — they
 	// grounded on its map and had nothing to ground on without it.
-	assert.equal(phaseRunCount(2), 12 + 24);
+	// Phase 2: core 12, 8 slices x 3, plus the minimum-context PAIR x 3 — a bare AX tree with
+	// no DOM attrs and no screenshots, grounded on an equally minimal map and ungrounded. The
+	// ungrounded half is the floor of the whole matrix; every other arm should beat it.
+	assert.equal(phaseRunCount(2), 12 + 24 + 6);
 	// Phase 3: 2 local compiles + replay ×3 per backend + no-rescue ×3.
 	assert.equal(phaseRunCount(3), 2 + 6 + 3);
 	// Phase 4 (optional): 2 task cells × 2 + 1 compile + 2 replays.
 	assert.equal(phaseRunCount(4), 7);
-	// Phase 5 (filmed): one take per phase-2 task config (12) + one filmed replay per backend.
-	assert.equal(phaseRunCount(5), 12 + 2);
+	// Phase 5 (filmed): one take per phase-2 task config (14, including the minimum-context
+	// pair — derived from the phase-2 arms, so adding a config there adds a filmed take here)
+	// plus one filmed replay per backend.
+	assert.equal(phaseRunCount(5), 14 + 2);
 });
 
 test("MATRIX__UsesOnlyAxAndCdp__When__DomIsDeleted", () => {
@@ -309,7 +314,7 @@ test("runPhase__ShapesOptionsPerArm__When__Phase2Dispatches", async () => {
 		const fake = fakeDispatch();
 		const code = await runPhase(2, { go: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
 		assert.equal(code, EXIT_OK);
-		assert.equal(fake.calls.length, 36);
+		assert.equal(fake.calls.length, 42);
 
 		const byFlag = (pred: (c: DispatchOptions) => boolean): DispatchOptions[] => fake.calls.filter(pred);
 		// Task text crosses verbatim and is goal-only for every call.
@@ -317,8 +322,16 @@ test("runPhase__ShapesOptionsPerArm__When__Phase2Dispatches", async () => {
 			assert.equal(c.kind, "task");
 			assert.equal(auditTaskPrompt(c.task ?? "").hinted, false);
 		}
-		assert.equal(byFlag((c) => c.noGrounding === true && c.backend === "ax" && !c.noAx && c.app === "Yarn").length, 3);
-		assert.equal(byFlag((c) => c.axdomOff === true).length, 3);
+		// Two ungrounded ax arms now — the full-perception floor and the minimum-context floor —
+		// so the predicate has to name which, or it counts both and reads like one.
+		assert.equal(byFlag((c) => c.noGrounding === true && c.backend === "ax" && !c.noAx && !c.axdomOff && !c.noVision).length, 3);
+		assert.equal(byFlag((c) => c.noGrounding === true && c.backend === "ax" && c.axdomOff === true && c.noVision === true).length, 3);
+		// Nine: the axdom-off arm at n=3, plus the minimum-context PAIR at n=3 each — both
+		// halves of that pair run without the sidecar, which is half of what makes them
+		// minimum-context.
+		assert.equal(byFlag((c) => c.axdomOff === true).length, 9);
+		// And the matrix floor is dispatched with everything off at once, which no other arm is.
+		assert.equal(byFlag((c) => c.axdomOff === true && c.noVision === true && c.noGrounding === true).length, 3);
 		assert.equal(byFlag((c) => c.noVision === true && c.backend === "cdp").length, 3);
 		assert.equal(byFlag((c) => c.useRecipe === true && !c.noAx).length, 3);
 		// Two vision-only arms remain (ungrounded floor + curated prose), 3 runs each. The
@@ -359,7 +372,7 @@ test("runPhase__BypassesPhase1Gate__When__ForceIsSet", async () => {
 		const fake = fakeDispatch();
 		const code = await runPhase(2, { go: true, force: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
 		assert.equal(code, EXIT_OK);
-		assert.equal(fake.calls.length, 36);
+		assert.equal(fake.calls.length, 42);
 	});
 });
 
@@ -1058,4 +1071,24 @@ test("groundingChecked__FlagsARunThatDidNotGetItsDeclaredGrounding__When__Proven
 	// And every arm in the matrix resolves to something — an unhandled combination would make
 	// the detector itself the source of false positives.
 	for (const a of MATRIX.filter((x) => x.kind === "task")) assert.ok(expectedProvenance(a), a.id);
+});
+
+test("MATRIX__PairsEveryPerceptionFloorWithAnUngroundedArm__When__AConditionIsMeasured", () => {
+	// An ungrounded arm is the floor its grounded siblings are read against. Without one, a
+	// grounded arm's number has nothing to be better THAN — "grounding helps" is a comparison
+	// or it is nothing. The minimum-context pair was added 2026-08-01 because the most
+	// impoverished condition had a grounded arm and no floor.
+	const perceptionOf = (a: Arm) => `${a.dispatch.backend}|${Boolean(a.dispatch.noAx)}|${Boolean(a.dispatch.noVision)}|${Boolean(a.dispatch.axdomOff)}`;
+	const task = MATRIX.filter((a) => a.kind === "task" && a.phase === 2);
+	const ungroundedConfigs = new Set(task.filter((a) => a.dispatch.noGrounding).map(perceptionOf));
+
+	// Every ungrounded arm is a floor for at least one grounded arm — an orphan floor measures
+	// a condition nothing is compared against.
+	const groundedConfigs = new Set(task.filter((a) => !a.dispatch.noGrounding).map(perceptionOf));
+	for (const c of ungroundedConfigs) assert.ok(groundedConfigs.has(c), `ungrounded config ${c} has no grounded sibling to be the floor for`);
+
+	// And the floor of the whole matrix exists: least perception AND no map.
+	const min = task.find((a) => a.dispatch.noGrounding && a.dispatch.axdomOff && a.dispatch.noVision);
+	assert.ok(min, "no minimum-context ungrounded arm — nothing establishes the matrix floor");
+	assert.equal(perceptionLine(min), "AX tree (no DOM attrs)");
 });

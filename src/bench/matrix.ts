@@ -261,14 +261,9 @@ const PHASE1: Arm[] = [
 		app: BENCH_APP,
 		n: 1,
 		dispatch: { backend: "ax", axdomOff: true, noVision: true },
-		/**
-		 * COMPARISON-ONLY: no task arm reads this map, deliberately. It completes the
-		 * perception grid so the other three ax cells can be read against a floor, and a
-		 * grounding pass is a measurement in its own right — map size, surfaces reached and
-		 * cost are the phase-1 outputs. Adding a task consumer would mean three more phase-2
-		 * runs to answer a question the grid already answers.
-		 */
-		comparisonOnly: true,
+		// Consumed by p2-min-context-grounded since 2026-08-01 — it was comparison-only until
+		// David pointed out that the least-context condition is exactly the one worth running
+		// a task in: it measures how much the agent can work out on the fly.
 		informs: "the bare AX tree alone: the floor of the element channel, with neither DOM attrs nor screenshots",
 	},
 	{
@@ -323,6 +318,25 @@ const PHASE2_SLICES: Arm[] = [
 	// artifact nobody reads.
 	task("p2-ax-grounded-no-vision", { backend: "ax", noVision: true }, "what the screenshot channel buys on ax", { env: { APPMAP_VARIANT: "novision" } }),
 	task("p2-cdp-grounded-no-vision", { backend: "cdp", noVision: true }, "same on cdp — DOM snapshot is text-rich; fleet-scale cost", { env: { APPMAP_VARIANT: "novision" } }),
+	/**
+	 * MINIMUM CONTEXT, both tiers (David, 2026-08-01). A bare AX tree: no DOM attributes from
+	 * the sidecar, no screenshots. It is the most impoverished condition an agent can be asked
+	 * to work in and still be addressing real controls.
+	 *
+	 * Two reasons this pair earns six runs. It is the only test of how well the agent figures
+	 * things out ON THE FLY when almost nothing is handed to it — the deployment case where
+	 * the sidecar is unavailable and screenshots are too expensive at fleet scale. And the
+	 * grounded half is the only consumer of p1-explore-ax-noaxdom-no-vision's map, which was
+	 * otherwise a 30-minute pass written for a comparison alone.
+	 *
+	 * The ungrounded half is the floor of the entire matrix: least perception AND no map. Every
+	 * other arm should beat it, and an arm that does not is telling you its condition adds
+	 * nothing.
+	 */
+	task("p2-min-context-grounded", { backend: "ax", axdomOff: true, noVision: true }, "least perception, grounded on an equally minimal map — the sidecar-less, screenshot-less deploy case", {
+		env: { APPMAP_VARIANT: "novision" },
+	}),
+	task("p2-min-context-ungrounded", { backend: "ax", axdomOff: true, noVision: true, noGrounding: true }, "the floor of the matrix: least perception, no map — can it work it out on the fly"),
 	task("p2-ax-curated", { backend: "ax", useRecipe: true }, "explore pass vs 10 minutes of human notes"),
 	// Vision-only is ax-backend-only by construction: cdp observations ARE ref lists.
 	task("p2-vision-only-ungrounded", { backend: "ax", noAx: true, noGrounding: true }, "the floor: screenshots alone, cold"),
