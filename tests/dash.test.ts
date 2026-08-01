@@ -468,6 +468,30 @@ test("BuildState__ExposesLineageAndTargetKey__When__ArmsRideTheWire", () => {
 	assert.equal(byId("p2-ax-grounded")?.targetKey, "Yarn");
 });
 
+// The Sees check columns: perception as per-channel booleans, derived from the arm's
+// dispatch flags (never parsed from the perception string). The four dispatch shapes below
+// cover every branch: cdp (DOM only), plain ax (AX + DOM attrs), noAx (Vision only),
+// axdomOff + noVision (bare AX tree).
+test("BuildState__SeesAxDomVision__When__AxArmRunsFullPerception", () => {
+	const s = buildState(manifest(), fleet([]), [], false);
+	assert.deepEqual(armView(s, "p2-ax-grounded")?.sees, { ax: true, dom: true, vision: true });
+});
+
+test("BuildState__SeesDomWithoutAx__When__ArmRunsTheCdpBackend", () => {
+	const s = buildState(manifest(), fleet([]), [], false);
+	assert.deepEqual(armView(s, "p2-cdp-grounded")?.sees, { ax: false, dom: true, vision: true });
+});
+
+test("BuildState__SeesOnlyVision__When__ArmDeclaresNoAx", () => {
+	const s = buildState(manifest(), fleet([]), [], false);
+	assert.deepEqual(armView(s, "p1-explore-vision")?.sees, { ax: false, dom: false, vision: true });
+});
+
+test("BuildState__SeesBareAx__When__ArmRunsAxdomOffWithoutVision", () => {
+	const s = buildState(manifest(), fleet([]), [], false);
+	assert.deepEqual(armView(s, "p2-min-context-grounded")?.sees, { ax: true, dom: false, vision: false });
+});
+
 test("BuildState__OmitsArmPasses__When__NothingSubmitted", () => {
 	// Every MATRIX arm rides the wire so the page can show the whole plan, but an arm with
 	// no submissions carries no pass — the page reads passes.length as "not started".
