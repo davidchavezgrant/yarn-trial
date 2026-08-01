@@ -171,9 +171,9 @@
 	tr.exp-row td { background: rgba(255, 255, 255, 0.03); }
 	td.arm .dn { color: var(--ink); }
 	/* Rank badge on explore group headers: comprehensiveness rank within the target as TEXT
-	   ("1/3"), border-tinted by rank. A solid dot here was indistinguishable from the status
-	   dots two cells over — same glyph, same hues, different meaning. The ordinal is the
-	   fact; the border is only a glance aid. */
+	   (the numerator alone, "1" — the "of N" lives in the tooltip), border-tinted by rank.
+	   A solid dot here was indistinguishable from the status dots two cells over — same glyph,
+	   same hues, different meaning. The ordinal is the fact; the border is only a glance aid. */
 	td.arm .rankbadge {
 		font-size: 10px; border: 1px solid var(--border); border-radius: 8px; padding: 0 5px;
 		margin-right: 6px; color: var(--ink-2); cursor: help; font-variant-numeric: tabular-nums;
@@ -1125,19 +1125,19 @@ function selJob(p, key) {
 
 const ordinal = (n) => { const s = ["th", "st", "nd", "rd"], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };
 
-// Rank badge on explore group headers: "1/3" = the target's most comprehensive map of 3
-// ranked (1 pass ranked = no badge). The ordinal is TEXT — a solid dot in status hues was
-// indistinguishable from the succeeded/failed dots in the Runs column — and the border
-// tint (good/critical/warning for best/worst/between) is only a glance aid. Rank comes off
-// the wire (rankExplore in dash.ts) so the page never re-derives an ordering the server
-// already owns.
+// Rank badge on explore group headers: "1" = the target's most comprehensive map — the
+// "of N" lives only in the tooltip (1 pass ranked = no badge). The ordinal is TEXT — a
+// solid dot in status hues was indistinguishable from the succeeded/failed dots in the
+// Runs column — and the border tint (good/critical/warning for best/worst/between) is
+// only a glance aid. Rank comes off the wire (rankExplore in dash.ts) so the page never
+// re-derives an ordering the server already owns.
 function rankDot(a, p) {
 	if (a.kind !== "explore" || !p.exploreRank || p.exploreRank.of < 2) return "";
 	const { rank, of } = p.exploreRank;
 	const color = rank === 1 ? STATUS.good : rank === of ? STATUS.critical : STATUS.warning;
 	const tip = `Comprehensiveness rank within ${targetLabel(a.targetKey)} — by distilled map size (graph nodes; 'seen' deliberately unused, it inflates on repetitive content)\n${ordinal(rank)} of ${of}`
 		+ (a.flags && a.flags.includes("--no-ax") ? "\n" + DECLARED_TIP : "");
-	return `<span class="rankbadge" style="border-color:${color}" data-tip="${esc(tip)}">${rank}/${of}</span>`;
+	return `<span class="rankbadge" style="border-color:${color}" data-tip="${esc(tip)}">${rank}</span>`;
 }
 
 // COMPILE rows only: every chip in one cell (their entries are inert file transforms with
