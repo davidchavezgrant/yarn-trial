@@ -514,42 +514,122 @@ export function fromStore(relParts: string[], outRoot = outDir()): string {
  */
 const readStoredManifest = (date: string): Manifest => readManifest(date, storeRoot([date, "manifest.json"]));
 
-/**
- * The newest note narrate() has persisted to narrative.md, if any. The live copy used to be
- * in-memory only, so a restarted dash served nothing while every note it had ever minted sat
- * on disk beside the manifest — and a restart into a keyless environment could never re-mint.
- * Headings are machine-written by narrate() (`## <ISO> — N collected (<model>)`), so parsing
- * the last one back is exact, not heuristic.
- */
-/** Where the narrator's event log APPENDS: inside the store, by David's explicit exception. */
-export const narrativeLogPath = (outRoot?: string): string => path.join(outRoot ?? outDir(), LIVE_DIR, "narrative.jsonl");
+/** The narrator's event-log filename — the pass-level file beside the manifests AND one per run dir. */
+const NARRATIVE_FILE = "narrative.jsonl";
+
+/** Where the narrator's pass-level event log APPENDS: inside the store, by David's explicit exception. */
+export const narrativeLogPath = (outRoot?: string): string => path.join(outRoot ?? outDir(), LIVE_DIR, NARRATIVE_FILE);
 
 /** The event log's pre-bench home (out/live/narrative.jsonl) — read-only; appends go above. */
-export const legacyNarrativeLogPath = (outRoot?: string): string => path.join(outRoot ?? outDir(), OLD_LIVE_DIR, "narrative.jsonl");
+export const legacyNarrativeLogPath = (outRoot?: string): string => path.join(outRoot ?? outDir(), OLD_LIVE_DIR, NARRATIVE_FILE);
 
-function readPersistedNarrative(date: string): Narrative | undefined {
-	// The event log first: one JSON object per line, append-only. The newest parseable
-	// line wins — a torn final line (reader racing the append) falls back to the one before.
-	// Canonical home first, then the pre-bench file — events already landed there the night
-	// the store lived at out/live, and moving the append target must not orphan them.
-	for (const logFile of [narrativeLogPath(), legacyNarrativeLogPath()]) {
-		try {
-			const lines = fs.readFileSync(logFile, "utf8").trimEnd().split("\n");
-			for (let i = lines.length - 1; i >= 0; i--) {
-				try {
-					const ev = JSON.parse(lines[i] as string);
-					if (ev?.text && ev?.t) return { updatedAt: String(ev.t), text: String(ev.text), model: String(ev.model ?? "?") };
-				} catch {
-					// torn or foreign line — keep walking back
-				}
+/**
+ * One narrator note. Notes are PER RUN (David, 2026-08-01): each is minted when its run's
+ * collection is detected, reading the ENTIRE state of the live store at that moment — so
+ * every note is a point-in-time reflection of the runs finished by then. The same event
+ * rides both logs (appendNarrativeEvent); the pass-level shape keeps t/model/text so
+ * readPersistedNarrative keeps serving pre-per-run events unchanged.
+ */
+export interface NarrativeEvent {
+	t: string;
+	runKey: string;
+	armId: string;
+	/** Collected-run count at mint time. */
+	collectedAtMint: number;
+	model: string;
+	text: string;
+}
+
+/**
+ * Append one note to BOTH homes: the run's own folder (out/bench/live/<runKey>/narrative.jsonl
+ * — the note is per run, and the run dir is that run's record) and the pass-level log (the
+ * findings card's "newest" feed and the re-mint guard's recovery source). Both writes ride
+ * David's sanctioned-write exception (2026-08-01): the dash is otherwise a pure reader, but
+ * the narrator appends INTO the store — one JSON event per line, append-only, never
+ * rewritten, so a reader racing an append at worst sees one torn tail line, which every
+ * reader here skips. The mkdirs are defensive: the run dir already exists for any collected
+ * run, and the store dir exists once the runner has written anything.
+ */
+export function appendNarrativeEvent(ev: NarrativeEvent, outRoot?: string): void {
+	const line = `${JSON.stringify(ev)}\n`;
+	const runLog = runPath(ev.runKey, NARRATIVE_FILE, outRoot ?? outDir());
+	fs.mkdirSync(path.dirname(runLog), { recursive: true });
+	fs.appendFileSync(runLog, line);
+	const passLog = narrativeLogPath(outRoot);
+	fs.mkdirSync(path.dirname(passLog), { recursive: true });
+	fs.appendFileSync(passLog, line);
+}
+
+/**
+ * The runKeys the pass-level log already holds notes for — the narrator's re-mint guard,
+ * recovered from DISK at startup (never from memory: a restarted dash must not re-bill the
+ * model for runs a previous process already noted). Pre-per-run events carry no runKey and
+ * seed nothing, so the first tick after this feature lands backfills a note per collected run.
+ */
+export function notedRunKeys(outRoot?: string): Set<string> {
+	const noted = new Set<string>();
+	try {
+		for (const line of fs.readFileSync(narrativeLogPath(outRoot), "utf8").split("\n")) {
+			try {
+				const ev = JSON.parse(line);
+				if (typeof ev?.runKey === "string") noted.add(ev.runKey);
+			} catch {
+				// torn or foreign line — not an event
 			}
-		} catch {
-			// this event log does not exist — try the next home, then the legacy markdown
 		}
+	} catch {
+		// no log yet — nothing noted
+	}
+
+	return noted;
+}
+
+/** The newest parseable event in one log file — a torn final line (reader racing the append) falls back. */
+function lastNarrativeEvent(file: string): Record<string, any> | undefined {
+	try {
+		const lines = fs.readFileSync(file, "utf8").trimEnd().split("\n");
+		for (let i = lines.length - 1; i >= 0; i--) {
+			try {
+				const ev = JSON.parse(lines[i] as string);
+				if (ev?.text && ev?.t) return ev;
+			} catch {
+				// torn or foreign line — keep walking back
+			}
+		}
+	} catch {
+		// this event log does not exist
+	}
+
+	return undefined;
+}
+
+/**
+ * The newest note the narrator has persisted, if any. The live copy used to be in-memory
+ * only, so a restarted dash served nothing while every note it had ever minted sat on disk
+ * beside the manifest — and a restart into a keyless environment could never re-mint.
+ * Canonical event log first, then the pre-bench file (events landed there the night the
+ * store lived at out/live), then the legacy narrative.md whose headings narrate() once
+ * machine-wrote (`## <ISO> — N collected (<model>)` — parsing the last back is exact).
+ */
+export function readPersistedNarrative(date: string, outRoot?: string): Narrative | undefined {
+	for (const logFile of [narrativeLogPath(outRoot), legacyNarrativeLogPath(outRoot)]) {
+		const ev = lastNarrativeEvent(logFile);
+		if (!ev) continue;
+		// Per-run events add runKey/armId/collectedAtMint; pre-per-run events had date/collected.
+		// Both read back through the same t/model/text core the parser has always required.
+		const collected = ev.collectedAtMint ?? ev.collected;
+
+		return {
+			updatedAt: String(ev.t),
+			text: String(ev.text),
+			model: String(ev.model ?? "?"),
+			...(typeof ev.runKey === "string" ? { runKey: ev.runKey } : {}),
+			...(typeof collected === "number" ? { collected } : {}),
+		};
 	}
 	let raw: string;
 	try {
-		raw = fs.readFileSync(fromStore([date, "narrative.md"]), "utf8");
+		raw = fs.readFileSync(fromStore([date, "narrative.md"], outRoot), "utf8");
 	} catch {
 		return undefined; // No file — nothing narrated for this date yet.
 	}
@@ -562,7 +642,12 @@ function readPersistedNarrative(date: string): Narrative | undefined {
 	return { updatedAt: last[1], text, model: last[2] };
 }
 
-export function narratorPrompt(digest: Record<string, unknown>, previous?: string): string {
+export function narratorPrompt(
+	digest: Record<string, unknown>,
+	previous?: string,
+	/** Per-run framing: the run whose collection triggered this note, plus its own EntryView numbers. */
+	run?: { runKey: string; armId: string; stats?: unknown },
+): string {
 	return [
 		"You are the running commentator on a live benchmark matrix for a self-driving UI agent",
 		"(backends: ax = macOS accessibility, cdp = Chrome DevTools Protocol; grounded = the agent",
@@ -581,6 +666,15 @@ export function narratorPrompt(digest: Record<string, unknown>, previous?: strin
 		"caveat, and only where it changes the conclusion. Never speculate past the data. Plain",
 		"prose, no headers, no lists, no markdown.",
 		...(previous ? ["", "Your previous note (already seen — write only what CHANGED or sharpened):", previous] : []),
+		...(run
+			? [
+					"",
+					`A run just completed: ${run.runKey} (arm ${run.armId}). Given the COMPLETE state below —`,
+					"every run finished so far — write the note for THIS run: what it contributes, confirms,",
+					"or changes versus its arm and the field to date. ≤5 sentences, numbers-first, plain prose.",
+					...(run.stats !== undefined ? ["", "The completed run's own numbers:", JSON.stringify(run.stats, null, 1)] : []),
+				]
+			: []),
 		"",
 		"Data:",
 		JSON.stringify(digest, null, 1),
@@ -767,6 +861,12 @@ export interface DashDetail {
 	 */
 	heat?: { surfaces: Record<string, number>; controls: Record<string, number>; runs: number };
 	note?: string;
+	/**
+	 * The narrator's note for THIS run (the run dir's narrative.jsonl, newest event) — the
+	 * dropdown renders it beneath the prompt. Named apart from `note`, which is the detail's
+	 * own diagnostics string. Model-written; verify before quoting.
+	 */
+	narratorNote?: { t: string; text: string; model: string };
 }
 
 function heatFor(
@@ -987,6 +1087,9 @@ export function buildDetail(jobId: string, manifest: Manifest, opts: { dataDir?:
 		),
 	];
 
+	// The run's own narrator note — runFile so archived/legacy homes keep serving old notes.
+	const noteEv = lastNarrativeEvent(runFile(jobId, NARRATIVE_FILE, path.join(dataDir, "out")));
+
 	return {
 		jobId,
 		armId: entry.armId,
@@ -997,6 +1100,7 @@ export function buildDetail(jobId: string, manifest: Manifest, opts: { dataDir?:
 		mutatedKeys,
 		...(graph ? { heat: heatFor(graph, exploreArmId, entry.model, manifest, dataDir) } : {}),
 		...(notes.length ? { note: notes.join("; ") } : {}),
+		...(noteEv ? { narratorNote: { t: String(noteEv.t), text: String(noteEv.text), model: String(noteEv.model ?? "?") } } : {}),
 	};
 }
 
@@ -1243,10 +1347,9 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		if (events.length > 200) events.shift();
 	};
 
-	// Seeded from disk so a restart does not lose the note: narrate() persists every mint to
-	// narrative.md, and narratedCount still starts at -1, so a keyed process replaces this
-	// with a fresh note on its first tick — the seed only covers the window (or the keyless
-	// environment) where it cannot.
+	// Seeded from disk so a restart does not lose the newest note: narrate() persists every
+	// mint to the event logs, and the re-mint guard below recovers from the same file — a
+	// restarted keyed process picks up where the last one stopped instead of re-minting.
 	// Seed the persisted note ONLY when this pass actually has collected data. The read
 	// chain deliberately walks historical homes, so an empty fresh store would otherwise
 	// resurrect a previous pass's conclusions into a board showing zero collected runs —
@@ -1268,61 +1371,85 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		for (const res of clients) res.write(data);
 	};
 
-	// The narrator: when a landing batch changes what is known, ask the default model for a
-	// plain-English read of the rollups. A commentator, not an authority — its note renders
-	// with a "verify before quoting" sub and appends to narrative.md beside the manifest.
-	// DASH_NARRATE=0 disables; a keyless environment just logs and moves on.
-	let narratedCount = -1;
+	// The narrator, PER RUN (David, 2026-08-01): every newly collected run gets its own note,
+	// and each note is written READING the entire current state of the live store — a
+	// point-in-time reflection of the runs finished by then. A commentator, not an authority —
+	// notes render with a "verify before quoting" sub. The already-noted set recovers from the
+	// pass-level log's runKey fields (never from memory), so a restart never re-mints; the
+	// writes themselves ride David's sanctioned-write exception (see appendNarrativeEvent).
+	// DASH_NARRATE=0 disables; a keyless environment logs one feed line and skips.
+	const notedRuns = notedRunKeys();
 	let narrating = false;
+	let keylessLogged = false;
 	const narrate = async (): Promise<void> => {
 		if (process.env.DASH_NARRATE === "0" || narrating) return;
-		const collectedCount = manifest.entries.filter((e) => e.collected).length;
-		if (collectedCount === 0 || collectedCount === narratedCount) return;
+		const collected = manifest.entries.filter((e) => e.collected);
+		const newly = collected.filter((e) => !notedRuns.has(e.jobId));
+		if (!newly.length) return;
 		narrating = true;
 		try {
-			const { makeClient } = await import("../core/harness/model.js");
-			const { client, model } = makeClient();
-			const digest = narratorDigest(buildState(manifest, fleet, [], autoCollect, defaultModel));
-			const res = await client.messages.create({
-				model,
-				// 4000, not a text-sized budget: reasoning models spend max_tokens on thinking
-				// BEFORE the visible text, and 400 was exhausted mid-reason — every tick failed
-				// with no text at all. The prompt caps the visible output (~5 sentences), so
-				// this ceiling does not bound the note's length.
-				max_tokens: 4000,
-				messages: [{ role: "user", content: narratorPrompt(digest, narrative?.text) }],
-			});
-			const text = (res.content ?? [])
-				.filter((b: any) => b.type === "text")
-				.map((b: any) => b.text)
-				.join("\n")
-				.trim();
-			if (!text) {
-				// Name WHY there was no text — "no text" alone hid a max_tokens exhaustion for a day.
-				const stop = (res as any).stop_reason ?? (res as any).finish_reason ?? "unknown";
-				const blocks = (res.content ?? []).map((b: any) => b?.type ?? "?").join(", ") || "none";
-				throw new Error(`model returned no text (stop: ${stop}; blocks: ${blocks})`);
+			let mc: { client: any; model: string } | undefined;
+			try {
+				mc = (await import("../core/harness/model.js")).makeClient();
+			} catch {
+				// One line, once — a keyless dash must not restate this every tick.
+				if (!keylessLogged) addEvent(`narrator: no model key — skipping ${newly.length} run note(s)`);
+				keylessLogged = true;
+
+				return;
 			}
-			narratedCount = collectedCount;
-			narrative = { updatedAt: new Date().toISOString(), text, model };
-			// THE ONE SANCTIONED WRITE (per David, 2026-08-01, amended same day): the dash is
-			// otherwise a pure reader, but the narrator writes INTO the store by explicit
-			// exception — out/bench/live/narrative.jsonl, IMMUTABLY: one JSON event per line,
-			// append-only, never rewritten. An event log rather than a mutated file means the
-			// full findings history survives verbatim (the GUI shows the newest; the file is
-			// the record), and a reader racing an append at worst sees one torn tail line,
-			// which readPersistedNarrative skips. The mkdir covers a store the runner has not
-			// created yet; it never touches anything inside an existing store.
-			const logFile = narrativeLogPath();
-			fs.mkdirSync(path.dirname(logFile), { recursive: true });
-			fs.appendFileSync(
-				logFile,
-				`${JSON.stringify({ t: narrative.updatedAt, date, collected: collectedCount, model, text })}\n`,
-			);
-			addEvent(`narrator: note updated (${collectedCount} collected)`);
-			push();
-		} catch (e) {
-			addEvent(`narrator failed: ${(e as Error).message}`);
+			// ONE state snapshot for the whole batch: a batch collect lands several runs at
+			// once, and every note in it must reflect the same post-collect world.
+			const state = buildState(manifest, fleet, [], autoCollect, defaultModel);
+			const digest = narratorDigest(state);
+			const entryByJob = new Map(state.arms.flatMap((a) => a.passes.flatMap((p) => p.entries)).map((e) => [e.jobId, e]));
+			// Sequential on purpose — one model call at a time, never a parallel spam of the
+			// provider; and one run's failed note must not block the rest (its runKey stays
+			// un-noted, so the next tick retries it alone).
+			for (const e of newly) {
+				try {
+					const res = await mc.client.messages.create({
+						model: mc.model,
+						// 4000, not a text-sized budget: reasoning models spend max_tokens on thinking
+						// BEFORE the visible text, and 400 was exhausted mid-reason — every tick failed
+						// with no text at all. The prompt caps the visible output (~5 sentences), so
+						// this ceiling does not bound the note's length.
+						max_tokens: 4000,
+						messages: [{
+							role: "user",
+							content: narratorPrompt(digest, undefined, { runKey: e.jobId, armId: e.armId, stats: entryByJob.get(e.jobId) }),
+						}],
+					});
+					const text = (res.content ?? [])
+						.filter((b: any) => b.type === "text")
+						.map((b: any) => b.text)
+						.join("\n")
+						.trim();
+					if (!text) {
+						// Name WHY there was no text — "no text" alone hid a max_tokens exhaustion for a day.
+						const stop = (res as any).stop_reason ?? (res as any).finish_reason ?? "unknown";
+						const blocks = (res.content ?? []).map((b: any) => b?.type ?? "?").join(", ") || "none";
+						throw new Error(`model returned no text (stop: ${stop}; blocks: ${blocks})`);
+					}
+					const ev: NarrativeEvent = {
+						t: new Date().toISOString(),
+						runKey: e.jobId,
+						armId: e.armId,
+						collectedAtMint: collected.length,
+						model: mc.model,
+						text,
+					};
+					appendNarrativeEvent(ev);
+					notedRuns.add(e.jobId);
+					// The findings card shows the newest pass-log event; several mints in one
+					// tick leave the LAST one appended showing — fine, they share one state.
+					narrative = { updatedAt: ev.t, text, model: mc.model, runKey: e.jobId, collected: collected.length };
+					addEvent(`narrator: note minted for ${e.jobId} (${collected.length} collected)`);
+					push();
+				} catch (err) {
+					addEvent(`narrator failed for ${e.jobId}: ${(err as Error).message}`);
+				}
+			}
 		} finally {
 			narrating = false;
 		}
@@ -2130,8 +2257,8 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		setInterval(runCollect, COLLECT_SEC * 1000);
 		void runCollect();
 	}
-	// Piggybacks the collect cadence: a tick only calls the model when the collected count
-	// moved, so a quiet hour costs nothing.
+	// Piggybacks the collect cadence: a tick only calls the model when a run collected that
+	// has no note yet, so a quiet hour costs nothing.
 	setInterval(() => void narrate(), COLLECT_SEC * 1000);
 	void narrate();
 

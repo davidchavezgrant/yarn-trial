@@ -951,7 +951,12 @@ function detailRowHtml(a, p, key) {
 		: a.kind === "replay" ? (d && d.task ? `<span class="k">Replay — recipe task</span>${esc(d.task)}` : `<span class="meta">Replay — recipe task not collected yet</span>`)
 		: d && d.task ? `<span class="k">Prompt</span>${esc(d.task)}`
 		: `<span class="meta">no task prompt recorded</span>`;
-	return `<tr class="detail-row"><td colspan="13">${statsStrip(a, e)}<div class="d-prompt">${prompt}</div>
+	// The run's own narrator note (its run dir's narrative.jsonl) — model-written, so it keeps
+	// the same "verify before quoting" caveat the findings card carries.
+	const note = d && d.narratorNote
+		? `<div class="d-note" style="max-width:90ch;white-space:pre-wrap">${esc(d.narratorNote.text)} <span class="meta">— narrator, ${hhmm(d.narratorNote.t)} · verify before quoting</span></div>`
+		: "";
+	return `<tr class="detail-row"><td colspan="13">${statsStrip(a, e)}<div class="d-prompt">${prompt}</div>${note}
 		<div class="logwrap" data-logjob="${esc(sel)}" data-loghost="${esc(e.host || "")}"></div></td></tr>`;
 }
 
@@ -1503,7 +1508,10 @@ function renderNarrative() {
 	el.style.whiteSpace = "pre-wrap";
 	el.style.maxWidth = "90ch";
 	el.textContent = state.narrative.text;
-	$("narrative-sub").textContent = `written ${hhmm(state.narrative.updatedAt)} by ${state.narrative.model} from the live rollups — verify against the report before quoting anywhere`;
+	// Per-run notes name their trigger; pre-per-run events carry none and keep the plain line.
+	const n = state.narrative;
+	const trigger = n.runKey && n.collected != null ? ` · reflecting ${n.collected} collected · after ${shortJob(n.runKey)}` : "";
+	$("narrative-sub").textContent = `written ${hhmm(n.updatedAt)} by ${n.model}${trigger} — verify against the report before quoting anywhere`;
 }
 
 function renderEvents() {

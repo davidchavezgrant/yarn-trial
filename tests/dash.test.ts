@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { buildDetail, buildState, defaultDashDate, type FleetView, fromStore, groundingArmId, legacyNarrativeLogPath, loadEnvFallback, matchPath, narrativeLogPath, parseDashArgs, parseEnvLine, parseLogFrames, rankExplore, utf8Tail } from "../src/bench/dash.js";
+import { appendNarrativeEvent, buildDetail, buildState, defaultDashDate, type FleetView, fromStore, groundingArmId, legacyNarrativeLogPath, loadEnvFallback, matchPath, narrativeLogPath, type NarrativeEvent, narratorPrompt, notedRunKeys, parseDashArgs, parseEnvLine, parseLogFrames, rankExplore, readPersistedNarrative, utf8Tail } from "../src/bench/dash.js";
 import type { Manifest, ManifestEntry } from "../src/bench/manifest.js";
 import { armById } from "../src/bench/matrix.js";
 
@@ -683,6 +683,76 @@ test("NarrativeLogPath__AppendsUnderTheBenchStore__When__ReadsStillCoverThePreBe
 	assert.equal(legacyNarrativeLogPath("/x/out"), path.join("/x/out", "live", "narrative.jsonl"));
 });
 
+test("NotedRunKeys__RecoversMintedSet__When__PassLogHoldsRunEvents", () => {
+	// The narrator's re-mint guard recovers from the pass-level log's runKey fields at startup
+	// — never from memory. Pre-per-run events (no runKey) and torn lines seed nothing.
+	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-narr-"));
+	try {
+		plant(out, ["bench", "live", "narrative.jsonl"], [
+			JSON.stringify({ t: "2026-08-01T00:00:00.000Z", date: "2026-08-01", collected: 3, model: "m", text: "old pass-level note" }),
+			JSON.stringify({ t: "2026-08-01T01:00:00.000Z", runKey: "job-a", armId: "p2-ax-grounded", collectedAtMint: 4, model: "m", text: "note a" }),
+			'{"torn',
+			JSON.stringify({ t: "2026-08-01T02:00:00.000Z", runKey: "job-b", armId: "p2-ax-grounded", collectedAtMint: 5, model: "m", text: "note b" }),
+			"",
+		].join("\n"));
+		const noted = notedRunKeys(out);
+		assert.deepEqual([...noted].sort(), ["job-a", "job-b"]);
+		assert.equal(noted.has("job-c"), false);
+	} finally {
+		fs.rmSync(out, { recursive: true, force: true });
+	}
+});
+
+test("AppendNarrativeEvent__RoundTripsThroughBothLogs__When__NoteIsMinted", () => {
+	// The SAME event lands in the run dir AND the pass-level log; the pass-level shape gains
+	// runKey/armId/collectedAtMint but keeps t/model/text, so readPersistedNarrative serves it
+	// (with the trigger fields) and notedRunKeys recovers the guard from the same bytes.
+	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-narr-"));
+	try {
+		const ev: NarrativeEvent = { t: "2026-08-01T03:00:00.000Z", runKey: "job-rt", armId: "p2-ax-grounded", collectedAtMint: 7, model: "test-model", text: "the note" };
+		appendNarrativeEvent(ev, out);
+		assert.deepEqual(JSON.parse(fs.readFileSync(path.join(out, "bench", "live", "job-rt", "narrative.jsonl"), "utf8").trim()), ev);
+		const n = readPersistedNarrative("2026-08-01", out);
+		assert.equal(n?.updatedAt, ev.t);
+		assert.equal(n?.text, "the note");
+		assert.equal(n?.model, "test-model");
+		assert.equal(n?.runKey, "job-rt");
+		assert.equal(n?.collected, 7);
+		assert.equal(notedRunKeys(out).has("job-rt"), true);
+	} finally {
+		fs.rmSync(out, { recursive: true, force: true });
+	}
+});
+
+test("ReadPersistedNarrative__ToleratesPreRunEvents__When__LogPredatesPerRunNotes", () => {
+	// Old pass-level events ({t, date, collected, model, text}) keep reading back — the parser
+	// requires only t/text/model; the trigger fields are simply absent.
+	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-narr-"));
+	try {
+		plant(out, ["bench", "live", "narrative.jsonl"],
+			`${JSON.stringify({ t: "2026-08-01T00:00:00.000Z", date: "2026-08-01", collected: 3, model: "m", text: "old note" })}\n`);
+		const n = readPersistedNarrative("2026-08-01", out);
+		assert.equal(n?.text, "old note");
+		assert.equal(n?.model, "m");
+		assert.equal(n?.runKey, undefined);
+		assert.equal(n?.collected, 3);
+	} finally {
+		fs.rmSync(out, { recursive: true, force: true });
+	}
+});
+
+test("NarratorPrompt__FramesTheTriggeringRun__When__RunContextIsGiven", () => {
+	// Per-run mints keep the persona and the terse rules, add the completed run's framing and
+	// its own EntryView numbers ahead of the full-state digest.
+	const p = narratorPrompt({ progress: { collected: 9 } }, undefined, { runKey: "job-x", armId: "p2-cdp-grounded", stats: { steps: 9, usd: 0.12 } });
+	assert.ok(p.includes("A run just completed: job-x (arm p2-cdp-grounded)"));
+	assert.ok(p.includes("write the note for THIS run"));
+	assert.ok(p.includes('"steps": 9'));
+	assert.ok(p.includes("AT MOST 5 sentences"));
+	// No run context — the framing stays out entirely (the pre-per-run prompt, unchanged).
+	assert.ok(!narratorPrompt({ progress: {} }).includes("A run just completed"));
+});
+
 test("FromStore__NamesTheLegacyPath__When__ArtifactExistsNowhere", () => {
 	// The last candidate comes back so error messages and the manifest watcher name where
 	// the data is expected to appear — same contract as paths.ts's runFile.
@@ -748,6 +818,27 @@ test("BuildDetail__PrefersTheRunDirsOwnAppmap__When__TheRunFolderHoldsOne", () =
 		const d = buildDetail("job-o", m, { dataDir: dir, benchRoot: path.join(dir, "bench") });
 		assert.equal(d.graphSource, "job-o/appmap.json (run dir)");
 		assert.equal(d.steps[0]?.edgeTo, "brand-kit");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("BuildDetail__CarriesTheRunsNarratorNote__When__RunDirHoldsNarrativeLog", () => {
+	// The dropdown renders the run's own note beneath the prompt; the detail carries the run
+	// dir's narrative.jsonl NEWEST event (several never happen in normal minting, but a rescue
+	// re-mint must win). A run without one simply omits the field.
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dash-detail-note-"));
+	try {
+		fs.mkdirSync(path.join(dir, "out", "bench", "live", "job-n"), { recursive: true });
+		fs.writeFileSync(path.join(dir, "out", "bench", "live", "job-n", "run.json"), JSON.stringify({ task: "t", steps: [] }));
+		fs.writeFileSync(path.join(dir, "out", "bench", "live", "job-n", "narrative.jsonl"), [
+			JSON.stringify({ t: "2026-08-01T01:00:00.000Z", runKey: "job-n", armId: "p2-ax-grounded", collectedAtMint: 1, model: "m1", text: "first" }),
+			JSON.stringify({ t: "2026-08-01T02:00:00.000Z", runKey: "job-n", armId: "p2-ax-grounded", collectedAtMint: 2, model: "m2", text: "latest note" }),
+			"",
+		].join("\n"));
+		const m = manifest(entry({ jobId: "job-n", state: "done", collected: true }));
+		const d = buildDetail("job-n", m, { dataDir: dir, benchRoot: path.join(dir, "bench") });
+		assert.deepEqual(d.narratorNote, { t: "2026-08-01T02:00:00.000Z", text: "latest note", model: "m2" });
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
