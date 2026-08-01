@@ -104,6 +104,33 @@ test("BuildState__KeepsAwaitingCollect__When__HostRegistryReportsTheJobDone", ()
 	assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.entries[0]?.status, "awaiting-collect");
 });
 
+test("BuildState__KeepsManifestState__When__FleetSnapshotPredatesTheSubmit", () => {
+	// A job submitted AFTER the last fleet poll is absent from that snapshot because the
+	// snapshot is older than the job, not because the job ended. The manifest reaches the page
+	// in ~300ms (fs-watch) while the fleet is polled every FLEET_POLL_SEC, so every fresh
+	// submit used to spend that gap as amber "awaiting-collect" before flipping to Queued.
+	// Absence is only evidence of termination when the poll postdates the submit.
+	const s = buildState(
+		manifest(entry({ state: "queued", submittedAt: "2026-07-31T20:06:00.000Z" })),
+		fleet([{ name: "mac1", reachable: true, state: "idle" }]),
+		[],
+		true,
+	);
+	assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.entries[0]?.status, "queued");
+});
+
+test("BuildState__KeepsManifestState__When__FleetWasNeverPolled", () => {
+	// No polledAt = no snapshot age at all — same conclusion, conservatively: the snapshot
+	// cannot testify about the job, so the manifest's state stands.
+	const s = buildState(
+		manifest(entry({ state: "queued" })),
+		{ rows: [{ name: "mac1", reachable: true, state: "idle" }] },
+		[],
+		true,
+	);
+	assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.entries[0]?.status, "queued");
+});
+
 test("BuildState__KeepsManifestState__When__HostIsUnreachable", () => {
 	// An unreachable host proves nothing about the job, so the last-known state stands.
 	const s = buildState(manifest(entry({})), fleet([{ name: "mac1", reachable: false, state: "unknown", reason: "down" }]), [], true);

@@ -56,6 +56,12 @@ export interface DashEvent {
 
 export interface FleetView {
 	rows: FleetRow[];
+	/**
+	 * When the poll that produced `rows` BEGAN — the snapshot's honest age, not when it landed.
+	 * liveFor treats a job's absence from the snapshot as termination only when this postdates
+	 * the job's submit; a failed re-poll keeps the old rows AND the old stamp, so staleness
+	 * stays visible to that comparison.
+	 */
 	polledAt?: string;
 	error?: string;
 }
@@ -70,8 +76,9 @@ export interface EntryView {
 	/**
 	 * running/queued come from the live fleet (authoritative while the poll is fresh);
 	 * succeeded/failed kinds from collected metrics; "awaiting-collect" when the job's host
-	 * answered and no longer holds it — unless the host's job registry says it DIED, in which
-	 * case failed/crashed/stopped surface pre-collect; the manifest's stale state otherwise.
+	 * answered WITHOUT the job on a poll taken after the submit — unless the host's job
+	 * registry says it DIED, in which case failed/crashed/stopped surface pre-collect; the
+	 * manifest's own state otherwise (host unreachable, or the snapshot predates the submit).
 	 */
 	status: string;
 	/** Seconds the run has been going (running) or took per its own log (collected). */
@@ -262,6 +269,14 @@ function liveFor(e: ManifestEntry, fleet: FleetView): Pick<EntryView, "status" |
 		const rec = host.recent?.find((r) => r.jobId === e.jobId);
 		if (rec?.state === "failed" || rec?.state === "stopped") return { status: rec.state };
 		if (rec?.state === "orphaned") return { status: "crashed" };
+		// Absence from the snapshot is evidence of termination ONLY when the snapshot postdates
+		// the submit. The manifest reaches the page in ~300ms (fs-watch) while the fleet is
+		// polled every FLEET_POLL_SEC, so a fresh submit spends the gap absent from a snapshot
+		// that merely predates it — and used to render as amber "awaiting-collect" until the
+		// next poll. The registry reads above stay unguarded: they are positive sightings, and
+		// a snapshot older than the job cannot contain it. NaN comparisons land on the manifest
+		// side, which is the conservative direction — a snapshot of unknown age proves nothing.
+		if (!(Date.parse(fleet.polledAt ?? "") >= Date.parse(e.submittedAt))) return { status: e.state };
 
 		return { status: "awaiting-collect" };
 	}
@@ -1828,10 +1843,15 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	const pollFleet = async (): Promise<void> => {
 		if (polling) return;
 		polling = true;
+		// Stamped BEFORE the ssh fan-out: liveFor compares this against submittedAt to decide
+		// whether a job's absence from the snapshot means anything, and the snapshot's contents
+		// are no fresher than the moment the poll began. Stamping at completion would claim the
+		// round trip's worth of freshness the data does not have.
+		const polledAt = new Date().toISOString();
 		try {
 			const rows = await fleetStatus();
 			const local = await localRunRow();
-			fleet = { rows: local ? [local, ...rows] : rows, polledAt: new Date().toISOString() };
+			fleet = { rows: local ? [local, ...rows] : rows, polledAt };
 		} catch (e) {
 			fleet = { ...fleet, error: (e as Error).message };
 			addEvent(`fleet poll failed: ${(e as Error).message}`);
