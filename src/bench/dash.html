@@ -190,8 +190,11 @@
 	td.treecell { text-align: center; white-space: nowrap; }
 	/* A multi-run variant splits after the identity columns — one line per run, the five
 	   identity cells rowspanned across the group. Internal separators go dashed so the
-	   group still reads as one variant; the solid grid line returns on its last run. */
+	   group still reads as one variant; the solid grid line returns on its last run.
+	   The rowspanned identity cells center on the group — top-aligned (the table default),
+	   the variant name hugged line 1 and read as belonging to that run alone. */
 	tr.splitrow > td { border-bottom: 1px dashed var(--grid); }
+	#board td[rowspan] { vertical-align: middle; }
 	td.task { color: var(--muted); max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 	/* row detail: the appmap + the run's path through it */
