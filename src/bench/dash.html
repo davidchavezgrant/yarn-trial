@@ -1718,14 +1718,28 @@ function syncPeekArming() {
 		if (!ps.armed && !ps.fatal) armPeek(h);
 	}
 	for (const h of Object.keys(peekStates)) {
-		if (busy.has(h)) continue;
+		if (busy.has(h)) {
+			const ps = peekStates[h];
+			ps.idleSince = 0; // busy again — any pending idle grace resets
+
+			continue;
+		}
 		const ps = peekStates[h];
 		ps.fatal = false; // the failed episode ended with the run — the next busy flip retries
 		if (!ps.armed) continue;
-		// Grace: an OPEN, frame-delivering stream outlives the stale row (the run's final
-		// frames). Anything else — connecting, waiting spinner, retry backoff — disarms NOW:
-		// an idle host must hold no connections.
-		if (ps.ws && ps.ws.readyState === WebSocket.OPEN && ps.streaming) continue;
+		// BOUNDED grace: let the run's final frames land, then return to Idle no matter
+		// what. The old unbounded "keep while frames flow" check never fired — `streaming`
+		// is a latch set on the first frame, and a finished run's app stays up and
+		// debug-flagged, so panels streamed idle desktops forever after the run ended.
+		if (ps.ws && ps.ws.readyState === WebSocket.OPEN && ps.streaming) {
+			if (!ps.idleSince) {
+				ps.idleSince = Date.now();
+
+				continue;
+			}
+			if (Date.now() - ps.idleSince < 10_000) continue;
+		}
+		ps.idleSince = 0;
 		disarmPeek(h);
 	}
 }
