@@ -335,7 +335,7 @@
 	<section class="grid2">
 		<div class="card"><h2>Phase 1 — Discovery per Backend</h2><div class="sub">controls seen / actuated / dismissed per Explore arm (x̃ across each arm's passes) — the leaner-vs-blinder question</div><div id="chart-explore"></div></div>
 		<div class="card"><h2>Task Outcomes by Arm</h2><div class="sub">collected runs by verdict; pending = submitted, not yet collected</div><div id="chart-outcomes"></div></div>
-		<div class="card"><h2>Explore Effect — Steps x̄</h2><div class="sub">explored vs unexplored, per backend (phase 2 core)</div><div id="chart-steps"></div></div>
+		<div class="card"><h2>Explore Effect — Actions x̄</h2><div class="sub">explored vs unexplored, per backend (phase 2 core)</div><div id="chart-steps"></div></div>
 		<div class="card"><h2>Explore Effect — Output Tokens x̄</h2><div class="sub">same arms, token cost of going in blind</div><div id="chart-tokens"></div></div>
 		<div class="card"><h2>Attention — Offered vs Shown</h2><div class="sub">mean interactive elements observed vs list lines rendered into the prompt</div><div id="chart-attention"></div></div>
 		<div class="card"><h2>Cumulative Est. Cost</h2><div class="sub" id="cost-sub"></div><div id="chart-cost"></div></div>
@@ -418,8 +418,8 @@ const fmtMoney = (n) => n < 0.01 && n > 0 ? "$" + n.toFixed(4) : "$" + n.toFixed
 // Seconds stay visible past the hour mark — they are what makes a live ticker read as live.
 // Floor the seconds component everywhere: rounding rolled 59.5s over to "60s" and "1m60s".
 const fmtDur = (s) => s == null ? "–"
-	: s >= 3600 ? Math.floor(s / 3600) + "h" + String(Math.floor(s % 3600 / 60)).padStart(2, "0") + "m" + String(Math.floor(s % 60)).padStart(2, "0") + "s"
-	: s >= 60 ? Math.floor(s / 60) + "m" + String(Math.floor(s % 60)).padStart(2, "0") + "s" : Math.floor(s) + "s";
+	: s >= 3600 ? Math.floor(s / 3600) + "h" + String(Math.floor(s % 3600 / 60)).padStart(2, "0") + "m " + String(Math.floor(s % 60)).padStart(2, "0") + "s"
+	: s >= 60 ? Math.floor(s / 60) + "m " + String(Math.floor(s % 60)).padStart(2, "0") + "s" : Math.floor(s) + "s";
 const fmtNum = (n) => n == null ? "–" : Number.isInteger(n) ? String(n) : n >= 100 ? String(Math.round(n)) : n.toFixed(1);
 const fmtK = (n) => n == null ? "–" : n >= 10000 ? (n / 1000).toFixed(0) + "k" : n >= 1000 ? (n / 1000).toFixed(1) + "k" : fmtNum(n);
 const hhmm = (iso) => { const d = new Date(iso); return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); };
@@ -955,7 +955,7 @@ function statusChip(e, rowKey, selected) {
 	// so a hover never reads live counters as collected numbers — and named "live" only
 	// while the run actually runs; an ended run's tail says so.
 	const liveTip = lp ? (e.status === "running" ? "\nlive (event log, provisional): " : "\nevent log (run ended, provisional): ") + [
-		lp.steps != null ? `step ${lp.steps}, ${lp.verified != null ? lp.verified : 0}✓` : "",
+		lp.steps != null ? `action ${lp.steps}, ${lp.verified != null ? lp.verified : 0}✓` : "",
 		lp.actions != null ? `${lp.actions} actions` + (lp.frontier != null ? `, frontier ${lp.frontier}` : "") + (lp.nodes != null ? `, ${lp.nodes} nodes` : "") : "",
 		// Live economics ride the same provisional line, ~-prefixed: outputTokens is the
 		// headline token number (repo convention), usd priced server-side like collected rows.
@@ -1115,7 +1115,9 @@ function runOf(jobId) {
 // header rows repeated the column labels down the page, which got hard to read. Explore
 // rows' discovery numbers each get their OWN column (Actions…Ambig, after the task metrics)
 // so passes compare down the page — they were one colspan-5 inline-labeled blob, unscannable.
-// Task rows show "–" there; explore rows show "–" under Steps (Actions IS the explore's steps).
+// ONE Actions column for every kind of run (the Steps column is gone, David 2026-08-01):
+// a task run's step count and an explore pass's action count are the same idea, so task
+// rows put their count (with the verified tally in the hover) where explores put theirs.
 // Every metric column is PER RUN: a multi-run variant splits after the identity columns
 // into one line per run (passRows), the identity cells rowspanned across the group.
 // Flags live in the arm tooltip (the display name is derived from them) and per-run
@@ -1137,17 +1139,17 @@ const MAP_TIP = "the appmap as a full node-link tree — edge thickness = traver
 // lineage group every row shares the group's target anyway.
 // Ordering: Variant leads with Task right beside it (David, 2026-08-01), then the Runs
 // chips (the chip is the row's anchor), the config block (the three Sees check columns,
-// Acts With, Model), the run-lifecycle columns (Steps, Tokens, Cost — Started and Time
-// folded into the chip label the same day), the five explore discovery metrics, ops at
-// the right.
+// Acts With, Model), the run-lifecycle columns (Tokens, Cost — Started and Time folded
+// into the chip label the same day), Actions (every run's count) and the four explore
+// discovery metrics, ops at the right.
 // No Success column: per-run ✓/✗ is already on the Runs column's status chips — a second
 // cell saying the same thing read as a different signal.
 // Sees is three ✓ columns, not a phrase: "AX + DOM attrs + Vision" was an awkward
 // constructed sentence; the exact wording (perceptionLine) survives in each cell's tooltip.
 // Every full-width spanner (detail rows, phase separators) spans NCOLS — keep it in step
-// with TASK_HEAD when adding a column. 18 = Variant + Task + Runs + the three Sees checks
-// + Acts With + Model + 3 run-lifecycle + 5 explore discovery + Map + Graphs.
-const NCOLS = 18;
+// with TASK_HEAD when adding a column. 17 = Variant + Task + Runs + the three Sees checks
+// + Acts With + Model + Tokens + Cost + Actions + 4 explore discovery + Map + Graphs.
+const NCOLS = 17;
 // The explore percentage columns share one denominator: seen (the pass's total observed
 // controls — actuated + dismissed converge on it, so both stay in [0,100]). graphNodes is
 // NOT a valid denominator: dismissed alone can be 2× the distilled node count (a mass
@@ -1159,9 +1161,8 @@ const TASK_HEAD = "<tr>" + thr("Variant", VARIANT_TIP) +
 	th("Sees", "which channels reach the model — ✓ per channel; hover a row's cells for the exact wording", "", ' colspan="3"') +
 	thr("Acts With", ACTS_TIP) +
 	thr("Model", "what actually ran, off the run logs") +
-	thr("Steps", "actions the run took (hover for the verified count)", "num-h") +
 	thr("Tokens", "OUTPUT tokens the run spent", "num-h") + thr("Cost", "published-rate estimate per run — not an invoice · ? = tokens recorded but no pricing", "num-h") +
-	thr("Actions", "explore rows — actions the grounding pass took", "num-h") +
+	thr("Actions", "actions the run took — task runs carry their verified count in the hover; explore rows count the grounding pass", "num-h") +
 	thr("Nodes", "explore rows — distilled appmap graph nodes", "num-h") +
 	thr("Activated", "explore rows — share of the controls the pass observed that it operated at least once (actuated ÷ seen); hover for the counts", "num-h") +
 	thr("Dismissed", "explore rows — share of the controls the pass observed that it swept off the frontier without operating (dismissed ÷ seen). The pass ends when the frontier empties, and dismissing is a legitimate way to empty it", "num-h") +
@@ -1319,9 +1320,10 @@ function identityRest(a, p, span = "") {
 		${modelCell(p, span)}`;
 }
 
-// The five explore-discovery columns, dashed on task/replay rows so every row spans the
-// same 20 columns without colspan bookkeeping.
-const NO_EXPLORE_CELLS = `<td class="num">–</td>`.repeat(5);
+// The four explore-discovery columns AFTER Actions (Nodes, Activated, Dismissed, Ambig),
+// dashed on task/replay rows so every row spans the same NCOLS without colspan bookkeeping
+// — task rows fill Actions themselves (taskActionsCellFor).
+const NO_EXPLORE_CELLS = `<td class="num">–</td>`.repeat(4);
 
 // A metric cell carrying an event-log value: ~ marks it approximate. Blue means RUNNING —
 // the .livecell tint + LIVE tip are worn only while the entry is running; an entry that
@@ -1335,12 +1337,14 @@ const liveNumCell = (e, label, extraTip) => {
    (EntryView.live) stand in ONLY while the run is uncollected, marked ~ (tinted only while
    it runs), so a provisional number can never blend with a banked one. */
 
-function stepsCellFor(e) {
+// A task/replay run's Actions cell — the wire still says `steps` (collect's field name),
+// the UI says actions everywhere (one vocabulary for task and explore counts).
+function taskActionsCellFor(e) {
 	if (e.steps != null)
-		return `<td class="num" data-tip="${esc(e.verifiedSteps != null ? `steps taken — ${e.verifiedSteps} of ${e.steps} verified` : "steps taken (no verified count)")}">${fmtNum(e.steps)}</td>`;
+		return `<td class="num" data-tip="${esc(e.verifiedSteps != null ? `actions taken — ${e.verifiedSteps} of ${e.steps} verified` : "actions taken (no verified count)")}">${fmtNum(e.steps)}</td>`;
 	const lp = !e.collected && e.live;
 	return lp && lp.steps != null
-		? liveNumCell(e, `~${fmtNum(lp.steps)}${lp.verified != null ? ` (${fmtNum(lp.verified)}✓)` : ""}`, "steps so far (verified in parens)")
+		? liveNumCell(e, `~${fmtNum(lp.steps)}${lp.verified != null ? ` (${fmtNum(lp.verified)}✓)` : ""}`, "actions so far (verified in parens)")
 		: `<td class="num">–</td>`;
 }
 
@@ -1430,7 +1434,7 @@ function exploreCellsFor(a, e) {
 // A variant with several runs SPLITS after the identity columns (David, 2026-08-01): the
 // seven identity cells (Variant, Task, Sees×3, Acts With, Model) are identical across a
 // pass's runs, so they render once and rowspan the group; everything run-dependent
-// (chip, Steps…Ambig, ⤢) gets one line per run, reading that run's OWN numbers. Line order = the chips' drain order
+// (chip, Tokens…Ambig, ⤢) gets one line per run, reading that run's OWN numbers. Line order = the chips' drain order
 // (finished → running → queued, oldest first in each band). Each line carries the chip's
 // click semantics on the whole row (data-row + data-job): click a line to open/select its
 // run's dropdown, click it again to collapse. The detail row rides AFTER the group — a
@@ -1459,13 +1463,13 @@ const graphsCell = (a, p, span) =>
 
 function taskRow(a, p) {
 	return passRows(a, p, false, (e) =>
-		stepsCellFor(e) + tokensCellFor(e) + costCellFor(e) + NO_EXPLORE_CELLS);
+		tokensCellFor(e) + costCellFor(e) + taskActionsCellFor(e) + NO_EXPLORE_CELLS);
 }
 
-// The explore GROUP-HEADER rows. Steps stays "–": Actions IS an explore's step count.
+// The explore GROUP-HEADER rows — exploreCellsFor leads with the pass's own Actions cell.
 function exploreRow(a, p, first) {
 	return passRows(a, p, first, (e) =>
-		`<td class="num">–</td>` + tokensCellFor(e) + costCellFor(e) + exploreCellsFor(a, e));
+		tokensCellFor(e) + costCellFor(e) + exploreCellsFor(a, e));
 }
 
 // Compile arms (phase 3/4 recipe compiles) are local, instant file transforms recorded as
@@ -1486,8 +1490,8 @@ function compileRow(a, p) {
 		: `<td class="task" data-tip="no source run yet">–</td>`;
 	// This inert row mirrors the board's column order by HAND (no variantCell/passRows split
 	// to lean on), so it must be kept in step with TASK_HEAD: Variant, Task(=src), Runs, the
-	// three Sees dashes (no model runs, so no perception channels), Acts With, Model, Steps,
-	// Tokens, Cost, the five explore dashes, Map, Graphs — 18 cells.
+	// three Sees dashes (no model runs, so no perception channels), Acts With, Model, Tokens,
+	// Cost, Actions, the four explore dashes, Map, Graphs — 17 cells.
 	return `<tr class="crow"><td class="arm" data-tip="${esc(tip)}"><span class="dn">${esc(displayName(a))}</span>${badge}</td>
 		${srcCell}${runsCell(p, null)}<td class="see">–</td><td class="see">–</td><td class="see">–</td><td class="num">–</td><td class="num">–</td>
 		<td class="num">–</td><td class="num">–</td><td class="num">–</td>
@@ -1542,7 +1546,7 @@ function fetchDetail(job) {
 // Term explainers for the dropdown stat keys (statsStrip + liveStrip), same delegated
 // tooltip as the board cells — "Ambig", "Tok In" and "Judge" are opaque without one.
 const STAT_TIPS = {
-	Actions: "actions the pass took",
+	Actions: "actions the run took",
 	Time: "wall-clock for this run",
 	Seen: "controls the pass observed",
 	Actuated: "controls the pass operated",
@@ -1550,8 +1554,7 @@ const STAT_TIPS = {
 	Surfaces: "distinct screens/panels/dialogs seen",
 	Nodes: "distilled appmap graph nodes",
 	Ambig: "same setting editable at two scopes",
-	Steps: "actions the run took",
-	Verified: "steps with verified effects",
+	Verified: "actions with verified effects",
 	"Tok In": "input tokens sent to the model",
 	Out: "output tokens generated",
 	"Cache-Read": "prompt tokens read from cache",
@@ -1560,7 +1563,7 @@ const STAT_TIPS = {
 	Judge: "judge verdicts: trajectory / visual",
 	Frontier: "un-operated controls — the pass ends when this empties",
 	Stopped: "has the pass declared itself done",
-	Last: "the run's latest step",
+	Last: "the run's latest action",
 	Claimed: "the run's own claim — pre-judge",
 	Cleanup: "the run's cleanup status",
 	Fatal: "the error that killed the run",
@@ -1577,7 +1580,7 @@ function statsStrip(a, e) {
 			["Seen", fmtNum(st.controlsSeen)], ["Actuated", fmtNum(st.controlsActuated)],
 			["Dismissed", fmtNum(st.controlsDismissed)], ["Surfaces", fmtNum(st.surfaces)], ["Nodes", fmtNum(st.graphNodes)],
 			["Ambig", fmtNum(st.scopeAmbiguities)]]
-		: [["Steps", e.steps], ["Verified", e.verifiedSteps],
+		: [["Actions", e.steps], ["Verified", e.verifiedSteps],
 			["Time", e.elapsedSec != null ? fmtDur(e.elapsedSec) : null],
 			["Tok In", e.inputTokens != null ? fmtK(e.inputTokens) : null],
 			["Out", e.outputTokens != null ? fmtK(e.outputTokens) : null],
@@ -1600,7 +1603,7 @@ function liveStrip(a, e) {
 	const running = e.status === "running";
 	const pairs = a.kind === "explore"
 		? [["Actions", lp.actions], ["Frontier", lp.frontier], ["Actuated", lp.actuated], ["Dismissed", lp.dismissed], ["Seen", lp.seen], ["Nodes", lp.nodes], ["Stopped", lp.finished]]
-		: [["Steps", lp.steps], ["Verified", lp.verified], ["Last", lp.lastStep]];
+		: [["Actions", lp.steps], ["Verified", lp.verified], ["Last", lp.lastStep]];
 	// Usage is common to both kinds (one event per model call, cumulative). Same ~ prefix as
 	// the live cells; the strip's trailing caveat already marks the whole row provisional.
 	if (lp.outputTokens != null) pairs.push(["Out", "~" + fmtK(lp.outputTokens)]);
@@ -1793,7 +1796,7 @@ function treeSvg(d) {
 			`${n.kind}: ${n.id}`,
 			n.settingKey ? `setting: ${n.settingKey} (${n.scope} scope)` : n.scope ? `${n.scope} scope` : "",
 			`visits: ${visits} across ${heat.runs} collected run(s)`,
-			steps.length ? `this run: step ${steps.join(", ")}` : "",
+			steps.length ? `this run: action ${steps.join(", ")}` : "",
 			isGated ? "🛑 gated — the explore pass refused to operate this (destructive/external)" : "",
 			amb ? "⚠ dual-scope — " + AMB_TIP : "",
 			isMut ? "mutated by this run" : "",

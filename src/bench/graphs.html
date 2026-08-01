@@ -264,7 +264,7 @@ function renderHeader() {
 	const tile = (l, v, d) => tiles.push({ l, v, d });
 	tile("runs", `${p.collected ?? 0}/${a.n ?? "?"}`, "collected");
 	tile("success", `${p.successes ?? 0}/${p.collected ?? 0}`);
-	if (p.meanSteps != null) tile("steps x̄", fmtNum(p.meanSteps));
+	if (p.meanSteps != null) tile("actions x̄", fmtNum(p.meanSteps));
 	if (p.meanElapsedSec != null) tile("time x̄", fmtDur(p.meanElapsedSec));
 	if (p.meanModelCalls != null) tile("calls x̄", fmtNum(p.meanModelCalls));
 	if (p.meanOutputTokens != null) tile("out-tok x̄", fmtK(p.meanOutputTokens));
