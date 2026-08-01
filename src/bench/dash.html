@@ -150,9 +150,9 @@
 	.num { color: var(--ink-2); }
 	tr.mrow { cursor: pointer; }
 	tr.mrow:hover td { background: rgba(255, 255, 255, 0.035); }
-	/* Explore rows: faint aqua wash so the two board sections read apart at a glance.
+	/* Explore rows: faint neutral wash so the two board sections read apart at a glance.
 	   Subtler than the hover wash, which outranks it (specificity), so hover still reads. */
-	tr.exp-row td { background: rgba(25, 158, 112, 0.05); }
+	tr.exp-row td { background: rgba(255, 255, 255, 0.03); }
 	td.arm .dn { color: var(--ink); }
 	/* Rank dot on explore group headers: comprehensiveness rank within the target. Color
 	   never alone — the tooltip carries the rank text. */
@@ -776,13 +776,15 @@ function entryStart(e) {
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-// HH:MM, prefixed with its day ("Jul 31 23:58") when the start falls on a previous UTC
-// day — an overnight bench must not read as this morning.
+// Local 12-hour time with AM/PM ("2:18 AM"), prefixed with its day ("Jul 31 11:58 PM")
+// when the start falls on a previous local day — an overnight bench must not read as
+// this morning.
 function startStamp(t) {
 	if (t == null) return "–";
 	const d = new Date(t), now = new Date();
-	const today = d.getUTCFullYear() === now.getUTCFullYear() && d.getUTCMonth() === now.getUTCMonth() && d.getUTCDate() === now.getUTCDate();
-	return (today ? "" : MONTHS[d.getUTCMonth()] + " " + d.getUTCDate() + " ") + hhmm(d.toISOString());
+	const today = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+	const h = d.getHours(), time = (h % 12 || 12) + ":" + String(d.getMinutes()).padStart(2, "0") + (h < 12 ? " AM" : " PM");
+	return (today ? "" : MONTHS[d.getMonth()] + " " + d.getDate() + " ") + time;
 }
 
 const shortJob = (id) => String(id).length > 14 ? String(id).slice(0, 14) + "…" : String(id);
@@ -845,7 +847,11 @@ function exploreRow(a, p, first) {
 		? ` <span data-tip="${esc(DECLARED_TIP)}">⚠</span>`
 		: "";
 	const seg = (label, value, tip) => `<span data-tip="${esc(tip)}"><span class="k">${label}</span>${value}</span>`;
-	const summary = [
+	// No explore data at all → render the cell empty rather than a line of dashes; the cell
+	// itself stays (colspan=5) so column alignment with Started/Runs/Map is unchanged.
+	const hasData = [ex.actions, ex.controlsSeen, ex.surfaces, ex.graphNodes, ex.scopeAmbiguities]
+		.some(v => v != null);
+	const summary = !hasData ? "" : [
 		seg("Actions x̃", fmtNum(ex.actions),
 			"actions the pass took" + (ex.elapsed ? "\nelapsed " + ex.elapsed : "") + "\n" + MED_TIP),
 		seg("Controls", ex.controlsSeen != null ? `${ex.controlsSeen}/${ex.controlsActuated}/${ex.controlsDismissed}` : "–",
