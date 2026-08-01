@@ -50,6 +50,14 @@ import { accumulatedGraph, type FinishInput, merge, type Pass } from "./state.js
  * candidate there; demanding uniqueness HERE means a miss (say, the backend matched a
  * non-interactive row) credits nothing rather than guessing.
  */
+/**
+ * How long to let a freshly-launched app paint before calling the first observation empty.
+ * 8 x 2s matches the task agent's home probe — long enough for a cold Electron relaunch,
+ * short enough that a genuinely blank target fails fast rather than burning a fleet slot.
+ */
+const FIRST_OBSERVATION_TRIES = Number(process.env.EXPLORE_FIRST_OBS_TRIES ?? 8);
+const FIRST_OBSERVATION_WAIT_MS = Number(process.env.EXPLORE_FIRST_OBS_WAIT_MS ?? 2000);
+
 const uniqueQueryHandle = (query: string, obs: ObservationBundle): string | number | undefined => {
 	const q = query.toLowerCase();
 	const hits = obs.interactive.filter((e) => e.name.toLowerCase().includes(q) || e.value.toLowerCase().includes(q));
@@ -100,7 +108,28 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 	overlay.setDriving(true);
 	let obs: ObservationBundle;
 	try {
-		obs = await doObserve(`${p.stepsDir}/explore-step-0`);
+		/**
+		 * POLLED, not taken once. The guard below is right to refuse an empty first observation,
+		 * but one of the things it names — "a window that has not painted" — is the one cause
+		 * that fixes itself, and taking a single sample cannot tell it from the causes that do
+		 * not.
+		 *
+		 * That distinction became load-bearing when the cold start landed (2026-08-01). Cold
+		 * start quits the app so acquisition relaunches it; on the CDP path acquisition returns
+		 * as soon as the DEBUG PORT answers, which the Electron main process opens well before
+		 * the renderer has content. So quit → relaunch → attach → observe raced the first paint
+		 * and killed p1-explore-cdp about fifteen seconds in, while every ax arm ran fine.
+		 *
+		 * The same shape the task agent already uses for its home probe (agent/run.ts): sample,
+		 * stop the moment there is content, give up after a bounded wait and let the guard speak.
+		 */
+		for (let attempt = 0; attempt < FIRST_OBSERVATION_TRIES; attempt++) {
+			obs = await doObserve(`${p.stepsDir}/explore-step-0`);
+			if (obs.appContent > 0) break;
+			if (attempt === 0) console.log(`first observation is empty — waiting for ${p.app} to paint`);
+			await new Promise((r) => setTimeout(r, FIRST_OBSERVATION_WAIT_MS));
+		}
+		obs = obs!;
 	} finally {
 		overlay.setDriving(false);
 	}
@@ -117,7 +146,11 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 	 * front, where the answer is unambiguous and the run has cost nothing yet.
 	 */
 	if (obs.appContent === 0)
-		throw new TargetNotObservableError(p.app, "the first observation has no app content — a cold start that lands on a permissions gate, an onboarding wall, or an unpainted window maps that instead of the app");
+		throw new TargetNotObservableError(
+			p.app,
+			`the first observation still has no app content after ${Math.round((FIRST_OBSERVATION_TRIES * FIRST_OBSERVATION_WAIT_MS) / 1000)}s — ` +
+				"a cold start that lands on a permissions gate, an onboarding wall, or a window that never paints maps that instead of the app",
+		);
 
 	ingest(obs);
 	p.messages.push({

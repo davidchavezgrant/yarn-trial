@@ -465,6 +465,30 @@ export function failureKind(
 	return "crashed";
 }
 
+/**
+ * Did this run fail for a reason that says nothing about the agent?
+ *
+ * The distinction David asked for (2026-08-01): a run that DIED is not a result, a run that
+ * finished and did not achieve the goal is. Only the first should be thrown out and retried.
+ *
+ * Structural, never a match against error prose — the same rule the cdp→ax fallback follows.
+ * `failureKind` already draws the line: "crashed" means terminal with no run log at all, while
+ * "gave-up" means the agent ran to its own verdict. `orphaned` is the runner dying under a run.
+ * Deliberately NOT technical: `stopped` (an operator's decision, and auto-retrying what a human
+ * killed is the wrong instinct), `unready` (a sign-in gate, which already re-dispatches itself)
+ * and `hinted-refused` (the measurement rule working).
+ */
+export function technicalFailure(state: string, metrics: RunMetrics, arm: Arm | undefined, notes: string[]): ManifestEntry["technical"] {
+	if (state === "orphaned") return { kind: "orphaned", detail: "the runner died under this run; nothing about the agent was measured" };
+	if (metrics.failureKind === "crashed") return { kind: "crashed", detail: "terminal with no run log — died before writing anything measurable" };
+	// Explore arms have no run log to miss; their primary artifact is the appmap, and
+	// failureKind is not computed for them at all.
+	if (arm?.kind === "explore" && state === "failed" && notes.some((n) => n.startsWith("no appmap at")))
+		return { kind: "crashed", detail: "explore failed before committing a map — no grounding produced" };
+
+	return undefined;
+}
+
 /** Metrics for one terminal entry, from whatever artifacts landed. Missing files become notes. */
 function collectEntry(entry: ManifestEntry, job: JobRecord | undefined, dataDir: string, state: string, benchRoot?: string): ManifestEntry {
 	const arm = armById(entry.armId);
@@ -536,11 +560,15 @@ function collectEntry(entry: ManifestEntry, job: JobRecord | undefined, dataDir:
 		if (scopes.length) metrics = { ...metrics, mutationScopes: scopes };
 	}
 
+	const technical = technicalFailure(state, metrics, arm, notes);
+	if (technical) notes.push(`TECHNICAL FAILURE (${technical.kind}) — not counted as a sample; re-run the phase to replace it`);
+
 	return {
 		...entry,
 		state,
 		collected: true,
 		metrics,
+		...(technical ? { technical } : {}),
 		...(notes.length ? { note: notes.join("; ") } : {}),
 	};
 }

@@ -5,27 +5,8 @@ import path from "node:path";
 import { test } from "node:test";
 import { auditTaskPrompt } from "../src/core/harness.js";
 import type { JobRecord } from "../src/remote/runner/jobs.js";
-import { expectedProvenance,
-	archiveDirFor,
-	collect,
-	failureKind,
-	poisonedHosts,
-	jobTiming,
-	journalScopes,
-	parseAppmapStamp,
-	parseGraphCounts,
-	parseRunMetrics,
-} from "../src/bench/collect.js";
-import {
-	type Manifest,
-	type ManifestEntry,
-	manifestPath,
-	readManifest,
-	recordSubmissions,
-	submittedCount,
-	updateEntry,
-	writeManifest,
-} from "../src/bench/manifest.js";
+import { archiveDirFor, collect, expectedProvenance, failureKind, jobTiming, journalScopes, parseAppmapStamp, parseGraphCounts, parseRunMetrics, poisonedHosts, technicalFailure } from "../src/bench/collect.js";
+import { entriesForArm, manifestPath, readManifest, recordSubmissions, submittedCount, type Manifest, type ManifestEntry, updateEntry, writeManifest } from "../src/bench/manifest.js";
 import { BACKENDS, MATRIX, armAppmapSlug, armById, armTitle, perceptionLine, phaseArms, phaseRunCount, type Arm } from "../src/bench/matrix.js";
 import type { DispatchOptions } from "../src/remote/control/dispatch.js";
 import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, auditPhase, dateArg, dispatchOptionsFor, findCompileSource, plannedRuns, runPhase } from "../src/bench/orchestrate.js";
@@ -1145,4 +1126,47 @@ test("dispatchOptionsFor__ForwardsEveryDeclaredFlag__When__AnyArmDeclaresIt", ()
 		}
 	}
 	assert.deepEqual(missed, [], `flags declared on an arm but not forwarded:\n  ${missed.join("\n  ")}`);
+});
+
+test("submittedCount__SkipsTechnicalFailures__When__ARunDiedProducingNothing", () => {
+	// David's rule (2026-08-01): a run that failed for a TECHNICAL reason is thrown out and
+	// retried, because it is a data point about the harness rather than about the agent.
+	//
+	// The mechanism is deliberately not a retry loop. submittedCount is the top-up arithmetic
+	// `bench phase --go` uses, so excluding these makes the next run of the phase refill them —
+	// one code path for "submit what is missing", whatever the reason it is missing.
+	const e = (jobId: string, over: Partial<ManifestEntry> = {}): ManifestEntry => ({
+		armId: "p1-explore-cdp",
+		jobId,
+		host: "mac1",
+		submittedAt: "2026-08-01T06:00:00.000Z",
+		state: "done",
+		collected: true,
+		...over,
+	});
+	const m: Manifest = {
+		date: "2026-08-01",
+		createdAt: "2026-08-01T06:00:00.000Z",
+		entries: [e("a"), e("b", { state: "failed", technical: { kind: "crashed", detail: "died on acquisition" } }), e("c")],
+	};
+	assert.equal(submittedCount(m, "p1-explore-cdp"), 2, "the crashed run must not consume a sample");
+	// The entry STAYS — "two runs died acquiring the app" is worth knowing, and deleting the
+	// evidence would make a broken Mac look like a slow one.
+	assert.equal(entriesForArm(m, "p1-explore-cdp").length, 3);
+});
+
+test("technicalFailure__SeparatesHarnessFromAgent__When__ARunFails", () => {
+	const explore = armById("p1-explore-cdp");
+	// Died before producing anything → not a result.
+	assert.equal(technicalFailure("orphaned", {}, explore, [])?.kind, "orphaned");
+	assert.equal(technicalFailure("failed", { failureKind: "crashed" }, explore, [])?.kind, "crashed");
+	assert.equal(technicalFailure("failed", {}, explore, ["no appmap at docs/appmaps/yarn.cdp.md"])?.kind, "crashed");
+
+	// Ran to a verdict, or a human intervened → these ARE the measurement, and auto-retrying
+	// them would either discard real failures or fight the operator who stopped the run.
+	assert.equal(technicalFailure("failed", { failureKind: "gave-up" }, explore, []), undefined);
+	assert.equal(technicalFailure("stopped", { failureKind: "stopped" }, explore, []), undefined);
+	assert.equal(technicalFailure("failed", { failureKind: "unready" }, explore, []), undefined);
+	assert.equal(technicalFailure("failed", { failureKind: "hinted-refused" }, explore, []), undefined);
+	assert.equal(technicalFailure("done", { success: true }, explore, []), undefined);
 });

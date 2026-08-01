@@ -125,6 +125,17 @@ export interface ManifestEntry {
 	/** Last known job state; collect refreshes it from the pulled job record. */
 	state: string;
 	collected: boolean;
+	/**
+	 * This run produced NOTHING measurable — it died before writing its primary artifact, or the
+	 * runner was killed under it. Set by collect; see `technicalFailure`.
+	 *
+	 * Such a run is not a data point about the agent, it is a data point about the harness, so it
+	 * must not consume one of the arm's samples. `submittedCount` skips these, which is the whole
+	 * mechanism: re-running `bench phase N --go` sees the arm short and re-submits it. The entry
+	 * STAYS in the manifest — "three runs died acquiring the app" is worth knowing, and silently
+	 * deleting the evidence would make a broken Mac look like a slow one.
+	 */
+	technical?: { kind: string; detail: string };
 	/** Pre-run env the runner must carry (e.g. APPMAP_VARIANT=vision) — see Arm.env. */
 	env?: Record<string, string>;
 	/**
@@ -255,8 +266,15 @@ export function updateEntry(m: Manifest, entry: ManifestEntry): Manifest {
 export const entriesForArm = (m: Manifest, armId: string, model?: string): ManifestEntry[] =>
 	m.entries.filter((e) => e.armId === armId && e.model === model);
 
-/** How many samples an arm already has in this model's pass — the top-up arithmetic. */
-export const submittedCount = (m: Manifest, armId: string, model?: string): number => entriesForArm(m, armId, model).length;
+/**
+ * How many samples an arm already has in this model's pass — the top-up arithmetic.
+ *
+ * Technical failures do not count. A run that crashed before producing anything says nothing
+ * about the arm, so leaving it in the tally would silently shrink n: an arm declared n=3 whose
+ * first attempt died on acquisition would go out with two real samples and report as complete.
+ */
+export const submittedCount = (m: Manifest, armId: string, model?: string): number =>
+	entriesForArm(m, armId, model).filter((e) => !e.technical).length;
 
 /**
  * Phase-2 gate: grounded arms read their own backend's phase-1 map, so a phase-1 explore
