@@ -84,6 +84,8 @@
 	.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
 	.q { color: var(--muted); font-size: 11px; margin-top: 4px; }
 	.warn { color: var(--warning); font-size: 11px; }
+	/* The busy card's prompt line clamps at 3 lines — the full text rides the data-tip. */
+	.host .prompt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
 
 	/* peek panel: one per card, fixed 16:10 — idle, waiting and live all occupy the SAME box,
 	   so a stream starting or dying never shifts the layout. */
@@ -1032,31 +1034,73 @@ function hostCard(name) {
 	return card;
 }
 
+// A busy card leads with WHAT is running, not the fact that it runs: app + ticking elapsed,
+// the running arm's display title, one sentence for its configuration ("Explore sees with
+// AX + DOM attrs + Vision and acts with CDP using azure/gpt-5.6-sol") and the prompt
+// (clamped, full text in the hover; explore arms have no prompt, so no line). The old
+// "Busy · operator" label, raw-job-id line and "Queue: …" arm chain are gone — a card
+// with a running variant is self-evidently busy, and the ids live in the title's hover.
 function hostInfoHtml(r) {
 	// busy = the running token (never --s1: series hue), idle = good, unreachable = critical.
 	// Any OTHER state ("unknown" — an armed host that fell out of the poll) is hollow, not
 	// warning-amber: amber claims knowledge ("needs attention") the poll doesn't have.
 	const known = !r.reachable || r.state === "busy" || r.state === "idle";
 	const color = !r.reachable ? STATUS.critical : r.state === "busy" ? RUNNING : r.state === "idle" ? STATUS.good : "";
-	const busy = r.state === "busy"
-		? `<div class="row"><span class="txt">${esc(r.app || "?")}</span><span class="meta">${elapsedSpan(r.elapsedSec)}</span></div>
-		   <div class="q">${esc(r.jobId || "")}${r.stalled ? ' <span class="warn">⚠ Stalled ' + fmtDur(r.logSilenceSec) + ' silent</span>' : ""}</div>`
-		: "";
-	const queue = r.queue && r.queue.length
-		? `<div class="q">Queue: ${r.queue.map((q) => esc(armOf(q.jobId) || q.app || q.jobId)).join(" → ")}</div>` : "";
 	const tcc = r.tccOk === false ? `<div class="warn">No TCC grants</div>` : "";
 	// No stream buttons — arming derives from fleet state (syncPeekArming). The last FATAL
 	// stream failure surfaces compactly: ⚠ beside the host name with the reason in its tip,
 	// cleared when a later attach succeeds — the panel stays a quiet Idle box, never an
 	// error dump.
 	const err = peekErrors[r.name] ? ` <span class="pk-err" data-tip="${esc(peekErrors[r.name])}">⚠</span>` : "";
-	return `<div class="row"><span class="dot${known ? "" : " unknown"}"${known ? ` style="background:${color}"` : ""}></span><span class="name">${esc(r.name)}</span>${err}
-		<span class="meta">${esc(statusLabel(r.reachable ? r.state : "unreachable"))}${r.operator ? " · " + esc(r.operator) : ""}</span></div>
-		${busy}${queue}${tcc}${r.reason ? `<div class="q">${esc(r.reason)}</div>` : ""}`;
+	// Non-busy cards keep their state label + reason exactly as before; busy cards drop the
+	// label (and the operator with it) — the running variant below says more than "Busy".
+	const label = r.state === "busy" ? "" : `<span class="meta">${esc(statusLabel(r.reachable ? r.state : "unreachable"))}</span>`;
+	return `<div class="row"><span class="dot${known ? "" : " unknown"}"${known ? ` style="background:${color}"` : ""}></span><span class="name">${esc(r.name)}</span>${err}${label}</div>
+		${r.state === "busy" ? busyCardBody(r) : ""}${tcc}${r.reason ? `<div class="q">${esc(r.reason)}</div>` : ""}`;
 }
 
-function armOf(jobId) {
-	for (const a of state.arms) for (const p of a.passes) if (p.entries.some((e) => e.jobId === jobId)) return a.id;
+/** The busy card's body: app + ticking elapsed, then the running variant. */
+function busyCardBody(r) {
+	const app = `<div class="row"><span class="txt">${esc(r.app || "?")}</span><span class="meta">${elapsedSpan(r.elapsedSec)}</span></div>`;
+	const stalled = r.stalled ? ` <span class="warn">⚠ Stalled ${fmtDur(r.logSilenceSec)} silent</span>` : "";
+	const run = runOf(r.jobId);
+	// A running job no arm claims (a manual run the bench never dispatched): the raw job id
+	// is its only honest name, so it stands where the variant title would.
+	if (!run) return app + `<div class="row"><span class="txt">${esc(r.jobId || "")}</span>${stalled}</div>`;
+	const { arm } = run;
+	// The configuration sentence reuses the standardized vocabulary VERBATIM (arm.perception /
+	// arm.actuation are the same strings the board's tooltips speak); either axis absent
+	// (compile arms) just drops its clause rather than fabricating one.
+	const kind = arm.kind ? arm.kind[0].toUpperCase() + arm.kind.slice(1) : "Run";
+	const cfg = [arm.perception ? `sees with ${arm.perception}` : "", arm.actuation ? `acts with ${arm.actuation}` : ""]
+		.filter(Boolean).join(" and ");
+	const sentence = `${kind}${cfg ? " " + cfg : ""} using ${busyModel(run)}`;
+	// Task arms show the goal-only prompt (clamped — hover for the full text); web arms with
+	// no prompt show their URL; explore arms have neither, so no line — nothing fabricated.
+	const prompt = arm.task || arm.url || "";
+	return app
+		+ `<div class="row"><span class="txt" data-tip="${esc(arm.id + "\n" + r.jobId)}">${esc(displayName(arm))}</span>${stalled}</div>`
+		+ `<div class="q">${esc(sentence)}</div>`
+		+ (prompt ? `<div class="q prompt" data-tip="${esc(prompt)}">${esc(prompt)}</div>` : "");
+}
+
+// modelCell's precedence, worded for the sentence: what THIS run's usage events named (the
+// only per-run truth while it runs), else what the pass's collected runs recorded, else the
+// dispatch model with "(default)" resolved to this environment's default.
+function busyModel({ pass, entry }) {
+	if (entry.live && entry.live.model) return normModel(entry.live.model);
+	if (pass.ranModels) return [...new Set(pass.ranModels.map(normModel))].join(", ");
+	return pass.model === "(default)" ? (state.defaultModel ? normModel(state.defaultModel) : "default") : pass.model;
+}
+
+/** jobId → the { arm, pass, entry } that dispatched it — the busy card's join. Null for
+ *  runs the bench never dispatched (manual jobs), whose only honest name is the job id. */
+function runOf(jobId) {
+	if (!jobId) return null;
+	for (const a of state.arms) for (const p of a.passes) {
+		const e = p.entries.find((x) => x.jobId === jobId);
+		if (e) return { arm: a, pass: p, entry: e };
+	}
 	return null;
 }
 
