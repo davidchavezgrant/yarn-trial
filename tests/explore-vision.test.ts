@@ -16,7 +16,7 @@ import {
 } from "../src/core/harness/declared-frontier.js";
 import { loadGrounding } from "../src/core/agent/grounding.js";
 import { coverageNow, provenanceHeader, writeArtifacts } from "../src/core/explore/artifacts.js";
-import { noAxRefusal } from "../src/core/explore/cli.js";
+import { parseCli, noAxRefusal } from "../src/core/explore/cli.js";
 import { SURVEY_TOOL, systemPrompt, VISION_ACT_TOOL } from "../src/core/explore/prompt.js";
 import { newPass } from "../src/core/explore/state.js";
 
@@ -444,4 +444,22 @@ test("systemPrompt__TellsThePassToPressCreateControls__When__TheyOpenNewSurfaces
 	// And the old discouraging budget must be gone — it is what made one scratch object feel
 	// like the ceiling.
 	assert.doesNotMatch(EXPLORE_PROMPT, /five is a mess left behind/);
+});
+
+test("parseCli__UpgradesToAnElectronTarget__When__TheBackendIsCdp", () => {
+	// Without cdpAttach the CDP backend never launches the app with a debug port — it probes
+	// 9222 and fails — so explore on cdp worked ONLY while some earlier flagged run had left
+	// the app running with one. Cold start removed that accident and all three cdp arms failed
+	// instantly. agent/cli.ts has had this line since the cdp backend landed; explore never did.
+	const cdp = parseCli(["Yarn", "--backend", "cdp"]);
+	assert.equal(cdp.target.kind, "app");
+	assert.equal((cdp.target as any).cdpAttach, true, "a cdp app target must be launchable");
+
+	// The ax path is untouched — AxBackend opens the app itself and needs no debug port.
+	const ax = parseCli(["Yarn", "--backend", "ax"]);
+	assert.equal((ax.target as any).cdpAttach, undefined);
+
+	// And the name still comes from the positional, not parseTarget's fallback — the bug the
+	// rebuild above it exists to prevent (stamping every map "notion-calendar").
+	assert.equal((cdp.target as any).name, "Yarn");
 });
