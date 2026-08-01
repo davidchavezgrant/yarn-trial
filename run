@@ -104,11 +104,11 @@ ${b}bench${n}
   bench phase <1|2|3|4> --go             submit that phase to the fleet queue (without --go: preview)
   bench collect                          pull finished runs, compute metrics, rewrite the report
   bench judge                            re-grade landed runs with the offline judge (idempotent)
-  dash [--port N] [--no-collect] [--web] live dashboard (Electron): fleet, matrix progress, charts
-                                         as results land (auto-runs collect; --no-collect = pure
-                                         reader; --web = headless server on localhost:4642;
-                                         --dev = --web with hot reload — server restarts on .ts
-                                         changes, page reloads itself)
+  dash [--port N] [--collect] [--web]    live dashboard (Electron): fleet, matrix progress, charts
+                                         as results land (pure reader by default; --collect arms
+                                         the auto-collect loop; --web = headless server on
+                                         localhost:4642; --dev = --web with hot reload — server
+                                         restarts on .ts changes, page reloads itself)
 
 ${b}setup & health${n}
   doctor                                 check permissions, keys, deps before demoing
@@ -255,10 +255,12 @@ bench)
 
 dash)
 	# Live view over the benchmark manifest + fleet (src/bench/dash.ts + electron/dash.ts).
-	# Auto-runs the idempotent `bench collect` on a loop so results land while the fleet
-	# drains; --no-collect makes it a pure reader. Electron window by default; --web serves
-	# headless on http://localhost:4642 instead. No assert_no_run_in_flight: it reads
-	# registries and pulls artifacts, never starts a driver session. No have_key: no model.
+	# A pure reader by default — the runner owns out/bench/live. --collect opts in to the
+	# idempotent `bench collect` loop for unattended drains (--no-collect, the old opt-out,
+	# is a harmless no-op). Electron window by default; --web serves headless on
+	# http://localhost:4642 instead. No assert_no_run_in_flight: it reads registries and
+	# pulls artifacts, never starts a driver session. No have_key: no model — except the
+	# narrator, which degrades to silence keyless.
 	shift
 	if [[ " $* " == *" --dev "* || ${1:-} == --dev ]]; then
 		# Hot reload: tsx restarts the server on any imported .ts change; the page reloads
