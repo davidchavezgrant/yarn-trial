@@ -640,6 +640,36 @@ export interface DashOptions {
 	autoCollect: boolean;
 }
 
+/**
+ * The date to watch when none was asked for: the LATEST manifest that exists, else today.
+ * A benchmark drains across the UTC midnight rollover, and a dash restarted at 00:10 that
+ * silently pointed at a fresh empty manifest — while three Macs kept draining yesterday's —
+ * is exactly what happened the first night this ran.
+ */
+export function defaultDashDate(root?: string): string {
+	try {
+		const base = path.dirname(benchDir(utcDate(), root));
+		// Non-empty manifests only: the rollover itself can mint an empty next-day manifest
+		// (any collect run after midnight does), and that husk must not outrank the drain.
+		const dates = fs
+			.readdirSync(base)
+			.filter((d) => {
+				if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
+				try {
+					return (JSON.parse(fs.readFileSync(path.join(base, d, "manifest.json"), "utf8")).entries?.length ?? 0) > 0;
+				} catch {
+					return false;
+				}
+			})
+			.sort();
+		if (dates.length) return dates[dates.length - 1] as string;
+	} catch {
+		// No bench dir yet — today is as good as anything.
+	}
+
+	return utcDate();
+}
+
 /** CLI flags shared by the web entry (main below) and the Electron shell (electron/dash.ts). */
 export function parseDashArgs(args: string[]): DashOptions {
 	const flag = (name: string): string | undefined => {
@@ -650,7 +680,7 @@ export function parseDashArgs(args: string[]): DashOptions {
 
 	return {
 		port: Number(flag("--port") ?? process.env.DASH_PORT ?? 4642),
-		date: flag("--date") ?? utcDate(),
+		date: flag("--date") ?? defaultDashDate(),
 		autoCollect: !args.includes("--no-collect"),
 	};
 }
