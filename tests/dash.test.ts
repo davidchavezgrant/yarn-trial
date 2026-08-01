@@ -965,6 +965,76 @@ test("BuildDetail__PrefersTheRunDirsOwnAppmap__When__TheRunFolderHoldsOne", () =
 	}
 });
 
+test("BuildDetail__ServesCheckpointGraph__When__ExploreStillRunning", () => {
+	// A running pass has no appmap.json yet, but checkpoint.json (rewritten on every record,
+	// shaped as a valid AppMap) IS its map-so-far — served through the same renderer, marked
+	// graphLive so the page tags it LIVE and expires its detail cache.
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dash-detail-ckpt-"));
+	try {
+		fs.mkdirSync(path.join(dir, "out", "bench", "live", "job-ck"), { recursive: true });
+		fs.writeFileSync(path.join(dir, "out", "bench", "live", "job-ck", "checkpoint.json"), JSON.stringify({ app: "Yarn", ...GRAPH }));
+		const m = manifest(entry({ jobId: "job-ck", armId: "p1-explore-ax", state: "running", collected: false }));
+		const d = buildDetail("job-ck", m, { dataDir: dir, benchRoot: path.join(dir, "bench") });
+		assert.equal(d.graphLive, true);
+		assert.ok(d.graphSource?.includes("checkpoint"), `source names the checkpoint: ${d.graphSource}`);
+		assert.equal(d.graph?.nodes.length, GRAPH.nodes.length);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("BuildDetail__PrefersFinalAppmap__When__RunDirHoldsCheckpointToo", () => {
+	// The finished artifact outranks the checkpoint even while uncollected (the awaiting-
+	// collect window): appmap.json is the pass's real output, the checkpoint its draft.
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dash-detail-ckpt2-"));
+	try {
+		const run = path.join(dir, "out", "bench", "live", "job-ck2");
+		fs.mkdirSync(run, { recursive: true });
+		fs.writeFileSync(path.join(run, "appmap.json"), JSON.stringify(GRAPH));
+		fs.writeFileSync(path.join(run, "checkpoint.json"), JSON.stringify({ ...GRAPH, nodes: GRAPH.nodes.slice(0, 1) }));
+		const m = manifest(entry({ jobId: "job-ck2", armId: "p1-explore-ax", state: "running", collected: false }));
+		const d = buildDetail("job-ck2", m, { dataDir: dir, benchRoot: path.join(dir, "bench") });
+		assert.equal(d.graphLive, undefined);
+		assert.equal(d.graphSource, "job-ck2/appmap.json (run dir)");
+		assert.equal(d.graph?.nodes.length, GRAPH.nodes.length);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("BuildDetail__PrefersRemoteCheckpoint__When__HandlerFetchedOne", () => {
+	// A fleet run's local checkpoint is at best a stale mid-run pull snapshot; the copy the
+	// handler just ssh-fetched off the busy Mac is the run speaking now, so it wins.
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dash-detail-ckpt3-"));
+	try {
+		const run = path.join(dir, "out", "bench", "live", "job-ck3");
+		fs.mkdirSync(run, { recursive: true });
+		fs.writeFileSync(path.join(run, "checkpoint.json"), JSON.stringify({ ...GRAPH, nodes: GRAPH.nodes.slice(0, 1) }));
+		const m = manifest(entry({ jobId: "job-ck3", armId: "p1-explore-ax", state: "running", collected: false }));
+		const d = buildDetail("job-ck3", m, { dataDir: dir, benchRoot: path.join(dir, "bench"), remoteCheckpoint: { app: "Yarn", ...GRAPH } });
+		assert.equal(d.graphLive, true);
+		assert.equal(d.graph?.nodes.length, GRAPH.nodes.length, "the remote copy's nodes, not the stale local one's");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("BuildDetail__IgnoresCheckpoint__When__EntryCollected", () => {
+	// checkpoint.json persists after a pass finishes; once collect has banked the run, the
+	// draft must never shadow the arm-keyed tiers (archive/docs) that hold real artifacts.
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dash-detail-ckpt4-"));
+	try {
+		fs.mkdirSync(path.join(dir, "out", "bench", "live", "job-ck4"), { recursive: true });
+		fs.writeFileSync(path.join(dir, "out", "bench", "live", "job-ck4", "checkpoint.json"), JSON.stringify(GRAPH));
+		const m = manifest(entry({ jobId: "job-ck4", armId: "p1-explore-ax", state: "done", collected: true }));
+		const d = buildDetail("job-ck4", m, { dataDir: dir, benchRoot: path.join(dir, "bench") });
+		assert.equal(d.graphLive, undefined);
+		assert.ok(!d.graphSource?.includes("checkpoint"), `checkpoint must not serve a collected run: ${d.graphSource}`);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("BuildDetail__CarriesTheRunsNarratorNote__When__RunDirHoldsNarrativeLog", () => {
 	// The dropdown renders the run's own note beneath the prompt; the detail carries the run
 	// dir's narrative.jsonl NEWEST event (several never happen in normal minting, but a rescue

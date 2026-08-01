@@ -1431,14 +1431,18 @@ function sweepDetailCache() {
 
 function fetchDetail(job) {
 	// A cached FAILURE retries (at most every 10s — render cadence calls this repeatedly);
-	// a cached success stays until the collect sweep retires it.
+	// a cached success stays until the collect sweep retires it. EXCEPT a live graph (a
+	// running explore's checkpoint): the map grows as the pass discovers, so that cache
+	// expires every 15s while the run stays uncollected — the render cadence refetches and
+	// the tree keeps growing without any new timer.
 	const c = detailCache[job];
 	if (c && c._failedAt && Date.now() - c._failedAt > 10000) delete detailCache[job];
+	else if (c && c.graphLive && Date.now() - (c._fetchedAt || 0) > 15000 && !(state && isCollected(job))) delete detailCache[job];
 	if (detailCache[job] || detailInflight[job]) return;
 	detailInflight[job] = true;
 	fetch("/api/detail?job=" + encodeURIComponent(job))
 		.then((r) => r.json())
-		.then((d) => { d._preCollect = !(state && isCollected(job)); detailCache[job] = d; })
+		.then((d) => { d._preCollect = !(state && isCollected(job)); d._fetchedAt = Date.now(); detailCache[job] = d; })
 		.catch(() => { detailCache[job] = { steps: [], mutatedKeys: [], note: "failed to load detail", _failedAt: Date.now(), _preCollect: true }; })
 		.finally(() => {
 			delete detailInflight[job];
@@ -1532,7 +1536,11 @@ function detailRowHtml(a, p, key) {
 
 function detailBody(d) {
 	const noteBits = [d.note, d.graphSource ? `map: ${d.graphSource}` : ""].filter(Boolean).join(" · ");
-	const note = noteBits ? `<div class="d-note">${esc(noteBits)}</div>` : "";
+	// A live graph (running pass's checkpoint) wears the LIVE tag ahead of the note line —
+	// the tree is the map SO FAR and regrows on the 15s detail refetch. The tag sits
+	// OUTSIDE esc(): server strings stay escaped like every other note.
+	const liveMark = d.graphLive ? `<span class="livetag">LIVE</span> map so far — the pass is still exploring${noteBits ? " · " : ""}` : "";
+	const note = liveMark || noteBits ? `<div class="d-note">${liveMark}${esc(noteBits)}</div>` : "";
 	const steps = d.steps.length
 		? `<ol>` + d.steps.map((s) =>
 			`<li${s.reasoning ? ` data-tip="${esc(s.reasoning)}"` : ""}><span class="${s.verified ? "ok-v" : "bad-v"}">${s.verified ? "✓" : "✗"}</span> ${esc(s.label)} <span class="meta">${esc((s.surface || "").split("/").pop() || "")}</span></li>`).join("") + `</ol>`
@@ -1702,7 +1710,7 @@ function openTree(job) {
 	// payload, so say the distinction without it.
 	const nS = d.graph.nodes.filter((n) => n.kind === "surface").length;
 	const nC = d.graph.nodes.filter((n) => n.kind === "control").length;
-	$("tm-sub").textContent = `${d.armId} · ${job} · ${d.graphSource || ""}   —   ${nS} surfaces · ${nC} controls in the distilled map (the row's "surfaces" column counts every surface the pass SAW — a larger universe)`;
+	$("tm-sub").textContent = `${d.armId} · ${job} · ${d.graphLive ? "LIVE — map so far, pass in flight · " : ""}${d.graphSource || ""}   —   ${nS} surfaces · ${nC} controls in the distilled map (the row's "surfaces" column counts every surface the pass SAW — a larger universe)`;
 	// The legend used to be crammed into the #tm-sub one-liner; it now leads the body as a
 	// swatch strip (the charts' .legend/.sw classes). The dual-scope item carries the full
 	// wrong-scope-trap explainer as its tooltip.

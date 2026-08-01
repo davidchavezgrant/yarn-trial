@@ -1404,6 +1404,12 @@ export interface DashDetail {
 	graph?: { nodes: any[]; edges: any[]; home?: string; gated?: string[] };
 	/** Where the graph came from — the run dir's own copy, archived arm map, live docs/appmaps, or nothing. */
 	graphSource?: string;
+	/**
+	 * The graph is the RUNNING pass's checkpoint — the map so far, not a finished artifact.
+	 * The page tags the tree LIVE and expires its detail cache so growth keeps arriving;
+	 * absent the moment the pass writes its real appmap (which outranks the checkpoint).
+	 */
+	graphLive?: boolean;
 	steps: DetailStep[];
 	/** settingKeys the run's journal recorded as actually mutated. */
 	mutatedKeys: string[];
@@ -1552,12 +1558,24 @@ function resolveGraph(
 	app: string,
 	benchRoot: string,
 	dataDir: string,
-): { graph?: DashDetail["graph"]; source?: string } {
+	remoteCheckpoint?: Record<string, any>,
+): { graph?: DashDetail["graph"]; source?: string; live?: boolean } {
 	// The run's own copy — explore passes save RUN_FILES.appmapGraph inside their run dir, and
 	// runFile walks out/bench/live → out/bench/archive → the pre-bench out/live and out/archive
 	// homes. Task runs carry no appmap of their own and fall through to the arm-keyed copies.
 	const own = readJsonFile(runFile(entry.jobId, RUN_FILES.appmapGraph, path.join(dataDir, "out")));
 	if (own?.nodes) return { graph: shapeGraph(own), source: `${entry.jobId}/${RUN_FILES.appmapGraph} (run dir)` };
+	// The pass's checkpoint — rewritten on every `record`, deliberately shaped as a valid
+	// AppMap (explore/artifacts.ts), so a RUNNING (or killed) explore serves its map-so-far
+	// through the same renderer. Sits below the final artifact (a finished pass has
+	// appmapGraph above) and above the arm-keyed tiers, which for an in-flight run would
+	// show a PREVIOUS pass's finished map instead of this run's growing one. The remote
+	// copy (ssh-fetched off the busy Mac by serveDetail) outranks a local file, which for
+	// a fleet run is at best a stale mid-run pull snapshot.
+	if (!entry.collected) {
+		const ckpt = remoteCheckpoint?.nodes ? remoteCheckpoint : readJsonFile(runFile(entry.jobId, RUN_FILES.checkpoint, path.join(dataDir, "out")));
+		if (ckpt?.nodes) return { graph: shapeGraph(ckpt), source: `${RUN_FILES.checkpoint} (map so far — pass in flight)`, live: true };
+	}
 	const archive = archiveDirFor(benchRoot, { ...entry, armId: exploreArmId });
 	try {
 		const file = fs.readdirSync(archive).find((f) => f.endsWith(".json"));
@@ -1610,7 +1628,7 @@ function shapeGraph(g: Record<string, any>): NonNullable<DashDetail["graph"]> {
 }
 
 /** Everything the board's dropdown needs for one run: the map, the walk, the mutations. */
-export function buildDetail(jobId: string, manifest: Manifest, opts: { dataDir?: string; benchRoot?: string } = {}): DashDetail {
+export function buildDetail(jobId: string, manifest: Manifest, opts: { dataDir?: string; benchRoot?: string; remoteCheckpoint?: Record<string, any> } = {}): DashDetail {
 	const dataDir = opts.dataDir ?? dataRoot();
 	// Store-resolved (out/bench/live → out/bench/archive → pre-bench out/live and out/archive
 	// → legacy out/bench), off dataDir so tests stay hermetic — this is where archiveDirFor
@@ -1622,7 +1640,7 @@ export function buildDetail(jobId: string, manifest: Manifest, opts: { dataDir?:
 	if (!arm) return { jobId, armId: entry.armId, steps: [], mutatedKeys: [], note: "unknown arm" };
 
 	const exploreArmId = arm.kind === "explore" ? arm.id : groundingArmId(arm);
-	const { graph, source } = resolveGraph(entry, exploreArmId, arm.app, benchRoot, dataDir);
+	const { graph, source, live } = resolveGraph(entry, exploreArmId, arm.app, benchRoot, dataDir, opts.remoteCheckpoint);
 
 	const notes: string[] = [];
 	if (!graph) notes.push("no appmap graph found for this arm yet");
@@ -1669,6 +1687,7 @@ export function buildDetail(jobId: string, manifest: Manifest, opts: { dataDir?:
 		...(task ? { task } : {}),
 		...(graph ? { graph } : {}),
 		...(source ? { graphSource: source } : {}),
+		...(live ? { graphLive: true } : {}),
 		steps,
 		mutatedKeys,
 		...(graph ? { heat: heatFor(graph, exploreArmId, entry.model, manifest, dataDir) } : {}),
@@ -3138,6 +3157,40 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	 * to 0 by design (rotation guard), so a guessed size-minus-64K offset can replay the
 	 * whole file.
 	 */
+	/**
+	 * Detail, with a fresh checkpoint off the run's busy Mac when one applies: a RUNNING
+	 * fleet explore's map-so-far lives only in its run dir on the host (checkpoint.json —
+	 * explore/artifacts.ts rewrites it on every `record`), so it is fetched ON DEMAND, per
+	 * detail open, never on the fleet poll — nobody pays ssh for a pane nobody is looking
+	 * at. Same guarded path machinery as the event tails; any failure (unreachable host,
+	 * no file yet, torn JSON mid-write) simply serves the local tiers instead.
+	 */
+	const serveDetail = async (res: http.ServerResponse, job: string): Promise<void> => {
+		let remoteCheckpoint: Record<string, any> | undefined;
+		const entry = manifest.entries.find((e) => e.jobId === job);
+		const arm = entry ? armById(entry.armId) : undefined;
+		if (entry && !entry.collected && entry.host && arm?.kind === "explore" && inventory && SAFE_RUN_ID.test(job)) {
+			try {
+				const host = resolveHost(entry.host, inventory);
+				let root = remoteRootCache.get(entry.host);
+				if (!root) {
+					root = await remoteDataRoot(host, runSsh);
+					if (root) remoteRootCache.set(entry.host, root);
+				}
+				if (root) {
+					const remote = `${root}/out/${LIVE_DIR}/${job}/${RUN_FILES.checkpoint}`;
+					assertSafeRemotePath(remote);
+					const r = await runSsh(host, ["cat", remote], {});
+					if (r.code === 0) remoteCheckpoint = JSON.parse(r.stdout);
+				}
+			} catch {
+				// Local tiers answer — a 4s ssh timeout on a busy Mac is routine, not evidence.
+			}
+		}
+		res.writeHead(200, { "content-type": "application/json" });
+		res.end(JSON.stringify(buildDetail(job, manifest, remoteCheckpoint ? { remoteCheckpoint } : {})));
+	};
+
 	const logsInflight = new Set<string>();
 	const serveLogs = async (res: http.ServerResponse, params: URLSearchParams): Promise<void> => {
 		const json = (status: number, body: Record<string, unknown>): void => {
@@ -3231,9 +3284,8 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			res.writeHead(200, { "content-type": "application/json" });
 			res.end(JSON.stringify(currentState(), null, "\t"));
 		} else if (url.startsWith("/api/detail")) {
-			const job = new URL(url, "http://localhost").searchParams.get("job") ?? "";
-			res.writeHead(200, { "content-type": "application/json" });
-			res.end(JSON.stringify(buildDetail(job, manifest)));
+			// Async like /api/logs: a running fleet explore's detail may ssh for its checkpoint.
+			void serveDetail(res, new URL(url, "http://localhost").searchParams.get("job") ?? "");
 		} else if (url.startsWith("/api/logs")) {
 			// Async by necessity (ssh); serveLogs answers every path itself, including throws.
 			void serveLogs(res, new URL(url, "http://localhost").searchParams);
