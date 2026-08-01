@@ -2274,6 +2274,24 @@ test("parseArgs__AcceptsTheManagementVerbs__When__TheyArriveAsSubcommands", () =
 	for (const m of ["authclear", "appdelete"]) assert.ok(!("error" in parseArgs([m], "/tmp/x")), m);
 });
 
+test("parseArgs__AcceptsEveryVerb__When__ControlCodeSendsItViaRunnerArgv", () => {
+	// The drift the test above describes actually happened: serve.ts learned peek-capture and
+	// ctl.ts's METHODS never did, so the dash's SCK peek fallback died on every Mac with
+	// "unknown subcommand" — the shim refused the verb before the daemon could answer. The
+	// contract is cross-machine and invisible to the typechecker, so enforce it exhaustively:
+	// every literal verb any control-side call site sends must parse on the runner side.
+	const srcRoot = path.resolve(import.meta.dirname, "..", "src");
+	const verbs = new Set<string>();
+	for (const entry of fs.readdirSync(srcRoot, { recursive: true, withFileTypes: true })) {
+		if (!entry.isFile() || !entry.name.endsWith(".ts")) continue;
+
+		const text = fs.readFileSync(path.join(entry.parentPath, entry.name), "utf8");
+		for (const m of text.matchAll(/runnerArgv\(\s*"([a-z0-9-]+)"/g)) verbs.add(m[1]);
+	}
+	assert.ok(verbs.size >= 5, `the scan found only ${verbs.size} runnerArgv call sites — pattern drift?`);
+	for (const verb of verbs) assert.ok(!("error" in parseArgs([verb], "/tmp/x")), `ctl.ts refuses ${JSON.stringify(verb)}, which control code sends`);
+});
+
 test("parseArgs__DecodesSpec__When__TaskTextWouldBeShellSyntax", () => {
 	// The exact hazard --spec exists for: sshd joins remote argv into one string and the login
 	// shell re-splits it, so this task text as an argument would be three commands.
