@@ -133,7 +133,7 @@ test("expectedProvenance__ExpectsProcedure__When__TheArmAsksForOne", () => {
 	// wrong tier label. groundingChecked compares this against what the run log recorded.
 	for (const arm of phaseArms(6)) assert.equal(expectedProvenance(arm), "procedure", arm.id);
 	assert.equal(expectedProvenance(armById("p2-ax-grounded")!), "explore");
-	assert.equal(expectedProvenance(armById("p2-ax-curated")!), "curated");
+	assert.equal(expectedProvenance(armById("p2-curated")!), "curated");
 });
 
 test("harvestSourceArms__CoversBothLineages__When__Phase6IsRead", () => {

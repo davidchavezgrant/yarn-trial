@@ -85,6 +85,19 @@ export interface Arm {
 	 * replay arms: the compile arm whose recipe they replay.
 	 */
 	sourceArm?: string;
+	/**
+	 * WHY this arm actuates over `ax` when the default is `cdp`.
+	 *
+	 * Required on every ax arm, and enforced by a test. CDP is the production actuator — it
+	 * backgrounds, it never steals the operator's pointer, and it has none of cua's liabilities
+	 * (no 300s session lifetime, no shared daemon, no consent gate). AX is the FALLBACK: the
+	 * actuator of last resort when there is no reachable DOM.
+	 *
+	 * The matrix drifted to 73% ax (77 runs against 28) purely because `task()` callers kept
+	 * writing `backend: "ax"` out of habit, and nothing asked them why. A default is not a
+	 * decision; this field is what turns each ax arm back into one.
+	 */
+	axRationale?: string;
 	/** The decision this cell informs, from the plan doc. Printed by `bench plan`. */
 	informs?: string;
 	/** Unverified fleet-side requirement (install/sign-in). Printed loudly by `bench plan`. */
@@ -284,6 +297,7 @@ const PHASE1: Arm[] = [
 		app: BENCH_APP,
 		n: 1,
 		dispatch: { backend: "ax", noAx: true },
+		axRationale: "vision-only is ax-only by construction — a cdp observation IS a ref list, so 'screenshots only' cannot be expressed on that backend",
 		informs: "can grounding itself be done from screenshots — declared coverage, pass duration, map size vs the ax pass",
 	},
 ];
@@ -296,10 +310,51 @@ const PHASE2_CORE: Arm[] = BACKENDS.flatMap((backend) => [
 
 /** Phase 2 permutation slices — each maps to a fork in the implementation Aman inherits. */
 const PHASE2_SLICES: Arm[] = [
-	// Grounds on the map a sidecar-less pass wrote, so the arm measures the sidecar's absence
-	// END TO END rather than only at run time. Without this it read yarn.ax — a map the
-	// sidecar helped build — and could only ever have shown half the effect.
-	task("p2-ax-grounded-axdom-off", { backend: "ax", axdomOff: true }, "is the Swift sidecar worth shipping, end to end (grounding AND run)"),
+	/**
+	 * THE NATIVE-EQUIVALENT TIER (reframed 2026-08-01, David).
+	 *
+	 * These arms were declared to answer a build/don't-build question about a Swift binary —
+	 * "is the sidecar worth shipping" — and they do. But the same runs answer something Yarn
+	 * needs far more, and it was nowhere in the report: **can this drive an app with no DOM at
+	 * all?**
+	 *
+	 * AXDOM=0 IS that condition, and holding the app constant is what makes it a measurement
+	 * rather than an anecdote. axdom's whole trick is reading `AXDOMIdentifier` and
+	 * `AXDOMClassList` — attributes that exist only because the target is Chromium. Switch it
+	 * off and what remains is an accessibility tree with no DOM behind it, actuated through the
+	 * accessibility API: exactly the surface a native AppKit or SwiftUI app presents. The
+	 * grounding matches, too — `p1-explore-ax-noaxdom` writes the map these read, so the
+	 * limitation applies END TO END rather than only at run time.
+	 *
+	 * IT IS AN OPTIMISTIC BOUND, and the report must say so. Chromium derives its AX tree FROM
+	 * the DOM, so even sidecar-less that tree is unusually complete; a hand-rolled AppKit tree is
+	 * typically sparser and less consistently labelled. Measured on Yarn, axdom named 955/1044
+	 * anonymous nodes and 37 of 64 anonymous INTERACTIVE controls — turning it off returns those
+	 * 64 to anonymous, which is native-like, but everything Chromium already labelled stays
+	 * labelled.
+	 *
+	 * And it simulates PERCEPTION only, not lifecycle. The one real native failure we have
+	 * measured — Hex Fiend, 0/15 verified on 2026-07-30 — was an activation-policy problem: the
+	 * app never became key/main, so every menu item stayed disabled. AXDOM=0 does not reproduce
+	 * that. The fix lives in `AxBackend.acquire` and is still unvalidated against a real native
+	 * app (docs/research/2026-07-30-native-mac-apps-investigation.md).
+	 */
+	task(
+		"p2-ax-grounded-axdom-off",
+		{ backend: "ax", axdomOff: true },
+		"NATIVE-EQUIVALENT, grounded: an AX tree with no DOM behind it, mapped and run under the same limit. Also answers whether the Swift sidecar earns its keep end to end.",
+	),
+	/**
+	 * The cell the native tier was missing: cold AND native-equivalent, screenshots available.
+	 * Its counterpart `p2-ax-ungrounded` has the sidecar, and `p2-min-context-ungrounded` also
+	 * drops vision — so without this there was no way to say "no DOM, no map, but it can see",
+	 * which is the honest starting position for an app nobody has onboarded yet.
+	 */
+	task(
+		"p2-ax-noaxdom-ungrounded",
+		{ backend: "ax", axdomOff: true, noGrounding: true },
+		"NATIVE-EQUIVALENT, cold: no DOM attributes, no map, screenshots on — the un-onboarded native app",
+	),
 	// Grounds on the map an element-only pass wrote, so the map's vocabulary matches what this
 	// run can perceive — the same reason the vision arm reads the vision map. Also the only
 	// thing that consumes p1-explore-no-vision's output; without it that pass writes an
@@ -321,13 +376,13 @@ const PHASE2_SLICES: Arm[] = [
 	 * other arm should beat it, and an arm that does not is telling you its condition adds
 	 * nothing.
 	 */
-	task("p2-min-context-grounded", { backend: "ax", axdomOff: true, noVision: true }, "least perception, grounded on an equally minimal map — the sidecar-less, screenshot-less deploy case", {
+	task("p2-min-context-grounded", { backend: "ax", axdomOff: true, noVision: true }, "NATIVE-EQUIVALENT, harshest grounded: bare AX tree, no screenshots, mapped under the same limit", {
 		env: { APPMAP_VARIANT: "novision" },
 	}),
-	task("p2-min-context-ungrounded", { backend: "ax", axdomOff: true, noVision: true, noGrounding: true }, "the floor of the matrix: least perception, no map — can it work it out on the fly"),
+	task("p2-min-context-ungrounded", { backend: "ax", axdomOff: true, noVision: true, noGrounding: true }, "NATIVE-EQUIVALENT floor: bare AX tree, no screenshots, no map — can it work it out on the fly"),
 		task(
-		"p2-ax-curated",
-		{ backend: "ax", useRecipe: true },
+		"p2-curated",
+		{ backend: "cdp", useRecipe: true },
 		// TASK-CONTAMINATED, and the numbers must be reported as such. docs/recipes/yarn.md names
 		// the canonical task's control, its surface, its exact options AND the brand-vs-document
 		// split — so this arm receives the route and the wrong-scope defence. Its own header also
@@ -336,7 +391,7 @@ const PHASE2_SLICES: Arm[] = [
 		"explore pass vs a curated tier that CONTAINS THIS TASK'S ANSWER — an upper bound on grounding, not a human-notes comparison",
 	),
 	// Vision-only is ax-backend-only by construction: cdp observations ARE ref lists.
-	task("p2-vision-only-ungrounded", { backend: "ax", noAx: true, noGrounding: true }, "the floor: screenshots alone, cold"),
+	task("p2-vision-only-ungrounded", { backend: "ax", noAx: true, noGrounding: true }, "the floor: screenshots alone, cold", { axRationale: "vision-only is ax-only by construction — a cdp observation IS a ref list, so 'screenshots only' cannot be expressed on that backend" }),
 	/**
 	 * Vision-only run against the ORDINARY stamped appmap — the one an ax explore pass wrote.
 	 * No new infrastructure: docs/appmaps/<slug>.md already exists.
@@ -358,7 +413,7 @@ const PHASE2_SLICES: Arm[] = [
 	 * useless at BOTH stages is still unmeasured — that needs the vision-only explore pass.
 	 * The id says `axmap` so a reader of the report cannot miss which it is.
 	 */
-	task("p2-vision-only-grounded-axmap", { backend: "ax", noAx: true }, "does explore-written prose lift a vision-only agent (map from an ax pass — see the note)"),
+	task("p2-vision-only-grounded-axmap", { backend: "ax", noAx: true }, "does explore-written prose lift a vision-only agent (map from an element-perceiving pass)", { axRationale: "vision-only is ax-only by construction — a cdp observation IS a ref list, so 'screenshots only' cannot be expressed on that backend" }),
 	/**
 	 * The AX-hostile-app story, measured properly: grounding AND actuation both from
 	 * screenshots only. Consumes the `.vision` map that p1-explore-vision writes, so it is
@@ -374,9 +429,9 @@ const PHASE2_SLICES: Arm[] = [
 		"p2-vision-only-grounded-visionmap",
 		{ backend: "ax", noAx: true },
 		"grounding and actuation both vision-only — the app-with-no-usable-AX deploy story",
-		{ env: { APPMAP_VARIANT: "vision" } },
+		{ env: { APPMAP_VARIANT: "vision" }, axRationale: "vision-only is ax-only by construction — a cdp observation IS a ref list, so 'screenshots only' cannot be expressed on that backend" },
 	),
-	task("p2-vision-only-curated", { backend: "ax", noAx: true, useRecipe: true }, "same against the human-written tier"),
+	task("p2-vision-only-curated", { backend: "ax", noAx: true, useRecipe: true }, "same against the human-written tier", { axRationale: "vision-only is ax-only by construction — a cdp observation IS a ref list, so 'screenshots only' cannot be expressed on that backend" }),
 ];
 
 /**
@@ -438,13 +493,15 @@ const PHASE3: Arm[] = [
 		informs: "steps re-resolved vs rescued, model calls (target 0), wall-clock + tokens vs live grounded",
 	})),
 	{
-		id: "p3-replay-ax-norescue",
+		id: "p3-replay-norescue",
 		phase: 3,
 		kind: "replay",
 		app: BENCH_APP,
 		n: 3,
-		dispatch: { backend: "ax", noRescue: true },
-		sourceArm: "p3-compile-ax",
+		// cdp, not ax: this measures the UNATTENDED FLEET POSTURE, which is a question about
+		// how the shipping configuration behaves with no operator, not about the fallback.
+		dispatch: { backend: "cdp", noRescue: true },
+		sourceArm: "p3-compile-cdp",
 		informs: "unattended-fleet posture: does the happy path hold with ZERO model calls",
 	},
 ];
@@ -457,15 +514,16 @@ const PHASE3: Arm[] = [
  * are skipped, the compile runs, and the replays go out.
  */
 const PHASE4: Arm[] = [
-	task("p4-ungrounded", { backend: "ax", noGrounding: true }, "is everything above cursor-task-specific", { phase: 4, task: PHASE4_TASK, n: 2 }),
-	task("p4-grounded", { backend: "ax" }, "is everything above cursor-task-specific", { phase: 4, task: PHASE4_TASK, n: 2 }),
+	task("p4-ungrounded", { backend: "cdp", noGrounding: true }, "is everything above cursor-task-specific", { phase: 4, task: PHASE4_TASK, n: 2 }),
+	task("p4-grounded", { backend: "cdp" }, "is everything above cursor-task-specific", { phase: 4, task: PHASE4_TASK, n: 2 }),
 	{
 		id: "p4-compile",
 		phase: 4,
 		kind: "compile",
 		app: BENCH_APP,
 		n: 1,
-		dispatch: { backend: "ax" },
+		// Follows p4-grounded: a recipe compiled from a cdp run resolves cdp's control names.
+		dispatch: { backend: "cdp" },
 		sourceArm: "p4-grounded",
 		informs: "does compile generalize past the canonical task",
 	},
@@ -475,7 +533,7 @@ const PHASE4: Arm[] = [
 		kind: "replay",
 		app: BENCH_APP,
 		n: 2,
-		dispatch: { backend: "ax" },
+		dispatch: { backend: "cdp" },
 		sourceArm: "p4-compile",
 		informs: "does replay generalize past the canonical task",
 	},

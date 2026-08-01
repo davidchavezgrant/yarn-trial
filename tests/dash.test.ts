@@ -338,7 +338,9 @@ test("BuildState__ExposesLineageAndTargetKey__When__ArmsRideTheWire", () => {
 	assert.equal(byId("p2-ax-grounded")?.groundedBy, "p1-explore-ax");
 	assert.equal(byId("p2-cdp-grounded")?.groundedBy, "p1-explore-cdp");
 	// Curated (USE_RECIPE) arms are grounded — they nest too.
-	assert.equal(byId("p2-ax-curated")?.groundedBy, "p1-explore-ax");
+	// The curated tier moved to cdp on 2026-08-01 — it measures ONBOARDING COST, which should be
+	// read on the shipping actuator, and it has no ax twin so it was never a comparison.
+	assert.equal(byId("p2-curated")?.groundedBy, "p1-explore-cdp");
 	// Replays consume the same lineage as the run they were compiled from.
 	assert.equal(byId("p3-replay-cdp")?.groundedBy, "p1-explore-cdp");
 	// Ungrounded arms and explore/compile arms carry no lineage.

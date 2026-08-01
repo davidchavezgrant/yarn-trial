@@ -66,7 +66,10 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// Phase 2: core 12, 8 slices x 3, plus the minimum-context PAIR x 3 — a bare AX tree with
 	// no DOM attrs and no screenshots, grounded on an equally minimal map and ungrounded. The
 	// ungrounded half is the floor of the whole matrix; every other arm should beat it.
-	assert.equal(phaseRunCount(2), 12 + 24 + 6);
+	// core 12 (2 backends x grounded/ungrounded x 3), slices 27, procedures-tier comparators 6.
+	// Slices went 24 -> 27 on 2026-08-01: the native-equivalent grid (AXDOM=0, i.e. an AX tree
+	// with no DOM behind it) was missing its cold+screenshots cell.
+	assert.equal(phaseRunCount(2), 12 + 27 + 6);
 	// Phase 3: 2 local compiles + replay ×3 per backend + no-rescue ×3.
 	assert.equal(phaseRunCount(3), 2 + 6 + 3);
 	// Phase 4 (optional): 2 task cells × 2 + 1 compile + 2 replays.
@@ -294,7 +297,7 @@ test("runPhase__ShapesOptionsPerArm__When__Phase2Dispatches", async () => {
 		const fake = fakeDispatch();
 		const code = await runPhase(2, { go: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
 		assert.equal(code, EXIT_OK);
-		assert.equal(fake.calls.length, 42);
+		assert.equal(fake.calls.length, phaseRunCount(2));
 
 		const byFlag = (pred: (c: DispatchOptions) => boolean): DispatchOptions[] => fake.calls.filter(pred);
 		// Task text crosses verbatim and is goal-only for every call.
@@ -306,10 +309,11 @@ test("runPhase__ShapesOptionsPerArm__When__Phase2Dispatches", async () => {
 		// so the predicate has to name which, or it counts both and reads like one.
 		assert.equal(byFlag((c) => c.noGrounding === true && c.backend === "ax" && !c.noAx && !c.axdomOff && !c.noVision).length, 3);
 		assert.equal(byFlag((c) => c.noGrounding === true && c.backend === "ax" && c.axdomOff === true && c.noVision === true).length, 3);
-		// Nine: the axdom-off arm at n=3, plus the minimum-context PAIR at n=3 each — both
-		// halves of that pair run without the sidecar, which is half of what makes them
-		// minimum-context.
-		assert.equal(byFlag((c) => c.axdomOff === true).length, 9);
+		// TWELVE — the native-equivalent tier, complete since 2026-08-01. AXDOM=0 leaves an AX
+		// tree with no DOM behind it, which is the surface a native AppKit app presents, so the
+		// grid is {grounded, cold} x {screenshots, none} at n=3 each. It was nine while the
+		// cold+screenshots cell was missing.
+		assert.equal(byFlag((c) => c.axdomOff === true).length, 12);
 		// And the matrix floor is dispatched with everything off at once, which no other arm is.
 		assert.equal(byFlag((c) => c.axdomOff === true && c.noVision === true && c.noGrounding === true).length, 3);
 		assert.equal(byFlag((c) => c.noVision === true && c.backend === "cdp").length, 3);
@@ -352,7 +356,7 @@ test("runPhase__BypassesPhase1Gate__When__ForceIsSet", async () => {
 		const fake = fakeDispatch();
 		const code = await runPhase(2, { go: true, force: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
 		assert.equal(code, EXIT_OK);
-		assert.equal(fake.calls.length, 42);
+		assert.equal(fake.calls.length, phaseRunCount(2));
 	});
 });
 
@@ -405,13 +409,15 @@ test("runPhase__CompilesLocallyAndDispatchesReplays__When__Phase3HasCleanSources
 		// Only the ax source is clean; the cdp compile waits for a successful cdp run.
 		assert.deepEqual(compiled, ["run-ax-1"]);
 
-		// ax replays (3 + 3 no-rescue) dispatch with the compiled recipe; cdp replays defer.
-		assert.equal(fake.calls.length, 6);
+		// Only the ax replay arm dispatches: p3-replay-norescue moved to cdp on 2026-08-01 (it
+		// measures the unattended FLEET posture, a question about the shipping actuator), so it
+		// waits on the cdp compile like every other cdp replay.
+		assert.equal(fake.calls.length, 3);
 		for (const c of fake.calls) {
 			assert.equal(c.kind, "replay");
 			assert.match(c.recipe ?? "", /recipe\.json$/);
 		}
-		assert.equal(fake.calls.filter((c) => c.noRescue === true).length, 3);
+		assert.equal(fake.calls.filter((c) => c.noRescue === true).length, 0, "the no-rescue arm is cdp now and defers with the others");
 
 		const after = readManifest(DATE, liveDir(dir));
 		const compileEntry = after.entries.find((e) => e.armId === "p3-compile-ax");
@@ -453,7 +459,7 @@ test("plannedRuns__ExcludesCompileArms__When__Phase3Planned", () => {
 });
 
 test("dispatchOptionsFor__CarriesRecipeAndQueue__When__ReplayArm", () => {
-	const arm = armById("p3-replay-ax-norescue")!;
+	const arm = armById("p3-replay-norescue")!;
 	const o = dispatchOptionsFor(arm, "docs/recipes/yarn.abc.recipe.json");
 	assert.equal(o.kind, "replay");
 	assert.equal(o.queue, true);
@@ -1047,7 +1053,7 @@ test("groundingChecked__FlagsARunThatDidNotGetItsDeclaredGrounding__When__Proven
 	// label, and loadGrounding turns a missing map into provenance "none" without complaint.
 	const grounded = MATRIX.find((a) => a.id === "p2-ax-grounded")!;
 	const ungrounded = MATRIX.find((a) => a.id === "p2-ax-ungrounded")!;
-	const curated = MATRIX.find((a) => a.id === "p2-ax-curated")!;
+	const curated = MATRIX.find((a) => a.id === "p2-curated")!;
 	const visionmap = MATRIX.find((a) => a.id === "p2-vision-only-grounded-visionmap")!;
 
 	assert.equal(expectedProvenance(grounded), "explore");
@@ -1169,4 +1175,60 @@ test("technicalFailure__SeparatesHarnessFromAgent__When__ARunFails", () => {
 	assert.equal(technicalFailure("failed", { failureKind: "unready" }, explore, []), undefined);
 	assert.equal(technicalFailure("failed", { failureKind: "hinted-refused" }, explore, []), undefined);
 	assert.equal(technicalFailure("done", { success: true }, explore, []), undefined);
+});
+
+test("MATRIX__JustifiesEveryAxArm__When__CdpIsTheDefault", () => {
+	// CDP is the production actuator — it backgrounds, never steals the operator's pointer, and
+	// carries none of cua's liabilities. FOR_AMAN's second bullet already says so, and the `dom`
+	// backend was deleted as dominated. So AX is the FALLBACK, and an arm that uses it owes a
+	// reason.
+	//
+	// Without this the matrix drifted to 73% ax (77 runs against 28) — not by anyone deciding
+	// that, but because `task()` callers kept typing `backend: "ax"` out of habit and nothing
+	// asked why. A default is not a decision.
+	//
+	// Three reasons are legitimate, and they are checked structurally rather than by trusting a
+	// comment:
+	//   1. the arm IS the ax-vs-cdp comparison — a cdp twin of the same shape exists
+	//   2. the variable cannot exist on cdp — axdomOff, since the sidecar enriches the AX tree
+	//      and cdp already has the real DOM (this is also the native-equivalent tier)
+	//   3. an explicit written axRationale
+	const shape = (a: Arm) => JSON.stringify({ ...a.dispatch, backend: null }) + `|${a.phase}|${a.kind}|${a.task ?? ""}`;
+	const cdpShapes = new Set(MATRIX.filter((a) => a.dispatch.backend === "cdp").map(shape));
+	const unjustified = MATRIX.filter(
+		(a) => a.dispatch.backend === "ax" && !a.dispatch.axdomOff && !cdpShapes.has(shape(a)) && !a.axRationale,
+	).map((a) => a.id);
+	assert.deepEqual(unjustified, [], `ax arms with no stated reason — pair them with a cdp twin or add axRationale:\n  ${unjustified.join("\n  ")}`);
+});
+
+test("MATRIX__CoversTheNativeEquivalentGrid__When__AxdomIsOff", () => {
+	// "Yarn with only the tools a native app would give you" (David, 2026-08-01): AXDOM=0 removes
+	// the DOM attributes that exist only because the target is Chromium, leaving an accessibility
+	// tree with nothing behind it, actuated through the accessibility API. Holding the APP
+	// constant is what makes it a measurement instead of an anecdote.
+	//
+	// All four cells must exist or the tier cannot be read: dropping the map and dropping the
+	// screenshots are separate losses, and a native app can be onboarded or not independently of
+	// whether the agent can see.
+	const native = MATRIX.filter((a) => a.phase === 2 && a.dispatch.axdomOff);
+	const cell = (grounded: boolean, vision: boolean) =>
+		native.find((a) => Boolean(a.dispatch.noGrounding) === !grounded && Boolean(a.dispatch.noVision) === !vision);
+	for (const [g, v, label] of [
+		[true, true, "grounded + screenshots"],
+		[true, false, "grounded, no screenshots"],
+		[false, true, "cold + screenshots"],
+		[false, false, "cold, no screenshots — the floor"],
+	] as Array<[boolean, boolean, string]>)
+		assert.ok(cell(g, v), `the native-equivalent grid is missing: ${label}`);
+
+	// Every one of them must be ax: a cdp run has the real DOM, so it cannot be native-equivalent
+	// however many other channels are switched off.
+	for (const a of native) assert.equal(a.dispatch.backend, "ax", `${a.id} claims the native tier but actuates over cdp`);
+	// And each must be grounded on a map built under the SAME limit, or the arm measures the
+	// sidecar's absence at run time only while reading a map the sidecar helped write.
+	for (const a of native.filter((x) => !x.dispatch.noGrounding))
+		assert.ok(
+			MATRIX.some((e) => e.kind === "explore" && e.dispatch.axdomOff && Boolean(e.dispatch.noVision) === Boolean(a.dispatch.noVision)),
+			`${a.id} has no sidecar-less explore pass to ground on`,
+		);
 });
