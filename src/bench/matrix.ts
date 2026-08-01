@@ -178,6 +178,28 @@ const PHASE1: Arm[] = [
 		informs: "grounding a real web app: controls seen/actuated, pass duration and cost on a target far larger than Yarn",
 	},
 	/**
+	 * The element-only GROUNDING pass — the mirror of the vision-only one below.
+	 *
+	 * Added 2026-08-01 (David spotted the asymmetry): phase 2 tests dropping screenshots during
+	 * a TASK, but nothing tested dropping them during GROUNDING, while the opposite channel got
+	 * both. The 2x2 was half empty.
+	 *
+	 * It is a cost question above all. The Notion pass spent 2.5M input and 17.8M cache-read
+	 * tokens, and screenshots are the bulk of that — so if an element-only pass produces a
+	 * comparable map, onboarding a new app gets materially cheaper, which is exactly the
+	 * per-app budget Jasper described. Read `nodes` and `surfaces` against p1-explore-ax,
+	 * which differs from this arm in nothing but the screenshot channel.
+	 */
+	{
+		id: "p1-explore-no-vision",
+		phase: 1,
+		kind: "explore",
+		app: BENCH_APP,
+		n: 1,
+		dispatch: { backend: "ax", noVision: true },
+		informs: "can grounding be done from the element tree alone — map size and cost vs the same pass with screenshots",
+	},
+	/**
 	 * The vision-only GROUNDING pass — discovery from screenshots alone, no element list.
 	 *
 	 * This is the arm the matrix was missing: it had three vision-only TASK arms and no

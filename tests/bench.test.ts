@@ -61,11 +61,12 @@ test("MATRIX__HasUniqueArmIds__When__Defined", () => {
 });
 
 test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
-	// Phase 1: ax + cdp Yarn explores, the cdp web-explore verification run, and the
-	// vision-only grounding pass (added 2026-07-31 — the matrix previously had three
-	// vision-only TASK arms and no vision-only GROUNDING, so the AX-hostile-app question
-	// was only half-asked).
-	assert.equal(phaseRunCount(1), 4);
+	// Phase 1: ax + cdp Yarn explores, the cdp web-explore run, and BOTH single-channel
+	// grounding passes. The vision-only one landed 2026-07-31 (three vision-only TASK arms
+	// existed with no vision-only GROUNDING); the element-only one 2026-08-01, closing the
+	// mirror gap — phase 2 tested dropping screenshots during a task but never during
+	// grounding, which is where they cost the most.
+	assert.equal(phaseRunCount(1), 5);
 	// Phase 2: core 2 backends × 2 grounding × 3, plus 6 slices × 3. Two blocks were cut
 	// 2026-07-31 after their prerequisites were CHECKED rather than assumed (matrix.ts holds
 	// the full reasoning at each site): the Notion Calendar slice (4 arms × 2 = 8 runs — the
@@ -235,8 +236,15 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		const fake = fakeDispatch();
 		const code = await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
 		assert.equal(code, EXIT_OK);
-		// Four: ax + cdp Yarn explores, the cdp web check, and the vision-only grounding pass.
-		assert.equal(fake.calls.length, 4);
+		// Five: ax + cdp Yarn explores, the cdp web check, and both single-channel passes.
+		assert.equal(fake.calls.length, 5);
+		// The two single-channel passes must differ ONLY in which channel they drop — same
+		// backend, same app — or they are not a comparison.
+		const single = fake.calls.filter((c) => c.noAx || c.noVision);
+		assert.equal(single.length, 2);
+		for (const c of single) assert.equal(c.backend, "ax", "both single-channel passes drive through the same actuator");
+		assert.equal(single.filter((c) => c.noAx).length, 1);
+		assert.equal(single.filter((c) => c.noVision).length, 1);
 		// The vision-only pass is the one that drops the element list; it must still keep
 		// vision, which the explore CLI enforces (--no-ax --no-vision leaves nothing).
 		const visionPass = fake.calls.find((c) => c.noAx === true);
@@ -256,7 +264,7 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 	assert.match(web?.url ?? "", /app\.notion\.com/);
 		// Every accepted job landed in the manifest, uncollected.
 		const m = readManifest(DATE, dir);
-		assert.equal(m.entries.length, 4);
+		assert.equal(m.entries.length, 5);
 		assert.ok(m.entries.every((e) => !e.collected && e.host === "mac1"));
 	});
 });
@@ -273,6 +281,7 @@ test("runPhase__ShapesOptionsPerArm__When__Phase2Dispatches", async () => {
 			// with no map loadGrounding degrades to provenance "none" — the arm would run as a
 			// silent duplicate of the ungrounded one. Phase 2 refusing here IS the protection.
 			entry("p1-explore-vision", "explore-v", { collected: true, state: "done" }),
+			entry("p1-explore-no-vision", "explore-nv", { collected: true, state: "done" }),
 		]);
 		writeManifest(m, dir);
 
@@ -344,6 +353,7 @@ test("runPhase__SubmitsOnlyMissingSamples__When__ManifestAlreadyHoldsSome", asyn
 			entry("p1-explore-ax", "explore-a"),
 			entry("p1-explore-cdp", "explore-c"),
 			entry("p1-explore-vision", "explore-v"),
+			entry("p1-explore-no-vision", "explore-nv"),
 		]);
 		writeManifest(m, dir);
 
@@ -786,12 +796,12 @@ test("runPhase__ScopesSampleCountsToTheModelPass__When__TwoModelsRunTheMatrix", 
 	await withTempAsync("bench-", async (dir) => {
 		const a = fakeDispatch();
 		await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: a.fn, log: () => {}, model: "openai/gpt-5.6-sol:nitro" });
-		assert.equal(a.calls.length, 4, "pass A submits the full phase");
+		assert.equal(a.calls.length, 5, "pass A submits the full phase");
 		for (const c of a.calls) assert.equal(c.model, "openai/gpt-5.6-sol:nitro");
 
 		const b = fakeDispatch();
 		await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: b.fn, log: () => {}, model: "claude-fable-5" });
-		assert.equal(b.calls.length, 4, "pass B submits the full phase again — pass A's entries are not its samples");
+		assert.equal(b.calls.length, 5, "pass B submits the full phase again — pass A's entries are not its samples");
 		for (const c of b.calls) assert.equal(c.model, "claude-fable-5");
 
 		// And a re-run of pass A tops up nothing.
