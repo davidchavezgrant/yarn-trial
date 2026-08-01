@@ -84,26 +84,34 @@
 			}
 		},
 		{
-			"armId": "p1-explore-no-vision",
-			"jobId": "explore-2026-08-01T00-12-22-496-yarn",
-			"host": "mac1",
-			"submittedAt": "2026-08-01T00:12:22.644Z",
-			"state": "done",
-			"collected": true,
-			"metrics": {
-				"startedAt": "2026-08-01T00:12:22.497Z",
-				"endedAt": "2026-08-01T00:15:04.736Z",
-				"runSec": 162,
-				"success": false,
-				"failureKind": "crashed"
-			},
-			"note": "no run log — counted as failure"
-		},
-		{
 			"armId": "p1-explore-vision",
 			"jobId": "explore-2026-08-01T00-12-26-311-yarn",
 			"host": "mac2",
 			"submittedAt": "2026-08-01T00:12:26.453Z",
+			"state": "done",
+			"collected": true,
+			"metrics": {
+				"startedAt": "2026-08-01T00:12:26.312Z",
+				"endedAt": "2026-08-01T00:41:51.164Z",
+				"runSec": 1765,
+				"exploreActions": 162,
+				"exploreElapsed": "29m",
+				"inputTokens": 597258,
+				"outputTokens": 43631,
+				"cacheReadTokens": 2171392,
+				"cacheCreationTokens": 0,
+				"modelCalls": 221,
+				"surfaces": 8,
+				"graphNodes": 53,
+				"graphEdges": 18,
+				"scopeAmbiguities": 1
+			}
+		},
+		{
+			"armId": "p1-explore-no-vision",
+			"jobId": "explore-2026-08-01T00-18-28-757-yarn",
+			"host": "mac3",
+			"submittedAt": "2026-08-01T00:18:28.757Z",
 			"state": "running",
 			"collected": false
 		}

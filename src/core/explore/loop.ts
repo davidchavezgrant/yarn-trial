@@ -1,5 +1,6 @@
 import type { ModelClient } from "../harness.js";
 import Anthropic from "@anthropic-ai/sdk";
+import { envNum } from "../../env.js";
 import { boundaryDescription, classifyBoundary } from "../boundary.js";
 import type { CdpBackend } from "../../backends/cdp.js";
 import type { Driver } from "../driver.js";
@@ -117,7 +118,16 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 	 * finish and never acts would otherwise spin until the action backstop burning
 	 * tokens, so after three the concession is taken and recorded as the stop reason.
 	 */
+	// Distinct surfaces the model has declared anything on — the coverage number the dry-round
+	// sweep argues against, and the one the prompt quotes back to it.
+	const surfaceCount = (pass: Pass): number => new Set([...pass.declared.seen.values()].map((v) => v.surface)).size;
 	let finishRefusals = 0;
+	// Consecutive empty-frontier finishes that added no new declarations before the pass is
+	// allowed to concede. Two, not one: the first refusal is the hunt, the second confirms it
+	// found nothing. See the block in the finish handler.
+	const DRY_ROUNDS = envNum("EXPLORE_DRY_ROUNDS", 2);
+	let dryFinishes = 0;
+	let lastDeclaredAtFinish = -1;
 	let obsThisChapter = 1;
 
 	/**
@@ -199,6 +209,45 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 
 		if (toolUse.name === "finish") {
 			const rest = remaining();
+			/**
+			 * A DECLARED frontier empties when the model runs out of ideas, not when the app
+			 * runs out of surfaces — so "everything I declared is operated" is not evidence of
+			 * coverage the way an exhausted element list is.
+			 *
+			 * Measured 2026-08-01: a vision-only pass reached 8 surfaces where the ax pass on
+			 * the same app reached 31, and its 29 survey calls covered those same 8 places over
+			 * and over (9x "Draft editor", 6x "Template editor"). It went deep and never went
+			 * looking. finish was accepted on the first ask because rest was empty.
+			 *
+			 * So: refuse the first empty frontier and send it hunting for regions it has not
+			 * opened. Concede only after DRY_ROUNDS consecutive attempts add no new
+			 * declarations — the hunt itself is the evidence, not the model's confidence. A
+			 * mechanical frontier needs none of this: its `rest` already holds every element
+			 * the tree reported, including the ones that lead elsewhere.
+			 */
+			if (vo && rest.length === 0 && p.declared.seen.size > 0) {
+				const grew = p.declared.seen.size > lastDeclaredAtFinish;
+				lastDeclaredAtFinish = p.declared.seen.size;
+				if (grew) dryFinishes = 0;
+				else dryFinishes++;
+				if (dryFinishes < DRY_ROUNDS) {
+					console.log(`  finish deferred (dry ${dryFinishes}/${DRY_ROUNDS}): ${p.declared.seen.size} declared across ${surfaceCount(p)} surface(s) — sweeping for unopened regions`);
+					p.messages.push({
+						role: "user",
+						content: [
+							{
+								type: "tool_result",
+								tool_use_id: toolUse.id,
+								content:
+									`Before finishing: you have surveyed ${surfaceCount(p)} surface(s). An app almost always has more.\n\n` +
+									"Name every navigation affordance you have SEEN but not opened — menu bar items, sidebar entries, tabs, toolbar overflow (\u2026) buttons, right-click menus, settings sections, anything that would change what fills the window. " +
+									"Open the ones you have not, and survey what appears. If a sweep genuinely turns up nothing new, call finish again and it will be accepted.",
+							},
+						],
+					});
+					continue;
+				}
+			}
 			// A vision-only pass with NOTHING surveyed has an empty frontier by construction —
 			// the ledger only holds what the model declared — so an empty ledger is refused the
 			// same way a non-empty one is: zero declarations is zero coverage, not full coverage.
