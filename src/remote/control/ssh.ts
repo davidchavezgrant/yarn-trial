@@ -109,15 +109,18 @@ export function sshArgv(host: HostEntry, remoteArgv: string[]): string[] {
 }
 
 /**
- * The argv for a local port-forward to the same port on the far side: `-L p:127.0.0.1:p -N`.
+ * The argv for a local port-forward: `-L local:127.0.0.1:remote -N`. `localPort` defaults to
+ * the remote port; callers that must not squat a well-known local port (the dash's peek
+ * tunnels) pass an ephemeral one instead.
  *
  * Shares `sshBaseArgv` rather than restating it so the tunnel can never drift into weaker
  * pinning than the command channel — a forwarded viewer stream through an unpinned tunnel
  * would be the one unauthenticated hop in an otherwise key-checked fleet. `-N` because the
  * tunnel is the whole job: there is no remote command, so nothing here can ever be shell text.
  */
-export function tunnelArgv(host: HostEntry, port: number): string[] {
+export function tunnelArgv(host: HostEntry, port: number, localPort = port): string[] {
 	if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error(`not a forwardable port: ${port}`);
+	if (!Number.isInteger(localPort) || localPort <= 0 || localPort > 65535) throw new Error(`not a forwardable port: ${localPort}`);
 
 	// Multiplexing OFF for the tunnel, and this is the whole bug behind the "white sign-in
 	// screen" (measured 2026-07-31). sshBaseArgv turns on ControlMaster=auto so the fleet's
@@ -135,7 +138,7 @@ export function tunnelArgv(host: HostEntry, port: number): string[] {
 		"-o", "ServerAliveInterval=15",
 		"-o", "ServerAliveCountMax=3",
 		"-o", "ExitOnForwardFailure=yes",
-		"-L", `${port}:127.0.0.1:${port}`,
+		"-L", `${localPort}:127.0.0.1:${port}`,
 		"-N",
 		`${host.ssh.user}@${host.ssh.host}`,
 	];

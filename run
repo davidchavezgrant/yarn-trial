@@ -98,7 +98,9 @@ ${b}bench${n}
   bench judge                            re-grade landed runs with the offline judge (idempotent)
   dash [--port N] [--no-collect] [--web] live dashboard (Electron): fleet, matrix progress, charts
                                          as results land (auto-runs collect; --no-collect = pure
-                                         reader; --web = headless server on localhost:4642)
+                                         reader; --web = headless server on localhost:4642;
+                                         --dev = --web with hot reload — server restarts on .ts
+                                         changes, page reloads itself)
 
 ${b}setup & health${n}
   doctor                                 check permissions, keys, deps before demoing
@@ -233,6 +235,13 @@ dash)
 	# headless on http://localhost:4642 instead. No assert_no_run_in_flight: it reads
 	# registries and pulls artifacts, never starts a driver session. No have_key: no model.
 	shift
+	if [[ " $* " == *" --dev "* || ${1:-} == --dev ]]; then
+		# Hot reload: tsx restarts the server on any imported .ts change; the page reloads
+		# itself when its SSE stream reconnects (and on dash.html edits, which the server
+		# watches). Open the window with a plain `./run dash` in another terminal — it
+		# attaches to this server instead of starting its own — or use a browser.
+		exec npx tsx watch src/bench/dash.ts "$@"
+	fi
 	if [[ " $* " == *" --web "* || ${1:-} == --web ]]; then
 		exec npx tsx src/bench/dash.ts "$@"
 	fi

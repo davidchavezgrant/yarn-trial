@@ -1,4 +1,4 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
@@ -291,6 +291,29 @@ export function narratorDigest(state: DashState): Record<string, unknown> {
 				passes: a.passes.map(({ entries, ...p }) => ({ ...p, statuses: entries.map((e) => e.status) })),
 			})),
 	};
+}
+
+/**
+ * The newest note narrate() has persisted to narrative.md, if any. The live copy used to be
+ * in-memory only, so a restarted dash served nothing while every note it had ever minted sat
+ * on disk beside the manifest — and a restart into a keyless environment could never re-mint.
+ * Headings are machine-written by narrate() (`## <ISO> — N collected (<model>)`), so parsing
+ * the last one back is exact, not heuristic.
+ */
+function readPersistedNarrative(date: string): Narrative | undefined {
+	let raw: string;
+	try {
+		raw = fs.readFileSync(path.join(benchDir(date), "narrative.md"), "utf8");
+	} catch {
+		return undefined; // No file — nothing narrated for this date yet.
+	}
+	const heads = [...raw.matchAll(/^## (\S+) — \d+ collected \(([^)\n]+)\)$/gm)];
+	const last = heads.at(-1);
+	if (!last) return undefined;
+	const text = raw.slice((last.index ?? 0) + last[0].length).trim();
+	if (!text) return undefined;
+
+	return { updatedAt: last[1], text, model: last[2] };
 }
 
 export function narratorPrompt(digest: Record<string, unknown>, previous?: string): string {
@@ -723,12 +746,24 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		if (events.length > 200) events.shift();
 	};
 
-	let narrative: Narrative | undefined;
+	// Seeded from disk so a restart does not lose the note: narrate() persists every mint to
+	// narrative.md, and narratedCount still starts at -1, so a keyed process replaces this
+	// with a fresh note on its first tick — the seed only covers the window (or the keyless
+	// environment) where it cannot.
+	let narrative: Narrative | undefined = readPersistedNarrative(date);
 
-	const push = (): void => {
+	// The ONE state builder for anything a client can receive. `narrative` used to be attached
+	// only inside push(), so GET /api/state and the initial /events frame omitted it — a page
+	// that connected after the note was minted showed nothing until an unrelated push came by.
+	const currentState = (): DashState => {
 		const state = buildState(manifest, fleet, events, autoCollect, defaultModel);
 		if (narrative) state.narrative = narrative;
-		const data = `data: ${JSON.stringify(state)}\n\n`;
+
+		return state;
+	};
+
+	const push = (): void => {
+		const data = `data: ${JSON.stringify(currentState())}\n\n`;
 		for (const res of clients) res.write(data);
 	};
 
@@ -749,7 +784,11 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			const digest = narratorDigest(buildState(manifest, fleet, [], autoCollect, defaultModel));
 			const res = await client.messages.create({
 				model,
-				max_tokens: 400,
+				// 4000, not a text-sized budget: reasoning models spend max_tokens on thinking
+				// BEFORE the visible text, and 400 was exhausted mid-reason — every tick failed
+				// with no text at all. The prompt caps the visible output (~5 sentences), so
+				// this ceiling does not bound the note's length.
+				max_tokens: 4000,
 				messages: [{ role: "user", content: narratorPrompt(digest, narrative?.text) }],
 			});
 			const text = (res.content ?? [])
@@ -757,7 +796,12 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 				.map((b: any) => b.text)
 				.join("\n")
 				.trim();
-			if (!text) throw new Error("model returned no text");
+			if (!text) {
+				// Name WHY there was no text — "no text" alone hid a max_tokens exhaustion for a day.
+				const stop = (res as any).stop_reason ?? (res as any).finish_reason ?? "unknown";
+				const blocks = (res.content ?? []).map((b: any) => b?.type ?? "?").join(", ") || "none";
+				throw new Error(`model returned no text (stop: ${stop}; blocks: ${blocks})`);
+			}
 			narratedCount = collectedCount;
 			narrative = { updatedAt: new Date().toISOString(), text, model };
 			fs.appendFileSync(
@@ -788,12 +832,60 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 
 	// Fleet poll — lazy import so `buildState` stays importable without the ssh machinery.
 	const { fleetStatus } = await import("../remote/control/fleet.js");
+
+	/**
+	 * The laptop itself runs agent/explore/replay jobs that `fleetStatus()` cannot see — it
+	 * only polls the colo Macs — so an in-flight local run appears nowhere on the board.
+	 * Detect one with the same pgrep the run script's in-flight guard uses and surface it as
+	 * a synthetic "local" row. Identity is best-effort from the freshest run artifact; an
+	 * idle laptop is not a fleet member, so no run means no row at all.
+	 */
+	const localRunRow = async (): Promise<FleetRow | undefined> => {
+		// pgrep exits 1 on no match — that is the quiet "nothing running" path, not an error.
+		const inFlight = await new Promise<boolean>((resolve) =>
+			execFile("pgrep", ["-f", "tsx src/core/(agent|explore|recipe-cli)\\.ts"], (err) => resolve(!err)));
+		if (!inFlight) return undefined;
+
+		let jobId: string | undefined;
+		let app: string | undefined;
+		let elapsedSec: number | undefined;
+		try {
+			const runsDir = path.join(dataRoot(), "out", "runs");
+			const now = Date.now();
+			const fresh = fs.readdirSync(runsDir)
+				.filter((f) => f.endsWith(".json") && !f.endsWith(".judge.json"))
+				.map((f) => ({ f, st: fs.statSync(path.join(runsDir, f)) }))
+				.filter((e) => e.st.isFile() && now - e.st.mtimeMs < 15 * 60 * 1000)
+				.sort((a, b) => b.st.mtimeMs - a.st.mtimeMs)[0];
+			if (fresh) {
+				jobId = fresh.f.replace(/(?:\.checkpoint)?\.json$/, "");
+				// Stems read `[explore-]<stamp>-<app-slug>` — the slug is the best-effort app.
+				app = /^(?:explore-)?\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}-(.+)$/.exec(jobId)?.[1];
+				// birthtime is 0 on filesystems that do not track it — fall back to mtime.
+				elapsedSec = Math.max(0, Math.round((now - (fresh.st.birthtimeMs || fresh.st.mtimeMs)) / 1000));
+			}
+		} catch {
+			// No artifacts yet (or out/runs missing) — the row still reports a busy laptop.
+		}
+
+		return {
+			name: "local",
+			reachable: true,
+			state: "busy",
+			...(app ? { app } : {}),
+			...(jobId ? { jobId } : {}),
+			...(elapsedSec !== undefined ? { elapsedSec } : {}),
+		};
+	};
+
 	let polling = false;
 	const pollFleet = async (): Promise<void> => {
 		if (polling) return;
 		polling = true;
 		try {
-			fleet = { rows: await fleetStatus(), polledAt: new Date().toISOString() };
+			const rows = await fleetStatus();
+			const local = await localRunRow();
+			fleet = { rows: local ? [local, ...rows] : rows, polledAt: new Date().toISOString() };
 		} catch (e) {
 			fleet = { ...fleet, error: (e as Error).message };
 			addEvent(`fleet poll failed: ${(e as Error).message}`);
@@ -831,9 +923,10 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	 * an unflagged app has no endpoint and says so; the SCK path needs a runner verb and waits.
 	 *
 	 * View-only is structural: the viewer's messages are never forwarded to the engine, so a
-	 * stray click cannot corrupt a live benchmark run. One peek at a time — the tunnels map
-	 * the remote debug ports onto the SAME local ports (9222/9777), so a second host's peek
-	 * preempts the first (last request wins, the fleet's own idiom).
+	 * stray click cannot corrupt a live benchmark run. One peek at a time — a second host's
+	 * peek preempts the first (last request wins, the fleet's own idiom). Each tunnel binds an
+	 * EPHEMERAL local port, so nothing on the laptop — a stale ControlMaster forward, a local
+	 * debug-flagged Chrome, another dash — can ever collide with it.
 	 */
 	interface Peek {
 		host: string;
@@ -867,19 +960,17 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		}
 	};
 
-	/** Something ACCEPTS on the port, whatever protocol it speaks — the pre-tunnel squatter check. */
-	const portAccepts = async (port: number): Promise<boolean> => {
-		const { connect } = await import("node:net");
+	/** An ephemeral local port, picked by letting the OS bind 0 and reading back what it chose. */
+	const freeLocalPort = async (): Promise<number> => {
+		const { createServer } = await import("node:net");
 
-		return new Promise((resolve) => {
-			const sock = connect({ port, host: "127.0.0.1" });
-			const done = (v: boolean) => {
-				sock.destroy();
-				resolve(v);
-			};
-			sock.once("connect", () => done(true));
-			sock.once("error", () => done(false));
-			setTimeout(() => done(false), 800).unref();
+		return new Promise((resolve, reject) => {
+			const srv = createServer();
+			srv.once("error", reject);
+			srv.listen(0, "127.0.0.1", () => {
+				const chosen = (srv.address() as { port: number }).port;
+				srv.close(() => resolve(chosen));
+			});
 		});
 	};
 
@@ -890,48 +981,41 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		const host = loadHosts().hosts.find((h) => h.name === hostName);
 		if (!host) return { ok: false, error: `unknown host ${JSON.stringify(hostName)}` };
 
-		// The previous session's tunnels take a beat to release their ports after SIGTERM —
-		// wait them out, or switching hosts trips the squatter guard on our own dying ssh.
-		const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-		for (let i = 0; i < 20; i++) {
-			const held = (await Promise.all(PEEK_PORTS.map(portAccepts))).some(Boolean);
-			if (!held) break;
-			await sleep(150);
-		}
-
-		// The tunnels bind the debug ports LOCALLY. If something STILL listens there — a
-		// stale ControlMaster forward, a local debug-flagged Chrome, another operator tool —
-		// our ssh dies on ExitOnForwardFailure and the probe below would happily stream from
-		// the SQUATTER, showing pixels from the wrong machine. Refuse instead: a peek that
-		// might lie about which Mac it shows is worse than no peek.
-		for (const port of PEEK_PORTS)
-			if (await portAccepts(port))
-				return {
-					ok: false,
-					error: `local port ${port} is held by something that is not this dash (a stale ssh forward or a local debug Chrome) — close it first: lsof -nP -iTCP:${port} -sTCP:LISTEN`,
-				};
+		// Each remote debug port tunnels to a FRESH ephemeral local port. The old fixed
+		// 9222/9777 local bindings needed a squatter-refusal check and a wait-for-release loop
+		// after teardown (our own dying ssh held the port); both are obsolete with ephemeral
+		// ports and were deleted — nothing else can be listening on a port the OS just minted.
+		const locals: Array<{ remote: number; local: number }> = [];
+		for (const remote of PEEK_PORTS) locals.push({ remote, local: await freeLocalPort() });
 
 		const p: Peek = { host: hostName, tunnels: [], sockets: new Set() };
 		peek = p;
-		for (const port of PEEK_PORTS) p.tunnels.push(spawn("ssh", tunnelArgv(host, port), { stdio: "ignore" }));
+		for (const { remote, local } of locals) p.tunnels.push(spawn("ssh", tunnelArgv(host, remote, local), { stdio: "ignore" }));
 
-		// Which debug port answers decides what we watch: 9222 is the app the run drives,
-		// 9777 the web-Chrome. Poll briefly — the tunnel itself takes a moment to come up.
+		// Which REMOTE debug port answers (probed through its tunnel's local port) decides what
+		// we watch: 9222 is the app the run drives, 9777 the web-Chrome. Poll briefly — the
+		// tunnel itself takes a moment to come up.
 		let endpoint: string | undefined;
 		let browserEndpoint: string | undefined;
 		for (let tries = 0; tries < 5 && !endpoint; tries++) {
-			for (const port of PEEK_PORTS)
-				if (!endpoint && (await endpointUp(port))) endpoint = `http://127.0.0.1:${port}`;
-				else if (endpoint && !endpoint.endsWith(String(port)) && (await endpointUp(port))) browserEndpoint = `http://127.0.0.1:${port}`;
+			for (const { local } of locals)
+				if (!endpoint && (await endpointUp(local))) endpoint = `http://127.0.0.1:${local}`;
+				else if (endpoint && endpoint !== `http://127.0.0.1:${local}` && (await endpointUp(local))) browserEndpoint = `http://127.0.0.1:${local}`;
 		}
 		if (peek !== p) return { ok: false, error: "superseded by a newer peek" };
 		if (!endpoint) {
 			teardownPeek();
+			// Blame the right thing: "an ax-arm run" is nonsense on an idle Mac. The fleet
+			// snapshot can be up to a poll interval (~20s) stale, so this branch is a
+			// best-effort diagnosis, not ground truth.
+			const row = fleet.rows.find((r) => r.name === hostName);
+			const error = row?.state === "busy"
+				? `no CDP debug endpoint reachable on ${hostName} — the current run is likely an ax-arm driving an unflagged app; peek covers Chromium targets only for now`
+				: row?.state === "idle"
+					? `nothing debug-flagged is listening on ${hostName} — the host is idle; peek needs a live Chromium target (a cdp-arm run, or the web Chrome a web run leaves up)`
+					: `no CDP debug endpoint reachable on ${hostName} and its runner state is unknown — check ./run hosts`;
 
-			return {
-				ok: false,
-				error: `no CDP debug endpoint reachable on ${hostName} — the current run is likely an ax-arm driving an unflagged app; peek covers Chromium targets only for now`,
-			};
+			return { ok: false, error };
 		}
 
 		const { connectCdpEngine } = await import("../remote/liveview-cdp.js");
@@ -962,6 +1046,27 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	}
 
 	const htmlPath = resolveHtml();
+
+	// Hot reload for the page itself: editors save via rename, which kills a file-watch, so
+	// watch the DIRECTORY and filter to the html basename (same reason as the manifest watcher
+	// above). Not push() — the page reloads itself and refetches everything, so full state is
+	// redundant here; a bare reload frame is all it needs. Debounced: one save fires several
+	// events. try/catch because hot reload is a dev nicety — an unwatchable dir must not kill
+	// the server.
+	try {
+		const htmlBase = path.basename(htmlPath);
+		let htmlTimer: NodeJS.Timeout | undefined;
+		fs.watch(path.dirname(htmlPath), (_ev, filename) => {
+			if (filename && filename !== htmlBase) return;
+			clearTimeout(htmlTimer);
+			htmlTimer = setTimeout(() => {
+				for (const res of clients) res.write(`data: {"reload":true}\n\n`);
+			}, 200);
+		});
+	} catch {
+		// Degrade silently — the dashboard still serves; edits just need a manual refresh.
+	}
+
 	const server = http.createServer((req, res) => {
 		const url = req.url ?? "/";
 		if (url === "/" || url === "/index.html") {
@@ -969,14 +1074,14 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			res.end(fs.readFileSync(htmlPath));
 		} else if (url === "/api/state") {
 			res.writeHead(200, { "content-type": "application/json" });
-			res.end(JSON.stringify(buildState(manifest, fleet, events, autoCollect, defaultModel), null, "\t"));
+			res.end(JSON.stringify(currentState(), null, "\t"));
 		} else if (url.startsWith("/api/detail")) {
 			const job = new URL(url, "http://localhost").searchParams.get("job") ?? "";
 			res.writeHead(200, { "content-type": "application/json" });
 			res.end(JSON.stringify(buildDetail(job, manifest)));
 		} else if (url === "/events") {
 			res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
-			res.write(`data: ${JSON.stringify(buildState(manifest, fleet, events, autoCollect, defaultModel))}\n\n`);
+			res.write(`data: ${JSON.stringify(currentState())}\n\n`);
 			clients.add(res);
 			req.on("close", () => clients.delete(res));
 		} else {
@@ -1059,8 +1164,8 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 
 	// Orphaned ssh tunnels outlive a dead parent silently — kill them with the process. The
 	// signal handlers matter: "exit" does NOT fire on an unhandled SIGTERM/SIGINT, which is
-	// exactly how a dash restart (kill + relaunch) leaks its tunnels onto the debug ports and
-	// then trips its own squatter guard.
+	// exactly how a dash restart (kill + relaunch) leaks its tunnels as stray processes
+	// holding live forwards to a colo Mac nobody is watching.
 	process.on("exit", teardownPeek);
 	for (const sig of ["SIGINT", "SIGTERM"] as const)
 		process.on(sig, () => {

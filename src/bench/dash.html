@@ -173,6 +173,7 @@
 	<section class="card">
 		<h2>Matrix</h2>
 		<div class="sub" id="board-sub"></div>
+		<div id="offmatrix"></div>
 		<div class="scroll" id="board"></div>
 	</section>
 
@@ -429,7 +430,7 @@ const EXPLORE_HEAD = "<tr>" + th("name", NAME_TIP) +
 	th("task") + th("model", "what actually ran, off the run logs") +
 	th("actions", "actions the pass took (elapsed on hover)") +
 	th("controls seen / act / dism", "of every control the pass observed (seen), how many it operated (actuated) vs swept off the frontier without operating (dismissed) — the pass ends when the frontier empties, and dismissing is a legitimate way to empty it") +
-	th("surfaces", "distinct screens/panels/tabs/dialogs controls were found on — what you navigate BETWEEN; controls live ON them") +
+	th("surfaces", "stamp coverage: distinct screens/panels/tabs/dialogs controls were SEEN on during the pass — what you navigate BETWEEN; controls live ON them. The distilled appmap graph (the map column) typically keeps fewer surface nodes than this") +
 	th("nodes", "appmap graph nodes (edges on hover)") +
 	th("ambig", "settings editable at two scopes under one identity (same settingKey, different scope) — the wrong-scope trap; each gets a prompt warning") +
 	th("map", "the appmap this pass produced, as a full node-link tree — edge thickness = traversal heat across collected runs") + "</tr>";
@@ -623,7 +624,9 @@ function mapTree(d) {
 	};
 	const roots = surfaces.filter((s) => parentOf(s.id) === "root");
 	const unplaced = ctrlsBySurf.root || [];
-	return `<div class="d-note">${surfaces.length} surfaces · ${controls.length} controls · blue = on the run's path (numbers = step order) · orange = mutated by the run · ⚠ = dual-scope setting</div>`
+	// Lead with the root count: collapsed, only the root <details> rows show, which read as
+	// "the map only has ~7 surfaces" unless the note says the rest are nested underneath.
+	return `<div class="d-note">${roots.length} top-level of ${surfaces.length} surfaces — expand to walk the tree · ${controls.length} controls · blue = on the run's path (numbers = step order) · orange = mutated by the run · ⚠ = dual-scope setting</div>`
 		+ roots.map(renderSurf).join("")
 		+ (unplaced.length ? `<details class="surf" data-sid="root-ctrls"${trustSnapshot ? (prevOpenSurfs.has("root-ctrls") ? " open" : "") : " open"}><summary>${esc(g.home || "home")}</summary><div>${unplaced.map(chip).join("")}</div></details>` : "");
 }
@@ -697,7 +700,13 @@ function openTree(job) {
 	const d = detailCache[job];
 	if (!d || !d.graph) return;
 	$("tm-title").textContent = "appmap tree";
-	$("tm-sub").textContent = `${d.armId} · ${job} · ${d.graphSource || ""}   —   ● surface (a place) · ○ control · thick edge = traversed often across ${d.heat ? d.heat.runs : 0} collected run(s) · blue = this run's path · orange = mutated · ⚠ dual-scope`;
+	// Two different surface universes exist and the mismatch confuses: the row's "surfaces"
+	// column is the pass's coverage stamp (every surface controls were SEEN on), while this
+	// tree is the distilled map, which keeps fewer. The stamp number isn't in the detail
+	// payload, so say the distinction without it.
+	const nS = d.graph.nodes.filter((n) => n.kind === "surface").length;
+	const nC = d.graph.nodes.filter((n) => n.kind === "control").length;
+	$("tm-sub").textContent = `${d.armId} · ${job} · ${d.graphSource || ""}   —   ${nS} surfaces · ${nC} controls in the distilled map (the row's "surfaces" column counts every surface the pass SAW — a larger universe) · ● surface (a place) · ○ control · thick edge = traversed often across ${d.heat ? d.heat.runs : 0} collected run(s) · blue = this run's path · orange = mutated · ⚠ dual-scope`;
 	$("tm-body").innerHTML = treeSvg(d);
 	$("treeModal").classList.add("on");
 }
@@ -750,12 +759,51 @@ function renderBoard() {
 	$("board-sub").textContent = `${state.progress.submitted} submitted of ${state.progress.planned} planned runs · ${state.progress.collected} collected · finished first (in finish order), in-flight below (newest start last) · click an arm to see its map + path`;
 }
 
+/* ---- off-matrix strip ---------------------------------------------------------------- */
+
+// The board renders manifest entries ONLY, but a job dispatched outside `bench phase`
+// (plain `./run dispatch`) still holds a Mac's lease — visible on its fleet card, absent
+// from the matrix, which read as a missing row. Surface exactly those here: any fleet
+// jobId (busy or queued) that no manifest entry claims.
+function offMatrixJobs() {
+	const known = new Set();
+	for (const a of state.arms) for (const p of a.passes) for (const e of p.entries) known.add(e.jobId);
+	const jobs = [];
+	for (const r of state.fleet.rows) {
+		if (r.state === "busy" && r.jobId && !known.has(r.jobId))
+			jobs.push({ host: r.name, jobId: r.jobId, app: r.app, elapsedSec: r.elapsedSec, queued: false });
+		for (const q of r.queue || [])
+			if (q.jobId && !known.has(q.jobId))
+				jobs.push({ host: r.name, jobId: q.jobId, app: q.app, queued: true });
+	}
+	return jobs;
+}
+
+const OFFMATRIX_TIP = "the matrix shows only manifest entries; off-matrix jobs still occupy a Mac and delay queued matrix runs";
+
+function renderOffMatrix() {
+	// Empty strip = empty container: no reserved space when everything on the fleet is a cell.
+	$("offmatrix").innerHTML = offMatrixJobs().map((j) =>
+		`<div class="q" data-tip="${esc(OFFMATRIX_TIP)}">⚠ off-matrix: ${esc(j.host)} · ${esc(j.jobId)}${j.app ? ` (${esc(j.app)})` : ""} · ${j.queued ? "queued" : `running ${elapsedSpan(j.elapsedSec)}`} — dispatched outside \`bench phase\`, not a benchmark cell</div>`,
+	).join("");
+}
+
 function renderExplore() {
 	const arms = state.arms.filter((a) => a.phase === 1 && a.passes.some((p) => p.explore && p.explore.controlsSeen != null));
 	if (!arms.length) { $("chart-explore").innerHTML = `<div class="empty">waiting for a collected explore…</div>`; return; }
 	// Funnel order (seen ≥ actuated+dismissed); colors follow the series, not the position.
+	// Group labels mirror the board's "perceives" column; web arms append "(web)" so the
+	// two DOM+vision explores (Yarn app vs the web target) stay distinguishable — the exact
+	// host adds nothing a chart label needs. Four groups share the 460px viewBox — ≈18-20
+	// chars of 11px text each — so a label compacts ("+vis") ONLY when it overruns that
+	// budget; full words otherwise.
+	const exploreLabel = (a) => {
+		if (!a.perception) return a.id.replace("p1-explore-", "");
+		const full = a.url ? `${a.perception} (web)` : a.perception;
+		return full.length <= 20 ? full : full.replace(" + vision", "+vis");
+	};
 	const groups = arms.flatMap((a) => a.passes.filter((p) => p.explore && p.explore.controlsSeen != null).map((p) => ({
-		label: a.id.replace("p1-explore-", "") + (p.model !== "(default)" ? " · " + p.model : ""),
+		label: exploreLabel(a) + (p.model !== "(default)" ? " · " + p.model : ""),
 		values: [p.explore.controlsSeen, p.explore.controlsActuated, p.explore.controlsDismissed],
 	})));
 	// seen/actuated/dismissed as green/blue/red (found / operated / skipped) — green and red
@@ -856,7 +904,7 @@ function render() {
 	$("h-live").textContent = `${p.running} · ${p.queued}`;
 	$("h-success").textContent = String(p.successes);
 	$("metaline").textContent = `${state.date} · fleet ${state.fleet.polledAt ? hhmm(state.fleet.polledAt) : "–"} · ${state.autoCollect ? "auto-collect on" : "collect off (pure reader)"} · updated ${hhmm(state.generatedAt)}`;
-	renderFleet(); renderBoard(); renderExplore(); renderOutcomes();
+	renderFleet(); renderBoard(); renderOffMatrix(); renderExplore(); renderOutcomes();
 	groundingChart("chart-steps", (x) => x.meanSteps, fmtNum);
 	groundingChart("chart-tokens", (x) => x.meanOutputTokens, fmtK);
 	renderAttention(); renderCost(); renderJudge(); renderNarrative(); renderEvents();
@@ -947,8 +995,22 @@ $("tm-close").addEventListener("click", () => $("treeModal").classList.remove("o
 document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") $("treeModal").classList.remove("on"); });
 
 const es = new EventSource("/events");
-es.onmessage = (ev) => { state = JSON.parse(ev.data); receivedAt = Date.now(); $("conn").classList.add("ok"); render(); };
-es.onerror = () => $("conn").classList.remove("ok");
+// --dev hot reload, page half. Two boundaries reload the page: an explicit {reload:true}
+// push (the server watched dash.html change), and reconnect-after-error — the EventSource
+// auto-reconnects when a tsx-watch restart drops the stream, and this page's JS may be
+// stale by then. Reloading on those boundaries is what makes --dev hot for the page,
+// not just the server.
+let esErrored = false;
+es.onmessage = (ev) => {
+	const d = JSON.parse(ev.data);
+	if (d && d.reload === true) { location.reload(); return; } // never falls through to render with a non-state object
+	state = d;
+	receivedAt = Date.now();
+	$("conn").classList.add("ok");
+	render();
+};
+es.onopen = () => { if (esErrored) location.reload(); };
+es.onerror = () => { esErrored = true; $("conn").classList.remove("ok"); };
 
 // Elapsed tickers between pushes: every js-elapsed span (fleet cards AND matrix run chips)
 // advances from the last push's base — the page reads as live even between SSE frames.
