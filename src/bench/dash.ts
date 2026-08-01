@@ -495,7 +495,25 @@ const readStoredManifest = (date: string): Manifest => readManifest(date, storeR
  * Headings are machine-written by narrate() (`## <ISO> — N collected (<model>)`), so parsing
  * the last one back is exact, not heuristic.
  */
+/** Where the narrator's event log lives: INSIDE the store, by David's explicit exception. */
+export const narrativeLogPath = (outRoot?: string): string => path.join(outRoot ?? path.join(dataRoot(), "out"), "live", "narrative.jsonl");
+
 function readPersistedNarrative(date: string): Narrative | undefined {
+	// The event log first: one JSON object per line, append-only. The newest parseable
+	// line wins — a torn final line (reader racing the append) falls back to the one before.
+	try {
+		const lines = fs.readFileSync(narrativeLogPath(), "utf8").trimEnd().split("\n");
+		for (let i = lines.length - 1; i >= 0; i--) {
+			try {
+				const ev = JSON.parse(lines[i] as string);
+				if (ev?.text && ev?.t) return { updatedAt: String(ev.t), text: String(ev.text), model: String(ev.model ?? "?") };
+			} catch {
+				// torn or foreign line — keep walking back
+			}
+		}
+	} catch {
+		// no event log yet — try the legacy markdown home below
+	}
 	let raw: string;
 	try {
 		raw = fs.readFileSync(fromStore(["bench", date, "narrative.md"]), "utf8");
@@ -1211,17 +1229,19 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			}
 			narratedCount = collectedCount;
 			narrative = { updatedAt: new Date().toISOString(), text, model };
-			// THE ONE SANCTIONED WRITE (per David, 2026-08-01): the dash is otherwise a pure
-			// reader — out/live is the runner's store and nothing here may touch it. The
-			// narrator's "Findings So Far" note is the dash's OWN artifact, so it lives OUTSIDE
-			// the store, at the dash-owned out/bench/<date>/narrative.md (benchDir writes there,
-			// never through fromStore). The mkdir is part of this same write: the reader no
-			// longer creates the bench dir at startup, and the manifest may have been read from
-			// out/live or out/archive while this date's out/bench dir does not exist yet.
-			fs.mkdirSync(benchDir(date), { recursive: true });
+			// THE ONE SANCTIONED WRITE (per David, 2026-08-01, amended same day): the dash is
+			// otherwise a pure reader, but the narrator writes INTO the store by explicit
+			// exception — out/live/narrative.jsonl, IMMUTABLY: one JSON event per line,
+			// append-only, never rewritten. An event log rather than a mutated file means the
+			// full findings history survives verbatim (the GUI shows the newest; the file is
+			// the record), and a reader racing an append at worst sees one torn tail line,
+			// which readPersistedNarrative skips. The mkdir covers a store the runner has not
+			// created yet; it never touches anything inside an existing store.
+			const logFile = narrativeLogPath();
+			fs.mkdirSync(path.dirname(logFile), { recursive: true });
 			fs.appendFileSync(
-				path.join(benchDir(date), "narrative.md"),
-				`\n## ${narrative.updatedAt} — ${collectedCount} collected (${model})\n\n${text}\n`,
+				logFile,
+				`${JSON.stringify({ t: narrative.updatedAt, date, collected: collectedCount, model, text })}\n`,
 			);
 			addEvent(`narrator: note updated (${collectedCount} collected)`);
 			push();

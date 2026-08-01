@@ -20,10 +20,15 @@ out/
 # were force-added (`git add -f`) and stay tracked because gitignore does not apply to files git
 # already knows about. Adding a NEW result file needs `-f` too.
 #
-# DELIBERATELY NOT TRACKED: out/live (the canonical run record) and out/archive (its hard-linked
-# backup). Both contain step frames and recordings — gigabytes of PNGs and mp4s per pass. Git is
-# not the backup mechanism for those; out/archive is. What goes in git is the small curated
-# distillate: manifests, per-arm appmaps, the measured cost figures.
+# TRACKED: out/archive/bench/<date>/ — the benchmark manifest family (manifest.json, the per-arm
+# appmap copies, narrative.md). Kilobytes, and unrecreatable without re-running the passes that
+# produced them. The ARCHIVE copy is what git holds rather than the live one, deliberately: the
+# live directory is written to continuously while a pass runs, so tracking it means half-written
+# manifests in commits. The two are hard links to the same inodes, so this costs nothing extra.
+#
+# NOT TRACKED: out/live/<runKey>/ and out/archive/<runKey>/ — the runs themselves. Step frames
+# and recordings are gigabytes of PNGs and mp4s per pass. Git is not the backup mechanism for
+# those; the hard-linked archive is.
 .env
 .playwright-mcp/
 .DS_Store
