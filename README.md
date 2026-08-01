@@ -79,7 +79,7 @@ frontier of un-operated controls empties (a finished pass on Yarn measured ~40 m
 ```sh
 ./run explore "Yarn"                              # -> docs/appmaps/yarn.{md,json}
 ./run "show me how to change the cursor type" "Yarn"
-./run "show me how to change the cursor type" "Yarn" --record   # -> out/recording/
+./run "show me how to change the cursor type" "Yarn" --record   # -> out/bench/live/<run>/recording/
 ```
 
 Web targets work the same way with `--url` (sign in once first with
@@ -92,7 +92,7 @@ Web targets work the same way with `--url` (sign in once first with
 
 Appmaps for Yarn, Notion Calendar (prose only — no `.json`, so graph features are off for
 it) and two web targets are committed, so you can skip `explore` for those. Run logs land
-in `out/runs/<stamp>-<app>.json`. If a run is killed before it can tidy up,
+in `out/bench/live/<stamp>-<app>/run.json`. If a run is killed before it can tidy up,
 `npm run cleanup -- <stamp>` replays its mutation journal and puts the app back.
 
 A completed run can be re-graded by an independent adversarial judge — it reads the
@@ -100,15 +100,47 @@ trajectory, the step frames, and the appmap's scope rubric, and is the check tha
 "right value, wrong scope" runs the in-run verification passes:
 
 ```sh
-npm run judge -- <stamp>              # -> out/runs/<stamp>.judge.json (advisory)
+npm run judge -- <stamp>              # -> out/bench/live/<stamp>/judge.json (advisory)
 ```
 
-Once a run succeeds, freeze it and repeat it for free:
+Once a run succeeds, there are two ways to reuse it — a MACHINE replay and a knowledge
+write-up, which are different things:
 
 ```sh
 ./run recipe compile <stamp>        # -> docs/recipes/<slug>.<hash>.recipe.json
 ./run recipe replay <file|stamp>    # zero model calls unless the app has drifted
+./run recipe replay <stamp> --record   # filmed: no model latency to hide in post
 ```
+
+A recipe is a frozen click sequence: targets re-resolve by exact (name, surface, role), so a
+renamed control is an error rather than an adaptation. A **procedure** is the other half —
+prose describing the route, for a later agent to read and adapt:
+
+```sh
+./run judge <stamp>                    # a procedure may only come from a judged-PASS run
+./run procedures harvest <stamp>       # -> out/bench/live/<stamp>/procedure.md
+./run procedures promote <stamp>       # -> docs/procedures/…  (makes it loadable)
+USE_PROCEDURES=1 ./run "<same task>" "Yarn"
+```
+
+Harvesting is deliberately offline — it never runs inside a measured run, and it refuses any
+run the independent judge did not pass, because an agent that accurately describes doing the
+wrong thing would otherwise teach that to everything downstream.
+
+### Where run data lives
+
+**One directory per run**: `out/bench/live/<runKey>/` holds `run.json`, `journal.jsonl`,
+`judge.json`, `appmap.md`, `procedure.md`, `recipe.json`, `steps/` and `recording/`. That
+directory is the canonical record; `out/bench/archive/<runKey>/` is a hard-linked backup taken
+when the run ends, so removing the live copy loses nothing.
+
+```sh
+./run runs list                 # outcome, size, backup state
+./run runs drop <stamp>         # a failed run out of live, backup kept — then re-run it
+./run runs purge [--yes]        # clear live, every backup kept
+```
+
+Both back a run up before deleting and refuse to delete anything they could not back up.
 
 Other entry points: `./run` alone opens the Electron shell; `npm test` runs the unit
 suite; `./run help` lists everything, including the fleet verbs (`enroll`, `hosts`,

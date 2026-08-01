@@ -8,7 +8,7 @@ This is the technical companion to `docs/research/2026-07-31-poc-gotchas-and-les
 should you copy, what should you redesign, and what should you not build at all.**
 
 Everything here was measured or hit in practice during the four-day POC. Where a number
-appears, it's from a run log in `out/runs/` or a stamped artifact — the repo's rule is
+appears, it's from a run log in `out/bench/live/<runKey>/run.json` or a stamped artifact — the repo's rule is
 that numbers come from the harness, never from memory (see §7 on why that rule exists).
 
 The A/B statistics (grounded vs. ungrounded, vision on/off) are being re-run at real
@@ -53,8 +53,18 @@ sample sizes and are deliberately absent. Everything qualitative about grounding
   sequence that re-runs with zero model calls, the model invoked only when a step breaks.
   The live round trip worked first try; the design constraints it imposes on action
   records (stable descriptors, expectation stored with the action) apply from day one. (§9)
+- **Two artifacts come out of a successful run, and they are not the same thing.** A
+  *recipe* is a frozen click sequence — machine replay, exact target resolution, errors
+  rather than adapts. A *procedure* is prose describing the route, for a later agent to read
+  and adapt. Build both seams from day one; the data they need is the same StepRecords. (§9)
 - **Put every rule in code.** Each rule we kept by convention — prompt hygiene, log
   writing, provenance — was broken within a day; each one moved into code held. (§7)
+- **Every silent-failure bug we shipped had the same shape: an absence rendering as a
+  value.** A grader with no answer key returning "pass"; an unknowable scope rendering as
+  zero; a flag missing from a hand-written list producing a plausible run under the wrong
+  label. None threw, none logged, all three produced publishable-looking numbers. If you
+  build one habit from this document, make it *never let "I could not check" and "I checked
+  and it was fine" produce the same output*. (§11)
 
 ---
 
@@ -723,7 +733,91 @@ The full constraint list is LIMITATIONS §12; the architecture-shaping subset:
 
 ---
 
-## 10. Where to look in this repo
+## 10. Procedures: the artifact between a map and a recipe (built 2026-08-01)
+
+A successful run can produce two reusable artifacts, and conflating them costs you both.
+
+| | appmap | **procedure** | compiled recipe |
+|---|---|---|---|
+| answers | *where things are* | *how to do this class of task* | *replay these exact clicks* |
+| scope | per app | per (app, backend, task) | per (app, task) |
+| consumer | a model reads it | a model reads it | a machine executes it |
+| brittleness | robust, topological | robust, adaptable prose | exact `(name, surface, role)`; a renamed control is an ERROR |
+
+We had the outer two and nothing in the middle. A map never says which route to take, in what
+order, or that the change must be committed before it survives a panel close. A recipe has all
+of that and cannot be read as knowledge — it replays one task with one set of values.
+
+**Harvest offline, never at `done()`.** Two reasons, and the second is the one that matters.
+Doing it in-run puts a model call inside every successful run, polluting the cost and latency of
+the very numbers you are measuring. And at `done` time the only available quality gate is the
+agent's own claim about its own success — which is precisely what fails in the wrong-scope
+class, where four runs accurately described doing the wrong thing. So harvesting reads a
+*finished* run plus its independent judge verdict, and refuses anything the judge did not pass.
+
+**Key procedures by lineage, not just by task.** A procedure distilled from a run that HAD a map
+presupposes the mapping pass — you cannot conclude the pass is replaceable from an artifact that
+requires it. A procedure distilled from an *ungrounded* run is the honest replacement claim. They
+are different experiments and must not share a filename. Derive the lineage from the source run's
+own recorded provenance, never from a label an operator types.
+
+**Keep pixel-verified steps.** Our recipe compiler refuses them — correctly, because a replay
+must re-check an expectation mechanically and "some pixels changed" is not re-checkable. We
+copied that gate into the harvester and it was wrong: **canvas content is invisible to both AX
+and the DOM**, which is the entire reason a pixel-delta verification layer exists. A drag across
+an editor canvas or a timeline handle has no other evidence. Dropping those steps would refuse a
+judged-PASS canvas run outright, or harvest it with a silent hole exactly where the hard part
+was. Label the channel in the prompt and tell the model to describe the step by WHERE it happened
+and what visibly changes.
+
+**Nothing grades the prose, and we could not find a good way to.** The judge grades the run. An
+omitted Save step or an ambiguous scope survives every gate. A mechanical completeness check is
+tempting and is one-directional in the wrong way: it can flag a missing text-verified surface but
+never an invented one, because a legitimate canvas step has no name to match against — so it
+would prune exactly the vision-only knowledge that is hardest to acquire. We left the check
+empirical: the arm that grounds on a procedure is itself judged, so a bad procedure shows up as
+that arm underperforming. Fine for a benchmark; an open problem if you ship procedures.
+
+---
+
+## 11. The failure shape that cost us the most: absence rendering as a value
+
+
+Four bugs found in one adversarial audit on 2026-08-01. None threw, none logged, and all four
+would have produced publishable-looking numbers. They are the same bug wearing different clothes,
+and it is the one to build defences against.
+
+**A grader with no answer key returns a confident pass.** Our offline judge loads the appmap's
+scope-collision list as its rubric, and was reading it from a slug no exploration pass writes any
+more. When the file is absent the rubric builder returned `""` — so with the legacy file deleted,
+*every* wrong-scope run silently passes. That verdict also gates procedure harvesting, so it
+could have promoted a wrong-scope route as reusable grounding. **Never let "I could not check"
+and "I checked and it was fine" produce the same output.**
+
+**An unknowable value rendering as zero inverts a metric's sign.** The mutation journal labels a
+change's scope by reading the appmap graph, and the graph was loaded only for runs that had
+grounding. So ungrounded runs recorded `scope: unset` for everything, and the wrong-scope column
+would have read 0 for exactly the arms that make the mistake — showing grounding *causing* the
+problem it prevents. **"Unknown" and "zero" must never render as the same number.**
+
+**Normalisation switching itself off for the arms being compared.** Every run resets the app to
+its declared home, looked up in that arm's own map — and the reduced-perception passes declare no
+home, so nine runs began wherever the previous job left the app. Non-comparability *perfectly
+correlated with the treatment*: "dropping screenshots costs N extra steps" would have included
+"and started somewhere arbitrary". **A control that reads its configuration from the thing under
+test is not a control.**
+
+**A hand-written forwarding list drops flags in silence.** Translating a declared config into a
+job order by spelling out every field means a new flag reaches the run only if someone edited
+that function. It happened three times. The worst was the recording flag: filmed arms are derived
+from measured arms by adding *only* "record", so dropping it turned 16 runs into byte-identical
+duplicates of their siblings under different labels — plausible data, no footage, nothing
+detecting it. The fix that finally held is a test that walks every declared config and asserts
+each set field arrives. It caught a regression I introduced ten seconds later.
+
+---
+
+## 12. Where to look in this repo
 
 | What | Where |
 |---|---|
@@ -734,6 +828,8 @@ The full constraint list is LIMITATIONS §12; the architecture-shaping subset:
 | Explore: frontier, dismissal, salvage, descent, home | `src/core/explore.ts` |
 | Journal/teardown/cleanup | `src/core/journal.ts`, `src/core/teardown.ts`, `src/core/cleanup.ts` |
 | Recipe replay: format, compiler, resolution, engine, rescue | `src/core/recipe.ts`, `src/core/replay.ts`, `src/core/recipe-cli.ts` |
+| Procedures: harvest gates, lineage, the grounding tier | `src/core/procedure.ts`, `src/core/procedure-cli.ts`, `src/bench/harvest.ts` |
+| Run-data layout, hard-linked backups, `./run runs` | `src/paths.ts`, `src/core/runs-cli.ts` |
 | Offline run judge + bench integration | `src/core/judge.ts`, `src/bench/judge.ts` (report's `## Judge` section) |
 | Humanize: track building, motion fitting, rendering | `src/cursor/humanize.ts`, `src/cursor/track.ts`, `src/cursor/render.ts`, `scripts/fit-motion.py` |
 | Fleet: ssh, lease, jobs, profiles, provision | `src/remote/control/`, `src/remote/runner/` |

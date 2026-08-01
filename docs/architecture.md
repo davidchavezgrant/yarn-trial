@@ -92,6 +92,50 @@ Jasper's ~24h/app budget (the old "~5–6 min" figure measured a budget-truncate
 **Revisit if**: exploration stops paying for itself on some app class, or recipe
 compilation (below) subsumes it.
 
+## 4a. Procedures: a third grounding tier, harvested rather than swept (2026-08-01)
+
+An appmap is topology and a compiled recipe is a frozen click sequence; between them sits
+task-level prose — "here is the route that worked for this goal" — and nothing produced it.
+`./run procedures harvest <stamp>` distils one from a finished run, keyed by (app, backend,
+task, **lineage**), loaded with `USE_PROCEDURES=1` as a REPLACEMENT for the appmap.
+
+Three decisions worth the words:
+
+- **Harvest offline, not at `done()`.** In-run harvesting would add a model call to every
+  successful run — polluting the cost and latency figures the benchmark exists to produce —
+  and at `done` time the only gate available is the agent's own claim, which is exactly what
+  fails in the wrong-scope class. Harvesting reads a finished run plus its independent judge
+  verdict and refuses anything the judge did not pass.
+- **Promotion is a separate, deliberate step.** Harvesting records what a run taught;
+  promoting makes it an input to every later run of that task. An input tier appearing as a
+  side effect of dispatching a phase is how sample independence dies quietly.
+- **Lineage is part of the key.** A procedure from a run that HAD a map presupposes the sweep;
+  one from an ungrounded run is the honest "can this replace exploration" claim. Different
+  experiments, so different files, and the lineage is derived from the source run's recorded
+  provenance rather than typed by an operator.
+
+**Revisit if**: procedures measurably replace the exploration pass (phase 6 answers this), or
+if the ungrounded lineage proves unharvestable — which would itself answer the onboarding
+question.
+
+## 4b. Run artifacts: one directory per run, hard-linked backup (2026-08-01)
+
+`out/bench/live/<runKey>/` holds everything a run produces — log, journal, judge verdict,
+appmap, procedure, recipe, step frames, recording, job record, console log. It replaced three
+sibling trees keyed by the same stamp. Nothing was lost under the old layout, but every
+consumer needed its own five-way fan-out and each was a place to forget a branch: the fleet
+pull forgot step frames for long enough that the offline judge returned VISUAL UNAVAILABLE for
+a whole matrix.
+
+`out/bench/archive/<runKey>/` is a hard-linked backup taken when a run terminates — zero disk
+cost on hundreds of megabytes of frames, and it survives the live copy being deleted, which is
+what makes `./run runs drop <stamp>` a safe way to retire a failed run before re-running it.
+Post-terminal writers (recipe compile, procedure harvest) must re-link; `archiveRun` is
+re-callable for exactly that.
+
+**Revisit if**: live and archive ever land on different filesystems, where the link degrades to
+a real copy and the disk cost returns.
+
 ## 5. DOM enrichment via a native Swift sidecar (challenged and upheld 2026-07-29)
 
 The driver projects each element to role/label/value/frame, so unlabeled icon buttons

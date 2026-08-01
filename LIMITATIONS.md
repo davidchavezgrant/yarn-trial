@@ -314,6 +314,37 @@ watching runs fail at the very tasks later measured — the prompt-hygiene rule 
   provenance plus the appmap's content hash, so a "grounded" claim is auditable afterwards.
 - **Never hand-edit a stamped appmap.** Regenerate it, or move the edit to `docs/recipes/`.
 
+**2026-08-01 — the same side door reopened twice, in new places.**
+
+1. *The curated tier contains the benchmark's answer.* `docs/recipes/yarn.md` names the
+   canonical task's control, its surface, its exact options AND the brand-vs-document scope
+   split — and its own header says it was "assembled from an exploration pass on 2026-07-29",
+   so it is not human notes either. `auditTaskPrompt` gates the TASK string; **nothing audits
+   grounding text**. The arm is now labelled an upper bound on grounding rather than a
+   human-notes comparison. Fixing it properly means writing the file blind to the benchmark
+   tasks and re-timing it.
+2. *Scope warnings were leaking into every tier.* The appmap graph loaded whenever any
+   grounding prose loaded, so the curated and procedure arms received `scopeWarnings()` — the
+   most correctness-relevant output of the exploration pass — while their logs claimed a
+   different tier. Now gated on `provenance === explore | explore-vision`. The graph still
+   loads unconditionally for the mutation journal and teardown, which never touch the prompt.
+
+**Procedures (new tier, 2026-08-01) inherit this constraint and add one.** A procedure is
+prose harvested from a judged-PASS run, so its trustworthiness is exactly the judge's. Two
+guards: harvesting refuses any run the judge did not pass (the wrong-scope class is a run that
+accurately describes doing the wrong thing, and writing that down would teach it onward), and
+harvesting refuses `--hinted` runs, because writing a dictated route down as "discovered"
+turns a one-run violation into a permanent input.
+
+**What is NOT guarded: nothing grades the procedure TEXT.** The judge grades the run. An
+omitted Save step, a wrong generalisation, or an ambiguous scope survives every gate. A
+mechanical prose check was considered and rejected — it can only ever be one-directional. It
+could flag a missing text-verified surface, but never an invented one, because a legitimate
+canvas step has no AX or DOM name to match against; it would prune exactly the vision-only
+knowledge that is hardest to acquire. The check is therefore empirical and downstream: phase 6
+grounds on the procedure and is itself judged, so a bad procedure shows up as phase 6
+underperforming. Adequate for a benchmark, an open problem for productization.
+
 ---
 
 ## 10. AX flakiness costs roughly one run in three
@@ -608,3 +639,132 @@ A wipe is not a fix on its own — signing the same account back in with sync re
 vault. `SyncDisabled` + `BrowserSignin: 0` now close that permanently at mandatory policy
 level on all three Macs. Full operational detail, including why this needs a configuration
 profile rather than a plist on macOS 26: `docs/research/2026-07-31-fleet-chrome-lockdown.md`.
+
+---
+
+## 19. Run artifacts escape the run folder silently, and only on the second run
+
+**CONSTRAINT** · found 2026-08-01 (audit), largely fixed
+
+A run's artifacts used to live in three sibling trees keyed by the same stamp (`out/runs/`,
+`out/recording/`, `out/jobs/`). Nothing was ever *lost* — the key correlated them — but every
+consumer needed its own five-way fan-out, and each fan-out was a place to forget a branch. The
+fleet pull forgot `-steps/` for long enough that the offline judge returned VISUAL UNAVAILABLE
+for an entire matrix: half its signal, silently blank.
+
+Consolidated to `out/bench/live/<runKey>/` (`src/paths.ts`). `out/bench/archive/<runKey>/` is a
+hard-linked backup taken when a run terminates — zero disk cost on hundreds of megabytes of
+frames, and it survives the live copy being deleted, which is what makes `./run runs drop` safe.
+
+**Three writers were escaping the folder**, and each failed silently on the SECOND run rather
+than the first: `agent-final.png` (the frame the visual judge grades), `cleanup-N-M.png`
+(teardown's restore evidence), and `explore-step-N.png` (every grounding pass overwrote the
+previous pass's frames). A shared path works perfectly until a second run exists, which is why
+no behavioural test caught them — `RunArtifacts__AreAllRunScoped` is a source-level guard that
+fails the build on a `doObserve("bare-name")`.
+
+**Post-terminal writers must re-link the backup.** The backup is taken when the run ends, so
+anything written afterwards — a compiled recipe, a harvested procedure, an offline judge verdict
+— lands in live and not in archive unless the writer calls `archiveRun(stamp)` again. It is
+re-callable for exactly this. **Still owed: `judge.json` does not re-link.**
+
+---
+
+## 20. A declared flag reaches the child only if someone remembered a hand-written list
+
+**CONSTRAINT** · found 2026-08-01 (audit), fixed structurally
+
+`dispatchOptionsFor` in `src/bench/orchestrate.ts` translates an arm into a job order by
+spelling out every field by hand, so a flag added to `ArmDispatch` and set on an arm reaches
+the run only if that function was also edited. **This has now happened three times:**
+
+| flag | consequence |
+|---|---|
+| `APPMAP_VARIANT=novision` | two grounding passes had no consumer; `bench plan` printed a false claim |
+| `record` | all 16 filmed runs would have been unfilmed *duplicates of their phase-2 siblings* — `filmed()` derives them by adding only `record` and `n:1`, so dropping it erases the entire difference |
+| `useProcedures` | all 6 phase-6 runs would have measured the appmap tier |
+
+The failure shape is the same each time and is the worst available: plausible, correctly-shaped
+data under the wrong label. `groundingChecked` catches the tier case, but only at collect time,
+after the runs are paid for; nothing catches `record` at all, because the manifest never records
+it.
+
+The durable fix is `dispatchOptionsFor__ForwardsEveryDeclaredFlag`, which walks every arm's
+actual `dispatch` object and asserts each set field arrives. The previous tests checked only
+that the *matrix declared* the flags, which is why none of the three were ever caught. It
+justified itself immediately: the edit adding the two missing lines deleted `noRescue`, and the
+test named it within seconds.
+
+---
+
+## 21. A grader with no answer key returns a confident pass
+
+**CONSTRAINT** · found 2026-08-01 (audit), fixed
+
+The offline judge catches the wrong-scope class by loading the appmap graph's scope-collision
+list as a rubric. It was loading that from the **plain** app slug (`docs/appmaps/yarn.json`) —
+which no explore pass writes any more, since the writer emits the variant slug (`yarn.ax`,
+`yarn.cdp.novision`, …). Two consequences:
+
+- It graded against whatever legacy file survived, whose `settingKey` vocabulary differs from
+  the maps arms are actually grounded on (`zoom-type` vs `default-zoom-type`,
+  `window-padding` vs `screen-window-padding`) — the wrong answer key.
+- `buildRubric` returned `""` when the file was absent. Delete the legacy maps — which every
+  hygiene rule here tells you to do — and **every wrong-scope run silently passes**.
+
+That verdict is not only reported: it gates procedure harvesting, so a wrong-scope run could
+have become promoted grounding that teaches the mistake to everything downstream. The rubric is
+now keyed on the run's own backend, and an empty rubric warns loudly instead of passing quietly.
+
+**The general lesson**: a check whose "I could not check" branch is indistinguishable from
+"I checked and it passed" is worse than no check, because it launders absence into evidence.
+
+---
+
+## 22. A metric can come out with the wrong SIGN
+
+**CONSTRAINT** · found 2026-08-01 (audit), fixed
+
+The mutation journal labels each change's `settingKey` and `scope` by reading the appmap graph.
+That graph was loaded only when grounding prose loaded — so an UNGROUNDED run journalled every
+mutation with `scope` unset, and `journalScopes` yielded `"unset"`.
+
+The report's wrong-scope column would therefore have read **0 for every ungrounded arm** —
+because the scope was unknowable, not because the runs were correct — and non-zero for the
+grounded arms that avoid the mistake. The table would have shown grounding *causing* wrong-scope
+mutations, inverting the sign on the matrix's most important claim and the one most likely to be
+quoted.
+
+The graph never reaches the model; it is read by `detectMutation` and by teardown, both on our
+side of the boundary. It now loads unconditionally. The prompt-facing half (`scopeWarnings`)
+stays gated on the tier.
+
+**The general lesson**: "unknown" and "zero" must never render as the same number, and a metric
+derived from an artifact that some arms cannot produce is a metric about the artifact.
+
+---
+
+## 23. Start-state normalisation can switch itself off for exactly the arms being compared
+
+**CONSTRAINT** · found 2026-08-01 (audit), fixed
+
+Every run resets the app to its declared home first, looked up in the arm's own appmap. Measured
+on the committed maps:
+
+| map | `homeLabels()` |
+|---|---|
+| `yarn.ax.json` | `["Library"]` |
+| `yarn.cdp.json` | `["Library"]` |
+| `yarn.ax.novision.json` | `[]` |
+| `yarn.ax.vision.json` | `[]` |
+
+Both perception-reduced passes failed to declare a home and both full-perception passes declared
+one — a property of the treatment, so re-running phase 1 reproduces it. `resetToHome` returned
+`"none"`, and only `"failed"` refuses, so nine runs began wherever the previous job on that Mac
+left the app. Their comparators all reset.
+
+That is non-comparability **perfectly correlated with the variable being measured**: "dropping
+screenshots costs N extra steps" would have silently included "and started from an arbitrary
+state". Home is a property of the app, not of the channel that mapped it, so it now falls back to
+the full-perception map for that backend (`plainVariant`, used by nothing else and explicitly
+forbidden for choosing grounding).

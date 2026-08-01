@@ -39,9 +39,9 @@ Design decisions and their reasoning live in `docs/architecture.md`.
      completed run in one adversarial model call: full step trajectory + step frames (when
      per-run) + the appmap's scope ambiguities as rubric. Grades against the TASK, not the
      claim, so a run that accurately reports doing the wrong thing still fails. Writes
-     `out/runs/<stamp>.judge.json`; never touches the run log.
+     `out/bench/live/<stamp>/judge.json`; never touches the run log.
 
-  Every step is logged to `out/runs/<stamp>-<app>.json` (action, expectation, verdict,
+  Every step is logged to `out/bench/live/<stamp>-<app>/run.json` (action, expectation, verdict,
   pixel delta, screenshot). Known gap: text checks prove *a* control holds the value, not
   that it is the *intended* one — see LIMITATIONS §8; layer 4 exists to catch exactly that
   class after the fact (validated on the known wrong-scope runs).
@@ -55,8 +55,9 @@ Design decisions and their reasoning live in `docs/architecture.md`.
 - **DOM enrichment without CDP.** `native/axdom` (Swift, `npm run build:native`) recovers
   the DOM id/class Chromium drops from its AX tree, naming 955 of 1044 anonymous Yarn
   nodes. Optional: unbuilt or `AXDOM=0` degrades silently to the bare AX view.
-- **Grounding** comes in two tiers, kept separate so that measuring one doesn't
-  quietly measure the other:
+- **Grounding** comes in three tiers, kept in separate directories so that measuring one
+  doesn't quietly measure another. `USE_RECIPE` and `USE_PROCEDURES` each REPLACE the appmap
+  rather than adding to it, and the run log records which tier actually loaded:
   - `docs/appmaps/<app>.md` — output of the autonomous exploration pass
     (`src/core/explore.ts`), stamped with a provenance header. Runs until the frontier of
     un-operated controls empties: measured **40 min / 96 actions** on Yarn (2026-07-30).
@@ -66,15 +67,30 @@ Design decisions and their reasoning live in `docs/architecture.md`.
     stop reason — `frontier-empty` is reachable by dismissing (`EXPLORE_DISMISS_CAP`
     bounds bulk dismissal; `EXPLORE_DESCENT=1` opts into harness-guarded descent behind
     destructive-looking controls — LIMITATIONS §15).
-  - `docs/recipes/<app>.md` — hand-curated notes, including verified task recipes.
+  - `docs/recipes/<app>.md` — hand-curated notes (`USE_RECIPE=1`). Not measurable as
+    grounding: a human wrote it, and nothing audits grounding TEXT the way
+    `auditTaskPrompt` audits the task string.
+  - `docs/procedures/<slug>.<backend>.<hash>[.ungrounded].procedure.md` — **procedures**
+    (`USE_PROCEDURES=1`, added 2026-08-01): task-level prose harvested from a run the
+    offline judge PASSED — "here is the route that worked for this goal". The middle tier
+    between a map (topology, task-agnostic) and a compiled recipe (a frozen click sequence
+    that errors rather than adapts). Harvesting is offline (`./run procedures harvest`) so
+    it never lands inside a measured run, and it refuses any run the judge did not pass —
+    an agent that accurately describes doing the wrong thing must not teach that onward.
+    Keyed by app, backend AND lineage: a procedure written by an agent that HAD a map is a
+    different artifact from one written by an agent that had none, and only the second can
+    speak to whether the exploration pass needs to exist.
   - `docs/recipes/<slug>.<hash>.recipe.json` — **compiled replay recipes** (machine
-    output, stamped like appmaps — never hand-edit; re-record instead).
+    output, stamped like appmaps — never hand-edit; re-record instead). Filmable since
+    2026-08-01 (`./run recipe replay <stamp> --record`).
 
-  Both are auto-loaded into the agent's prompt and the run log records which was used.
-  The split exists because it was violated: task-specific recipes had been hand-added
+  The separation exists because it was violated: task-specific recipes had been hand-added
   to appmaps that "grounded" runs were then measured against, which inflated grounding's
   apparent value. See the correction note in
-  `docs/research/2026-07-29-yarn-poc-findings.md`.
+  `docs/research/2026-07-29-yarn-poc-findings.md`. Two consequences of that lesson are
+  enforced in code — an unstamped file in a machine-output directory is treated as curated,
+  and the appmap graph's scope warnings reach the prompt ONLY on the explore tiers, so the
+  curated and procedure arms cannot silently inherit the sweep's most valuable output.
 - **Window-scoped recording** (`--record`): polls the driver's window snapshots —
   which capture the target window's own content even when occluded or backgrounded —
   and assembles them into an mp4. The recording physically cannot contain anything but
@@ -213,7 +229,8 @@ contaminated. Read those before quoting a figure.
 - `docs/product.md` — status assessment and open product questions (non-technical)
 - `docs/research/` — driver quirks, verified sequences, and measured results
   (`2026-07-31-poc-gotchas-and-lessons.md` is the consolidated handoff writeup)
-- `docs/appmaps/` — grounding notes produced by the exploration pass
-- `docs/recipes/` — hand-curated grounding notes
+- `docs/appmaps/` — grounding notes produced by the exploration pass (machine, stamped)
+- `docs/recipes/` — hand-curated grounding notes, plus compiled replay recipes
+- `docs/procedures/` — task write-ups harvested from judged-PASS runs (machine, stamped)
 - `LIMITATIONS.md` — running log of what constrains the agent in practice
 - `README.md` — fresh-clone setup on a new machine
