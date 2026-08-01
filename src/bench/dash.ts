@@ -2182,7 +2182,14 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			p.lastStatus = castJson(p, { ev: "error", kind: "tunnel-died", message: `ssh tunnel for :${remote} on ${p.host} ${what} — respawning${p.tunnelErrs[slot] ? ` (${p.tunnelErrs[slot]})` : ""}` });
 			const n = Math.min(p.respawnCounts[slot], TUNNEL_RESPAWN_MS.length - 1);
 			p.respawnCounts[slot]++;
-			if (p.respawnCounts[slot] === TUNNEL_STORM_RESPAWNS && !p.stormLogged[slot]) {
+			// The storm line means "this session cannot connect at all" (a revoked/changed host
+			// key = eternal spinner). Gate it on NEVER having streamed: a slot whose remote port
+			// is legitimately silent (an ax arm leaves :9222 dead) is the idle connection and so
+			// the likeliest idle-drop victim, and its reconnects across a multi-hour session
+			// must not read as a failure while the other leg streams fine. probeOnce only resets
+			// the ANSWERING slot's counter, so without this gate the silent slot's count is
+			// monotone and eventually cries wolf.
+			if (p.respawnCounts[slot] === TUNNEL_STORM_RESPAWNS && !p.stormLogged[slot] && !p.streamLogged) {
 				p.stormLogged[slot] = true;
 				addEvent(`view: ${p.host}'s :${remote} tunnel died ${TUNNEL_STORM_RESPAWNS}× without connecting${p.tunnelErrs[slot] ? ` — ${p.tunnelErrs[slot]}` : ""}`);
 			}
@@ -2283,7 +2290,19 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			// sentinel's license to act: alive-but-refusing is exactly the state a web-primary
 			// wedge presents, where a static-but-delivered page must be left alone. Only a frame
 			// clears it — a window/title event mid-refusal changes nothing about delivery.
-			if (ev?.ev === "error" && (ev.kind === "idle-parked" || ev.kind === "stream-stopped")) p.refusing = true;
+			if (ev?.ev === "error" && (ev.kind === "idle-parked" || ev.kind === "stream-stopped")) {
+				p.refusing = true;
+				// A refusal AFTER frames were flowing: the engine emits it without dying, so
+				// nothing else leaves "streaming" — the panel would keep its last JPEG labeled
+				// live, and the late-joiner replay would hand a reconnecting viewer that frozen
+				// frame (and hide the vnc offer, which only shows in the wait state). Drop to
+				// waiting so setStatus clears lastFrame; the next real frame re-flips to
+				// streaming via gotFrame.
+				if (p.gotFrame) {
+					p.gotFrame = false;
+					setStatus(p, "waiting", `${p.host} stopped delivering — waiting for it to resume`);
+				}
+			}
 			if (ev?.ev === "window") p.lastWindow = castJson(p, ev);
 			else castJson(p, ev);
 			// Inert-handle detection: connect-time deaths resolve to an engine whose exit NEVER
@@ -2404,14 +2423,18 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 					return;
 				}
 			}
-			const delivering = p.engine && p.gotFrame && !p.refusing;
-			if (!p.vncOffered && !delivering && Date.now() - p.lastFrameAt > VNC_OFFER_AFTER_MS) {
+			const stale = (): boolean => !(p.engine && p.gotFrame && !p.refusing) && Date.now() - p.lastFrameAt > VNC_OFFER_AFTER_MS;
+			if (!p.vncOffered && stale()) {
 				const [{ vncUrl, hasScreenShareLogin }, { findCredentials, parseCredentials }] = await Promise.all([
 					import("../remote/control/signin.js"),
 					import("../remote/control/team.js"),
 				]);
 				const seeded = await hasScreenShareLogin(p.hostCfg).catch(() => false);
-				if (peeks.get(p.host) !== p || p.closing || p.vncOffered) return;
+				// Re-check delivery AND staleness after the awaits: a first frame landing during
+				// the `security` exec resets lastFrameAt and clears vncOffered, and minting the
+				// offer anyway would stamp a stale button over a live stream and consume the
+				// edge-trigger so the next real waiting episode stays silent.
+				if (peeks.get(p.host) !== p || p.closing || p.vncOffered || !stale()) return;
 				// Booleans only cross the wire — the bundle's password is read to answer
 				// "could a click seed the keychain" and goes no further.
 				let canSeed = false;
@@ -2665,31 +2688,49 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	 * Idempotent by construction (`security -U`), so every click is also the repair for a
 	 * stale item. The viewer opens on the machine running the DASH SERVER — the operator's
 	 * laptop in every normal posture; a remote --web viewer uses the offer's URL directly.
+	 *
+	 * LOOPBACK-ONLY, and that is the security boundary. This writes the login keychain (with
+	 * the fleet's VNC password in a `security` argv) and pops a GUI window — actions that only
+	 * make sense for an operator sitting AT the dash machine, and must never be driven by a
+	 * remote peer or a cross-origin page. The read endpoints stay open (a teammate watches
+	 * `--web`); this one refuses anything but 127.0.0.1/::1. A remote viewer still gets the
+	 * vnc:// link in the offer and opens Screen Sharing on THEIR own machine, client-side.
 	 */
-	const serveVncOpen = async (res: http.ServerResponse, params: URLSearchParams): Promise<void> => {
+	const vncInflight = new Set<string>();
+	const serveVncOpen = async (res: http.ServerResponse, params: URLSearchParams, remote: string | undefined): Promise<void> => {
 		const json = (status: number, body: Record<string, unknown>): void => {
 			if (!res.headersSent) res.writeHead(status, { "content-type": "application/json" });
 			res.end(JSON.stringify(body));
 		};
+		// A credential-writing, GUI-popping action never answers a non-local caller — ngrok
+		// forwards from loopback so this does not cover a tunnel, but it stops every LAN/direct
+		// remote peer, and the offer's own vnc:// link is the remote viewer's real path anyway.
+		if (remote !== "127.0.0.1" && remote !== "::1" && remote !== "::ffff:127.0.0.1")
+			return json(403, { error: "Screen Sharing can only be opened from the dash machine" });
 		const hostName = params.get("host") ?? "";
+		// One at a time: the async seed still spawns `security`, and a looped/held click must
+		// not stack subprocesses. Same idiom as /api/logs' logsInflight.
+		if (vncInflight.has(hostName)) return json(429, { error: "a Screen Sharing request for this host is already in flight" });
+		vncInflight.add(hostName);
 		try {
 			const [{ loadHosts }, { vncUrl, hasScreenShareLogin }, { seedVncKeychain }] = await Promise.all([
 				import("../remote/control/hosts.js"),
 				import("../remote/control/signin.js"),
 				import("../remote/control/team.js"),
 			]);
-			// Same strictness as /api/logs: this endpoint execs, and the dash can sit behind an
-			// ngrok tunnel — only a host in the pinned inventory gets anything run for it.
+			// Same strictness as /api/logs: only a host in the pinned inventory gets anything
+			// run for it.
 			const host = loadHosts().hosts.find((h) => h.name === hostName);
 			if (!host) return json(400, { error: `unknown host ${JSON.stringify(hostName)}` });
 			let seedNote = "";
 			try {
-				const seed = seedVncKeychain([host]);
+				const seed = await seedVncKeychain([host]);
 				if (!seed.hadBundle) seedNote = "no team bundle on this machine";
 				else if (!seed.hadPassword) seedNote = "the team bundle carries no VNC password";
 				else if (!seed.seeded.length) seedNote = "keychain seeding was refused";
-			} catch (e) {
-				seedNote = `team bundle unreadable — ${(e as Error).message}`;
+			} catch {
+				// The message would embed the bundle's local path — kept out of the response.
+				seedNote = "the team bundle could not be read";
 			}
 			const promptless = await hasScreenShareLogin(host).catch(() => false);
 			const u = vncUrl(host);
@@ -2705,8 +2746,10 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 					? `Screen Sharing opened for ${host.name} — connects without a password.`
 					: `Screen Sharing opened for ${host.name} — it may ask for the Mac's password${seedNote ? ` (${seedNote})` : ""}.`,
 			});
-		} catch (e) {
-			json(500, { error: (e as Error).message });
+		} catch {
+			json(500, { error: "could not open Screen Sharing" });
+		} finally {
+			vncInflight.delete(hostName);
 		}
 	};
 
@@ -2730,7 +2773,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			if (req.method !== "POST") {
 				res.writeHead(405, { "content-type": "application/json" });
 				res.end(JSON.stringify({ error: "POST only" }));
-			} else void serveVncOpen(res, new URL(url, "http://localhost").searchParams);
+			} else void serveVncOpen(res, new URL(url, "http://localhost").searchParams, req.socket.remoteAddress);
 		} else if (url === "/events") {
 			res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
 			res.write(`data: ${JSON.stringify(currentState())}\n\n`);

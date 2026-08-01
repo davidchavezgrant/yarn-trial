@@ -738,10 +738,13 @@ test("parseCredentials__CarriesTheScreenSharingPassword__When__TheBundleHasOne",
 	assert.throws(() => parseCredentials(JSON.stringify({ ...bundle, vncPassword: 1234 })), /vncPassword must be a string/);
 });
 
-test("applyCredentials__TrustsBothScreenSharingLocations__When__SeedingTheKeychain", () => {
-	// The app moved: /System/Applications/Utilities on modern macOS, /System/Library/
-	// CoreServices historically. An ACL naming only the dead path grants nothing, and the
-	// operator gets the "allow access?" prompt -T exists to remove — so BOTH ride along.
+test("applyCredentials__TrustsOnlyExistingScreenSharingPaths__When__SeedingTheKeychain", () => {
+	// The load-bearing bug this asserts against: `security add-internet-password` ABORTS the
+	// whole command on the first -T path that does not exist (SecTrustedApplicationCreateFromPath
+	// → No such file or directory), writing no item. The app moved to /System/Applications/
+	// Utilities on modern macOS and left CoreServices behind, so naming BOTH made every seed
+	// fail everywhere. Only existing paths may be trusted — asserted by checking each -T points
+	// at a real file on THIS machine (whichever location it happens to have).
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "yarn-team-"));
 	const prev = process.env.YARN_RUNNER_HOME;
 	process.env.YARN_RUNNER_HOME = dir;
@@ -753,10 +756,10 @@ test("applyCredentials__TrustsBothScreenSharingLocations__When__SeedingTheKeycha
 			{ hosts: VNC_HOSTS.slice(0, 1), runSecurity: (args) => (calls.push(args), true) },
 		);
 		const trusted = calls[0].flatMap((a, i) => (calls[0][i - 1] === "-T" ? [a] : []));
-		assert.deepEqual(trusted, [
-			"/System/Applications/Utilities/Screen Sharing.app",
-			"/System/Library/CoreServices/Screen Sharing.app",
-		]);
+		for (const p of trusted) assert.ok(fs.existsSync(p), `a trusted -T path must exist on disk, got ${p}`);
+		// A real macOS runner has exactly one Screen Sharing.app; CI without either just seeds
+		// with no -T (still a valid item, only the ACL prompt is not pre-granted).
+		assert.ok(trusted.length <= 1, "at most one Screen Sharing.app location can exist");
 	} finally {
 		if (prev === undefined) delete process.env.YARN_RUNNER_HOME;
 		else process.env.YARN_RUNNER_HOME = prev;
@@ -780,36 +783,40 @@ function withBundleEnv<T>(bundlePath: string, fn: () => T): T {
 	}
 }
 
-test("seedVncKeychain__SeedsFromTheRetainedBundle__When__ItCarriesAPassword", () => {
+test("seedVncKeychain__SeedsFromTheRetainedBundle__When__ItCarriesAPassword", async () => {
 	// The on-demand half of passwordless screen sharing: a caller (the dash's peek fallback)
 	// re-seeds right before opening the viewer, without re-running identity provisioning —
-	// no ssh-keygen, no ~/.yarn-runner writes, just the keychain items.
+	// no ssh-keygen, no ~/.yarn-runner writes, just the keychain items. ASYNC because the dash
+	// calls it off its event loop; the exec seam returns a Promise.
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "yarn-vnc-"));
 	const file = path.join(dir, "team-credentials.json");
 	fs.writeFileSync(file, JSON.stringify({ schema: TEAM_SCHEMA, sshPrivateKey: "-----BEGIN OPENSSH PRIVATE KEY-----\nx\n", vncPassword: "hunter2" }));
 	const calls: string[][] = [];
 	try {
-		const out = withBundleEnv(file, () => seedVncKeychain(VNC_HOSTS, (args) => (calls.push(args), true)));
+		const out = await withBundleEnv(file, () => seedVncKeychain(VNC_HOSTS, async (args) => (calls.push(args), true)));
 		assert.deepEqual(out, { hadBundle: true, hadPassword: true, seeded: ["mac1", "mac2"] });
 		assert.equal(calls.length, 2);
 		assert.equal(calls[0][calls[0].indexOf("-w") + 1], "hunter2");
+		// Same existing-paths-only contract as the provisioning path: an add naming a dead -T
+		// aborts and writes nothing.
+		for (const c of calls) for (let i = 0; i < c.length; i++) if (c[i - 1] === "-T") assert.ok(fs.existsSync(c[i]));
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
 });
 
-test("seedVncKeychain__ReportsTheGapWithoutTouchingTheKeychain__When__BundleOrPasswordIsMissing", () => {
+test("seedVncKeychain__ReportsTheGapWithoutTouchingTheKeychain__When__BundleOrPasswordIsMissing", async () => {
 	// The two honest refusals, distinguished so a caller's message can say WHICH thing to fix:
 	// no bundle on this machine at all, versus a bundle exported without YARN_VNC_PASSWORD.
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "yarn-vnc-"));
 	const calls: string[][] = [];
 	try {
-		const missing = withBundleEnv(path.join(dir, "nope.json"), () => seedVncKeychain(VNC_HOSTS, (args) => (calls.push(args), true)));
+		const missing = await withBundleEnv(path.join(dir, "nope.json"), () => seedVncKeychain(VNC_HOSTS, async (args) => (calls.push(args), true)));
 		assert.deepEqual(missing, { hadBundle: false, hadPassword: false, seeded: [] });
 
 		const file = path.join(dir, "team-credentials.json");
 		fs.writeFileSync(file, JSON.stringify({ schema: TEAM_SCHEMA, sshPrivateKey: "-----BEGIN OPENSSH PRIVATE KEY-----\nx\n" }));
-		const passwordless = withBundleEnv(file, () => seedVncKeychain(VNC_HOSTS, (args) => (calls.push(args), true)));
+		const passwordless = await withBundleEnv(file, () => seedVncKeychain(VNC_HOSTS, async (args) => (calls.push(args), true)));
 		assert.deepEqual(passwordless, { hadBundle: true, hadPassword: false, seeded: [] });
 		assert.equal(calls.length, 0, "neither refusal may reach `security`");
 	} finally {

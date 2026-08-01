@@ -2057,11 +2057,19 @@ function paintVnc(host) {
 	const d = peekStates[host]?.vnc;
 	if (!d) { el.hidden = true; return; }
 	el.hidden = false;
-	el.querySelector(".pk-vnc-sub").innerHTML =
-		(d.seeded ? "connects without a password"
-			: d.canSeed ? "first open seeds the password from the team bundle"
-			: "may ask for the Mac's password — no team bundle on this machine")
-		+ ` · <a href="${esc(d.url)}">vnc link</a>`;
+	// seeded/canSeed describe the DASH SERVER's keychain and bundle — the machine the BUTTON
+	// opens Screen Sharing on. For a local operator (the normal posture) that is their own
+	// machine and the line is exact. The raw vnc:// link, by contrast, opens on the VIEWER's
+	// machine (a remote --web teammate), whose keychain the server cannot see — so the link
+	// carries its own caveat rather than borrowing the button's verdict.
+	const local = location.hostname === "localhost" || location.hostname === "127.0.0.1";
+	const buttonLine = d.seeded ? "connects without a password"
+		: d.canSeed ? "first open seeds the password from the team bundle"
+		: "may ask for the Mac's password — no team bundle on this machine";
+	const link = local
+		? ` · <a href="${esc(d.url)}">vnc link</a>`
+		: ` · <a href="${esc(d.url)}">vnc link</a> (opens from your machine — may prompt unless its own keychain is seeded)`;
+	el.querySelector(".pk-vnc-sub").innerHTML = buttonLine + link;
 }
 
 /** Repaint every card's panel from its host's peek state — called by renderFleet after reconcile. */

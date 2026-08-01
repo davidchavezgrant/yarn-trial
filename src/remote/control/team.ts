@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { resourcesRoot } from "../../paths.js";
@@ -151,10 +151,29 @@ export interface ApplyOptions {
  * to use instead. Weighed against the alternative — the password living in a chat message, a
  * note, or a wiki, which is where it goes when nothing automates this — the keychain wins.
  */
+/**
+ * Screen Sharing.app moved between macOS releases — /System/Applications/Utilities on modern
+ * builds (verified on 26.2), /System/Library/CoreServices historically. It cannot be BOTH:
+ * `security add-internet-password` resolves every `-T` at call time and ABORTS the whole
+ * command on the first path that does not exist (SecTrustedApplicationCreateFromPath →
+ * "No such file or directory"), writing nothing. So the ACL must name only paths that exist
+ * on THIS machine — naming both is how the seed silently failed everywhere.
+ */
+const SCREEN_SHARING_PATHS = [
+	"/System/Applications/Utilities/Screen Sharing.app",
+	"/System/Library/CoreServices/Screen Sharing.app",
+];
+
+function trustedScreenSharingArgs(): string[] {
+	// Screen Sharing reads a keychain item it is trusted on without an "allow access?" prompt.
+	return SCREEN_SHARING_PATHS.filter((p) => fs.existsSync(p)).flatMap((p) => ["-T", p]);
+}
+
 function applyVncPassword(password: string | undefined, hosts: HostEntry[] | undefined, exec = runSecurity): string[] {
 	// Ahead of resolving the inventory, so a bundle without a password reads no files at all.
 	if (!password) return [];
 
+	const trusted = trustedScreenSharingArgs();
 	const seeded: string[] = [];
 	for (const host of hosts ?? inventoryHosts()) {
 		const account = host.ssh.user;
@@ -169,12 +188,7 @@ function applyVncPassword(password: string | undefined, hosts: HostEntry[] | und
 			"-P", String(host.vnc.port),
 			"-w", password,
 			"-U",
-			// Screen Sharing reads the item without prompting for keychain access. Omit this and
-			// the operator trades a password prompt for an "allow access?" prompt. BOTH paths:
-			// the app moved to /System/Applications/Utilities on modern macOS (verified absent
-			// from CoreServices on 26.2), and an ACL naming only the dead path grants nothing.
-			"-T", "/System/Applications/Utilities/Screen Sharing.app",
-			"-T", "/System/Library/CoreServices/Screen Sharing.app",
+			...trusted,
 		]);
 		if (ok) seeded.push(host.name);
 	}
@@ -210,23 +224,55 @@ export interface VncSeedOutcome {
 	seeded: string[];
 }
 
+/** One async `security` invocation reduced to a boolean — the non-blocking seam. */
+export type AsyncSecurityRunner = (args: string[]) => Promise<boolean>;
+
+const runSecurityAsync: AsyncSecurityRunner = (args) =>
+	new Promise((resolve) => {
+		execFile("security", args, { timeout: 10_000 }, (err) => resolve(!err));
+	});
+
 /**
  * (Re)seed the screen-sharing keychain items from the retained team bundle — and ONLY those:
  * no identity install, no model key. Exists for callers that want passwordless vnc:// on
  * demand (the dash's peek fallback) without re-running full provisioning; `-U` makes it
- * idempotent, so calling it right before opening Screen Sharing costs one `security` exec per
- * host and repairs a stale or missing item in the same motion.
+ * idempotent, so calling it right before opening Screen Sharing repairs a stale or missing
+ * item in the same motion.
+ *
+ * ASYNC on purpose: the dash calls this from its request path, and the sync `security` exec
+ * (`add-internet-password` can block up to 10s on a locked keychain or a SecurityAgent
+ * dialog) would freeze the single event loop that heartbeats every live peek stream — long
+ * enough to trip the client's 12s staleness watchdog and drop the whole wall. It does NOT
+ * share `applyVncPassword` (which stays sync for the provisioning path that has no event loop
+ * to starve), but the argv it builds is identical, `trustedScreenSharingArgs` and all.
  *
  * Throws on a malformed bundle (same contract as parseCredentials) — a bundle that exists but
  * cannot be read is worth surfacing, not eating.
  */
-export function seedVncKeychain(hosts?: HostEntry[], exec: (args: string[]) => boolean = runSecurity): VncSeedOutcome {
+export async function seedVncKeychain(hosts?: HostEntry[], exec: AsyncSecurityRunner = runSecurityAsync): Promise<VncSeedOutcome> {
 	const file = findCredentials();
 	if (!file) return { hadBundle: false, hadPassword: false, seeded: [] };
 	const creds = parseCredentials(fs.readFileSync(file, "utf8"));
 	if (!creds.vncPassword) return { hadBundle: true, hadPassword: false, seeded: [] };
 
-	return { hadBundle: true, hadPassword: true, seeded: applyVncPassword(creds.vncPassword, hosts, exec) };
+	const trusted = trustedScreenSharingArgs();
+	const seeded: string[] = [];
+	for (const host of hosts ?? inventoryHosts()) {
+		if (!host.ssh.user) continue;
+		const ok = await exec([
+			"add-internet-password",
+			"-s", host.vnc.host,
+			"-a", host.ssh.user,
+			"-r", "vnc ",
+			"-P", String(host.vnc.port),
+			"-w", creds.vncPassword,
+			"-U",
+			...trusted,
+		]);
+		if (ok) seeded.push(host.name);
+	}
+
+	return { hadBundle: true, hadPassword: true, seeded };
 }
 
 /**
