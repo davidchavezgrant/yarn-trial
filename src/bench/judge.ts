@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { judgeRun } from "../core/judge.js";
-import { RUN_FILES, dataRoot as dataRootDir, outDir, runFile } from "../paths.js";
+import { RUN_FILES, dataRoot as dataRootDir, liveDir, outDir, runFile } from "../paths.js";
 import { armById } from "./matrix.js";
 import { readManifest, utcDate } from "./manifest.js";
 
@@ -77,7 +77,7 @@ export async function judgeBench(opts?: {
 	const judge = opts?.judge ?? ((stamp: string) => judgeRun(stamp, { model: process.env.JUDGE_MODEL ?? BENCH_JUDGE_MODEL }));
 	const crossJudge = opts?.crossJudge ?? ((stamp: string) => judgeRun(stamp, { model: process.env.CROSS_JUDGE_MODEL ?? CROSS_JUDGE_MODEL, tag: "cross" }));
 
-	const manifest = readManifest(date, outRoot);
+	const manifest = readManifest(date, liveDir(outRoot));
 	const outcome: BenchJudgeOutcome = { judged: [], skipped: [], failed: [] };
 
 	for (const entry of manifest.entries) {

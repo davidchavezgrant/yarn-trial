@@ -538,9 +538,9 @@ function jobFrame(over: Record<string, unknown> = {}): SshResult {
 			pid: 91,
 			startedAt: "2026-07-30T12:00:00.000Z",
 			artifacts: {
-				log: "out/live/2026-07-30T12-00-00-yarn/log.txt",
-				runLog: "out/live/2026-07-30T12-00-00-yarn/run.json",
-				recording: "out/live/2026-07-30T12-00-00-yarn/recording/window.mp4",
+				log: "out/bench/live/2026-07-30T12-00-00-yarn/log.txt",
+				runLog: "out/bench/live/2026-07-30T12-00-00-yarn/run.json",
+				recording: "out/bench/live/2026-07-30T12-00-00-yarn/recording/window.mp4",
 			},
 			...over,
 		},
@@ -572,7 +572,7 @@ test("pull__WritesUnderTheSameKey__When__JobProducedArtifacts", async () => {
 		// One source, and it is a directory — the run log, the console log, the step frames the
 		// judge needs and the recording all ride inside it with no path to forget.
 		assert.deepEqual(result.artifacts.map((a) => a.key), ["run"]);
-		assert.deepEqual(result.artifacts.map((a) => a.rel), ["out/live/2026-07-30T12-00-00-yarn"]);
+		assert.deepEqual(result.artifacts.map((a) => a.rel), ["out/bench/live/2026-07-30T12-00-00-yarn"]);
 		for (const a of result.artifacts) assert.equal(a.local.startsWith(dest), true, `${a.local} landed outside the data root`);
 
 		for (const argv of invocations) {
@@ -588,7 +588,7 @@ test("pull__WritesUnderTheSameKey__When__JobProducedArtifacts", async () => {
 		}
 		// Pulled as a directory — the trailing slash is what makes rsync copy the CONTENTS into
 		// the matching local directory rather than nesting it one level deeper.
-		assert.equal(invocations[0][invocations[0].length - 2], "administrator@10.0.0.1:/Users/administrator/yarn-trial/out/live/2026-07-30T12-00-00-yarn/");
+		assert.equal(invocations[0][invocations[0].length - 2], "administrator@10.0.0.1:/Users/administrator/yarn-trial/out/bench/live/2026-07-30T12-00-00-yarn/");
 	} finally {
 		fs.rmSync(dest, { recursive: true, force: true });
 	}
@@ -610,7 +610,7 @@ test("pull__FetchesBothAppmapHalves__When__JobWasAGroundingPass", async () => {
 				? jobFrame({
 						id: "explore-2026-07-30T12-00-00-yarn",
 						kind: "explore",
-						artifacts: { log: "out/live/explore-2026-07-30T12-00-00-yarn/log.txt", appmap: "docs/appmaps/yarn.md", checkpoint: "out/live/explore-2026-07-30T12-00-00-yarn/checkpoint.json" },
+						artifacts: { log: "out/bench/live/explore-2026-07-30T12-00-00-yarn/log.txt", appmap: "docs/appmaps/yarn.md", checkpoint: "out/bench/live/explore-2026-07-30T12-00-00-yarn/checkpoint.json" },
 					})
 				: ok({ dataRoot: "/Users/administrator/yarn-trial" });
 

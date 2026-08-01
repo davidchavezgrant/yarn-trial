@@ -74,10 +74,10 @@ ${b}ground & replay${n}
   recipe replay <file|stamp>             replay it — zero model calls unless a step breaks
   appmaps [--sync] [--app <name>]        which Mac holds which grounding; --sync converges the fleet
 
-${b}run data${n}  (out/live is canonical; out/archive is a hard-linked backup)
-  runs list                              every run in out/live, with size and backup state
-  runs drop <stamp>                      remove one from out/live, keeping its backup — then re-run it
-  runs purge [--yes]                     clear out/live, keeping every backup
+${b}run data${n}  (out/bench/live is canonical; out/bench/archive is a hard-linked backup)
+  runs list                              every run in out/bench/live, with size and backup state
+  runs drop <stamp>                      remove one from live, keeping its backup — then re-run it
+  runs purge [--yes]                     clear live, keeping every backup
 
 ${b}fleet${n}
   hosts                                  show the fleet and which Macs are free

@@ -40,6 +40,7 @@ import { dateArg,
 } from "../src/bench/orchestrate.js";
 import { renderReport, reportFileName, writeReport } from "../src/bench/report.js";
 import { host, withTemp, withTempAsync } from "./fixtures.js";
+import { liveDir } from "../src/paths.js";
 
 /**
  * The bench orchestrator, offline by construction — the same rule as dispatch.test.ts:
@@ -180,15 +181,15 @@ const entry = (armId: string, jobId: string, over: Partial<ManifestEntry> = {}):
 test("writeManifest__RoundTrips__When__ReadBack", () => {
 	withTemp("bench-", (dir) => {
 		const m: Manifest = { date: DATE, createdAt: "2026-07-31T09:00:00.000Z", entries: [entry("p1-explore-ax", "explore-j1")] };
-		writeManifest(m, dir);
-		assert.deepEqual(readManifest(DATE, dir), m);
-		assert.ok(fs.existsSync(manifestPath(DATE, dir)));
+		writeManifest(m, liveDir(dir));
+		assert.deepEqual(readManifest(DATE, liveDir(dir)), m);
+		assert.ok(fs.existsSync(manifestPath(DATE, liveDir(dir))));
 	});
 });
 
 test("readManifest__ReturnsEmpty__When__FileAbsent", () => {
 	withTemp("bench-", (dir) => {
-		const m = readManifest(DATE, dir);
+		const m = readManifest(DATE, liveDir(dir));
 		assert.equal(m.date, DATE);
 		assert.deepEqual(m.entries, []);
 	});
@@ -242,7 +243,7 @@ test("runPhase__DispatchesNothingAndExits2__When__GoFlagAbsent", async () => {
 		const code = await runPhase(1, { date: DATE, outRoot: dir, dispatchFn: fake.fn, log: (l) => lines.push(l) });
 		assert.equal(code, EXIT_NEEDS_GO);
 		assert.deepEqual(fake.calls, []);
-		assert.equal(readManifest(DATE, dir).entries.length, 0);
+		assert.equal(readManifest(DATE, liveDir(dir)).entries.length, 0);
 		assert.ok(lines.some((l) => /Nothing was dispatched/.test(l)));
 	});
 });
@@ -286,7 +287,7 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		assert.deepEqual(fake.calls.filter((c) => c.url), []);
 		assert.ok(fake.calls.every((c) => c.app === "Yarn"), "every phase-1 arm targets Yarn");
 		// Every accepted job landed in the manifest, uncollected.
-		const m = readManifest(DATE, dir);
+		const m = readManifest(DATE, liveDir(dir));
 		assert.equal(m.entries.length, 9);
 		assert.ok(m.entries.every((e) => !e.collected && e.host === "mac1"));
 	});
@@ -295,7 +296,7 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 test("runPhase__ShapesOptionsPerArm__When__Phase2Dispatches", async () => {
 	await withTempAsync("bench-", async (dir) => {
 		// Phase-1 gate satisfied: both Yarn explores collected.
-		let m = readManifest(DATE, dir);
+		let m = readManifest(DATE, liveDir(dir));
 		m = recordSubmissions(m, [
 			entry("p1-explore-ax", "explore-a", { collected: true, state: "done" }),
 			entry("p1-explore-cdp", "explore-c", { collected: true, state: "done" }),
@@ -309,7 +310,7 @@ test("runPhase__ShapesOptionsPerArm__When__Phase2Dispatches", async () => {
 			entry("p1-explore-ax-noaxdom-no-vision", "explore-nanv", { collected: true, state: "done" }),
 			entry("p1-explore-cdp-no-vision", "explore-cnv", { collected: true, state: "done" }),
 		]);
-		writeManifest(m, dir);
+		writeManifest(m, liveDir(dir));
 
 		const fake = fakeDispatch();
 		const code = await runPhase(2, { go: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
@@ -378,7 +379,7 @@ test("runPhase__BypassesPhase1Gate__When__ForceIsSet", async () => {
 
 test("runPhase__SubmitsOnlyMissingSamples__When__ManifestAlreadyHoldsSome", async () => {
 	await withTempAsync("bench-", async (dir) => {
-		let m = readManifest(DATE, dir);
+		let m = readManifest(DATE, liveDir(dir));
 		m = recordSubmissions(m, [
 			entry("p1-explore-ax", "explore-a"),
 			entry("p1-explore-cdp", "explore-c"),
@@ -387,7 +388,7 @@ test("runPhase__SubmitsOnlyMissingSamples__When__ManifestAlreadyHoldsSome", asyn
 			entry("p1-explore-ax-noaxdom-no-vision", "explore-nanv"),
 			entry("p1-explore-cdp-no-vision", "explore-cnv"),
 		]);
-		writeManifest(m, dir);
+		writeManifest(m, liveDir(dir));
 
 		const fake = fakeDispatch();
 		const code = await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
@@ -400,12 +401,12 @@ test("runPhase__SubmitsOnlyMissingSamples__When__ManifestAlreadyHoldsSome", asyn
 
 test("runPhase__CompilesLocallyAndDispatchesReplays__When__Phase3HasCleanSources", async () => {
 	await withTempAsync("bench-", async (dir) => {
-		let m = readManifest(DATE, dir);
+		let m = readManifest(DATE, liveDir(dir));
 		m = recordSubmissions(m, [
 			entry("p2-ax-grounded", "run-ax-1", { collected: true, state: "done", metrics: { success: true, finalCheckVerified: true } }),
 			entry("p2-cdp-grounded", "run-cdp-1", { collected: true, state: "done", metrics: { success: false } }),
 		]);
-		writeManifest(m, dir);
+		writeManifest(m, liveDir(dir));
 
 		const fake = fakeDispatch();
 		const compiled: string[] = [];
@@ -433,7 +434,7 @@ test("runPhase__CompilesLocallyAndDispatchesReplays__When__Phase3HasCleanSources
 		}
 		assert.equal(fake.calls.filter((c) => c.noRescue === true).length, 3);
 
-		const after = readManifest(DATE, dir);
+		const after = readManifest(DATE, liveDir(dir));
 		const compileEntry = after.entries.find((e) => e.armId === "p3-compile-ax");
 		assert.equal(compileEntry?.host, "local");
 		assert.equal(compileEntry?.collected, true);
@@ -443,9 +444,9 @@ test("runPhase__CompilesLocallyAndDispatchesReplays__When__Phase3HasCleanSources
 
 test("runPhase__RecordsCompileRefusal__When__CompileFnThrows", async () => {
 	await withTempAsync("bench-", async (dir) => {
-		let m = readManifest(DATE, dir);
+		let m = readManifest(DATE, liveDir(dir));
 		m = recordSubmissions(m, [entry("p2-ax-grounded", "run-hinted", { collected: true, state: "done", metrics: { success: true } })]);
-		writeManifest(m, dir);
+		writeManifest(m, liveDir(dir));
 
 		const fake = fakeDispatch();
 		await runPhase(3, {
@@ -458,7 +459,7 @@ test("runPhase__RecordsCompileRefusal__When__CompileFnThrows", async () => {
 			},
 			log: () => {},
 		});
-		const after = readManifest(DATE, dir);
+		const after = readManifest(DATE, liveDir(dir));
 		const refusal = after.entries.find((e) => e.armId === "p3-compile-ax");
 		assert.equal(refusal?.state, "failed");
 		assert.match(refusal?.note ?? "", /--hinted/);
@@ -657,9 +658,9 @@ test("collect__MarksEntryWithMetrics__When__TaskRunArtifactsArePresent", async (
 			path.join(dir, "out/runs/job-1.journal.jsonl"),
 			`${JSON.stringify({ kind: "setting", control: "Cursor Style", surface: "Screen Clip Settings", scope: "brand", before: "Arrow-first", after: "Pointer-first", step: 3 })}\n`,
 		);
-		let m = readManifest(DATE, outRoot);
+		let m = readManifest(DATE, liveDir(outRoot));
 		m = recordSubmissions(m, [entry("p2-ax-grounded", "job-1")]);
-		writeManifest(m, outRoot);
+		writeManifest(m, liveDir(outRoot));
 
 		const outcome = await collect({
 			date: DATE,
@@ -685,9 +686,9 @@ test("collect__PullsNothingAgain__When__RunASecondTime", async () => {
 		const outRoot = path.join(dir, "out");
 		fs.mkdirSync(path.join(dir, "out/runs"), { recursive: true });
 		fs.writeFileSync(path.join(dir, "out/runs/job-1.json"), JSON.stringify(RUN_LOG));
-		let m = readManifest(DATE, outRoot);
+		let m = readManifest(DATE, liveDir(outRoot));
 		m = recordSubmissions(m, [entry("p2-ax-grounded", "job-1")]);
-		writeManifest(m, outRoot);
+		writeManifest(m, liveDir(outRoot));
 
 		let pulls = 0;
 		const opts = {
@@ -714,9 +715,9 @@ test("collect__PullsNothingAgain__When__RunASecondTime", async () => {
 test("collect__LeavesEntryPending__When__JobStillRunning", async () => {
 	await withTempAsync("bench-", async (dir) => {
 		const outRoot = path.join(dir, "out");
-		let m = readManifest(DATE, outRoot);
+		let m = readManifest(DATE, liveDir(outRoot));
 		m = recordSubmissions(m, [entry("p2-ax-grounded", "job-1")]);
-		writeManifest(m, outRoot);
+		writeManifest(m, liveDir(outRoot));
 
 		const outcome = await collect({
 			date: DATE,
@@ -735,9 +736,9 @@ test("collect__LeavesEntryPending__When__JobStillRunning", async () => {
 test("collect__CountsRunAsFailure__When__TerminalJobHasNoRunLog", async () => {
 	await withTempAsync("bench-", async (dir) => {
 		const outRoot = path.join(dir, "out");
-		let m = readManifest(DATE, outRoot);
+		let m = readManifest(DATE, liveDir(outRoot));
 		m = recordSubmissions(m, [entry("p2-ax-grounded", "job-1")]);
-		writeManifest(m, outRoot);
+		writeManifest(m, liveDir(outRoot));
 
 		const outcome = await collect({
 			date: DATE,
@@ -766,9 +767,9 @@ test("collect__ParsesAppmapArtifacts__When__ExploreEntryIsTerminal", async () =>
 			path.join(dir, "docs/appmaps/yarn.json"),
 			JSON.stringify({ nodes: [{ id: "a", title: "A", kind: "surface", scope: "brand" }], edges: [] }),
 		);
-		let m = readManifest(DATE, outRoot);
+		let m = readManifest(DATE, liveDir(outRoot));
 		m = recordSubmissions(m, [entry("p1-explore-ax", "explore-1")]);
-		writeManifest(m, outRoot);
+		writeManifest(m, liveDir(outRoot));
 
 		const job = { ...doneJob("explore-1", {}), kind: "explore", artifacts: { log: "out/jobs/explore-1/log.txt", appmap: "docs/appmaps/yarn.md", appmapGraph: "docs/appmaps/yarn.json" } } as JobRecord;
 		const outcome = await collect({
@@ -849,9 +850,9 @@ test("runPhase__GatesPhase2OnThisPassesExplores__When__AnotherModelAlreadyExplor
 	await withTempAsync("bench-", async (dir) => {
 		const a = fakeDispatch();
 		await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: a.fn, log: () => {}, model: "openai/gpt-5.6-sol:nitro" });
-		let m = readManifest(DATE, dir);
+		let m = readManifest(DATE, liveDir(dir));
 		for (const e of m.entries) m = updateEntry(m, { ...e, collected: true });
-		writeManifest(m, dir);
+		writeManifest(m, liveDir(dir));
 
 		const b = fakeDispatch();
 		const code = await runPhase(2, { go: true, date: DATE, outRoot: dir, dispatchFn: b.fn, log: () => {}, model: "claude-fable-5" });

@@ -99,7 +99,7 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 	overlay.setDriving(true);
 	let obs: ObservationBundle;
 	try {
-		obs = await doObserve("explore-step-0");
+		obs = await doObserve(`${p.stepsDir}/explore-step-0`);
 	} finally {
 		overlay.setDriving(false);
 	}
@@ -625,7 +625,7 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 			const settleMs = settleMsFor(input.action, SETTLE_MS);
 			if (settleMs > SETTLE_MS) console.log(`    waiting ${Math.round(settleMs / 1000)}s before re-observing`);
 			await new Promise((r) => setTimeout(r, settleMs));
-			obs = await doObserve(`explore-step-${p.actions}`);
+			obs = await doObserve(`${p.stepsDir}/explore-step-${p.actions}`);
 		} finally {
 			// finally, not a trailing call: a throw from doObserve (a collapsed AX tree is
 			// routine here) would otherwise strand the banner up for the rest of the pass.
@@ -723,7 +723,7 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 					if (esc) await driver!.act(esc);
 				}
 				await new Promise((r) => setTimeout(r, SETTLE_MS));
-				obs = await doObserve(`explore-step-${p.actions}-escape`);
+				obs = await doObserve(`${p.stepsDir}/explore-step-${p.actions}-escape`);
 			} finally {
 				overlay.setDriving(false);
 			}

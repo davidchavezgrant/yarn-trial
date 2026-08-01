@@ -472,7 +472,11 @@ export function narratorDigest(state: DashState): Record<string, unknown> {
  * watcher name where the data is expected to appear rather than where it last wasn't.
  */
 export function storeRoot(relParts: string[], outRoot = outDir()): string {
-	const roots = [path.join(outRoot, LIVE_DIR), path.join(outRoot, ARCHIVE_DIR), outRoot];
+	// The manifest family is keyed by DATE, so `relParts` starts with one and the roots supply
+	// everything above it. `out/bench` is the legacy location AND the parent of the two current
+	// ones — order matters, not containment: live and archive are tried first, so a date present
+	// in both resolves to live.
+	const roots = [path.join(outRoot, LIVE_DIR), path.join(outRoot, ARCHIVE_DIR), path.join(outRoot, "bench"), outRoot];
 
 	return roots.find((r) => fs.existsSync(path.join(r, ...relParts))) ?? (roots[roots.length - 1] as string);
 }
@@ -483,10 +487,10 @@ export function fromStore(relParts: string[], outRoot = outDir()): string {
 
 /**
  * The day's manifest from wherever the store holds it. readManifest builds
- * `<root>/bench/<date>/manifest.json`, so it is handed the out-root variant (out/live,
- * out/archive, or plain out) under which that file currently exists.
+ * `<root>/<date>/manifest.json`, so it is handed the out-root variant (out/bench/live,
+ * out/bench/archive, or plain out) under which that file currently exists.
  */
-const readStoredManifest = (date: string): Manifest => readManifest(date, storeRoot(["bench", date, "manifest.json"]));
+const readStoredManifest = (date: string): Manifest => readManifest(date, storeRoot([date, "manifest.json"]));
 
 /**
  * The newest note narrate() has persisted to narrative.md, if any. The live copy used to be
@@ -516,7 +520,7 @@ function readPersistedNarrative(date: string): Narrative | undefined {
 	}
 	let raw: string;
 	try {
-		raw = fs.readFileSync(fromStore(["bench", date, "narrative.md"]), "utf8");
+		raw = fs.readFileSync(fromStore([date, "narrative.md"]), "utf8");
 	} catch {
 		return undefined; // No file — nothing narrated for this date yet.
 	}
@@ -909,7 +913,7 @@ export function buildDetail(jobId: string, manifest: Manifest, opts: { dataDir?:
 	const dataDir = opts.dataDir ?? dataRoot();
 	// Store-resolved (live → archive → out/bench), off dataDir so tests stay hermetic —
 	// this is where archiveDirFor finds the pass-archived appmap graphs.
-	const benchRoot = opts.benchRoot ?? fromStore(["bench", manifest.date], path.join(dataDir, "out"));
+	const benchRoot = opts.benchRoot ?? fromStore([manifest.date], path.join(dataDir, "out"));
 	const entry = manifest.entries.find((e) => e.jobId === jobId);
 	if (!entry) return { jobId, armId: "?", steps: [], mutatedKeys: [], note: "no manifest entry for this job" };
 	const arm = armById(entry.armId);
@@ -959,6 +963,14 @@ export function buildDetail(jobId: string, manifest: Manifest, opts: { dataDir?:
 
 const FLEET_POLL_SEC = Number(process.env.DASH_FLEET_SEC ?? 20);
 const COLLECT_SEC = Number(process.env.DASH_COLLECT_SEC ?? 60);
+/**
+ * SSE keepalive cadence — a REAL {"ev":"hb"} data frame, not a comment. The old ": ping"
+ * comment kept proxies from idling the socket but never fires onmessage, so the page could
+ * not tell quiet-healthy from silently dead and its #conn dot lied green over a wedged link.
+ * 15s means the page's 45s staleness watchdog trips only after ~3 missed beats — and the
+ * beat is independent of the fleet poll, so a hung ssh fan-out never reads as a dead server.
+ */
+const SSE_HEARTBEAT_MS = 15_000;
 
 /** /api/logs job ids become path segments locally and a spec field remotely — same shape jobs.ts pins. */
 // At least one non-dot character: "." and ".." pass the alphabet but are path tricks, not ids.
@@ -1032,16 +1044,17 @@ export interface DashOptions {
  */
 export function defaultDashDate(root?: string): string {
 	const outRoot = root ?? outDir();
-	// Date-dir discovery sweeps every store location (out/live, out/archive, and the legacy
-	// out/bench where manifests still land today); each candidate date is then judged on the
-	// SAME manifest the dash would actually read — fromStore's live-first resolution — so
-	// discovery and the later reads can never disagree about which copy counts.
+	// Date-dir discovery sweeps every store location (out/bench/live, out/bench/archive, and the
+	// legacy out/bench); each candidate date is then judged on the SAME manifest the dash would
+	// actually read — fromStore's live-first resolution — so discovery and the later reads can
+	// never disagree about which copy counts. The date regex is what keeps the sweep of the
+	// legacy root from picking up its own `live`/`archive` children as passes.
 	const dates = new Set<string>();
-	for (const r of [path.join(outRoot, LIVE_DIR), path.join(outRoot, ARCHIVE_DIR), outRoot]) {
+	for (const r of [path.join(outRoot, LIVE_DIR), path.join(outRoot, ARCHIVE_DIR), path.join(outRoot, "bench")]) {
 		try {
-			for (const d of fs.readdirSync(path.join(r, "bench"))) if (/^\d{4}-\d{2}-\d{2}$/.test(d)) dates.add(d);
+			for (const d of fs.readdirSync(r)) if (/^\d{4}-\d{2}-\d{2}$/.test(d)) dates.add(d);
 		} catch {
-			// This store location has no bench tree (out/live's may not exist yet) — fine.
+			// This store location does not exist yet — fine.
 		}
 	}
 	// Non-empty manifests only: the rollover itself can mint an empty next-day manifest
@@ -1049,7 +1062,7 @@ export function defaultDashDate(root?: string): string {
 	const drained = [...dates]
 		.filter((d) => {
 			try {
-				return (JSON.parse(fs.readFileSync(fromStore(["bench", d, "manifest.json"], outRoot), "utf8")).entries?.length ?? 0) > 0;
+				return (JSON.parse(fs.readFileSync(fromStore([d, "manifest.json"], outRoot), "utf8")).entries?.length ?? 0) > 0;
 			} catch {
 				return false;
 			}
@@ -1266,7 +1279,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	let watchingManifest = false;
 	const armManifestWatch = (): void => {
 		if (watchingManifest) return;
-		const dir = path.dirname(fromStore(["bench", date, "manifest.json"]));
+		const dir = path.dirname(fromStore([date, "manifest.json"]));
 		if (!fs.existsSync(dir)) return;
 		try {
 			fs.watch(dir, () => {
@@ -1960,9 +1973,13 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			process.exit(0);
 		});
 
+	// A data-frame heartbeat, doing double duty: proxy keepalive AND client liveness signal.
+	// The page drops {"ev":"hb"} before state handling — see SSE_HEARTBEAT_MS for why this
+	// stopped being a ": ping" comment.
 	setInterval(() => {
-		for (const res of clients) res.write(": ping\n\n");
-	}, 25_000);
+		const beat = `data: {"ev":"hb","t":"${new Date().toISOString()}"}\n\n`;
+		for (const res of clients) res.write(beat);
+	}, SSE_HEARTBEAT_MS);
 	setInterval(pollFleet, FLEET_POLL_SEC * 1000);
 	void pollFleet();
 	if (runCollect) {

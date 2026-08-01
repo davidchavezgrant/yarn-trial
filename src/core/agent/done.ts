@@ -13,6 +13,12 @@ export interface DoneContext {
 	sync: DriverSync;
 	overlay: Overlay;
 	doObserve: (name: string) => Promise<ObservationBundle>;
+	/**
+	 * OUT-relative directory for this run's frames, as run.ts builds it. The final frame used to
+	 * land on the shared `out/agent-final.png` — overwritten by the next run, which is precisely
+	 * the staleness the offline judge refuses to grade (see trustedFrames).
+	 */
+	stepsDir: string;
 	client: ModelClient;
 	model: string;
 	judgeMode: string;
@@ -40,6 +46,7 @@ export async function gradeDone(ctx: DoneContext): Promise<Record<string, unknow
 		sync,
 		overlay,
 		doObserve,
+		stepsDir,
 		client,
 		model,
 		judgeMode,
@@ -86,7 +93,7 @@ export async function gradeDone(ctx: DoneContext): Promise<Record<string, unknow
 		overlay.setDriving(true);
 		let finalShot = "";
 		try {
-			const finalObs = await doObserve("agent-final");
+			const finalObs = await doObserve(`${stepsDir}/agent-final`);
 			finalShot = finalObs.screenshotB64;
 			finalCheck = { ...verify(input.evidence!, finalObs.haystack), evidence: input.evidence };
 		} finally {

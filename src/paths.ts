@@ -90,7 +90,7 @@ export function outDir(): string {
 }
 
 /**
- * ONE DIRECTORY PER RUN — `out/live/<runKey>/`.
+ * ONE DIRECTORY PER RUN — `out/bench/live/<runKey>/`.
  *
  * A run's artifacts used to be scattered across three sibling trees keyed by the same string:
  * `out/runs/<key>.json` (plus `.journal.jsonl`, `.judge.json`, `-steps/`), `out/recording/<key>/`
@@ -103,14 +103,18 @@ export function outDir(): string {
  * Consolidating is what makes the backup honest: preserving a finished run is one directory,
  * not a list of globs that has to stay in sync with everything that writes.
  *
- * `out/live` IS THE CANONICAL RECORD — of runs in flight and of every run that has finished. The
- * dashboard, the offline judge, `cleanup` and `humanize` all read it, and nothing moves out of
- * it. `out/archive/<key>/` is a BACKUP taken when a run terminates: a second name for the same
- * bytes, so that losing the live tree (the purges during the 2026-08-01 false starts came close
- * to taking the July 31 results with them) does not lose the results.
+ * `out/bench/live` IS THE CANONICAL RECORD — of runs in flight and of every run that has
+ * finished. The dashboard, the offline judge, `cleanup` and `humanize` all read it, and nothing
+ * moves out of it. `out/bench/archive/<key>/` is a BACKUP taken when a run terminates: a second
+ * name for the same bytes, so that losing the live tree (the purges during the 2026-08-01 false
+ * starts came close to taking the July 31 results with them) does not lose the results.
+ *
+ * Both sit under `out/bench/` because everything either of them holds belongs to the benchmark:
+ * the runs, and the manifest family that indexes them (`out/bench/live/<date>/`, see
+ * bench/manifest.ts). One directory to hand someone, one to back up, one to purge.
  */
-export const LIVE_DIR = "live";
-export const ARCHIVE_DIR = "archive";
+export const LIVE_DIR = "bench/live";
+export const ARCHIVE_DIR = "bench/archive";
 
 /** The canonical names inside a run directory. Legacy locations are resolved by `runFile`. */
 export const RUN_FILES = {
@@ -119,18 +123,43 @@ export const RUN_FILES = {
 	judge: "judge.json",
 	judgeCross: "judge.cross.json",
 	checkpoint: "checkpoint.json",
-	salvageProse: "salvage.md",
-	salvageGraph: "salvage.json",
+	/**
+	 * A grounding pass's OWN copy of the map it produced. `docs/appmaps/<slug>.*` is the
+	 * canonical INPUT — keyed by app so the task agent can find it, and therefore overwritten by
+	 * the next pass on that variant. This copy is keyed by RUN, so it is the record of what THIS
+	 * pass produced and nothing later can overwrite it.
+	 *
+	 * It is also where a DEMOTED pass's map lands and stops: one that did not sweep the frontier,
+	 * or produced under half the committed node count, is written here and deliberately not
+	 * copied over docs/appmaps (see writeArtifacts). Same filename either way — "was it good
+	 * enough to publish" is a property of the pass, not a reason to file its output elsewhere.
+	 */
+	appmap: "appmap.md",
+	appmapGraph: "appmap.json",
+	/**
+	 * The recipe compiled FROM this run (`recipe compile <stamp>`), or, on a replay, the recipe it
+	 * replayed. `docs/recipes/` remains where a recipe is looked up BY NAME; this copy makes the
+	 * run folder answer "what did this run do" without a second lookup that a rename can break.
+	 */
+	recipe: "recipe.json",
 	console: "log.txt",
 	steps: "steps",
 	recording: "recording",
 } as const;
 
-/** Repo-relative (posix) — the form job records use, because they are read on another machine. */
+/**
+ * Repo-relative (posix) — the form job records use, because they are read on another machine.
+ * LIVE_DIR already contains a separator, so it is joined as a posix segment rather than through
+ * path.join: on a non-posix host that would emit backslashes into a string the far side splits.
+ */
 export const runRel = (key: string, ...parts: string[]): string => ["out", LIVE_DIR, key, ...parts].join("/");
 
-export const runDir = (key: string, root = outDir()): string => path.join(root, LIVE_DIR, key);
-export const archiveRunDir = (key: string, root = outDir()): string => path.join(root, ARCHIVE_DIR, key);
+/** The two roots themselves, for things keyed by something other than a run stamp. */
+export const liveDir = (root = outDir()): string => path.join(root, LIVE_DIR);
+export const archiveDir = (root = outDir()): string => path.join(root, ARCHIVE_DIR);
+
+export const runDir = (key: string, root = outDir()): string => path.join(liveDir(root), key);
+export const archiveRunDir = (key: string, root = outDir()): string => path.join(archiveDir(root), key);
 
 /** Where a WRITER puts an artifact: always live, never the archive. */
 export const runPath = (key: string, name: string, root = outDir()): string => path.join(runDir(key, root), name);
@@ -190,18 +219,24 @@ export function archiveRun(key: string, root = outDir()): string | undefined {
 	const from = runDir(key, root);
 	const to = archiveRunDir(key, root);
 	if (!fs.existsSync(from)) return undefined;
-	linkTree(from, to);
+	backupTree(from, to);
 
 	return to;
 }
 
-function linkTree(from: string, to: string): void {
+/**
+ * The backup mechanism itself, exported because a run is not the only thing worth backing up —
+ * the benchmark manifest family is filed by DATE rather than by run stamp and uses this
+ * directly (`archiveBench` in bench/manifest.ts). One implementation, so the two cannot end up
+ * with different ideas of what "backed up" means.
+ */
+export function backupTree(from: string, to: string): void {
 	fs.mkdirSync(to, { recursive: true });
 	for (const ent of fs.readdirSync(from, { withFileTypes: true })) {
 		const src = path.join(from, ent.name);
 		const dst = path.join(to, ent.name);
 		if (ent.isDirectory()) {
-			linkTree(src, dst);
+			backupTree(src, dst);
 			continue;
 		}
 		if (!ent.isFile() || fs.existsSync(dst)) continue;

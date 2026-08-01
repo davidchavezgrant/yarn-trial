@@ -589,6 +589,7 @@ export async function main(): Promise<void> {
 
 			if (toolUse.name === "done") {
 				const graded = await gradeDone({
+					stepsDir,
 					toolUse,
 					messages,
 					records,
@@ -766,6 +767,7 @@ export async function main(): Promise<void> {
 				if (journal.length || claimed.length) {
 					overlay.setDriving(true);
 					cleanupReport = await runTeardown({
+						stepsDir,
 						driver,
 						cdp,
 						client,

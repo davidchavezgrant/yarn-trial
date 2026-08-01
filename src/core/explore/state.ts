@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import fs from "node:fs";
 import { failedProvider, mergeGraph, newDeclaredLedger, newFrontier, OUT, runKey } from "../harness.js";
-import { RUN_FILES, appmapsDir, runDir, runPath } from "../../paths.js";
+import { LIVE_DIR, RUN_FILES, appmapsDir, runDir, runPath } from "../../paths.js";
 import { appmapSlug, type Target, targetSlug } from "../target.js";
 import type { AppMap, AppMapEdge, AppMapHome, AppMapNode, GatedBoundary } from "../../types.js";
 
@@ -61,8 +61,17 @@ export const newPass = (target: Target, app: string, backendKind: string, vision
 	const checkpointPath = runPath(stamp, RUN_FILES.checkpoint);
 	// Where a pass that must not replace the committed map writes instead — the checkpoint's
 	// naming family, promoted by hand. See the demotion decision in writeArtifacts.
-	const salvageProsePath = runPath(stamp, RUN_FILES.salvageProse);
-	const salvageGraphPath = runPath(stamp, RUN_FILES.salvageGraph);
+	// The run's own copy of its map — always written, whether or not it also gets published to
+	// docs/appmaps. Formerly named salvage.md/.json and written only when the pass was demoted,
+	// which meant a SUCCESSFUL pass left no per-run record at all: its map existed once, at a
+	// path keyed by app, waiting to be overwritten by the next pass on that variant.
+	// OUT-relative, because observation.ts joins it onto OUT — the same shape run.ts uses. Every
+	// pass wrote to a shared out/explore-step-N.png before this, so a second grounding pass
+	// silently overwrote the first one's frames and no pass could be reviewed after the next ran.
+	const stepsDir = `${LIVE_DIR}/${stamp}/${RUN_FILES.steps}`;
+	fs.mkdirSync(`${OUT}/${stepsDir}`, { recursive: true });
+	const appmapProsePath = runPath(stamp, RUN_FILES.appmap);
+	const appmapGraphPath = runPath(stamp, RUN_FILES.appmapGraph);
 	// Descent's mutation journal, shared with the task agent's format so `npm run cleanup` can
 	// replay a crashed descent; `claimed` mirrors the agent's ledger.
 	const journalPath = runPath(stamp, RUN_FILES.journal);
@@ -99,8 +108,9 @@ export const newPass = (target: Target, app: string, backendKind: string, vision
 		gated,
 		stamp,
 		checkpointPath,
-		salvageProsePath,
-		salvageGraphPath,
+		stepsDir,
+		appmapProsePath,
+		appmapGraphPath,
 		journalPath,
 		claimed,
 	};

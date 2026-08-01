@@ -1,6 +1,6 @@
 // First import on purpose: redirects dataRoot() to a temp dir before any src/ module
 // snapshots a path from it, so the job registry these tests exercise lands there and not
-// in the checkout's real out/live/.
+// in the checkout's real out/bench/live/.
 import "./data-tmp.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -85,7 +85,7 @@ function job(over: Partial<JobRecord> = {}): JobRecord {
 		state: "running",
 		pid: process.pid,
 		startedAt: new Date().toISOString(),
-		artifacts: { log: "out/live/2026-07-30T12-00-00-yarn/log.txt" },
+		artifacts: { log: "out/bench/live/2026-07-30T12-00-00-yarn/log.txt" },
 		...over,
 	};
 }
@@ -198,7 +198,7 @@ test("defaultRunnerDir__HonoursOverride__When__EnvVarIsSet", () => {
 
 test("mintJobId__MatchesTheRunLogStamp__When__AppNameHasSpaces", () => {
 	const id = mintJobId("task", "Notion Calendar");
-	// Exactly the shape agent.ts builds for out/live/<stamp>-<slug>/run.json, so the job dir, the
+	// Exactly the shape agent.ts builds for out/bench/live/<stamp>-<slug>/run.json, so the job dir, the
 	// run log and the recording dir share one key. Carries milliseconds so a runner dispatching
 	// several jobs in the same second does not mint one id for all of them.
 	assert.match(id, /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}(-\d+)?-notion-calendar$/);
@@ -252,7 +252,7 @@ test("createJob__ListsTheAppmapGraph__When__TheJobIsAnExplorePass", async () => 
 		// A task run has neither — it consumes appmaps, it does not produce them.
 		const task = createJob({ id: "task-job", kind: "task", app: "Notion Calendar", task: "t", operator: "dave" }, dir);
 		assert.equal(task.artifacts.appmapGraph, undefined);
-		assert.equal(task.artifacts.runLog, "out/live/task-job/run.json");
+		assert.equal(task.artifacts.runLog, "out/bench/live/task-job/run.json");
 	});
 });
 
@@ -261,8 +261,8 @@ test("createJob__ListsRunLogAndJournal__When__TheJobIsAReplay", async () => {
 		// recipe-cli.ts writes exactly these two under the run key: the run log always, the
 		// journal only when a step mutated something (pull reads an absent one as `missing`).
 		const rec = createJob({ id: "replay-job", kind: "replay", app: "Yarn", task: "", operator: "dave", recipe: "docs/recipes/yarn.abc123.recipe.json", noRescue: true }, dir);
-		assert.equal(rec.artifacts.runLog, "out/live/replay-job/run.json");
-		assert.equal(rec.artifacts.journal, "out/live/replay-job/journal.jsonl");
+		assert.equal(rec.artifacts.runLog, "out/bench/live/replay-job/run.json");
+		assert.equal(rec.artifacts.journal, "out/bench/live/replay-job/journal.jsonl");
 		assert.equal(rec.artifacts.appmap, undefined);
 		assert.equal(rec.artifacts.recording, undefined);
 		// The recipe path and the rescue posture are on the record — a queued replay spawns
@@ -470,7 +470,7 @@ function fakeSpawner(): { calls: Array<{ command: string; args: string[] }>; env
 
 /**
  * Like fakeSpawner, but creates the log directory first — as the real spawnDetached does. The
- * liveview verb spawns into out/live/liveview-<op>/, a dir that does not exist until the spawner
+ * liveview verb spawns into out/bench/live/liveview-<op>/, a dir that does not exist until the spawner
  * makes it; fakeSpawner appends without mkdir (fine for submit, which reuses an existing job dir).
  * The child exits on its own so nothing lingers after the test.
  */
@@ -1148,7 +1148,7 @@ const noOpen = {
  */
 test("liveview__StartsTheServerAndReturnsPortAndToken__When__TheHostIsFree", async () => {
 	await withTempAsync("yr-serve-", async (dir) => {
-		// The verb passes logFile: out/live/liveview-<op>/log.txt and relies on the spawner to
+		// The verb passes logFile: out/bench/live/liveview-<op>/log.txt and relies on the spawner to
 		// create the directory, exactly as the real spawnDetached does (fakeSpawner appends without
 		// mkdir, which the real one never would).
 		const spawner = mkdirSpawner();
@@ -1553,11 +1553,12 @@ test("submit__FreesTheHost__When__TheJobRegistryWriteFails", async () => {
 		try {
 			const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
 			try {
-				// A file where the run directory should go (the registry lives at out/live now):
+				// A file where the run directory should go (the registry lives at out/bench/live now):
 				// createJob's mkdir throws the way a full disk would — after the lease is taken,
 				// before any child exists.
 				fs.mkdirSync(path.join(dir, "out"), { recursive: true });
-				fs.writeFileSync(path.join(dir, "out", "live"), "not a directory");
+				fs.mkdirSync(path.join(dir, "out", "bench"), { recursive: true });
+				fs.writeFileSync(path.join(dir, "out", "bench", "live"), "not a directory");
 
 				const [res] = await request(runner.socketPath, "submit", { kind: "task", app: "Yarn", task: "t", operator: "dave" });
 				assert.equal(res.ok, false);
@@ -1588,7 +1589,7 @@ test("submit__RecordsACrashAsFailed__When__TheChildDiesToAnUnrequestedSignal", a
 				// Nobody called stop. This is the SIGSEGV/OOM-kill shape, and recording it as
 				// "stopped" would file a crash under an operator's decision.
 				process.kill(res.pid, "SIGTERM");
-				const root = path.join(dir, "out", "live");
+				const root = path.join(dir, "out", "bench", "live");
 				await waitFor("the exit to be finalised", () => readJob(res.jobId, root)?.state !== "running");
 				const rec = readJob(res.jobId, root);
 				assert.equal(rec?.state, "failed");
@@ -1813,8 +1814,8 @@ test("submit__SpawnsRecipeCliWithTheResolvedPath__When__TheKindIsReplay", async 
 			assert.equal(res.ok, true, String(res.error ?? ""));
 			pid = res.pid;
 			assert.match(res.jobId, /^replay-.*-yarn$/);
-			assert.equal(res.artifacts.runLog, `out/live/${res.jobId}/run.json`);
-			assert.equal(res.artifacts.journal, `out/live/${res.jobId}/journal.jsonl`);
+			assert.equal(res.artifacts.runLog, `out/bench/live/${res.jobId}/run.json`);
+			assert.equal(res.artifacts.journal, `out/bench/live/${res.jobId}/journal.jsonl`);
 
 			// recipe-cli's replay verb, with the recipe resolved against THIS Mac's data root.
 			const args = spawner.calls[0].args;

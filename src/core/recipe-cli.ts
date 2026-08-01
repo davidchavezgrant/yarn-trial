@@ -19,7 +19,7 @@ import { startOverlay } from "./overlay.js";
 import { compileRecipe, readRecipe, type Recipe, RecipeCompileError, recipeFileFor } from "./recipe.js";
 import { modelRescue, replayRecipe } from "./replay.js";
 import { runTeardown } from "./teardown.js";
-import { RUN_FILES, archiveRun, recipesDir, runDir, runFile, runPath } from "../paths.js";
+import { LIVE_DIR, RUN_FILES, archiveRun, recipesDir, runDir, runFile, runPath } from "../paths.js";
 import { parseTarget } from "./target.js";
 
 /**
@@ -62,6 +62,15 @@ export function compileFromStamp(stamp: string): { recipe: Recipe; path: string 
 		throw new RecipeCompileError("run was --hinted — its route was dictated, not discovered; re-run goal-only and compile that");
 	const path = recipeFileFor(recipesDir(), recipe.slug, recipe.task);
 	fs.mkdirSync(recipesDir(), { recursive: true });
+	// A copy inside the SOURCE run's folder: compiling is something that run produced, and the
+	// folder is the source of truth for what a run produced. docs/recipes stays the place a
+	// recipe is found by name.
+	try {
+		fs.mkdirSync(runDir(stamp), { recursive: true });
+		fs.writeFileSync(runPath(stamp, RUN_FILES.recipe), JSON.stringify(recipe, null, "\t"));
+	} catch {
+		// The source run may predate the consolidated layout; the canonical write above stands.
+	}
 	fs.writeFileSync(path, `${JSON.stringify(recipe, null, "\t")}\n`);
 
 	return { recipe, path };
@@ -172,6 +181,10 @@ async function main(): Promise<void> {
 		// The replay writes a run log of the same shape as a live run — one writer, in this
 		// function, fields derived in one place (the a86cafc lesson).
 		fs.mkdirSync(runDir(stamp), { recursive: true });
+		// And the recipe it replayed, so the folder answers "what was this replay meant to do"
+		// without resolving a docs/recipes filename that a later recompile changes (the name
+		// carries a content hash).
+		fs.writeFileSync(runPath(stamp, RUN_FILES.recipe), JSON.stringify(recipe, null, "\t"));
 		fs.writeFileSync(
 			runPath(stamp, RUN_FILES.log),
 			`${JSON.stringify(
@@ -197,6 +210,7 @@ async function main(): Promise<void> {
 			if (journal.length) {
 				const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, modelCalls: 0 };
 				await runTeardown({
+					stepsDir: `${LIVE_DIR}/${stamp}/${RUN_FILES.steps}`,
 					driver,
 					cdp,
 					client,

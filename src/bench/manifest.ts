@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { outDir } from "../paths.js";
+import { archiveDir, backupTree, liveDir, outDir } from "../paths.js";
 import type { Phase } from "./matrix.js";
 
 /**
@@ -150,24 +150,60 @@ export interface Manifest {
 /** UTC calendar date, the manifest's identity. */
 export const utcDate = (now = new Date()): string => now.toISOString().slice(0, 10);
 
-export const benchDir = (date = utcDate(), root = outDir()): string => path.join(root, "bench", date);
+/**
+ * The benchmark manifest family: `out/bench/live/<date>/` — manifest.json, the per-arm archived
+ * appmaps collect files there, and the dash's narrative.md.
+ *
+ * Beside the runs it indexes, because it IS their index and the two were separated only by
+ * history. `root` is an OUT-ROOT VARIANT, not the out dir: the default is out/bench/live, and
+ * the dashboard passes out/bench/archive or a plain out/ when reading a pass that exists only in
+ * one of those (see storeRoot in dash.ts). One reader opens a live pass, a backed-up pass and a
+ * pre-2026-08-01 pass with the same call.
+ *
+ * A pass is keyed by DATE and a run by stamp, so the two share this directory without colliding
+ * — `2026-08-01` next to `2026-08-01T03-07-52-979-yarn`. Neither is mistaken for the other:
+ * listJobs maps every name through readJob and a directory with no job.json drops out, and
+ * listRuns skips any directory holding a manifest.json.
+ */
+export const benchDir = (date = utcDate(), root = liveDir()): string => path.join(root, date);
 
-export const manifestPath = (date = utcDate(), root = outDir()): string => path.join(benchDir(date, root), "manifest.json");
+/**
+ * Hard-link the day's manifest family into out/archive/bench/<date>/, the same backup a run
+ * gets when it terminates.
+ *
+ * Called from collect, which is the point at which the manifest has just been told something
+ * durable — what each arm cost, which appmap it produced, how the judge graded it. Cheap enough
+ * to do unconditionally: the family is manifests and appmaps, kilobytes, and the links are free.
+ */
+export function archiveBench(date = utcDate(), outRoot = outDir()): string {
+	const to = benchDir(date, archiveDir(outRoot));
+	backupTree(benchDir(date, liveDir(outRoot)), to);
 
-export function readManifest(date = utcDate(), root = outDir()): Manifest {
-	const file = manifestPath(date, root);
-	try {
-		const m = JSON.parse(fs.readFileSync(file, "utf8")) as Manifest;
-		if (Array.isArray(m.entries)) return m;
-	} catch {
-		// Absent or unparseable both mean "no benchmark yet today" — writeManifest creates it.
+	return to;
+}
+
+export const manifestPath = (date = utcDate(), root = liveDir()): string => path.join(benchDir(date, root), "manifest.json");
+
+export function readManifest(date = utcDate(), root = liveDir()): Manifest {
+	// Live, then the backup, then the pre-2026-08-01 location — the same three-step fallback
+	// runFile does for run artifacts, and for the same reason: a layout change must not make a
+	// finished pass unreadable. An explicit non-default `root` is honoured as given, because the
+	// dashboard has already resolved which root holds the pass it wants.
+	const candidates = root === liveDir() ? [root, archiveDir(), outDir()] : [root];
+	for (const r of candidates) {
+		try {
+			const m = JSON.parse(fs.readFileSync(manifestPath(date, r), "utf8")) as Manifest;
+			if (Array.isArray(m.entries)) return m;
+		} catch {
+			// Absent or unparseable both mean "not here" — try the next root, then start fresh.
+		}
 	}
 
 	return { date, createdAt: new Date().toISOString(), entries: [] };
 }
 
 /** Atomic replace, the writeJob pattern: sibling temp + rename, removed on any failure. */
-export function writeManifest(m: Manifest, root = outDir()): void {
+export function writeManifest(m: Manifest, root = liveDir()): void {
 	const dir = benchDir(m.date, root);
 	fs.mkdirSync(dir, { recursive: true });
 	const target = path.join(dir, "manifest.json");

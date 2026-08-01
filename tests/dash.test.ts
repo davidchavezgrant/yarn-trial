@@ -537,13 +537,14 @@ test("LoadEnvFallback__DoesNothing__When__EnvironmentAlreadyHoldsAKey", () => {
 });
 
 /*
- * The store adapter. The runner saves all live data under out/live (canonical, read-only to
- * the dash) with out/archive as a hard-linked backup; anything older sits at its legacy path
+ * The store adapter. The runner saves all live data under out/bench/live (canonical, read-only to
+ * the dash) with out/bench/archive as a hard-linked backup; anything older sits at its legacy path
  * (out/bench, out/jobs, out/runs). Every dash read resolves live → archive → legacy, so
  * these pin the precedence with real directories the way the buildDetail fixtures do.
  */
 
-const REL = ["bench", "2026-08-01", "manifest.json"];
+// A pass is addressed by DATE; the store roots supply everything above it.
+const REL = ["2026-08-01", "manifest.json"];
 
 const plant = (root: string, parts: string[], body = "{}"): void => {
 	fs.mkdirSync(path.join(root, ...parts.slice(0, -1)), { recursive: true });
@@ -553,9 +554,9 @@ const plant = (root: string, parts: string[], body = "{}"): void => {
 test("FromStore__PrefersLive__When__LiveAndLegacyBothExist", () => {
 	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-store-"));
 	try {
-		plant(out, ["live", ...REL]);
-		plant(out, REL);
-		assert.equal(fromStore(REL, out), path.join(out, "live", ...REL));
+		plant(out, ["bench", "live", ...REL]);
+		plant(out, ["bench", ...REL]);
+		assert.equal(fromStore(REL, out), path.join(out, "bench", "live", ...REL));
 	} finally {
 		fs.rmSync(out, { recursive: true, force: true });
 	}
@@ -564,11 +565,11 @@ test("FromStore__PrefersLive__When__LiveAndLegacyBothExist", () => {
 test("FromStore__FallsBackToArchiveThenLegacy__When__LiveIsAbsent", () => {
 	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-store-"));
 	try {
-		plant(out, ["archive", ...REL]);
-		plant(out, REL);
-		assert.equal(fromStore(REL, out), path.join(out, "archive", ...REL));
-		fs.rmSync(path.join(out, "archive"), { recursive: true });
-		assert.equal(fromStore(REL, out), path.join(out, ...REL));
+		plant(out, ["bench", "archive", ...REL]);
+		plant(out, ["bench", ...REL]);
+		assert.equal(fromStore(REL, out), path.join(out, "bench", "archive", ...REL));
+		fs.rmSync(path.join(out, "bench", "archive"), { recursive: true });
+		assert.equal(fromStore(REL, out), path.join(out, "bench", ...REL));
 	} finally {
 		fs.rmSync(out, { recursive: true, force: true });
 	}
@@ -590,7 +591,7 @@ test("DefaultDashDate__FindsTheDrainUnderLive__When__LegacyTreeHoldsAnOlderDay",
 	try {
 		const full = JSON.stringify({ date: "x", createdAt: "x", entries: [{ jobId: "j" }] });
 		plant(out, ["bench", "2026-07-31", "manifest.json"], full);
-		plant(out, ["live", "bench", "2026-08-01", "manifest.json"], full);
+		plant(out, ["bench", "live", "2026-08-01", "manifest.json"], full);
 		// An empty next-day husk (any post-midnight collect mints one) must not outrank either.
 		plant(out, ["bench", "2026-08-02", "manifest.json"], JSON.stringify({ date: "x", createdAt: "x", entries: [] }));
 		assert.equal(defaultDashDate(out), "2026-08-01");
@@ -600,15 +601,15 @@ test("DefaultDashDate__FindsTheDrainUnderLive__When__LegacyTreeHoldsAnOlderDay",
 });
 
 test("BuildDetail__ReadsRunLog__When__RunLandedInTheLiveStore", () => {
-	// The consolidated layout: one directory per run, out/live/<job>/run.json — no legacy
+	// The consolidated layout: one directory per run, out/bench/live/<job>/run.json — no legacy
 	// out/runs fallback involved. The walk must come out identical to the legacy fixture's.
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dash-detail-live-"));
 	try {
 		fs.mkdirSync(path.join(dir, "docs", "appmaps"), { recursive: true });
 		fs.writeFileSync(path.join(dir, "docs", "appmaps", "yarn.json"), JSON.stringify(GRAPH));
-		fs.mkdirSync(path.join(dir, "out", "live", "job-l"), { recursive: true });
+		fs.mkdirSync(path.join(dir, "out", "bench", "live", "job-l"), { recursive: true });
 		fs.writeFileSync(
-			path.join(dir, "out", "live", "job-l", "run.json"),
+			path.join(dir, "out", "bench", "live", "job-l", "run.json"),
 			JSON.stringify({ task: "show me how to change the cursor type", steps: [rawStep(0, "Brand Kit"), rawStep(1, "Screen Clips"), rawStep(2, "Cursor Style")] }),
 		);
 		const m = manifest(entry({ jobId: "job-l", state: "done", collected: true }));
@@ -622,7 +623,7 @@ test("BuildDetail__ReadsRunLog__When__RunLandedInTheLiveStore", () => {
 });
 
 test("ParseDashArgs__DefaultsToPureReader__When__NoCollectFlagGiven", () => {
-	// READ-ONLY posture: out/live is the runner's store; collecting is opt-in. --date keeps
+	// READ-ONLY posture: out/bench/live is the runner's store; collecting is opt-in. --date keeps
 	// the parse off the real repo's bench tree.
 	assert.equal(parseDashArgs(["--date", "2026-08-01"]).autoCollect, false);
 	assert.equal(parseDashArgs(["--date", "2026-08-01", "--collect"]).autoCollect, true);

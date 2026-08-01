@@ -141,6 +141,12 @@ export interface TeardownArgs {
 	 */
 	mode: string;
 	vision: boolean;
+	/**
+	 * OUT-relative frame directory for this run. Optional because the standalone `cleanup` CLI
+	 * replays a journal for a run whose directory may predate the consolidation; absent, the
+	 * frames fall back to the shared out/cleanup-*.png names they always used.
+	 */
+	stepsDir?: string;
 	usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; modelCalls: number };
 }
 
@@ -204,7 +210,7 @@ async function restoreOne(a: TeardownArgs, m: Mutation, index: number): Promise<
 		? { description: `${m.control} reads "${m.before}" again`, textIncludes: [m.before] }
 		: { description: `${m.control} is empty again` };
 
-	let obs = await doObserve(`cleanup-${index}-0`);
+	let obs = await doObserve(shotName(a, `cleanup-${index}-0`));
 	// The run may have ended on the very surface this control lives on, in which case the
 	// value is already back within reach and the model never needs to be called at all.
 	if (controlReads(obs, m.control, m.surface, m.before))
@@ -290,7 +296,7 @@ async function restoreOne(a: TeardownArgs, m: Mutation, index: number): Promise<
 		// Read per step rather than at module load: the fake-actuator tests zero it so they do
 		// not spend real seconds settling, and a Mac with a slow target can raise it the same way.
 		await new Promise((res) => setTimeout(res, envNum("CLEANUP_SETTLE_MS", SETTLE_MS)));
-		obs = await doObserve(`cleanup-${index}-${step}`);
+		obs = await doObserve(shotName(a, `cleanup-${index}-${step}`));
 
 		// The harness's check, not the model's — `wanted` came from the journal before this
 		// loop began, so nothing the model says can widen it. The value scan is the authority
@@ -342,6 +348,9 @@ async function restoreOne(a: TeardownArgs, m: Mutation, index: number): Promise<
 
 	return { ...base, why: `not restored within ${a.budget} steps` };
 }
+
+/** Namespace a frame under the run when the caller knows which run this is. */
+const shotName = (a: TeardownArgs, suffix: string): string => (a.stepsDir ? `${a.stepsDir}/${suffix}` : suffix);
 
 export async function runTeardown(a: TeardownArgs): Promise<Record<string, unknown>> {
 	// Both would make every act ambiguous; neither would make restoreOne dereference undefined

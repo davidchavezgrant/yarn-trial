@@ -146,9 +146,17 @@ export const writeArtifacts = (p: Pass, out: FinishInput, stopped: StopReason, s
 	} catch {} // no committed map, or an unparseable one — nothing to protect
 	const modelFinished = stopped === "frontier-empty" || stopped === "frontier-conceded";
 	const demoted = salvaged || (!modelFinished && p.graphNodes.size * 2 < committedNodes);
-	const prosePath = demoted ? p.salvageProsePath : p.outPath;
-	const jsonPath = demoted ? p.salvageGraphPath : p.graphPath;
-	fs.writeFileSync(prosePath, prose);
+	// The run's own copy is written ALWAYS, and first: whatever this pass produced belongs with
+	// the pass, at a path nothing later can overwrite. Publishing to docs/appmaps is the separate,
+	// conditional step below — that path is keyed by app, so the next pass on the same variant
+	// replaces it, and before this every successful pass's map existed in exactly one overwritable
+	// place.
+	fs.writeFileSync(p.appmapProsePath, prose);
+	if (!demoted) fs.writeFileSync(p.outPath, prose);
+	// What to TELL the operator: the published path when it was published, the run's copy when
+	// the pass was held back.
+	const prosePath = demoted ? p.appmapProsePath : p.outPath;
+	const jsonPath = demoted ? p.appmapGraphPath : p.graphPath;
 	console.log(`\n=== exploration ${salvaged ? "SALVAGED" : "finished"} after ${p.actions} actions, ${elapsed}, ${p.findings.length} findings ===`);
 	console.log(`stopped: ${stopped} | controls${p.visionOnly ? " (declared)" : ""}: ${cov.actuated} actuated / ${cov.dismissed} dismissed / ${cov.seen} seen across ${cov.surfaces} surfaces | chapters: ${p.chapters}`);
 	if (p.refusals > 0) console.log(`safety guard refused ${p.refusals} action(s) on destructive-looking labels`);
@@ -166,7 +174,9 @@ export const writeArtifacts = (p: Pass, out: FinishInput, stopped: StopReason, s
 		edges: [...p.graphEdges.values()],
 		...(p.gated.length ? { gated: p.gated } : {}),
 	};
-	fs.writeFileSync(jsonPath, JSON.stringify(graph, null, 2));
+	const graphJson = JSON.stringify(graph, null, 2);
+	fs.writeFileSync(p.appmapGraphPath, graphJson);
+	if (!demoted) fs.writeFileSync(p.graphPath, graphJson);
 	if (p.gated.length) console.log(`gated boundaries: ${cov.gatedRead} read / ${cov.gatedRefused} refused`);
 	const ambiguities = findScopeAmbiguities(graph);
 	console.log(`structured graph: ${jsonPath} (${graph.nodes.length} nodes, ${graph.edges.length} edges)`);

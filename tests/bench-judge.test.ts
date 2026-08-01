@@ -8,15 +8,20 @@ import { type ManifestEntry, type RunMetrics, writeManifest } from "../src/bench
 import { armById } from "../src/bench/matrix.js";
 import { judgeDisagreements, writeReport } from "../src/bench/report.js";
 import { withTemp, withTempAsync } from "./fixtures.js";
+import { liveDir, RUN_FILES, runDir } from "../src/paths.js";
 
 /**
  * The bench judge, offline by construction — same rule as bench.test.ts: the judge model
  * call is an injected fake, every manifest and artifact lands in a temp dir. Nothing here
  * may call OpenRouter; a stray real judge spends money and returns nondeterminism.
  *
- * Layout mirrors the collect tests: one temp dir per test, `outRoot = <dir>/out` (manifest
- * at <outRoot>/bench/<date>/manifest.json), `dataDir = <dir>` (run logs and judge artifacts
- * at <dataDir>/out/runs/).
+ * Layout mirrors the collect tests: one temp dir per test, `outRoot = <dir>/out` (manifest at
+ * <outRoot>/live/bench/<date>/manifest.json since the 2026-08-01 consolidation), `dataDir =
+ * <dir>` (run log and judge artifact together in <dataDir>/out/bench/live/<jobId>/).
+ *
+ * The fixtures use the CURRENT layout deliberately. The pre-consolidation one still resolves
+ * through runFile's fallback and is covered in runs.test.ts; leaving these on the old paths
+ * would have meant nothing exercised judgeBench against what production actually writes.
  */
 
 const DATE = "2026-07-31";
@@ -54,22 +59,22 @@ const entry = (armId: string, jobId: string, over: Partial<ManifestEntry> = {}):
 });
 
 function seedManifest(outRoot: string, entries: ManifestEntry[]): void {
-	writeManifest({ date: DATE, createdAt: "2026-07-31T09:00:00.000Z", entries }, outRoot);
+	writeManifest({ date: DATE, createdAt: "2026-07-31T09:00:00.000Z", entries }, liveDir(outRoot));
 }
 
-function runsDir(dataDir: string): string {
-	const dir = path.join(dataDir, "out", "runs");
+function runsDir(dataDir: string, jobId: string): string {
+	const dir = runDir(jobId, path.join(dataDir, "out"));
 	fs.mkdirSync(dir, { recursive: true });
 
 	return dir;
 }
 
 function writeRunLog(dataDir: string, jobId: string): void {
-	fs.writeFileSync(path.join(runsDir(dataDir), `${jobId}.json`), JSON.stringify({ task: "t", app: "Yarn", success: true }));
+	fs.writeFileSync(path.join(runsDir(dataDir, jobId), RUN_FILES.log), JSON.stringify({ task: "t", app: "Yarn", success: true }));
 }
 
 function writeJudgeArtifact(dataDir: string, jobId: string, report: Record<string, unknown> = { trajectory: "PASS" }): void {
-	fs.writeFileSync(path.join(runsDir(dataDir), `${jobId}.judge.json`), JSON.stringify(report));
+	fs.writeFileSync(path.join(runsDir(dataDir, jobId), RUN_FILES.judge), JSON.stringify(report));
 }
 
 /** An injected judge that records its calls and throws for the stamps it is told to. */

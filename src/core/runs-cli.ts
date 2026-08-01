@@ -1,5 +1,5 @@
 /**
- * `./run runs list|drop|purge` — operating on out/live, which is the canonical record.
+ * `./run runs list|drop|purge` — operating on out/bench/live, which is the canonical record.
  *
  * This exists because the two operations David actually performs on run data are "this run
  * failed, take it out and re-run it" and "we screwed the whole attempt up, start over", and
@@ -58,6 +58,10 @@ export function listRuns(root = outDir()): RunRow[] {
 	}
 
 	return names
+		// A pass index, not a run: the manifest family is keyed by date and shares this directory
+		// (out/bench/live/2026-08-01 beside out/bench/live/2026-08-01T03-07-52-979-yarn). Without
+		// this it lists as a run with no log, which reads as "still executing" and blocks purge.
+		.filter((key) => !fs.existsSync(path.join(runDir(key, root), "manifest.json")))
 		.map((key) => {
 			const dir = runDir(key, root);
 			// The run log is the only place the outcome is recorded; a run still in flight has
@@ -86,7 +90,7 @@ const mb = (bytes: number): string => `${(bytes / 1e6).toFixed(1)} MB`;
  */
 export function dropRun(key: string, root = outDir()): { dropped: boolean; backedUp: boolean; reason?: string } {
 	const dir = runDir(key, root);
-	if (!fs.existsSync(dir)) return { dropped: false, backedUp: false, reason: "no such run in out/live" };
+	if (!fs.existsSync(dir)) return { dropped: false, backedUp: false, reason: "no such run in out/bench/live" };
 	// Back up FIRST, unconditionally. An already-backed-up run re-links only the files the
 	// archive is missing, so this is cheap and closes the window where a run finished writing
 	// after its backup was taken.
@@ -104,8 +108,8 @@ export function dropRun(key: string, root = outDir()): { dropped: boolean; backe
 
 function usage(): never {
 	console.error("usage: ./run runs list");
-	console.error("       ./run runs drop <stamp> [<stamp> …]   remove from out/live, keeping the backup");
-	console.error("       ./run runs purge [--yes]              remove every run from out/live, keeping backups");
+	console.error("       ./run runs drop <stamp> [<stamp> …]   remove from out/bench/live, keeping the backup");
+	console.error("       ./run runs purge [--yes]              remove every run from out/bench/live, keeping backups");
 	process.exit(1);
 }
 

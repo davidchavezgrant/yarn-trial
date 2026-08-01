@@ -23,6 +23,7 @@ import { runExploreLoop } from "./explore/loop.js";
 import { requestFinish } from "./explore/model.js";
 import { CLAIM_TOOL, EXTRA_TOOLS, SURVEY_TOOL, systemPrompt, VISION_ACT_TOOL } from "./explore/prompt.js";
 import { accumulatedGraph, newPass } from "./explore/state.js";
+import { LIVE_DIR, RUN_FILES } from "../paths.js";
 
 async function main(): Promise<void> {
 	const { target, app, guidance, backendKind, vision, noAx } = parseCli();
@@ -169,7 +170,7 @@ async function main(): Promise<void> {
 			// .json pairing a proseSha256 that no longer matches the prose beside it.
 			console.error(`salvage call failed: ${rescueErr instanceof Error ? rescueErr.message : String(rescueErr)}`);
 			fs.writeFileSync(
-				p.salvageProsePath,
+				p.appmapProsePath,
 				provenanceHeader({
 					app: p.app,
 					actions: p.actions,
@@ -193,11 +194,11 @@ async function main(): Promise<void> {
 				edges: [...p.graphEdges.values()],
 				...(p.gated.length ? { gated: p.gated } : {}),
 			};
-			fs.writeFileSync(p.salvageGraphPath, JSON.stringify(rawGraph, null, 2));
-			console.log(`wrote ${p.findings.length} raw findings to ${p.salvageProsePath}`);
-			console.log(`graph: ${p.salvageGraphPath} (${rawGraph.nodes.length} nodes); promote by hand if it is the better map:`);
-			console.log(`  cp ${p.salvageProsePath} ${p.outPath}`);
-			console.log(`  cp ${p.salvageGraphPath} ${p.graphPath}`);
+			fs.writeFileSync(p.appmapGraphPath, JSON.stringify(rawGraph, null, 2));
+			console.log(`wrote ${p.findings.length} raw findings to ${p.appmapProsePath}`);
+			console.log(`graph: ${p.appmapGraphPath} (${rawGraph.nodes.length} nodes); promote by hand if it is the better map:`);
+			console.log(`  cp ${p.appmapProsePath} ${p.outPath}`);
+			console.log(`  cp ${p.appmapGraphPath} ${p.graphPath}`);
 		}
 	} finally {
 		// Put the app back BEFORE closing the backends — teardown needs one of them. Wrapped so
@@ -218,6 +219,7 @@ async function main(): Promise<void> {
 					console.log(`\n=== descent cleanup: ${settings.length} mutation(s), ${p.claimed.length} claimed resource(s) ===`);
 					overlay.setDriving(true);
 					const report = await runTeardown({
+						stepsDir: `${LIVE_DIR}/${p.stamp}/${RUN_FILES.steps}`,
 						...(cdp ? { cdp } : { driver: driver! }),
 						client,
 						model,

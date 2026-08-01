@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url";
 import { auditTaskPrompt } from "../core/harness.js";
-import { outDir, relToData } from "../paths.js";
+import { liveDir, outDir, relToData } from "../paths.js";
 import { AUTO_HOST, type DispatchOptions, dispatchNotes, type DispatchResult } from "../remote/control/dispatch.js";
 import { CHALLENGER_N, challengerNeedsExplore, planChallenger } from "./challenger.js";
 import { collect } from "./collect.js";
@@ -216,7 +216,7 @@ async function runCompiles(phase: Phase, manifest: Manifest, opts: Required<Pick
 			m = recordSubmissions(m, [{ ...entry, state: "failed", note: `compile refused: ${(e as Error).message}` }]);
 			opts.log(`${arm.id}: compile refused — ${(e as Error).message}`);
 		}
-		writeManifest(m, opts.outRoot ?? outDir());
+		writeManifest(m, liveDir(opts.outRoot ?? outDir()));
 	}
 
 	return m;
@@ -245,7 +245,8 @@ export async function runChallenger(
 	const outRoot = opts.outRoot ?? outDir();
 	const date = opts.date ?? utcDate();
 	const dispatchFn = opts.dispatchFn ?? (await defaultDispatch());
-	let manifest = readManifest(date, outRoot);
+	const liveRoot = liveDir(outRoot);
+	let manifest = readManifest(date, liveRoot);
 
 	const exploreDone = explore ? entriesForArm(manifest, explore.id, model).some((e) => e.collected) : true;
 	const wave: Array<{ arm: Arm; sample: number }> = [];
@@ -281,7 +282,7 @@ export async function runChallenger(
 				...(w.arm.env ? { env: w.arm.env } : {}),
 			},
 		]);
-		writeManifest(manifest, outRoot);
+		writeManifest(manifest, liveRoot);
 		log(`✓ ${w.arm.id} [${w.sample + 1}/${explore && !exploreDone ? 1 : CHALLENGER_N}] -> ${result.jobId} on ${result.host.name}${result.queued ? " (queued)" : ""}`);
 	}
 	log(`\nsubmitted ${submitted}. Then: ./run bench collect && ./run bench judge --cross`);
@@ -377,7 +378,8 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 	const log = opts.log ?? console.log;
 	const outRoot = opts.outRoot ?? outDir();
 	const date = opts.date ?? utcDate();
-	let manifest = readManifest(date, outRoot);
+	const liveRoot = liveDir(outRoot);
+	let manifest = readManifest(date, liveRoot);
 
 	const hinted = auditPhase(phase);
 	if (hinted.length) {
@@ -454,7 +456,7 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 		]);
 		// After every accept, not at the end: a dead laptop mid-phase must not orphan the
 		// stamps of runs the fleet is already draining.
-		writeManifest(manifest, outRoot);
+		writeManifest(manifest, liveRoot);
 		log(`✓ ${p.arm.id} [${p.sample + 1}/${p.arm.n}] -> ${result.jobId} on ${result.host.name}${result.queued ? ` (queued #${result.position ?? "?"})` : ""}`);
 		for (const note of dispatchNotes(result)) log(`    ${note}`);
 		log(`    follow: ./run dispatch ${result.host.name} follow ${result.jobId}`);
@@ -530,11 +532,11 @@ export function dateArg(argv: string[]): string | undefined {
  */
 function warnRollover(date: string, outRoot: string, log: (s: string) => void): void {
 	try {
-		if (readManifest(date, outRoot).entries.length) return;
+		if (readManifest(date, liveDir(outRoot)).entries.length) return;
 		const prev = new Date(`${date}T00:00:00Z`);
 		prev.setUTCDate(prev.getUTCDate() - 1);
 		const yday = prev.toISOString().slice(0, 10);
-		const entries = readManifest(yday, outRoot).entries;
+		const entries = readManifest(yday, liveDir(outRoot)).entries;
 		if (!entries.length) return;
 		log(`NOTE: today's manifest (${date}) is empty, but ${yday} holds ${entries.length} entr(ies) — the UTC date rolled over.`);
 		log(`      A phase re-run now re-dispatches arms already collected yesterday. Continue that pass with: --date ${yday}`);
@@ -639,7 +641,7 @@ async function main(argv: string[]): Promise<number> {
 		}
 		const pi = argv.indexOf("--primary");
 		const primary = pi >= 0 && argv[pi + 1] && !argv[pi + 1].startsWith("--") ? argv[pi + 1] : "azure/gpt-5.6-sol";
-		const manifest = readManifest(dateArg(argv) ?? utcDate(), outDir());
+		const manifest = readManifest(dateArg(argv) ?? utcDate());
 		const plan = planChallenger(manifest, primary);
 		if (!plan) {
 			console.error(`REFUSED: no collected phase-2 runs for the primary model (${primary}), so there is no winner to challenge.`);
@@ -672,7 +674,7 @@ async function main(argv: string[]): Promise<number> {
 		const startingAt = si >= 0 && argv[si + 1] ? String(argv[si + 1]) : `${utcDate()}T00:00:00Z`;
 		const bi = argv.indexOf("--bucket");
 		const bucketWidth = (bi >= 0 ? argv[bi + 1] : "1h") as "1m" | "1h" | "1d";
-		const m = readManifest(dateArg(argv) ?? utcDate(), outDir());
+		const m = readManifest(dateArg(argv) ?? utcDate());
 		const estimated = rollupCost(
 			m.entries
 				.filter((e) => e.collected)

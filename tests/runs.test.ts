@@ -1,7 +1,7 @@
 /**
  * The run directory, its backup, and the two operations performed on them by hand.
  *
- * `out/live/<key>/` is the canonical record; `out/archive/<key>/` is a hard-linked backup taken
+ * `out/bench/live/<key>/` is the canonical record; `out/bench/archive/<key>/` is a hard-linked backup taken
  * when a run ends. The properties worth testing are the ones a `rm -rf` depends on: that the
  * backup survives the live copy being deleted, and that nothing deletes a run it has not backed
  * up first. Everything else here is path arithmetic.
@@ -107,8 +107,8 @@ test("runFile__FallsBackThroughArchiveToTheOldLayout__When__TheLiveCopyIsGone", 
 test("runRel__StaysPosix__When__BuildingAWirePath", () => {
 	// Job records cross to another machine and are joined against ITS data root, so these are
 	// posix strings by contract — path.join would emit backslashes on a non-posix host.
-	assert.equal(runRel("k"), "out/live/k");
-	assert.equal(runRel("k", RUN_FILES.recording, "window.mp4"), "out/live/k/recording/window.mp4");
+	assert.equal(runRel("k"), "out/bench/live/k");
+	assert.equal(runRel("k", RUN_FILES.recording, "window.mp4"), "out/bench/live/k/recording/window.mp4");
 });
 
 test("dropRun__RemovesFromLiveAndKeepsTheBackup__When__ARunNeedsReRunning", () => {
@@ -127,7 +127,7 @@ test("dropRun__RemovesFromLiveAndKeepsTheBackup__When__ARunNeedsReRunning", () =
 
 test("dropRun__Refuses__When__TheRunIsNotThere", () => {
 	withOut((root) => {
-		fs.mkdirSync(path.join(root, "live"), { recursive: true });
+		fs.mkdirSync(path.join(root, "bench", "live"), { recursive: true });
 		const res = dropRun("ghost", root);
 
 		assert.equal(res.dropped, false);
@@ -151,4 +151,39 @@ test("listRuns__NamesRunsWithNoLogAsInFlight__When__TheyHaveNotFinished", () => 
 		assert.equal(rows.find((r) => r.key === "run-bad")?.success, false);
 		assert.equal(rows.every((r) => !r.backedUp), true, "nothing is backed up until a run ends");
 	});
+});
+
+test("RunArtifacts__AreAllRunScoped__When__EveryWriterIsChecked", () => {
+	// The property David asked for: a run folder holds LITERALLY every artifact that run
+	// produces. This is a source-level guard rather than a behavioural one because the failure
+	// mode is silent — a writer that emits `out/agent-final.png` works perfectly until the
+	// second run, then overwrites the first run's evidence with no error anywhere.
+	//
+	// That is not hypothetical. Three writers were doing it as of 2026-08-01: the final frame the
+	// visual judge grades, the teardown's restore frames, and every explore pass's step frames.
+	// A July 29 run's "step 7" resolving to July 30 pixels is what made the offline judge refuse
+	// to trust bare filenames at all.
+	const root = path.resolve(import.meta.dirname, "..", "src");
+	const offenders: string[] = [];
+	const walk = (dir: string): void => {
+		for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+			const p = path.join(dir, e.name);
+			if (e.isDirectory()) {
+				// probes/ are one-off measurement instruments, not runs — they may write anywhere.
+				if (e.name !== "probes") walk(p);
+				continue;
+			}
+			if (!e.name.endsWith(".ts")) continue;
+			const src = fs.readFileSync(p, "utf8");
+			for (const [i, line] of src.split("\n").entries()) {
+				if (line.trimStart().startsWith("*") || line.trimStart().startsWith("//")) continue;
+				// An observation's shot name reaches OUT/<name>.png. Run-scoped names interpolate a
+				// steps directory; a bare string literal does not.
+				const m = /doObserve\(\s*(["'`])([^"'`$]*)\1\s*\)/.exec(line);
+				if (m) offenders.push(`${path.relative(root, p)}:${i + 1} doObserve("${m[2]}") — writes a shared out/${m[2]}.png`);
+			}
+		}
+	};
+	walk(root);
+	assert.deepEqual(offenders, [], `these writers escape the run directory:\n  ${offenders.join("\n  ")}`);
 });

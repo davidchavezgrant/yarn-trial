@@ -2,11 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { findScopeAmbiguities } from "../core/harness.js";
 import { readJournal } from "../core/journal.js";
-import { RUN_FILES, appSlug, dataRoot as dataRootDir, outDir, runFile } from "../paths.js";
+import { RUN_FILES, appSlug, dataRoot as dataRootDir, liveDir, outDir, runFile } from "../paths.js";
 import { appmapSlug } from "../core/target.js";
 import type { JobRecord } from "../remote/runner/jobs.js";
 import { type Arm, armAppmapSlug, armById } from "./matrix.js";
-import { benchDir, type Manifest, type ManifestEntry, readManifest, type RunMetrics, updateEntry, utcDate, writeManifest } from "./manifest.js";
+import { archiveBench, benchDir, readManifest, type Manifest, type ManifestEntry, type RunMetrics, updateEntry, utcDate, writeManifest } from "./manifest.js";
 import { writeReport } from "./report.js";
 
 /**
@@ -237,7 +237,8 @@ export async function collect(opts: CollectOptions = {}): Promise<CollectOutcome
 	const dataDir = opts.dataDir ?? dataRootDir();
 	const log = opts.log ?? console.error;
 	const pull = opts.pull ?? (await defaultPull());
-	let manifest = readManifest(date, outRoot);
+	const liveRoot = liveDir(outRoot);
+	let manifest = readManifest(date, liveRoot);
 	const collected: string[] = [];
 	const pending: string[] = [];
 
@@ -262,16 +263,16 @@ export async function collect(opts: CollectOptions = {}): Promise<CollectOutcome
 		const state = job?.state ?? entry.state;
 		if (!TERMINAL.has(state)) {
 			manifest = updateEntry(manifest, { ...entry, state });
-			writeManifest(manifest, outRoot);
+			writeManifest(manifest, liveRoot);
 			pending.push(entry.jobId);
 			log(`… ${entry.armId} ${entry.jobId}: still ${state}`);
 			continue;
 		}
 
-		const next = groundingChecked(collectEntry(entry, job, dataDir, state, benchDir(date, outRoot)));
+		const next = groundingChecked(collectEntry(entry, job, dataDir, state, benchDir(date, liveRoot)));
 		await humanizePulled(entry, job, dataDir, log);
 		manifest = updateEntry(manifest, next);
-		writeManifest(manifest, outRoot);
+		writeManifest(manifest, liveRoot);
 		collected.push(entry.jobId);
 		log(`✓ ${entry.armId} ${entry.jobId}: ${state}${next.note ? ` — ${next.note}` : ""}`);
 	}
@@ -282,7 +283,26 @@ export async function collect(opts: CollectOptions = {}): Promise<CollectOutcome
 	for (const warning of poisonedHosts(manifest)) log(warning);
 
 	const reportPath = writeReport(manifest, { ...(opts.reportDir ? { dir: opts.reportDir } : {}) });
-	writeManifest(manifest, outRoot);
+	// A second copy beside the manifest it was rendered from. docs/research/ is where the report
+	// is READ (committed, linked, shared); this one keeps the pass folder self-contained, so
+	// handing someone out/bench/archive/<date>/ hands them the numbers and their provenance
+	// together rather than a manifest plus instructions.
+	try {
+		fs.copyFileSync(reportPath, path.join(benchDir(date, liveRoot), path.basename(reportPath)));
+	} catch (err) {
+		log(`report copy into the pass folder failed: ${err instanceof Error ? err.message : String(err)}`);
+	}
+	writeManifest(manifest, liveRoot);
+	// Back the manifest family up on every collect, not only on the last one. Collect is where
+	// the pass acquires the facts that cannot be recomputed — each arm's cost and tokens, the
+	// per-job appmap copies, the judge verdicts — and it is idempotent and re-run repeatedly by
+	// the dashboard, so "the last collect wins" is not a schedule anyone controls. Hard links
+	// on kilobytes: cheap enough that there is no reason to be selective.
+	try {
+		archiveBench(date, outRoot);
+	} catch (err) {
+		log(`backup: could not copy the manifest to out/archive — ${err instanceof Error ? err.message : String(err)}`);
+	}
 
 	return { manifest, collected, pending, reportPath };
 }
@@ -461,11 +481,20 @@ function collectEntry(entry: ManifestEntry, job: JobRecord | undefined, dataDir:
 		// p1-explore-ax-noaxdom was graded against p1-explore-ax's map — the existsSync guard
 		// passing precisely BECAUSE the sibling's file was sitting there. The two arms would
 		// have reported byte-identical numbers and the sidecar would have looked worthless.
+		//
+		// FIRST CHOICE is the run's OWN copy (out/bench/live/<jobId>/appmap.md), written by the
+		// pass itself since 2026-08-01. docs/appmaps is keyed by APP, so a second pass on the same
+		// variant overwrites it — and on a three-Mac fleet the passes that share a variant finish
+		// minutes apart. Reading the app-keyed file has always been a race that collect happened
+		// to win; the run-keyed copy cannot be overwritten by anything.
+		const dataOut = path.join(dataDir, "out");
+		const own = runFile(entry.jobId, RUN_FILES.appmap, dataOut);
 		const derived = path.join(dataDir, `docs/appmaps/${armAppmapSlug(arm)}.md`);
 		const recorded = job?.artifacts?.appmap ? path.join(dataDir, job.artifacts.appmap) : undefined;
-		const md = recorded && fs.existsSync(recorded) ? recorded : derived;
+		const md = fs.existsSync(own) ? own : recorded && fs.existsSync(recorded) ? recorded : derived;
+		const ownGraph = runFile(entry.jobId, RUN_FILES.appmapGraph, dataOut);
 		const recordedGraph = job?.artifacts?.appmapGraph ? path.join(dataDir, job.artifacts.appmapGraph) : undefined;
-		const graphFile = recordedGraph && fs.existsSync(recordedGraph) ? recordedGraph : md.replace(/\.md$/, ".json");
+		const graphFile = md === own && fs.existsSync(ownGraph) ? ownGraph : recordedGraph && fs.existsSync(recordedGraph) ? recordedGraph : md.replace(/\.md$/, ".json");
 		try {
 			metrics = { ...metrics, ...parseAppmapStamp(fs.readFileSync(md, "utf8")) };
 		} catch {
