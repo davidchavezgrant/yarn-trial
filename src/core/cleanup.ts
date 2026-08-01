@@ -19,7 +19,7 @@ import { type Mutation, readJournal } from "./journal.js";
 import { collapseJournal, runTeardown } from "./teardown.js";
 import { startOverlay } from "./overlay.js";
 import { webTarget } from "./target.js";
-import { ARCHIVE_DIR, LIVE_DIR, OLD_ARCHIVE_DIR, OLD_LIVE_DIR, RUN_FILES, runFile } from "../paths.js";
+import { ARCHIVE_DIR, LIVE_DIR, OLD_ARCHIVE_DIR, OLD_LIVE_DIR, RUN_FILES, runDir, runFile, runPath } from "../paths.js";
 
 /**
  * Replay a run's mutation journal after the run itself has gone.
@@ -127,6 +127,43 @@ export function formatPlan(plan: EntryPlan[]): string {
  */
 export function exitCodeFor(summary: { attempted: number; failed: number }): number {
 	return summary.attempted > 0 && summary.failed > 0 ? 1 : 0;
+}
+
+/**
+ * The durable record of a standalone cleanup: what was planned per journal entry and what came
+ * of the attempt, written to the run folder as `cleanup.json`. An ordinary run folds its
+ * teardown into run.json (`cleanupReport`); the crashed run this CLI exists for has no run log,
+ * so before this receipt its restore outcome lived only in whichever terminal happened to run
+ * it — nothing durable for the fleet sweep or a later reader to consult. Pure, so tests can
+ * hold the shape still without a driver.
+ */
+export function cleanupReceipt(args: {
+	stamp: string;
+	app: string;
+	plan: EntryPlan[];
+	summary: { attempted: number; failed: number };
+	report?: Record<string, unknown>;
+}): Record<string, unknown> {
+	return {
+		stamp: args.stamp,
+		app: args.app,
+		at: new Date().toISOString(),
+		entries: args.plan.map(({ mutation: m, disposition, wanted }) => ({
+			step: m.step,
+			control: m.control,
+			...(m.surface ? { surface: m.surface } : {}),
+			...(m.scope ? { scope: m.scope } : {}),
+			...(m.resource ? { resource: m.resource } : {}),
+			disposition,
+			...(wanted !== undefined ? { wanted } : {}),
+		})),
+		attempted: args.summary.attempted,
+		restored: args.summary.attempted - args.summary.failed,
+		failed: args.summary.failed,
+		// The full teardown report when the loop ran to completion; absent when it threw or was
+		// interrupted — a receipt with zero attempts and no report IS that story.
+		...(args.report ? { report: args.report } : {}),
+	};
 }
 
 /**
@@ -238,6 +275,9 @@ async function main(): Promise<void> {
 	const { client, model } = makeClient();
 	const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, modelCalls: 0 };
 	let summary = { attempted: 0, failed: 0 };
+	// Hoisted so the receipt in the finally can carry the full report when the loop finished,
+	// and honestly omit it when the replay threw or was interrupted first.
+	let teardownReport: Record<string, unknown> | undefined;
 
 	try {
 		if (cdp) {
@@ -264,7 +304,7 @@ async function main(): Promise<void> {
 
 		if (interrupted()) return;
 
-		const report = await runTeardown({
+		teardownReport = await runTeardown({
 			driver,
 			cdp,
 			client,
@@ -286,7 +326,7 @@ async function main(): Promise<void> {
 			vision,
 			usage,
 		});
-		summary = { attempted: Number(report.attempted ?? 0), failed: Number(report.failed ?? 0) };
+		summary = { attempted: Number(teardownReport.attempted ?? 0), failed: Number(teardownReport.failed ?? 0) };
 	} finally {
 		overlay.setDriving(false);
 		await driver?.close();
@@ -297,6 +337,18 @@ async function main(): Promise<void> {
 			`cleanup finished: ${summary.attempted - summary.failed}/${summary.attempted} restored, ` +
 				`${usage.modelCalls} model calls`,
 		);
+		// The receipt goes in the run's folder — the run this journal belongs to, which for the
+		// crashed-run case is the only durable place its restore outcome exists. Best-effort: a
+		// receipt that cannot be written must not turn a finished cleanup into a failed one.
+		try {
+			fs.mkdirSync(runDir(stamp), { recursive: true });
+			fs.writeFileSync(
+				runPath(stamp, RUN_FILES.cleanup),
+				`${JSON.stringify(cleanupReceipt({ stamp, app, plan, summary, ...(teardownReport ? { report: teardownReport } : {}) }), null, "\t")}\n`,
+			);
+		} catch (err) {
+			console.error(`could not write cleanup receipt: ${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
 
 	process.exit(exitCodeFor(summary));

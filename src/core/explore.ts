@@ -7,6 +7,7 @@ import {
 	DRIVER_RULES,
 	makeClient,
 	onInterrupt,
+	teeConsole,
 	VISION_ONLY_RULES,
 } from "./harness.js";
 import type { AxBackend } from "../backends/ax.js";
@@ -46,6 +47,9 @@ async function main(): Promise<void> {
 	// empty run directories into the real out/ during one afternoon's test runs. The pass is only
 	// a run once something is about to be written into it.
 	fs.mkdirSync(`${outDir()}/${p.stepsDir}`, { recursive: true });
+	// Same rule as the task agent: the pass's console output is one of its artifacts. The tee
+	// stands down on the fleet, where the runner already owns log.txt via stdio redirection.
+	teeConsole(p.stamp);
 
 	try {
 		/**

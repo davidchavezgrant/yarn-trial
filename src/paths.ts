@@ -152,6 +152,13 @@ export const RUN_FILES = {
 	 * run folder answer "what did this run do" without a second lookup that a rename can break.
 	 */
 	recipe: "recipe.json",
+	/**
+	 * The standalone cleanup CLI's receipt (src/core/cleanup.ts): what it planned per journal
+	 * entry and what came of the attempt. An ordinary run folds this into run.json
+	 * (`cleanupReport`); the crashed run the CLI exists for has no run log to fold into, and
+	 * before this file its restore outcome lived only in whichever terminal ran it.
+	 */
+	cleanup: "cleanup.json",
 	console: "log.txt",
 	steps: "steps",
 	recording: "recording",

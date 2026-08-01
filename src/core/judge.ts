@@ -2,7 +2,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import fs from "node:fs";
 import path from "node:path";
 import { envNum } from "../env.js";
-import { appSlug, outDir } from "../paths.js";
+import { appSlug, archiveDir, liveDir, outDir, RUN_FILES, runDir, runFile, runPath } from "../paths.js";
 import type { ActionRequest, StepRecord } from "../types.js";
 import { findScopeAmbiguities, loadAppMapGraph, makeClient, retryTransient, routeTo } from "./harness.js";
 
@@ -67,27 +67,46 @@ export interface RunLogShape {
 }
 
 /**
- * Locate a run log by stamp prefix under `${outDir()}/runs/`. A bare stamp like
- * "2026-07-29T18-58-28" resolves to "2026-07-29T18-58-28-yarn.json"; an ambiguous prefix or
- * no match throws, listing what was found — a judge that silently graded the wrong run is
- * worse than one that refused.
+ * Locate a run log by stamp prefix. A bare stamp like "2026-07-29T18-58-28" resolves to
+ * "2026-07-29T18-58-28-yarn"; an ambiguous prefix or no match throws, listing what was found —
+ * a judge that silently graded the wrong run is worse than one that refused.
+ *
+ * Three homes, matching runFile's read order: the consolidated store (`out/bench/live`, where
+ * a run is a DIRECTORY holding run.json), its archive backup (a purged live tree must not make
+ * backed-up runs ungradeable), and the pre-consolidation flat `out/runs/` — a fixed historical
+ * set the judge must keep grading. The checker in bench/judge.ts already resolves through
+ * runFile; this resolver listing only the legacy tree is how it selected runs the judge then
+ * could not load.
  */
-export function resolveRunLog(stamp: string): { logPath: string; log: RunLogShape } {
-	const dir = `${outDir()}/runs`;
-	let names: string[] = [];
-	try {
-		names = fs.readdirSync(dir);
-	} catch {}
-	const candidates = names
-		.filter((n) => n.startsWith(stamp) && n.endsWith(".json") && !n.endsWith(".judge.json"))
-		.sort();
-	if (candidates.length === 0) throw new Error(`no run log matches "${stamp}" under ${dir}`);
+export function resolveRunLog(stamp: string): { key: string; logPath: string; log: RunLogShape } {
+	const list = (dir: string): string[] => {
+		try {
+			return fs.readdirSync(dir);
+		} catch {
+			return [];
+		}
+	};
+	// A Set, because a finished run exists in live AND archive under one key — two homes,
+	// one candidate.
+	const keys = new Set<string>();
+	for (const dir of [liveDir(), archiveDir()])
+		for (const name of list(dir)) if (name.startsWith(stamp) && fs.existsSync(path.join(dir, name, RUN_FILES.log))) keys.add(name);
+	// Legacy tree: sibling artifacts also end in .json (`.judge.json`, `.judge.cross.json`,
+	// `.checkpoint.json`, `.salvage.json`) and must not read as second candidates. Suffix
+	// exclusion, not a dot split — run keys legitimately contain dots (web-en.wikipedia.org).
+	for (const name of list(`${outDir()}/runs`))
+		if (name.startsWith(stamp) && name.endsWith(".json") && !/\.(judge|judge\.cross|checkpoint|salvage)\.json$/.test(name))
+			keys.add(name.replace(/\.json$/, ""));
+
+	const candidates = [...keys].sort();
+	if (candidates.length === 0) throw new Error(`no run log matches "${stamp}" under ${liveDir()}, ${archiveDir()} or ${outDir()}/runs`);
 	if (candidates.length > 1)
 		throw new Error(`stamp "${stamp}" is ambiguous — matches:\n  ${candidates.join("\n  ")}`);
 
-	const logPath = `${dir}/${candidates[0]}`;
+	const key = candidates[0];
+	const logPath = runFile(key, RUN_FILES.log);
 
-	return { logPath, log: JSON.parse(fs.readFileSync(logPath, "utf8")) as RunLogShape };
+	return { key, logPath, log: JSON.parse(fs.readFileSync(logPath, "utf8")) as RunLogShape };
 }
 
 /**
@@ -303,15 +322,18 @@ export function parseJudgeVerdict(
 }
 
 /**
- * The run log path with ".json" replaced by ".judge.json" — beside the log, never inside it.
+ * Where a run's verdict lands: `judge.json` in the run's OWN folder (runPath — the writer side
+ * of the store, always the live tree), never inside the run log. For a legacy run this is the
+ * key's first artifact in the consolidated store; readers resolve through runFile, so the
+ * verdict is found live-first either way.
  *
- * `tag` gives a SECOND judge its own artifact (`.judge.<tag>.json`) instead of overwriting
- * the first. That is what makes cross-judging possible: when a contestant model shares
- * lineage with the judge, one grader is a conflict, and two verdicts that disagree are worth
- * more than either alone.
+ * `tag` gives a SECOND judge its own artifact (`judge.<tag>.json` — tag "cross" is
+ * RUN_FILES.judgeCross) instead of overwriting the first. That is what makes cross-judging
+ * possible: when a contestant model shares lineage with the judge, one grader is a conflict,
+ * and two verdicts that disagree are worth more than either alone.
  */
-export function judgeReportPath(logPath: string, tag?: string): string {
-	return logPath.replace(/\.json$/, tag ? `.judge.${tag}.json` : ".judge.json");
+export function judgeReportPath(key: string, tag?: string): string {
+	return runPath(key, tag ? `judge.${tag}.json` : RUN_FILES.judge);
 }
 
 /**
@@ -321,7 +343,7 @@ export function judgeReportPath(logPath: string, tag?: string): string {
  * verdict: a silent fallback in either direction is a confident answer nobody gave.
  */
 export async function judgeRun(stamp: string, opts?: { noFrames?: boolean; model?: string; tag?: string }): Promise<JudgeReport> {
-	const { logPath, log } = resolveRunLog(stamp);
+	const { key, log } = resolveRunLog(stamp);
 	const gathered = opts?.noFrames ? { frames: [], stale: false } : trustedFrames(log);
 	const frames = sampleFrames(gathered.frames, envNum("JUDGE_MAX_FRAMES", 12));
 	const rubric = buildRubric(appSlug(log.app));
@@ -361,7 +383,7 @@ export async function judgeRun(stamp: string, opts?: { noFrames?: boolean; model
 		);
 
 	const report: JudgeReport = {
-		stamp: path.basename(logPath).replace(/\.json$/, ""),
+		stamp: key,
 		app: log.app,
 		task: log.task,
 		...(log.summary !== undefined ? { claim: log.summary } : {}),
@@ -375,7 +397,9 @@ export async function judgeRun(stamp: string, opts?: { noFrames?: boolean; model
 		framesStale: gathered.stale,
 		raw,
 	};
-	fs.writeFileSync(judgeReportPath(logPath, opts?.tag), `${JSON.stringify(report, null, "\t")}\n`);
+	// A legacy run has no directory in the store yet; the verdict is its first artifact there.
+	fs.mkdirSync(runDir(key), { recursive: true });
+	fs.writeFileSync(judgeReportPath(key, opts?.tag), `${JSON.stringify(report, null, "\t")}\n`);
 
 	return report;
 }

@@ -1,5 +1,4 @@
 import { pathToFileURL } from "node:url";
-import { outDir } from "../paths.js";
 import { judgeReportPath, judgeRun } from "./judge.js";
 
 /**
@@ -14,7 +13,7 @@ import { judgeReportPath, judgeRun } from "./judge.js";
 
 function usage(): never {
 	console.error("usage: npm run judge -- <stamp> [--no-frames]");
-	console.error("  stamp identifies a run under out/runs/, e.g. 2026-07-29T18-58-28 (prefix ok)");
+	console.error("  stamp identifies a run folder under out/bench/live (legacy out/runs/ resolves too), e.g. 2026-07-29T18-58-28 (prefix ok)");
 	console.error("  --no-frames  grade the trajectory only, sending no screenshots");
 	process.exit(1);
 }
@@ -37,7 +36,8 @@ async function main(): Promise<void> {
 	console.log(
 		`frames: ${report.framesUsed} used${report.framesStale ? " (run's screenshots were STALE shared paths — not trusted)" : ""}`,
 	);
-	console.log(`wrote: ${judgeReportPath(`${outDir()}/runs/${report.stamp}.json`)}`);
+	// report.stamp is the resolved run KEY, so this is the exact path judgeRun wrote.
+	console.log(`wrote: ${judgeReportPath(report.stamp)}`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)

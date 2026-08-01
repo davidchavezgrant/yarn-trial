@@ -12,6 +12,7 @@ import { JUDGE_SYSTEM,
 	sampleFrames,
 	trustedFrames,
 } from "../src/core/judge.js";
+import { RUN_FILES, archiveRunDir, runDir, runPath } from "../src/paths.js";
 import type { AppMap } from "../src/types.js";
 
 /**
@@ -151,6 +152,51 @@ test("resolveRunLog__IgnoresJudgeArtifacts__When__PreviousVerdictExists", () => 
 		assert.equal(logPath, written);
 		assert.equal(logPath.includes(".judge."), false);
 		assert.deepEqual(loaded, log);
+	});
+});
+
+test("resolveRunLog__FindsLog__When__RunLivesInConsolidatedStore", () => {
+	// Post-2026-08-01 runs are DIRECTORIES under out/bench/live holding run.json. The bench
+	// judge's eligibility check resolves them through runFile, so the resolver listing only the
+	// legacy flat tree selected runs it then threw on — the checker/loader split this pins shut.
+	inTempData(() => {
+		const log = makeRunLog();
+		const key = "2026-08-01T09-00-00-yarn";
+		fs.mkdirSync(runDir(key), { recursive: true });
+		fs.writeFileSync(runPath(key, RUN_FILES.log), JSON.stringify(log));
+		const r = resolveRunLog("2026-08-01T09-00-00");
+		assert.equal(r.key, key);
+		assert.equal(r.logPath, runPath(key, RUN_FILES.log));
+		assert.deepEqual(r.log, log);
+	});
+});
+
+test("resolveRunLog__FindsLog__When__OnlyArchiveBackupRemains", () => {
+	inTempData(() => {
+		const log = makeRunLog();
+		const key = "2026-08-01T10-00-00-yarn";
+		fs.mkdirSync(archiveRunDir(key), { recursive: true });
+		fs.writeFileSync(path.join(archiveRunDir(key), RUN_FILES.log), JSON.stringify(log));
+		const r = resolveRunLog("2026-08-01T10-00-00");
+		assert.equal(r.key, key);
+		assert.equal(r.logPath, path.join(archiveRunDir(key), RUN_FILES.log));
+	});
+});
+
+test("resolveRunLog__ReturnsOneCandidate__When__RunExistsInLiveAndArchive", () => {
+	// A finished run is the SAME key in both trees (archiveRun hard-links it). Reading that as
+	// two candidates would make every backed-up run ambiguous, i.e. ungradeable.
+	inTempData(() => {
+		const log = makeRunLog();
+		const key = "2026-08-01T11-00-00-yarn";
+		for (const dir of [runDir(key), archiveRunDir(key)]) {
+			fs.mkdirSync(dir, { recursive: true });
+			fs.writeFileSync(path.join(dir, RUN_FILES.log), JSON.stringify(log));
+		}
+		const r = resolveRunLog("2026-08-01T11-00-00");
+		assert.equal(r.key, key);
+		// runFile's read order: the live copy wins while it exists.
+		assert.equal(r.logPath, runPath(key, RUN_FILES.log));
 	});
 });
 
@@ -358,14 +404,22 @@ test("parseJudgeVerdict__NormalisesVerdict__When__VerdictWordIsLowercase", () =>
 	assert.equal(v.trajectory, "FAIL");
 });
 
-// --- judgeReportPath(). Verdicts live beside the log they judge, and the .judge.json suffix
-// is what resolveRunLog excludes — the two must stay in agreement.
+// --- judgeReportPath(). Verdicts live in the run's own folder under the RUN_FILES names —
+// the same names bench/judge.ts existence-checks through runFile, and the two must agree or
+// bench selects runs whose verdicts it then cannot find.
 
-test("judgeReportPath__AppendsJudgeSuffix__When__GivenLogPath", () => {
-	assert.equal(
-		judgeReportPath("/data/out/runs/2026-07-29T18-58-28-yarn.json"),
-		"/data/out/runs/2026-07-29T18-58-28-yarn.judge.json",
-	);
+test("judgeReportPath__ResolvesIntoRunFolder__When__GivenRunKey", () => {
+	inTempData(() => {
+		assert.equal(judgeReportPath("2026-07-29T18-58-28-yarn"), runPath("2026-07-29T18-58-28-yarn", RUN_FILES.judge));
+	});
+});
+
+test("judgeReportPath__MatchesJudgeCrossName__When__TaggedCross", () => {
+	// The "cross" tag must land exactly on RUN_FILES.judgeCross, or bench's already-cross-judged
+	// check reads a written verdict as missing and re-judges (re-bills) every pass.
+	inTempData(() => {
+		assert.equal(judgeReportPath("2026-07-29T18-58-28-yarn", "cross"), runPath("2026-07-29T18-58-28-yarn", RUN_FILES.judgeCross));
+	});
 });
 
 test("parseJudgeVerdict__ReadsDisclosureSeparatelyFromScope__When__BothLinesArePresent", () => {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { appForStamp, exitCodeFor, formatPlan, planRestores, stampArtifacts } from "../src/core/cleanup.js";
+import { appForStamp, cleanupReceipt, exitCodeFor, formatPlan, planRestores, stampArtifacts } from "../src/core/cleanup.js";
 import type { Mutation } from "../src/core/journal.js";
 
 // Synthetic fixtures describing the CLASS of journal rather than any historical run, so the
@@ -110,4 +110,51 @@ test("stampArtifacts__MatchesNothing__When__StampIsOnlyAPrefix", () => {
 	// would revive the silent exit-0 this guard exists to close.
 	const names = ["2026-07-30T20-54-28-yarn.json", "2026-07-30T20-54-28-yarn.journal.jsonl"];
 	assert.deepEqual(stampArtifacts(names, "2026-07-30T20-54"), []);
+});
+
+// --- the receipt. A standalone cleanup used to report its outcome to the console alone;
+// cleanup.json in the run folder is the durable copy, and its shape is what a later reader
+// (or the fleet sweep) gets to trust.
+
+test("cleanupReceipt__RecordsPlanAndTallies__When__TeardownRanToCompletion", () => {
+	const plan = planRestores([
+		setting("Cursor Style", "Arrow-first", "Pointer-first", 1),
+		setting("Motion Blur", undefined, "On", 2),
+	]);
+	const receipt = cleanupReceipt({
+		stamp: "2026-08-01T14-00-00-yarn",
+		app: "Yarn",
+		plan,
+		summary: { attempted: 1, failed: 0 },
+		report: { attempted: 1, failed: 0, restored: 1 },
+	}) as any;
+	assert.equal(receipt.stamp, "2026-08-01T14-00-00-yarn");
+	assert.equal(receipt.app, "Yarn");
+	// ISO timestamp, because "when was this app last put back" is the fleet question.
+	assert.ok(!Number.isNaN(Date.parse(receipt.at)));
+	assert.deepEqual(
+		receipt.entries.map((e: any) => [e.control, e.disposition]),
+		[["Motion Blur", "unrestorable"], ["Cursor Style", "restore"]],
+	);
+	// The restore target travels with the entry; the unrestorable one carries none.
+	assert.equal(receipt.entries[1].wanted, "Arrow-first");
+	assert.equal("wanted" in receipt.entries[0], false);
+	assert.equal(receipt.attempted, 1);
+	assert.equal(receipt.restored, 1);
+	assert.equal(receipt.failed, 0);
+	assert.deepEqual(receipt.report, { attempted: 1, failed: 0, restored: 1 });
+});
+
+test("cleanupReceipt__OmitsReport__When__TeardownNeverFinished", () => {
+	// An interrupted or thrown replay writes a receipt with zero attempts and no report —
+	// recording that cleanup started and did nothing, not pretending it ran.
+	const receipt = cleanupReceipt({
+		stamp: "2026-08-01T15-00-00-yarn",
+		app: "Yarn",
+		plan: [],
+		summary: { attempted: 0, failed: 0 },
+	}) as any;
+	assert.equal("report" in receipt, false);
+	assert.deepEqual(receipt.entries, []);
+	assert.equal(receipt.attempted, 0);
 });
