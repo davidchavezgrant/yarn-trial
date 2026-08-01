@@ -17,7 +17,7 @@ import {
 import { loadGrounding } from "../src/core/agent/grounding.js";
 import { coverageNow, provenanceHeader, writeArtifacts } from "../src/core/explore/artifacts.js";
 import { noAxRefusal } from "../src/core/explore/cli.js";
-import { SURVEY_TOOL, VISION_ACT_TOOL } from "../src/core/explore/prompt.js";
+import { SURVEY_TOOL, systemPrompt, VISION_ACT_TOOL } from "../src/core/explore/prompt.js";
 import { newPass } from "../src/core/explore/state.js";
 
 /**
@@ -424,4 +424,24 @@ test("VISION_ACT_TOOL__CarriesATargetProperty__When__SchemaIsRead", () => {
 test("SURVEY_TOOL__RequiresSurfaceAndControls__When__SchemaIsRead", () => {
 	const schema = SURVEY_TOOL.input_schema as { required: string[] };
 	assert.deepEqual([...schema.required].sort(), ["controls", "surface"]);
+});
+
+test("systemPrompt__TellsThePassToPressCreateControls__When__TheyOpenNewSurfaces", () => {
+	const EXPLORE_PROMPT = systemPrompt("", { subject: "an app", container: "the window" } as any, false);
+	// Three passes independently wrote down "New Template" and declined to press it — ax said
+	// "state-changing; not operated", cdp "creates persistent content", no-vision "mapped but
+	// not operated to preserve state" — and all three missed the entire template editor behind
+	// it. No safety guard fired; the prompt did it.
+	//
+	// The cause was ordering: an absolute "NEVER ... no creating documents you can't discard"
+	// came first, and permission to create scratch appeared twelve lines later, scoped to
+	// mapping DELETE flows and hedged with "five is a mess left behind".
+	assert.match(EXPLORE_PROMPT, /CREATE control is usually a door/i);
+	assert.match(EXPLORE_PROMPT, /PRESS create controls/);
+	// The prohibition must now name whose content it protects, or the model generalises it
+	// back over its own scratch.
+	assert.match(EXPLORE_PROMPT, /destructive or externally visible actions on THE USER'S existing content/);
+	// And the old discouraging budget must be gone — it is what made one scratch object feel
+	// like the ceiling.
+	assert.doesNotMatch(EXPLORE_PROMPT, /five is a mess left behind/);
 });

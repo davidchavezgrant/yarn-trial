@@ -35,7 +35,10 @@ export const systemPrompt = (rules: string, vocab: TargetVocabulary, descent: bo
 Your goal is a map, not a task: systematically visit the main surfaces — ${vocab.surfaces} — and record where things live and how to operate them.
 
 Safety rules (absolute):
-- NEVER take destructive or externally visible actions: no deleting, no sending/sharing, no account or sync changes, no creating events/documents you can't discard, no toggling settings you don't revert.
+- NEVER take destructive or externally visible actions on THE USER'S existing content: no deleting, no sending/sharing, no account or sync changes, no renaming or overwriting what was already there. Creating new scratch of your own is not in this list — see the create-controls rule below.
+- A CREATE control is usually a door, not a leaf. "New Template", "New Draft", "New Project", "Add scene" — pressing one typically opens an entire surface (an editor, a wizard, a canvas) that exists nowhere else in the app. Describing the button without pressing it maps the button and misses the application behind it. Measured on Yarn: three separate passes each wrote down "New Template" and declined to press it, and all three missed the whole template editor behind it.
+- So: PRESS create controls. Give the thing a distinctive scratch name, call "claim" the instant it exists, and explore what opened. That is what scratch is FOR — not only for mapping delete flows. A pass that creates five or six scratch objects while opening five or six real surfaces has done its job; the objects are reported for cleanup, and a handful is normal, not a mess.
+- The prohibition is on the USER'S content and on anything that leaves the machine — never delete, rename, move or overwrite something that was already there; never send, share, publish, purchase or change an account. Creating your own scratch and operating THAT is always allowed.
 - Opening panels, tabs, menus, and pickers is fine. Close what you open (escape, foreground) before moving on.
 - Leave it in the state you found it.
 ${vocab.cautions ? `\n${vocab.cautions}\n` : ""}${
@@ -47,8 +50,8 @@ A destructive feature hides its richest surface behind its opening press: clicki
 
 - When you press a control whose label reads reversible-destructive (delete, remove, discard, reset, archive, export, clear), the HARNESS takes over: it reads whatever dialog or sheet appears, records it, and presses Escape ITSELF to close it without committing. You do not press anything inside that dialog — you will get a fresh observation after the Escape. Just choose to press the opening control when mapping such a flow, then continue.
 - Controls that commit OFF the machine (send, share, publish, invite, purchase, sign out, account changes) are refused outright and never opened — reading their boundary would mean crossing it. Record and dismiss those.
-- To map a delete/archive flow safely on real content, first CREATE a throwaway object (a scratch draft/project with a distinctive name) and call "claim" the instant it exists, then descend ITS destructive menu. Scratch you claimed is yours to open; the user's content is not.
-- Settings you toggle while mapping are put back automatically after the pass, so a reversible toggle is fine to flip. Things you CREATE are reported, not deleted — one scratch object is fine, five is a mess left behind.
+- To map a delete/archive flow safely on real content, use the same trick: create a throwaway object, claim it, then descend ITS destructive menu. Scratch you claimed is yours to destroy; the user's content is not.
+- Settings you toggle while mapping are put back automatically after the pass, so a reversible toggle is fine to flip.
 `
 		: ""
 }${rules}
