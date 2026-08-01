@@ -8,13 +8,13 @@
 
 | arm | model | perception | flags | actions | elapsed | calls | out-tok | $ | actuated/dismissed/seen | surfaces | nodes | edges | ambiguities |
 |---|---|---|---|---|---|---|---|---|---|
-| p1-explore-ax | azure/gpt-5.6-sol | AX tree + DOM attrs + screenshots | --backend ax | 83 | 17m | 113 | 16604 | $7.42 | 54/0/894 | 33 | 92 | 32 | 1 |
-| p1-explore-cdp | azure/gpt-5.6-sol | DOM + screenshots | --backend cdp | — | — | — | — | — | — | — | — | — | — |
-| p1-explore-no-vision | azure/gpt-5.6-sol | AX tree + DOM attrs | --backend ax --no-vision | 76 | 12m | 125 | 17215 | $5.81 | 56/102/1613 | 35 | 99 | 41 | 10 |
-| p1-explore-ax-noaxdom | azure/gpt-5.6-sol | AX tree (no DOM attrs) + screenshots | --backend ax AXDOM=0 | — | — | — | — | — | — | — | — | — | — |
-| p1-explore-ax-noaxdom-no-vision | azure/gpt-5.6-sol | AX tree (no DOM attrs) | --backend ax --no-vision AXDOM=0 | — | — | — | — | — | — | — | — | — | — |
+| p1-explore-ax | azure/gpt-5.6-sol | AX + DOM attrs + Vision | --backend ax | 131 | 24m | 203 | 29690 | $11.99 | 71/188/1008 | 27 | 98 | 49 | 9 |
+| p1-explore-cdp | azure/gpt-5.6-sol | DOM + Vision | --backend cdp | — | — | — | — | — | — | — | — | — | — |
+| p1-explore-no-vision | azure/gpt-5.6-sol | AX + DOM attrs | --backend ax --no-vision | 95 | 13m | 135 | 20462 | $6.10 | 65/92/404 | 34 | 158 | 40 | 14 |
+| p1-explore-ax-noaxdom | azure/gpt-5.6-sol | AX (no DOM attrs) + Vision | --backend ax AXDOM=0 | — | — | — | — | — | — | — | — | — | — |
+| p1-explore-ax-noaxdom-no-vision | azure/gpt-5.6-sol | AX (no DOM attrs) | --backend ax --no-vision AXDOM=0 | — | — | — | — | — | — | — | — | — | — |
 | p1-explore-cdp-no-vision | azure/gpt-5.6-sol | DOM | --backend cdp --no-vision | — | — | — | — | — | — | — | — | — | — |
-| p1-explore-vision | azure/gpt-5.6-sol | screenshots only | --backend ax --no-ax | — | — | — | — | — | — | — | — | — | — |
+| p1-explore-vision | azure/gpt-5.6-sol | Vision only | --backend ax --no-ax | — | — | — | — | — | — | — | — | — | — |
 
 ## Phase 2 — backend × grounding (core)
 
@@ -110,9 +110,9 @@ Compiles: p3-compile-ax: not run; p3-compile-cdp: not run
 
 | pass | runs priced | runs unpriced | estimated |
 |---|---|---|---|
-| azure/gpt-5.6-sol | 2 | 0 | $13.23 |
+| azure/gpt-5.6-sol | 2 | 0 | $18.09 |
 
-**Total across priced runs: $13.23.**
+**Total across priced runs: $18.09.**
 
 ## Judge
 
@@ -122,18 +122,18 @@ _No run has judge metrics yet — run `./run bench judge` after runs land, then 
 
 | arm | job | host | queue wait s | run s |
 |---|---|---|---|---|
-| p1-explore-ax | explore-2026-08-01T09-50-21-178-yarn | mac1 | — | 1041 |
-| p1-explore-no-vision | explore-2026-08-01T09-50-28-726-yarn | mac3 | — | 802 |
+| p1-explore-ax | explore-2026-08-01T11-07-36-063-yarn | mac1 | — | 1723 |
+| p1-explore-no-vision | explore-2026-08-01T11-07-43-610-yarn | mac3 | — | 1065 |
 
 ## Raw stamps per arm
 
-- **p1-explore-ax**: `explore-2026-08-01T09-50-21-178-yarn` (mac1, azure/gpt-5.6-sol), `explore-2026-08-01T09-50-47-978-yarn` (mac2, azure/gpt-5.6-sol, uncollected)
-- **p1-explore-cdp**: `explore-2026-08-01T09-50-24-932-yarn` (mac2, azure/gpt-5.6-sol, uncollected), `explore-2026-08-01T09-50-52-114-yarn` (mac3, azure/gpt-5.6-sol, uncollected)
-- **p1-explore-no-vision**: `explore-2026-08-01T09-50-28-726-yarn` (mac3, azure/gpt-5.6-sol)
-- **p1-explore-ax-noaxdom**: `explore-2026-08-01T09-50-32-750-yarn` (mac1, azure/gpt-5.6-sol, uncollected)
-- **p1-explore-ax-noaxdom-no-vision**: `explore-2026-08-01T09-50-36-479-yarn` (mac2, azure/gpt-5.6-sol, uncollected)
-- **p1-explore-cdp-no-vision**: `explore-2026-08-01T09-50-40-263-yarn` (mac3, azure/gpt-5.6-sol, uncollected)
-- **p1-explore-vision**: `explore-2026-08-01T09-50-44-074-yarn` (mac1, azure/gpt-5.6-sol, uncollected)
+- **p1-explore-ax**: `explore-2026-08-01T11-07-36-063-yarn` (mac1, azure/gpt-5.6-sol), `explore-2026-08-01T11-08-01-877-yarn` (mac2, azure/gpt-5.6-sol, uncollected)
+- **p1-explore-cdp**: `explore-2026-08-01T11-07-39-820-yarn` (mac2, azure/gpt-5.6-sol, uncollected), `explore-2026-08-01T11-08-05-486-yarn` (mac3, azure/gpt-5.6-sol, uncollected)
+- **p1-explore-no-vision**: `explore-2026-08-01T11-07-43-610-yarn` (mac3, azure/gpt-5.6-sol)
+- **p1-explore-ax-noaxdom**: `explore-2026-08-01T11-07-47-225-yarn` (mac1, azure/gpt-5.6-sol, uncollected)
+- **p1-explore-ax-noaxdom-no-vision**: `explore-2026-08-01T11-07-50-778-yarn` (mac2, azure/gpt-5.6-sol, uncollected)
+- **p1-explore-cdp-no-vision**: `explore-2026-08-01T11-07-54-403-yarn` (mac3, azure/gpt-5.6-sol, uncollected)
+- **p1-explore-vision**: `explore-2026-08-01T11-07-58-135-yarn` (mac1, azure/gpt-5.6-sol, uncollected)
 
 ## For Aman
 
