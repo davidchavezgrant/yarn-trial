@@ -146,6 +146,38 @@ test("dispatch__SendsAbsentFlagsAsFalse__When__NoArmIsAsked", async () => {
 	assert.equal(spec.useRecipe, false);
 });
 
+test("dispatch__CarriesCleanupOffInTheSpec__When__CleanupOffIsAsked", async () => {
+	// Cleanup crosses as a NAMED spec field the runner validates — never argv text, never a
+	// generic env dict (the appmapVariant rationale in DispatchOptions).
+	const { run, calls } = recorder(() => ok({ jobId: "j-cleanup", pid: 7, artifacts: { log: "out/jobs/j-cleanup/log.txt" } }));
+	const result = await dispatch({ host: "mac2", app: "Yarn", task: "t", cleanup: "off", inventory: FLEET, run, ...noSync });
+
+	assert.equal(result.ok, true);
+	const spec = specOf(calls[0].argv);
+	assert.equal(spec.cleanup, "off");
+	assert.equal(calls[0].argv.includes("--no-cleanup"), false, "cleanup rides the spec, not an argv position");
+});
+
+test("dispatch__LeavesCleanupOffTheWire__When__ItIsNotAsked", async () => {
+	const { run, calls } = recorder(() => ok({ jobId: "j-plain", pid: 7, artifacts: { log: "out/jobs/j-plain/log.txt" } }));
+	await dispatch({ host: "mac2", app: "Yarn", task: "t", inventory: FLEET, run, ...noSync });
+
+	// Absent entirely, like backend: the child's own default (advisory) decides.
+	assert.equal("cleanup" in specOf(calls[0].argv), false);
+});
+
+test("dispatch__RelaysTheRunnersRefusal__When__CleanupValueIsInvalid", async () => {
+	// The client neither validates the value (the runner owns that rule; a second copy here
+	// could drift) nor DROPS it — a silently dropped option would run teardown over a filmed
+	// take. It crosses verbatim, and the runner's typed refusal comes back as the error.
+	const { run, calls } = recorder(() => refused({ error: `cleanup must be "off" when present, got "block"` }));
+	const result = await dispatch({ host: "mac2", app: "Yarn", task: "t", cleanup: "block" as any, inventory: FLEET, run, ...noSync });
+
+	assert.equal(specOf(calls[0].argv).cleanup, "block", "the invalid value crossed for the runner to refuse, not silently vanished");
+	assert.equal(result.ok, false);
+	if (!result.ok) assert.match(result.error, /cleanup must be "off"/);
+});
+
 test("dispatch__SyncsRecipesBeforeTheSubmit__When__TheKindIsReplay", async () => {
 	// The runner refuses a replay whose recipe file is absent, so the fan-out must land the
 	// file before the submit asks — order is the property under test.

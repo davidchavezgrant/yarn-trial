@@ -134,6 +134,10 @@ export interface JobRecord {
 	model?: string;
 	/** Step budget override for the child run (AGENT_STEPS). */
 	steps?: number;
+	/** `CLEANUP=off` in the child's environment: teardown skipped, the run ends on the changed
+	 *  state. Persisted so job.json tells the truth about HOW the run ran — a tidy-looking app
+	 *  after a cleanup-off job means the run changed nothing, not that teardown restored it. */
+	cleanup?: "off";
 	artifacts: JobArtifacts;
 }
 
@@ -164,6 +168,8 @@ export interface JobInit {
 	model?: string;
 	/** Step budget override for the child run (AGENT_STEPS). */
 	steps?: number;
+	/** `CLEANUP=off` on the child. Only the off literal crosses the wire — see serve.ts's submit. */
+	cleanup?: "off";
 	/** Accepted behind a held lease: the record starts `queued` and the drain spawns it later. */
 	queued?: boolean;
 }
@@ -280,6 +286,7 @@ export function createJob(init: JobInit, root = jobsDir()): JobRecord {
 		...(init.appmapVariant ? { appmapVariant: init.appmapVariant } : {}),
 		...(init.model ? { model: init.model } : {}),
 		...(init.steps ? { steps: init.steps } : {}),
+		...(init.cleanup ? { cleanup: init.cleanup } : {}),
 		artifacts: artifactsFor(id, init),
 	};
 	writeJob(rec, root);

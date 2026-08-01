@@ -605,6 +605,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 						...(rec.appmapVariant ? { APPMAP_VARIANT: rec.appmapVariant } : {}),
 						...(rec.model ? { AGENT_MODEL: rec.model } : {}),
 						...(rec.steps ? { AGENT_STEPS: String(rec.steps) } : {}),
+						...(rec.cleanup ? { CLEANUP: rec.cleanup } : {}),
 						// Fleet posture: a dispatched cdp run owns the machine (the lease says so),
 						// and the app it finds running portless was left by the previous job —
 						// an ax arm, most often. Quit-and-relaunch beats failing every
@@ -778,6 +779,15 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			return { ok: false, error: `steps must be an integer 1..100, got ${JSON.stringify(params.steps)}` };
 		const steps = params.steps as number | undefined;
 
+		// One literal, not the child's whole off|advisory|block vocabulary: advisory is the
+		// child's default and needs no field on the wire, and block stays an operator-local env
+		// — the two dispatch callers (filmed takes, state-restoring maintenance runs) both want
+		// off. Widening later is additive. Still an allowlist, like appmapVariant above, because
+		// the value becomes CLEANUP in the child's environment.
+		if (params.cleanup !== undefined && params.cleanup !== "off")
+			return { ok: false, error: `cleanup must be "off" when present, got ${JSON.stringify(params.cleanup)}` };
+		const cleanup = params.cleanup as "off" | undefined;
+
 		// The URL is child argv, but it is not free text: the child's own webTarget() gate
 		// rejects non-http(s) later, and this earlier copy exists because by then the lease
 		// and a profile swap are already spent. Scheme-only — everything else is the child's.
@@ -823,6 +833,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			...(appmapVariant !== undefined ? { appmapVariant } : {}),
 			...(model !== undefined ? { model } : {}),
 			...(steps !== undefined ? { steps } : {}),
+			...(cleanup !== undefined ? { cleanup } : {}),
 		};
 		const claim = acquire(
 			{ jobId: id, operator, kind, app, startedAt: new Date().toISOString(), pid: process.pid },

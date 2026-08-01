@@ -113,6 +113,13 @@ export interface DispatchOptions {
 	/** `AGENT_MODEL=<id>` on the child: which model runs the loop (task/explore/replay alike).
 	 *  Absent = the child's own default (makeClient). The benchmark's model dimension. */
 	model?: string;
+	/** `CLEANUP=off` on the child: skip the post-run teardown, so the run ends on the changed
+	 *  state. One literal, not the child's whole off|advisory|block vocabulary: advisory is the
+	 *  child's default and needs no field on the wire, and block stays operator-local — the two
+	 *  callers this exists for (filmed takes, state-restoring maintenance runs) both want off,
+	 *  and widening the union later is additive. A named field rather than a generic env dict,
+	 *  for exactly the appmapVariant rationale above. */
+	cleanup?: "off";
 	/**
 	 * Wait in line instead of being refused when the host is busy. Default true — the queue is
 	 * why an operator can dispatch five runs and close the lid. `false` restores the old
@@ -251,6 +258,7 @@ export async function dispatch(opts: DispatchOptions): Promise<DispatchResult> {
 		...(opts.url ? { url: opts.url } : {}),
 		...(opts.appmapVariant ? { appmapVariant: opts.appmapVariant } : {}),
 		...(opts.model ? { model: opts.model } : {}),
+		...(opts.cleanup ? { cleanup: opts.cleanup } : {}),
 		...(opts.steps ? { steps: opts.steps } : {}),
 		operator: opts.operator ?? defaultOperator(),
 	};
@@ -813,7 +821,7 @@ function toHost(host: HostEntry | string, inv?: Inventory): HostEntry {
 	return typeof host === "string" ? resolveHost(host, inv ?? loadHosts()) : host;
 }
 
-const USAGE = `usage: dispatch <host|auto> "<task>" "<App>" [--record] [--no-vision]
+const USAGE = `usage: dispatch <host|auto> "<task>" "<App>" [--record] [--no-vision] [--no-cleanup]
        dispatch <host|auto> explore "<App>"
        dispatch <host|auto> replay <recipe-file-or-stamp> [--no-rescue]
        dispatch <host> follow <jobId> [--from <byte>]
@@ -897,6 +905,9 @@ async function main(argv: string[]): Promise<number> {
 			// arms use — app method knowledge belongs there, never in the task prompt.
 			useRecipe: argv.includes("--use-recipe"),
 			useProcedures: argv.includes("--use-procedures"),
+			// --no-cleanup: CLEANUP=off on the child — the run ends on the changed state.
+			// For filmed takes and maintenance runs whose change IS the deliverable.
+			...(argv.includes("--no-cleanup") ? { cleanup: "off" as const } : {}),
 			// --steps N: budget override for runs whose recovery overhead outgrows the
 			// default 15 (validated to 1..100 on the runner).
 			...(argv.includes("--steps") ? { steps: Number(argv[argv.indexOf("--steps") + 1]) || undefined } : {}),

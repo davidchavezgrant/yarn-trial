@@ -952,6 +952,60 @@ test("submit__RefusesTheModel__When__ItIsNotAModelIdShape", async () => {
 	});
 });
 
+test("submit__CarriesCleanupOffToTheChildEnvAndTheRecord__When__CleanupOffIsAsked", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const prevData = process.env.YARN_RUNNER_DATA;
+		process.env.YARN_RUNNER_DATA = dir;
+		const spawner = envSpawner();
+		const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
+		let pid = 0;
+		try {
+			const [res] = await request(runner.socketPath, "submit", {
+				kind: "task",
+				app: "Yarn",
+				task: "show me how to change the cursor type",
+				operator: "dave",
+				cleanup: "off",
+			});
+			assert.equal(res.ok, true, String(res.error ?? ""));
+			pid = res.pid;
+			// The env is how the child obeys; the record is how the run folder tells the truth
+			// about how it ran.
+			assert.equal(spawner.envs[0]?.CLEANUP, "off");
+			assert.equal(readJob(res.jobId)?.cleanup, "off");
+		} finally {
+			if (pid) try { process.kill(-pid, "SIGKILL"); } catch {}
+			await runner.close();
+			if (prevData === undefined) delete process.env.YARN_RUNNER_DATA;
+			else process.env.YARN_RUNNER_DATA = prevData;
+		}
+	});
+});
+
+test("submit__RefusesCleanup__When__ItIsNotTheOffLiteral", async () => {
+	// advisory is the child's default and needs no field; block stays operator-local. Anything
+	// else arriving in this field is a client trying to widen an env-value allowlist over the
+	// wire, and it must die before the lease is spent.
+	await withTempAsync("yr-serve-", async (dir) => {
+		const spawner = fakeSpawner();
+		const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
+		try {
+			const [res] = await request(runner.socketPath, "submit", {
+				kind: "task",
+				app: "Yarn",
+				task: "t",
+				operator: "dave",
+				cleanup: "advisory",
+			});
+			assert.equal(res.ok, false);
+			assert.match(String(res.error), /cleanup must be "off"/);
+			assert.equal(spawner.calls.length, 0, "a refused cleanup spawns nothing");
+		} finally {
+			await runner.close();
+		}
+	});
+});
+
 test("submit__QueuesTheJob__When__TheHostIsBusyAndQueueIsAsked", async () => {
 	await withTempAsync("yr-serve-", async (dir) => {
 		const prevData = process.env.YARN_RUNNER_DATA;

@@ -84,6 +84,7 @@ ${b}run data${n}  (out/bench/live is canonical; out/bench/archive is a hard-link
 ${b}fleet${n}
   hosts                                  show the fleet and which Macs are free
   dispatch auto "<task>" "App"           run on a free Mac, follow it, pull artifacts back
+                                         (--no-cleanup: skip teardown — the changed end state stays)
   dispatch <mac> explore "App"           grounding pass on a named Mac
   dispatch <mac> follow|pull <jobId>     re-attach to a run in flight / fetch a finished run's artifacts
   provision [--doctor|--restart]         push this checkout to the Macs / grade them / bounce runners
