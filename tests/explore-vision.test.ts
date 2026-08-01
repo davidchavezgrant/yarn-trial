@@ -200,16 +200,37 @@ test("declaredSummary__SaysEmpty__When__EverythingIsOperatedOrDismissed", () => 
 test("newPass__WritesTheVisionPair__When__PassIsVisionOnly", () => {
 	inTempRoot(() => {
 		const p = newPass({ kind: "app", name: "Yarn" }, "Yarn", "ax", true, undefined, true);
-		assert.match(p.outPath, /\/yarn\.vision\.md$/);
-		assert.match(p.graphPath, /\/yarn\.vision\.json$/);
+		// Backend AND tier are both in the name now: every Yarn explore used to write
+		// yarn.json and the last to finish won (ax 156 nodes, cdp 196, no-vision 180).
+		assert.match(p.outPath, /\/yarn\.ax\.vision\.md$/);
+		assert.match(p.graphPath, /\/yarn\.ax\.vision\.json$/);
+
+		// The element-grounded pass on the same backend must NOT collide with it, which is
+		// the pair the old naming got wrong twice.
+		const grounded = newPass({ kind: "app", name: "Yarn" }, "Yarn", "ax", true, undefined, false);
+		assert.match(grounded.outPath, /\/yarn\.ax\.md$/);
+		assert.notEqual(grounded.outPath, p.outPath);
+
+		// And the element-ONLY pass differs from both — same backend, different perception.
+		const noVision = newPass({ kind: "app", name: "Yarn" }, "Yarn", "ax", false, undefined, false);
+		assert.match(noVision.outPath, /\/yarn\.ax\.novision\.md$/);
+		assert.notEqual(noVision.outPath, grounded.outPath);
 	});
 });
 
 test("newPass__WritesThePlainPair__When__PassIsElementGrounded", () => {
 	inTempRoot(() => {
+		// `yarn.ax`, not `yarn`: the backend is part of the name because a map is not
+		// backend-portable — ax and cdp name the same surface `editor` and `draft-editor`,
+		// and a grounded run resolves controls by name.
 		const p = newPass({ kind: "app", name: "Yarn" }, "Yarn", "ax", true, undefined);
-		assert.match(p.outPath, /\/yarn\.md$/);
-		assert.match(p.graphPath, /\/yarn\.json$/);
+		assert.match(p.outPath, /\/yarn\.ax\.md$/);
+		assert.match(p.graphPath, /\/yarn\.ax\.json$/);
+
+		// The other backend gets its own pair rather than overwriting this one.
+		const cdp = newPass({ kind: "app", name: "Yarn" }, "Yarn", "cdp", true, undefined);
+		assert.match(cdp.outPath, /\/yarn\.cdp\.md$/);
+		assert.notEqual(cdp.outPath, p.outPath);
 	});
 });
 
@@ -283,10 +304,10 @@ test("writeArtifacts__NeverTouchesTheElementGroundedMap__When__PassIsVisionOnly"
 		declaredCredit(p.declared, { name: "Save", surface: "Toolbar" });
 		writeArtifacts(p, { document: "# Yarn map from pixels", nodes: [], edges: [] }, "frontier-empty");
 
-		const visionProse = fs.readFileSync(`${appmaps}/yarn.vision.md`, "utf8");
+		const visionProse = fs.readFileSync(`${appmaps}/yarn.ax.vision.md`, "utf8");
 		assert.match(visionProse, /^<!-- provenance: explore-vision \|/);
 		assert.match(visionProse, /map from pixels/);
-		const visionGraph = JSON.parse(fs.readFileSync(`${appmaps}/yarn.vision.json`, "utf8"));
+		const visionGraph = JSON.parse(fs.readFileSync(`${appmaps}/yarn.ax.vision.json`, "utf8"));
 		assert.equal(visionGraph.provenance, "explore-vision");
 		// The committed pair is byte-identical: the whole point of the separate filenames.
 		assert.equal(fs.readFileSync(`${appmaps}/yarn.md`, "utf8"), committedProse);
@@ -305,11 +326,13 @@ test("loadGrounding__LoadsTheVisionMap__When__AppmapVariantIsVision", () => {
 		const appmaps = `${dir}/docs/appmaps`;
 		fs.mkdirSync(appmaps, { recursive: true });
 		fs.writeFileSync(`${appmaps}/yarn.md`, "<!-- provenance: explore | app: Yarn -->\nelement map");
-		fs.writeFileSync(`${appmaps}/yarn.vision.md`, "<!-- provenance: explore-vision | app: Yarn -->\nvision map");
+		fs.writeFileSync(`${appmaps}/yarn.ax.vision.md`, "<!-- provenance: explore-vision | app: Yarn -->\nvision map");
 		withEnv("APPMAP_VARIANT", "vision", () => {
-			const g = loadGrounding("yarn");
+			// The backend is part of the lookup now — a map is not backend-portable, so the
+			// caller says which pass's vocabulary it can resolve against.
+			const g = loadGrounding("yarn", "ax");
 			assert.equal(g.provenance, "explore-vision");
-			assert.match(g.path ?? "", /yarn\.vision\.md$/);
+			assert.match(g.path ?? "", /yarn\.ax\.vision\.md$/);
 			assert.match(g.notes ?? "", /vision map/);
 		});
 	});
@@ -320,7 +343,7 @@ test("loadGrounding__LoadsTheElementMap__When__NoVariantIsSelected", () => {
 		const appmaps = `${dir}/docs/appmaps`;
 		fs.mkdirSync(appmaps, { recursive: true });
 		fs.writeFileSync(`${appmaps}/yarn.md`, "<!-- provenance: explore | app: Yarn -->\nelement map");
-		fs.writeFileSync(`${appmaps}/yarn.vision.md`, "<!-- provenance: explore-vision | app: Yarn -->\nvision map");
+		fs.writeFileSync(`${appmaps}/yarn.ax.vision.md`, "<!-- provenance: explore-vision | app: Yarn -->\nvision map");
 		withEnv("APPMAP_VARIANT", undefined, () => {
 			const g = loadGrounding("yarn");
 			assert.equal(g.provenance, "explore");
@@ -347,9 +370,12 @@ test("loadAppMapGraph__LoadsTheVisionGraph__When__AppmapVariantIsVision", () => 
 		const appmaps = `${dir}/docs/appmaps`;
 		fs.mkdirSync(appmaps, { recursive: true });
 		fs.writeFileSync(`${appmaps}/yarn.json`, JSON.stringify({ app: "Yarn", capturedAt: "x", provenance: "explore", nodes: [], edges: [] }));
-		fs.writeFileSync(`${appmaps}/yarn.vision.json`, JSON.stringify({ app: "Yarn", capturedAt: "x", provenance: "explore-vision", nodes: [], edges: [] }));
-		withEnv("APPMAP_VARIANT", "vision", () => assert.equal(loadAppMapGraph("yarn")?.provenance, "explore-vision"));
-		withEnv("APPMAP_VARIANT", undefined, () => assert.equal(loadAppMapGraph("yarn")?.provenance, "explore"));
+		fs.writeFileSync(`${appmaps}/yarn.ax.vision.json`, JSON.stringify({ app: "Yarn", capturedAt: "x", provenance: "explore-vision", nodes: [], edges: [] }));
+		// With the backend named, the vision variant resolves to the ax pass's own vision graph.
+		withEnv("APPMAP_VARIANT", "vision", () => assert.equal(loadAppMapGraph("yarn", "ax")?.provenance, "explore-vision"));
+		// Without the variant, the backend-specific file is absent here so it falls back to the
+		// plain slug — which is what keeps curated and pre-split maps working.
+		withEnv("APPMAP_VARIANT", undefined, () => assert.equal(loadAppMapGraph("yarn", "ax")?.provenance, "explore"));
 	});
 });
 
@@ -359,7 +385,7 @@ test("loadAppMapGraph__ReturnsUndefined__When__TheVisionGraphIsAbsent", () => {
 		const appmaps = `${dir}/docs/appmaps`;
 		fs.mkdirSync(appmaps, { recursive: true });
 		fs.writeFileSync(`${appmaps}/yarn.json`, JSON.stringify({ app: "Yarn", capturedAt: "x", provenance: "explore", nodes: [], edges: [] }));
-		withEnv("APPMAP_VARIANT", "vision", () => assert.equal(loadAppMapGraph("yarn"), undefined));
+		withEnv("APPMAP_VARIANT", "vision", () => assert.equal(loadAppMapGraph("yarn", "ax"), undefined));
 	});
 });
 

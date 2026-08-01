@@ -109,8 +109,13 @@
 		display: inline-block; border: 1px solid var(--border); border-radius: 9px;
 		padding: 0 7px; margin: 2px 4px 2px 0; font-size: 11px; color: var(--ink-2);
 	}
+	/* One border per chip, so declaration order IS precedence (last wins). Dual-scope is a
+	   map-intrinsic fact; on-path and mutated are facts about THIS run — run-specific facts
+	   outrank map-intrinsic ones, and the ⚠ glyph still marks dual-scope when the border is
+	   claimed by a higher state. */
+	.ctrl.amb { border-color: var(--s2); }
 	.ctrl.onpath { border-color: var(--s1); color: var(--ink); }
-	.ctrl.mut { border-color: var(--s2); }
+	.ctrl.mut { border-color: var(--s5); }
 	.stepno {
 		display: inline-block; min-width: 13px; text-align: center; background: var(--s1);
 		color: #fff; border-radius: 8px; font-size: 10px; padding: 0 4px; margin-left: 5px; vertical-align: 1px;
@@ -213,6 +218,10 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
 const SERIES = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181"];
 const RED = "#e66767";
+// One explainer, three homes (legend tip, inline chip tip, tree-node tip) — the wrong-scope
+// trap is the single most decision-relevant marker on the map, so the full story travels
+// with every ⚠ rather than living in one place.
+const AMB_TIP = "this setting exists at TWO scopes under one identity (same settingKey — e.g. a brand-wide default in Brand Kit AND a per-document override in the editor). The wrong-scope trap: an agent asked to change the default can silently change only the document's copy and still pass every check. Both routes are always shown to the agent; the numbered path shows which one this run took.";
 const STATUS = { good: "#0ca30c", warning: "#fab219", serious: "#ec835a", critical: "#d03b3b" };
 const OUTCOME_COLORS = {
 	succeeded: STATUS.good, "gave-up": STATUS.critical, unready: STATUS.warning,
@@ -607,11 +616,11 @@ function mapTree(d) {
 		const isMut = c.settingKey && mutated.has(c.settingKey);
 		const tip = [
 			c.settingKey ? `setting: ${c.settingKey} (${c.scope} scope)` : "",
-			amb ? "⚠ same setting is editable at another scope — the wrong-scope trap" : "",
+			amb ? "⚠ dual-scope — " + AMB_TIP : "",
 			isMut ? "MUTATED by this run (journal)" : "",
 			c.options && c.options.length ? `options: ${c.options.join(", ")}` : "",
 		].filter(Boolean).join("\n");
-		return `<span class="ctrl${nodeSteps[c.id] ? " onpath" : ""}${isMut ? " mut" : ""}"${tip ? ` data-tip="${esc(tip)}"` : ""}>${esc(c.title)}${amb ? "⚠" : ""}${badges(nodeSteps[c.id])}</span>`;
+		return `<span class="ctrl${amb ? " amb" : ""}${nodeSteps[c.id] ? " onpath" : ""}${isMut ? " mut" : ""}"${tip ? ` data-tip="${esc(tip)}"` : ""}>${esc(c.title)}${amb ? "⚠" : ""}${badges(nodeSteps[c.id])}</span>`;
 	};
 	const renderSurf = (s) => {
 		const kids = surfaces.filter((k) => k.id !== s.id && parentOf(k.id) === s.id);
@@ -626,7 +635,7 @@ function mapTree(d) {
 	const unplaced = ctrlsBySurf.root || [];
 	// Lead with the root count: collapsed, only the root <details> rows show, which read as
 	// "the map only has ~7 surfaces" unless the note says the rest are nested underneath.
-	return `<div class="d-note">${roots.length} top-level of ${surfaces.length} surfaces — expand to walk the tree · ${controls.length} controls · blue = on the run's path (numbers = step order) · orange = mutated by the run · ⚠ = dual-scope setting</div>`
+	return `<div class="d-note">${roots.length} top-level of ${surfaces.length} surfaces — expand to walk the tree · ${controls.length} controls · blue = on the run's path (numbers = step order) · magenta = mutated by the run · ⚠ (orange) = dual-scope: same setting editable at two scopes — hover any ⚠ chip for the trap explained</div>`
 		+ roots.map(renderSurf).join("")
 		+ (unplaced.length ? `<details class="surf" data-sid="root-ctrls"${trustSnapshot ? (prevOpenSurfs.has("root-ctrls") ? " open" : "") : " open"}><summary>${esc(g.home || "home")}</summary><div>${unplaced.map(chip).join("")}</div></details>` : "");
 }

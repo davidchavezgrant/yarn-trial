@@ -11,7 +11,7 @@ import { appSlug, dataRoot } from "../paths.js";
 import { appmapSlug } from "../core/target.js";
 import { archiveDirFor } from "./collect.js";
 import { estimateCost, rollupCost, usd } from "./cost.js";
-import { type Arm, armById, flagsLine, MATRIX, type Phase } from "./matrix.js";
+import { type Arm, armAppmapSlug, armById, flagsLine, MATRIX, type Phase } from "./matrix.js";
 import { benchDir, type Manifest, type ManifestEntry, readManifest, utcDate } from "./manifest.js";
 import { judgeDisagreements, modelPasses, passLabel, rollup } from "./report.js";
 
@@ -590,10 +590,14 @@ function resolveGraph(
 	// `web-app.notion.com`. The dash then reported no map for a 471-node map that existed.
 	// Same backend-aware naming the pass writes with; the plain slug remains as the fallback
 	// inside the live lookup below for curated and pre-split maps.
+	// Backend-specific first, plain second — the same order and reasons as loadGrounding and
+	// loadAppMapGraph: a map is not backend-portable (ax and cdp name the same surface
+	// `editor` and `draft-editor`), while curated and pre-split maps live under the plain slug.
 	const arm = MATRIX.find((a) => a.id === exploreArmId);
-	const slug = appmapSlug(app, arm?.dispatch.backend ? { backend: arm.dispatch.backend } : {});
-	const live = readJsonFile(path.join(dataDir, "docs", "appmaps", `${slug}.json`));
-	if (live?.nodes) return { graph: shapeGraph(live), source: `docs/appmaps/${slug}.json (live)` };
+	for (const slug of [...(arm ? [armAppmapSlug(arm)] : []), appmapSlug(app)]) {
+		const live = readJsonFile(path.join(dataDir, "docs", "appmaps", `${slug}.json`));
+		if (live?.nodes) return { graph: shapeGraph(live), source: `docs/appmaps/${slug}.json (live)` };
+	}
 
 	return {};
 }

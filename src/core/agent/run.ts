@@ -246,7 +246,7 @@ export async function main(): Promise<void> {
 	// per-draft override instead of the brand default, because both satisfy a
 	// substring check. Naming each collision explicitly gives the model something
 	// specific to act on. NO_GROUNDING drops it too, so the A/B stays honest.
-	const graph = grounding.notes ? loadAppMapGraph(slug) : undefined;
+	const graph = grounding.notes ? loadAppMapGraph(slug, backendKind) : undefined;
 	const warnings = graph ? scopeWarnings(graph) : "";
 	const ambiguities = graph ? findScopeAmbiguities(graph) : [];
 
@@ -370,7 +370,7 @@ export async function main(): Promise<void> {
 						let probe = { ready: undefined as boolean | undefined, detail: "" };
 						for (let attempt = 0; attempt < 8; attempt++) {
 							const obs = await doObserve(`${stepsDir}/home-probe`);
-							probe = homeVisible(app, obs, loadAppMapGraph(slug));
+							probe = homeVisible(app, obs, loadAppMapGraph(slug, backendKind));
 							if (obs.appContent > 0 || probe.ready) break;
 							await new Promise((r) => setTimeout(r, 2000));
 						}
@@ -378,7 +378,7 @@ export async function main(): Promise<void> {
 
 						return probe.ready ? { result: "root-visible", detail: probe.detail } : { result: "failed", detail: probe.detail };
 					})()
-				: await resetToHome(driver!, ax!.win, app, loadAppMapGraph(slug));
+				: await resetToHome(driver!, ax!.win, app, loadAppMapGraph(slug, backendKind));
 			overlay.setDriving(false);
 			homeReset = reset.result;
 			console.log(`home reset: ${reset.result} — ${reset.detail}`);

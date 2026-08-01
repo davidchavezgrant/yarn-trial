@@ -46,3 +46,15 @@ Against AX, CDP saw 5.4× more controls per action and 2.3× more surfaces, but 
 ## 2026-08-01T00:56:25.285Z — 4 collected (gpt-5.6-sol)
 
 In one pass per arm, removing vision from AX doubled controls seen per action but cut seen-to-actuated conversion from 11.0% to 4.9%, with 8% fewer actuations per action. No-vision AX used 17% more calls and 26% more output tokens per action, despite 11% lower elapsed time per action. It also found 21% fewer surfaces and 6% fewer graph nodes per action, while scope ambiguity remained negligible.
+
+## 2026-08-01T00:59:54.828Z — 4 collected (gpt-5.6-sol)
+
+With one pass per arm, CDP saw 5.4× more controls per action than AX but converted only 2.8% versus 11.0%, while still actuating 35% more per action. CDP mapped 2.3× more surfaces and 42% more graph nodes per action, but incurred 17× more scope ambiguities. CDP also cost 64% more calls, 69% more output tokens, and 47% more time per action than AX. On Notion, CDP used 34% fewer calls and 39% fewer tokens per action than on Yarn, with 89% fewer scope ambiguities per action.
+
+## 2026-08-01T01:01:02.462Z — 4 collected (gpt-5.6-sol)
+
+In one pass per arm, removing screenshots from AX doubled controls seen per action but cut seen-to-actuated conversion from 11.0% to 4.9%, producing 8% fewer actuations per action. Tree-only exploration mapped 21% fewer surfaces and 6% fewer graph nodes per action while using 17% more calls and 26% more output tokens, though it ran 11% faster per action.
+
+## 2026-08-01T01:01:32.582Z — 4 collected (gpt-5.6-sol)
+
+In single passes, CDP saw 5.4× more controls per action than AX but converted only 2.8% versus 11.0%, yielding just 35% more actuations per action. CDP mapped 2.3× more surfaces and 42% more nodes per action, but incurred 17× more scope ambiguities, 64% more calls, 69% more output tokens, and 47% more time per action. On Notion, CDP sustained 0.45 actuations per action versus 0.47 on Yarn while conversion rose 4.9× and scope ambiguities per action fell 89%.
