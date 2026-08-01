@@ -835,6 +835,10 @@ export interface RunProgress {
 	actuated?: number;
 	dismissed?: number;
 	nodes?: number;
+	/** Distinct surfaces seen, and scope ambiguities off the graph so far — the heartbeat carries
+	 *  them since 2026-08-02, so an older log simply has neither and the cell degrades to "–". */
+	surfaces?: number;
+	scopeAmbiguities?: number;
 	/** The finish event's stop reason (frontier-empty, action-ceiling, interrupted…). */
 	finished?: string;
 	/** The run's OWN final claim (verdict event) — self-reported, pre-collect, pre-judge. */
@@ -884,6 +888,8 @@ export function aggregateRunEvents(raw: RawRunEvent[]): RunProgress | undefined 
 				if (typeof d.actuated === "number") p.actuated = d.actuated;
 				if (typeof d.dismissed === "number") p.dismissed = d.dismissed;
 				if (typeof d.nodes === "number") p.nodes = d.nodes;
+				if (typeof d.surfaces === "number") p.surfaces = d.surfaces;
+				if (typeof d.scopeAmbiguities === "number") p.scopeAmbiguities = d.scopeAmbiguities;
 				break;
 			}
 
@@ -900,6 +906,8 @@ export function aggregateRunEvents(raw: RawRunEvent[]): RunProgress | undefined 
 				if (typeof d.seen === "number") p.seen = d.seen;
 				if (typeof d.actuated === "number") p.actuated = d.actuated;
 				if (typeof d.dismissed === "number") p.dismissed = d.dismissed;
+				if (typeof d.surfaces === "number") p.surfaces = d.surfaces;
+				if (typeof d.scopeAmbiguities === "number") p.scopeAmbiguities = d.scopeAmbiguities;
 				break;
 			}
 

@@ -20,6 +20,7 @@ import {
 	frontierCredit,
 	frontierDismiss,
 	frontierIngest,
+	findScopeAmbiguities,
 	frontierMatches,
 	frontierRemaining,
 	frontierSummary,
@@ -101,17 +102,34 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 	// endpoint included. `frontier` alone cannot separate a pass that OPERATED its frontier
 	// from one that dismissed it en masse, hence actuated/dismissed ride along; token
 	// counters make discovery-per-token curves possible without touching collected metrics.
-	const discoveryCounters = () => ({
-		frontier: remaining().length,
-		seen: vo ? p.declared.seen.size : p.ledger.seen.size,
-		actuated: vo ? p.declared.operated.size : p.ledger.actuated.size,
-		dismissed: vo ? p.declared.dismissed.size : p.ledger.dismissed.size,
-		nodes: p.graphNodes.size,
-		tokensIn: p.usage.inputTokens,
-		tokensOut: p.usage.outputTokens,
-		tokensCacheRead: p.usage.cacheReadTokens,
-		tokensCacheCreation: p.usage.cacheCreationTokens,
-	});
+	const discoveryCounters = () => {
+		const seen = vo ? p.declared.seen : p.ledger.seen;
+
+		return {
+			frontier: remaining().length,
+			seen: seen.size,
+			actuated: vo ? p.declared.operated.size : p.ledger.actuated.size,
+			dismissed: vo ? p.declared.dismissed.size : p.ledger.dismissed.size,
+			nodes: p.graphNodes.size,
+			// Distinct surfaces anything has been SEEN on — the same set the finished stamp
+			// counts (artifacts.ts), so the live number lands on its collected value rather than
+			// jumping. And the scope-ambiguity count off the graph so far: findScopeAmbiguities is
+			// O(nodes) on a few-hundred-node partial graph, cheap enough for the ~every-10-actions
+			// heartbeat, and it converges on the stamp's number as the graph fills in.
+			surfaces: new Set([...seen.values()].map((e) => e.surface)).size,
+			scopeAmbiguities: findScopeAmbiguities({
+				app: p.app,
+				capturedAt: "",
+				provenance: vo ? "explore-vision" : "explore",
+				nodes: [...p.graphNodes.values()],
+				edges: [...p.graphEdges.values()],
+			}).length,
+			tokensIn: p.usage.inputTokens,
+			tokensOut: p.usage.outputTokens,
+			tokensCacheRead: p.usage.cacheReadTokens,
+			tokensCacheCreation: p.usage.cacheCreationTokens,
+		};
+	};
 	// The mechanical ledger stays EMPTY on a vision-only pass rather than being fed silently:
 	// the stamp's tallies must be the declared ones, and two ledgers would be two answers to
 	// "what did this pass cover".

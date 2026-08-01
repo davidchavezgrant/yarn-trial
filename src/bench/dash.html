@@ -1085,6 +1085,7 @@ const MAP_TIP = "the appmap as a full node-link tree — edge thickness = traver
 // column stayed through the merge, so the count nets to 18).
 const NCOLS = 18;
 const TASK_HEAD = "<tr>" + th("Variant", VARIANT_TIP) +
+	th("Runs", RUNS_TIP) +
 	th("Task", "the goal-only prompt the run was given") +
 	th("Sees", "what the agent SEES: AX or DOM elements, plus Vision — or Vision only") +
 	th("Acts With", "what injects the input: AX (cua driver) or CDP") +
@@ -1097,7 +1098,6 @@ const TASK_HEAD = "<tr>" + th("Variant", VARIANT_TIP) +
 	th("Surfaces", "explore rows — distinct screens/panels/tabs/dialogs controls were SEEN on: what you navigate BETWEEN; controls live ON them. The distilled appmap graph (Map column) typically keeps fewer surface nodes than this", "num-h") +
 	th("Nodes", "explore rows — distilled appmap graph nodes", "num-h") +
 	th("Ambig", "explore rows — settings editable at two scopes under one identity (same settingKey, different scope) — the wrong-scope trap; each gets a prompt warning", "num-h") +
-	th("Runs", RUNS_TIP) +
 	th("Map", MAP_TIP) +
 	th("Graphs", "this row's own page of charts — touch map, proof strips, judge agreement, attention depth, time anatomy, and more — live-updating as runs land") + "</tr>";
 
@@ -1223,22 +1223,32 @@ function startedCell(p) {
 // The split line's own Started cell: this run's start, its full story in the tip.
 const startedCellFor = (e) => `<td class="txt" data-tip="${esc(entryStartLine(e))}">${startStamp(entryStart(e))}</td>`;
 
-// The five identity cells (Variant…Model) — identical for every run of the pass, so on a
-// multi-run variant they render once with `span` (a rowspan attr) covering the group.
-function armCell(a, p, span = "") {
+// The five identity cells (Variant…Model) are identical for every run of the pass, so on a
+// multi-run variant they render once with `span` (a rowspan attr) covering the group. They
+// split around the Runs column (Runs sits right after Variant, David 2026-08-02), so the
+// Variant cell and the Task…Model cells are two functions — passRows interleaves the per-run
+// Runs chip between them, which the rowspan layout allows because the browser fills each
+// later row's cells into the columns the rowspans left open.
+
+// Column 1: the arm name (rank dot + display name + phase badge).
+function variantCell(a, p, span = "") {
 	const tip = [a.id, a.informs || "", `flags: ${a.flags || "(none)"}`].filter(Boolean).join("\n");
-	const taskCell = a.task
-		? `<td class="task"${span} data-tip="${esc(a.task)}">${esc(a.task)}</td>`
-		: a.kind === "explore"
-			? `<td class="task"${span} data-tip="Explore pass — no task prompt. The objective is coverage: operate every safe control until the frontier of un-operated controls empties, then write the appmap (docs/appmaps/)">Explore</td>`
-			: `<td class="task"${span} data-tip="no prompt — a replay runs its recipe's task">–</td>`;
 	// Phase badge on task/replay rows only: lineage groups interleave phases 2–5, so the row
 	// says which phase it belongs to. Explore group headers are all phase 1 — no badge.
 	const badge = a.kind !== "explore"
 		? `<span class="pbadge" data-tip="phase ${a.phase} arm — lineage groups interleave phases">P${a.phase}</span>`
 		: "";
-	return `<td class="arm"${span} data-tip="${esc(tip)}">${rankDot(a, p)}<span class="dn">${esc(displayName(a))}</span>${badge}</td>
-		${taskCell}
+	return `<td class="arm"${span} data-tip="${esc(tip)}">${rankDot(a, p)}<span class="dn">${esc(displayName(a))}</span>${badge}</td>`;
+}
+
+// Columns 3–6 (after the Runs column): Task, Sees, Acts With, Model.
+function identityRest(a, p, span = "") {
+	const taskCell = a.task
+		? `<td class="task"${span} data-tip="${esc(a.task)}">${esc(a.task)}</td>`
+		: a.kind === "explore"
+			? `<td class="task"${span} data-tip="Explore pass — no task prompt. The objective is coverage: operate every safe control until the frontier of un-operated controls empties, then write the appmap (docs/appmaps/)">Explore</td>`
+			: `<td class="task"${span} data-tip="no prompt — a replay runs its recipe's task">–</td>`;
+	return `${taskCell}
 		<td class="txt"${span} data-tip="${esc(SEES_TIP)}">${esc(a.perception || "–")}</td>
 		<td class="txt"${span} data-tip="${esc(ACTS_TIP)}">${esc(a.actuation || "–")}</td>
 		${modelCell(p, span)}`;
@@ -1305,14 +1315,16 @@ const costCellFor = (e) => e.usd != null ? `<td class="num">${fmtMoney(e.usd)}</
 			: `<td class="num">–</td>`;
 
 // The five explore-discovery cells for ONE pass (EntryView.exploreStamp); an uncollected
-// pass serves its heartbeat counters (actions/frontier/seen/nodes — surfaces and ambig are
-// stamped only at finish).
-// The actuated/dismissed/seen triple in the SAME hues the controls chart plots them
-// (renderExplore: Actuated=SERIES[0], Dismissed=SERIES[1], Seen=SERIES[2]) — the cell
-// doubles as the chart's legend. Spans set their own color, so inside a livecell the
-// numbers keep their series hue while the ~/slashes keep the running tint.
-const controlsTriple = (actuated, dismissed, seen) =>
-	`<span style="color:${SERIES[0]}">${fmtNum(actuated)}</span>/<span style="color:${SERIES[1]}">${fmtNum(dismissed)}</span>/<span style="color:${SERIES[2]}">${fmtNum(seen)}</span>`;
+// pass serves its heartbeat counters — the heartbeat carries the full set now (actions,
+// seen/actuated/dismissed, surfaces, nodes, scope ambiguities), so every cell is live.
+// seen/actuated/dismissed, in the order the collected cell leads with (seen is the total),
+// each colored to its series in the controls chart (renderExplore: Seen=SERIES[2],
+// Actuated=SERIES[0], Dismissed=SERIES[1]) so the cell doubles as the chart's legend. Spans
+// set their own color, so inside a livecell the numbers keep their series hue while the
+// ~/slashes keep the running tint. Used by BOTH the collected and the live path, so the
+// value never changes order or color when a run's collect lands.
+const controlsTriple = (seen, actuated, dismissed) =>
+	`<span style="color:${SERIES[2]}">${fmtNum(seen)}</span>/<span style="color:${SERIES[0]}">${fmtNum(actuated)}</span>/<span style="color:${SERIES[1]}">${fmtNum(dismissed)}</span>`;
 
 function exploreCellsFor(a, e) {
 	const num = (value, tip) => `<td class="num"${tip ? ` data-tip="${esc(tip)}"` : ""}>${value}</td>`;
@@ -1326,28 +1338,30 @@ function exploreCellsFor(a, e) {
 			: "";
 		return num(fmtNum(st.actions), "actions the pass took")
 			+ (st.controlsSeen != null
-				? num(`${st.controlsSeen}/${st.controlsActuated}/${st.controlsDismissed}${declared}`,
+				? num(`${controlsTriple(st.controlsSeen, st.controlsActuated, st.controlsDismissed)}${declared}`,
 					`seen ${st.controlsSeen} (total observed) · actuated ${st.controlsActuated} · dismissed ${st.controlsDismissed}`)
 				: num("–"))
 			+ num(fmtNum(st.surfaces)) + num(fmtNum(st.graphNodes)) + num(fmtNum(st.scopeAmbiguities));
 	}
 	const lp = !e.collected && e.live;
-	// The heartbeat carries the full discovery counters (2026-08-01), so the live cell shows
-	// the same colored triple its collected successor will; a runner predating that emits
-	// seen only, and the cell degrades to it. Built inline because liveNumCell escapes its
-	// label — same class/tip, so the live signals (~, italic, tint) are identical.
-	const controlsLive = lp && lp.seen != null
-		? (lp.actuated != null && lp.dismissed != null
-			? `<td class="num livecell" data-tip="${esc(LIVE_CELL_TIP + `\nactuated ${fmtNum(lp.actuated)} · dismissed ${fmtNum(lp.dismissed)} · seen ${fmtNum(lp.seen)}`)}">~${controlsTriple(lp.actuated, lp.dismissed, lp.seen)}</td>`
-			: liveNumCell(`~${fmtNum(lp.seen)} seen`))
-		: num("–", "arrives with the pass's heartbeat");
+	// Live discovery cells: the heartbeat (2026-08-02) carries the full set — actions, the
+	// seen/actuated/dismissed triple, surfaces, nodes, and scope ambiguities off the graph so
+	// far — so every explore cell shows its running value (~, tinted while RUNNING), converging
+	// on the collected number. A log predating a field degrades just that cell to "–". The
+	// controls cell is built inline because liveNumCell escapes its label; same class/tip, so
+	// the live signals are identical, and it reuses controlsTriple for identical color/order.
+	const controlsLive = lp && lp.seen != null && lp.actuated != null && lp.dismissed != null
+		? `<td class="num livecell" data-tip="${esc(LIVE_CELL_TIP + `\nseen ${fmtNum(lp.seen)} (total observed) · actuated ${fmtNum(lp.actuated)} · dismissed ${fmtNum(lp.dismissed)}`)}">~${controlsTriple(lp.seen, lp.actuated, lp.dismissed)}</td>`
+		: lp && lp.seen != null
+			? liveNumCell(e, `~${fmtNum(lp.seen)} seen`, "seen so far — actuated/dismissed arrive with the next heartbeat")
+			: num("–", "arrives with the pass's heartbeat");
 	return (lp && lp.actions != null
 			? liveNumCell(e, `~${fmtNum(lp.actions)}`, lp.frontier != null ? `frontier: ${fmtNum(lp.frontier)} controls left un-operated (the pass ends when this empties)` : "")
 			: num("–"))
-		+ (lp && lp.seen != null ? liveNumCell(e, `~${fmtNum(lp.seen)} seen`) : num("–"))
-		+ num("–")
+		+ controlsLive
+		+ (lp && lp.surfaces != null ? liveNumCell(e, `~${fmtNum(lp.surfaces)}`, "distinct surfaces seen so far") : num("–"))
 		+ (lp && lp.nodes != null ? liveNumCell(e, `~${fmtNum(lp.nodes)}`) : num("–"))
-		+ num("–");
+		+ (lp && lp.scopeAmbiguities != null ? liveNumCell(e, `~${fmtNum(lp.scopeAmbiguities)}`, "dual-scope settings in the graph so far") : num("–"));
 }
 
 // A variant with several runs SPLITS after the identity columns (David, 2026-08-01): the
@@ -1366,9 +1380,10 @@ function passRows(a, p, first, metricCells) {
 	const span = runs.length > 1 ? ` rowspan="${runs.length}"` : "";
 	const expCls = a.kind === "explore" ? " exp-row" : "";
 	const rows = runs.map((e, i) =>
-		`<tr class="mrow${expCls}${i === 0 && first ? " gsep" : ""}${i < runs.length - 1 ? " splitrow" : ""}" data-row="${esc(key)}" data-job="${esc(e.jobId)}">${i === 0 ? armCell(a, p, span) : ""}
-		${metricCells(e)}
+		`<tr class="mrow${expCls}${i === 0 && first ? " gsep" : ""}${i < runs.length - 1 ? " splitrow" : ""}" data-row="${esc(key)}" data-job="${esc(e.jobId)}">${i === 0 ? variantCell(a, p, span) : ""}
 		<td class="runs">${statusChip(e, key, e.jobId === sel)}</td>
+		${i === 0 ? identityRest(a, p, span) : ""}
+		${metricCells(e)}
 		<td class="treecell"><button class="btnv" data-viewtree="${esc(e.jobId)}" data-tip="${esc(MAP_TIP)}">⤢</button></td>
 		${i === 0 ? graphsCell(a, p, span) : ""}</tr>`).join("");
 	return rows + (openRows[key] ? detailRowHtml(a, p, key) : "");
@@ -1406,15 +1421,15 @@ function compileRow(a, p) {
 	const srcCell = src
 		? `<td class="task" data-tip="compiled from this source run's log (a compile entry's jobId is its source stamp; the recipe file path is not on the wire)">src ${esc(shortJob(src.jobId))}</td>`
 		: `<td class="task" data-tip="no source run yet">–</td>`;
-	// srcCell sits under Task (position 2) — it was marooned under "Acts With" when 5eade56
-	// reordered the header and only the armCell-based rows followed.
-	// All 13 metric dashes share one story — NO_EXPLORE_CELLS says "task rows", the wrong
-	// explanation on a row that IS the local file transform.
-	const dash = `<td class="num" data-tip="compiles run no model — nothing to measure">–</td>`;
+	// This inert row mirrors the board's column order by HAND (no armCell/passRows split to
+	// lean on), so it must be kept in step with TASK_HEAD: Variant, Runs, Task(=src), Sees,
+	// Acts With, Model, Started, Time, Steps, Tokens, Cost, the five explore dashes, Map,
+	// Graphs — 18 cells. Reordered when Runs moved after Variant (2026-08-02); the trailing
+	// Graphs treecell was also missing since main added that column.
 	return `<tr class="crow"><td class="arm" data-tip="${esc(tip)}"><span class="dn">${esc(displayName(a))}</span>${badge}</td>
-		${srcCell}<td class="num">–</td><td class="num">–</td><td class="num">–</td>
+		${runsCell(p, null)}${srcCell}<td class="num">–</td><td class="num">–</td><td class="num">–</td>
 		${startedCell(p)}<td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num">–</td>
-		${NO_EXPLORE_CELLS}${runsCell(p, null)}<td class="treecell"></td></tr>`;
+		${NO_EXPLORE_CELLS}<td class="treecell"></td><td class="treecell"></td></tr>`;
 }
 
 /* ---- row detail: appmap + path ------------------------------------------------------- */
