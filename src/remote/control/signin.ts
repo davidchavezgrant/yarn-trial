@@ -297,21 +297,6 @@ export async function forgetScreenShareLogin(host: HostEntry, exec: SecurityRunn
 	return { removed };
 }
 
-/**
- * Does this machine's login keychain hold a remembered Screen Sharing credential for the host?
- *
- * Metadata-only on purpose: no `-w`/`-g`, so the secret is never read and the query trips no
- * keychain ACL prompt — exit code 0 is "an item with this (server, account, protocol `vnc `)
- * triple exists", which is exactly the condition under which a `vnc://` open connects without
- * asking for a password. Callers use it to say so honestly BEFORE opening the viewer; it
- * cannot detect a stale password (the item exists, the Mac rotated), only absence.
- */
-export async function hasScreenShareLogin(host: HostEntry, exec: SecurityRunner = runSecurity): Promise<boolean> {
-	const args = ["find-internet-password", "-s", host.vnc.host, "-r", VNC_PROTOCOL,
-		...(host.ssh.user ? ["-a", host.ssh.user] : [])];
-
-	return (await exec(args)).code === 0;
-}
 
 /**
  * Close the screen-sharing window for one host, and quit the viewer if that was its last.

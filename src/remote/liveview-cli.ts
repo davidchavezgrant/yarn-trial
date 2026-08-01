@@ -230,6 +230,9 @@ async function main(): Promise<void> {
 	const token = process.env.LIVEVIEW_TOKEN || undefined;
 	const maxLifetimeMs = process.env.LIVEVIEW_MAX_LIFETIME_MS ? Number(process.env.LIVEVIEW_MAX_LIFETIME_MS) : undefined;
 	const idleAfterCloseMs = process.env.LIVEVIEW_IDLE_AFTER_CLOSE_MS ? Number(process.env.LIVEVIEW_IDLE_AFTER_CLOSE_MS) : undefined;
+	// View-only: the dash's peek wall streams a running benchmark and must not be able to drive
+	// it, so the server drops every inbound input frame (peek-capture sets this).
+	const viewOnly = process.env.LIVEVIEW_VIEW_ONLY === "1";
 	// The runner names the sign-in target so the engine can crop/guard the browser leg; a local
 	// second positional does the same for a human running this by hand.
 	const targetApp = process.env.LIVEVIEW_APP || app || undefined;
@@ -250,7 +253,7 @@ async function main(): Promise<void> {
 		resolved.engine === "cdp"
 			? () => connectCdpEngine({ endpoint: probeTarget, browserEndpoint: localBrowserCdpEndpoint(), app: targetApp })
 			: undefined;
-	const srv = await startLiveViewServer({ lan, fps, port, token, maxLifetimeMs, idleAfterCloseMs, app: targetApp, engine });
+	const srv = await startLiveViewServer({ lan, fps, port, token, maxLifetimeMs, idleAfterCloseMs, app: targetApp, engine, viewOnly });
 	// An env-supplied token means runner mode, where stdout lands in a persistent job log
 	// (out/jobs/.../log.txt) readable locally and via the runner's `logs` verb — printing the
 	// full URL would park a live capture+inject credential there for its whole lifetime. The

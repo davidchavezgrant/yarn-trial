@@ -1427,6 +1427,57 @@ test("liveview__Refuses__When__ARunHoldsTheLease", async () => {
 	});
 });
 
+/**
+ * The dash's view-only fallback: SCK window capture, spawned WITHOUT the sign-in ceremony. The
+ * reply carries a port + token the dash tunnels to and relays; the env forces the SCK transport
+ * and view-only so the wall gets pixels only.
+ */
+test("peekCapture__StartsAViewOnlySckServer__When__Requested", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const spawner = mkdirSpawner();
+		const runner = await startRunner(dir, { ...noSwap, ...noOpen, log: () => {}, spawn: spawner.spawn });
+		try {
+			const [res] = await request(runner.socketPath, "peek-capture");
+			assert.equal(res.ok, true);
+			assert.equal(typeof res.port, "number");
+			assert.match(String(res.token), /^[A-Za-z0-9_-]{16,}$/);
+			assert.equal(res.transport, "sck");
+			assert.equal(spawner.calls.length, 1, "the SCK capture server was actually spawned");
+			assert.equal(spawner.envs[0].LIVEVIEW_TRANSPORT, "sck", "window capture, not CDP — the whole point of the fallback");
+			assert.equal(spawner.envs[0].LIVEVIEW_VIEW_ONLY, "1", "the wall must never be able to drive the run");
+			assert.equal(spawner.envs[0].LIVEVIEW_APP, undefined, "no --app: full-window follow-frontmost, not the sign-in crop");
+		} finally {
+			await runner.close();
+		}
+	});
+});
+
+/**
+ * The load-bearing difference from `liveview`: a peek WATCHES a busy host. Where the sign-in verb
+ * refuses under a lease ("a login stream would capture over their recording"), peek-capture must
+ * proceed — SCK read-only capture never touches the run, and the running app is exactly what the
+ * wall exists to show.
+ */
+test("peekCapture__ProceedsAnyway__When__ARunHoldsTheLease", async () => {
+	await withTempAsync("yr-serve-", async (dir) => {
+		const spawner = mkdirSpawner();
+		const runner = await startRunner(dir, { ...noSwap, ...noOpen, log: () => {}, spawn: spawner.spawn });
+		let pid = 0;
+		try {
+			const [run] = await request(runner.socketPath, "submit", { kind: "task", app: "Yarn", task: "show me how to change the cursor type", operator: "sam" });
+			pid = run.pid;
+			const before = spawner.calls.length; // the run's own spawn
+			const [res] = await request(runner.socketPath, "peek-capture");
+			assert.equal(res.ok, true, "a busy host is the case the peek fallback exists for — never a refusal");
+			assert.notEqual(res.busy, true);
+			assert.equal(spawner.calls.length, before + 1, "the capture server came up alongside the run");
+		} finally {
+			if (pid) try { process.kill(-pid, "SIGKILL"); } catch {}
+			await runner.close();
+		}
+	});
+});
+
 /** A swap that throws must not be followed by a launch — the sign-in would land in the wrong data. */
 test("liveview__RefusesAndDoesNotSpawn__When__TheProfileSwapFails", async () => {
 	await withTempAsync("yr-serve-", async (dir) => {
