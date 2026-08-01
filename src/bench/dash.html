@@ -691,14 +691,14 @@ const RUNS_TIP = "one chip per run — click a chip to select that run: the row'
 // No target column: the app scope picker above the board carries the target, and inside a
 // lineage group every row shares the group's target anyway.
 // Ordering: the two wide prose cells (Variant, Task) together at the left, then the three
-// short config tokens (Sees, Acts, Model), then the five-column metric band exploreRow
+// short config tokens (Sees, Acts With, Model), then the five-column metric band exploreRow
 // spans with ONE colspan=5 cell — reordering across that band means colspan surgery.
 // "Success", not "Passed": PASS/FAIL is the judge's vocabulary and this column is
 // self-reported success — the distinction the judge pipeline exists to expose.
 const TASK_HEAD = "<tr>" + th("Variant", VARIANT_TIP) +
 	th("Task", "the goal-only prompt the run was given") +
 	th("Sees", "what the agent SEES: AX tree or DOM elements, plus vision — or pixels only") +
-	th("Acts", "what injects the input: AX (cua driver) or CDP") +
+	th("Acts With", "what injects the input: AX (cua driver) or CDP") +
 	th("Model", "what actually ran, off the run logs") +
 	th("Success", "self-reported: succeeded / collected (the judge's verdict lives in the Judge card)") +
 	th("Steps", "mean actions per run") + th("Time", "mean wall-clock per run") +
@@ -841,7 +841,7 @@ function taskRow(a, p) {
 // sticky header is task-shaped and explore medians must never sit under "Steps"/"Tokens"
 // labels. Each segment carries the tooltip its old column header + cell held — with the
 // headers gone, the segment tip is the only place the column semantics survive. Variant,
-// Task("Explore"), Sees, Acts, Model, Runs and Map stay real cells so they align
+// Task("Explore"), Sees, Acts With, Model, Runs and Map stay real cells so they align
 // with the task rows beneath. `first` marks the group's first row for .gsep air.
 function exploreRow(a, p, first) {
 	const key = rowId(a, p);
