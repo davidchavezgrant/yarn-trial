@@ -210,6 +210,14 @@ export interface ArmView {
 	 * the element channel named per backend (AX vs DOM).
 	 */
 	perception: string;
+	/**
+	 * `perception` split into per-channel booleans so the board can render check cells
+	 * (AX / DOM / Vision) instead of a constructed phrase. ax = AX elements reach the model;
+	 * dom = DOM elements (cdp backend) or the axdom sidecar's DOM attrs (ax backend, off
+	 * under AXDOM=0); vision = screenshots (off under --no-vision). Derived from the same
+	 * dispatch flags perceptionLine reads — never parsed from the `perception` string.
+	 */
+	sees: { ax: boolean; dom: boolean; vision: boolean };
 	actuation: string;
 	/** Task arms: the goal-only prompt the run was given. */
 	task?: string;
@@ -1269,6 +1277,18 @@ function displayTitle(arm: Arm): string {
 	return (filmed ? "Filmed " : "") + (ARM_TITLE_COPY[base] ?? base);
 }
 
+/**
+ * perceptionLine's semantics as per-channel booleans (matrix.ts owns the sentence; this owns
+ * the axes): --no-ax removes BOTH element channels; on cdp the DOM IS the element channel and
+ * there is no AX; on ax the tree carries DOM attrs unless the axdom sidecar is off (AXDOM=0);
+ * Vision is on unless --no-vision. Off the dispatch flags, never the rendered string.
+ */
+const armSees = (arm: Arm): ArmView["sees"] => ({
+	ax: !arm.dispatch.noAx && arm.dispatch.backend !== "cdp",
+	dom: !arm.dispatch.noAx && (arm.dispatch.backend === "cdp" || !arm.dispatch.axdomOff),
+	vision: !arm.dispatch.noVision,
+});
+
 export function buildState(manifest: Manifest, fleet: FleetView, events: DashEvent[], autoCollect: boolean, defaultModel?: string, live?: Map<string, RunProgress>): DashState {
 	const arms: ArmView[] = MATRIX.map((arm) => ({
 		id: arm.id,
@@ -1281,6 +1301,7 @@ export function buildState(manifest: Manifest, fleet: FleetView, events: DashEve
 		// perceptionLine speaks the user-facing modality words directly ("AX", "DOM",
 		// "Vision") since the 2026-08-01 terminology pass — no display-side rewrite.
 		perception: perceptionLine(arm),
+		sees: armSees(arm),
 		actuation: (arm.dispatch.backend ?? "ax").toUpperCase(),
 		...(arm.task ? { task: arm.task } : {}),
 		...(arm.dispatch.url ? { url: arm.dispatch.url } : {}),
