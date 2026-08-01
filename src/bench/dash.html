@@ -1068,8 +1068,8 @@ const RUNS_TIP = "the run's status — click to open/collapse its dropdown; the 
 // No target column: the app scope picker above the board carries the target, and inside a
 // lineage group every row shares the group's target anyway.
 // Ordering: the two wide prose cells (Variant, Task) together at the left, then the three
-// short config tokens (Sees, Acts With, Model), the four task metrics, the five explore
-// discovery metrics, ops at the right.
+// short config tokens (Sees, Acts With, Model), the run-lifecycle columns (Started, Time,
+// Steps, Tokens, Cost), the five explore discovery metrics, ops at the right.
 // No Success column: per-run ✓/✗ is already on the Runs column's status chips — a second
 // cell saying the same thing read as a different signal.
 // Every full-width spanner (detail rows, phase separators) spans NCOLS — keep it in step
@@ -1080,14 +1080,14 @@ const TASK_HEAD = "<tr>" + th("Variant", VARIANT_TIP) +
 	th("Sees", "what the agent SEES: AX or DOM elements, plus Vision — or Vision only") +
 	th("Acts With", "what injects the input: AX (cua driver) or CDP") +
 	th("Model", "what actually ran, off the run logs") +
-	th("Steps", "actions the run took (hover for the verified count)", "num-h") + th("Time", "wall-clock per run — ticking while the run executes", "num-h") +
+	th("Started", "when this run began — collected runs off the run log, running runs derived from their ticking elapsed; a queued run shows – until it starts") +
+	th("Time", "wall-clock per run — ticking while the run executes", "num-h") + th("Steps", "actions the run took (hover for the verified count)", "num-h") +
 	th("Tokens", "OUTPUT tokens the run spent", "num-h") + th("Cost", "published-rate estimate per run — not an invoice · ? = tokens recorded but no pricing", "num-h") +
 	th("Actions", "explore rows — actions the grounding pass took", "num-h") +
 	th("Controls", "explore rows — seen/actuated/dismissed: every control the pass observed (seen, the total), then how many it operated (actuated) vs swept off the frontier without operating (dismissed). The pass ends when the frontier empties, and dismissing is a legitimate way to empty it", "num-h") +
 	th("Surfaces", "explore rows — distinct screens/panels/tabs/dialogs controls were SEEN on: what you navigate BETWEEN; controls live ON them. The distilled appmap graph (Map column) typically keeps fewer surface nodes than this", "num-h") +
 	th("Nodes", "explore rows — distilled appmap graph nodes", "num-h") +
 	th("Ambig", "explore rows — settings editable at two scopes under one identity (same settingKey, different scope) — the wrong-scope trap; each gets a prompt warning", "num-h") +
-	th("Started", "when this run began — collected runs off the run log, running runs derived from their ticking elapsed; a queued run shows – until it starts") +
 	th("Runs", RUNS_TIP) +
 	th("Map", "the appmap as a full node-link tree — edge thickness = traversal heat, blue = the run's path") + "</tr>";
 
@@ -1326,7 +1326,7 @@ function exploreCellsFor(a, e) {
 
 // A variant with several runs SPLITS after the identity columns (David, 2026-08-01): the
 // five identity cells (Variant…Model) are identical across a pass's runs, so they render
-// once and rowspan the group; everything run-dependent (Steps…Started, chip, ⤢) gets one
+// once and rowspan the group; everything run-dependent (Started…Ambig, chip, ⤢) gets one
 // line per run, reading that run's OWN numbers. Line order = the chips' drain order
 // (finished → running → queued, oldest first in each band). Each line carries the chip's
 // click semantics on the whole row (data-row + data-job): click a line to open/select its
@@ -1342,7 +1342,6 @@ function passRows(a, p, first, metricCells) {
 	const rows = runs.map((e, i) =>
 		`<tr class="mrow${expCls}${i === 0 && first ? " gsep" : ""}${i < runs.length - 1 ? " splitrow" : ""}" data-row="${esc(key)}" data-job="${esc(e.jobId)}">${i === 0 ? armCell(a, p, span) : ""}
 		${metricCells(e)}
-		${startedCellFor(e)}
 		<td class="runs">${statusChip(e, key, e.jobId === sel)}</td>
 		<td class="treecell"><button class="btnv" data-viewtree="${esc(e.jobId)}">⤢</button></td></tr>`).join("");
 	return rows + (openRows[key] ? detailRowHtml(a, p, key) : "");
@@ -1350,13 +1349,13 @@ function passRows(a, p, first, metricCells) {
 
 function taskRow(a, p) {
 	return passRows(a, p, false, (e) =>
-		stepsCellFor(e) + timeCellFor(e) + tokensCellFor(e) + costCellFor(e) + NO_EXPLORE_CELLS);
+		startedCellFor(e) + timeCellFor(e) + stepsCellFor(e) + tokensCellFor(e) + costCellFor(e) + NO_EXPLORE_CELLS);
 }
 
 // The explore GROUP-HEADER rows. Steps stays "–": Actions IS an explore's step count.
 function exploreRow(a, p, first) {
 	return passRows(a, p, first, (e) =>
-		`<td class="num">–</td>` + timeCellFor(e) + tokensCellFor(e) + costCellFor(e) + exploreCellsFor(a, e));
+		startedCellFor(e) + timeCellFor(e) + `<td class="num">–</td>` + tokensCellFor(e) + costCellFor(e) + exploreCellsFor(a, e));
 }
 
 // Compile arms (phase 3/4 recipe compiles) are local, instant file transforms recorded as
@@ -1379,8 +1378,8 @@ function compileRow(a, p) {
 	// reordered the header and only the armCell-based rows followed.
 	return `<tr class="crow"><td class="arm" data-tip="${esc(tip)}"><span class="dn">${esc(displayName(a))}</span>${badge}</td>
 		${srcCell}<td class="num">–</td><td class="num">–</td><td class="num">–</td>
-		<td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num">–</td>
-		${NO_EXPLORE_CELLS}${startedCell(p)}${runsCell(p, null)}<td class="treecell"></td></tr>`;
+		${startedCell(p)}<td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num">–</td>
+		${NO_EXPLORE_CELLS}${runsCell(p, null)}<td class="treecell"></td></tr>`;
 }
 
 /* ---- row detail: appmap + path ------------------------------------------------------- */
