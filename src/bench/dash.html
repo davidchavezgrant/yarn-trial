@@ -943,6 +943,9 @@ function statusChip(e, rowKey, selected) {
 	const liveTip = lp ? "\nlive (event log, provisional): " + [
 		lp.steps != null ? `step ${lp.steps}, ${lp.verified != null ? lp.verified : 0}✓` : "",
 		lp.actions != null ? `${lp.actions} actions` + (lp.frontier != null ? `, frontier ${lp.frontier}` : "") + (lp.nodes != null ? `, ${lp.nodes} nodes` : "") : "",
+		// Live economics ride the same provisional line, ~-prefixed: outputTokens is the
+		// headline token number (repo convention), usd priced server-side like collected rows.
+		lp.outputTokens != null ? `~out ${fmtK(lp.outputTokens)} tok` + (lp.usd != null ? `, ~${fmtMoney(lp.usd)}` : "") : "",
 		lp.lastStep ? `last: ${lp.lastStep}` : "",
 		lp.verdict ? `claimed ${lp.verdict.success ? "success" : "failure"} — not yet collected/judged` : "",
 		lp.cleanup ? `cleanup: ${lp.cleanup}` : "",
@@ -1292,14 +1295,22 @@ function timeCellFor(e) {
 		: `<td class="num">–</td>`;
 }
 
-// Tokens/cost land only at collect (no mid-run token events), so uncollected runs show "–".
-const tokensCellFor = (e) => `<td class="num">${fmtK(e.outputTokens)}</td>`;
+// Tokens: collected wins; an uncollected run serves its usage events' cumulative total
+// (one per model call, the newest IS the count so far) as a live stand-in.
+const tokensCellFor = (e) => e.outputTokens != null
+	? `<td class="num">${fmtK(e.outputTokens)}</td>`
+	: !e.collected && e.live && e.live.outputTokens != null
+		? liveNumCell(`~${fmtK(e.live.outputTokens)}`, "output tokens so far — cumulative, off the run's usage events")
+		: `<td class="num">–</td>`;
 // Per-run cost: "?" = tokens recorded but no pricing (the report's unpriced), "–" = nothing
-// to price (queued, running, or a tokenless entry).
+// to price (queued, or a tokenless entry). A running run serves its live estimate (usd is
+// priced server-side in entryView, same estimateCost + fallbacks as collected rows).
 const costCellFor = (e) => e.usd != null ? `<td class="num">${fmtMoney(e.usd)}</td>`
 	: e.collected && e.outputTokens != null
 		? `<td class="num" data-tip="tokens recorded but no pricing for this run's model">?</td>`
-		: `<td class="num">–</td>`;
+		: !e.collected && e.live && e.live.usd != null
+			? liveNumCell(`~${fmtMoney(e.live.usd)}`, "est cost so far — published rates, not an invoice")
+			: `<td class="num">–</td>`;
 
 // The five explore-discovery cells for ONE pass (EntryView.exploreStamp); an in-flight
 // pass serves its heartbeat counters (actions/frontier/seen/nodes — surfaces and ambig are
@@ -1465,6 +1476,11 @@ function liveStrip(a, e) {
 	const pairs = a.kind === "explore"
 		? [["Actions", lp.actions], ["Frontier", lp.frontier], ["Seen", lp.seen], ["Nodes", lp.nodes], ["Stopped", lp.finished]]
 		: [["Steps", lp.steps], ["Verified", lp.verified], ["Last", lp.lastStep]];
+	// Usage is common to both kinds (one event per model call, cumulative). Same ~ prefix as
+	// the live cells; the strip's LIVE tag + caveat already mark the whole row provisional.
+	if (lp.outputTokens != null) pairs.push(["Out", "~" + fmtK(lp.outputTokens)]);
+	if (lp.modelCalls != null) pairs.push(["Calls", "~" + fmtNum(lp.modelCalls)]);
+	if (lp.usd != null) pairs.push(["Est Cost", "~" + fmtMoney(lp.usd)]);
 	if (lp.verdict) pairs.push(["Claimed", (lp.verdict.success ? "success" : "failure") + (lp.verdict.summary ? " — " + lp.verdict.summary : "")]);
 	if (lp.cleanup) pairs.push(["Cleanup", lp.cleanup]);
 	if (lp.fatal) pairs.push(["Fatal", lp.fatal]);

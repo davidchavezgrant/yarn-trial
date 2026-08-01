@@ -11,6 +11,9 @@ import { RUN_FILES, runPath } from "../../paths.js";
  * console prose. The event log is the same lifecycle story at coarse grain (run start,
  * per-step verdicts, final verdict, cleanup, fatal errors — ~15-25 lines for an 8-action
  * run, never one per element) in a shape any reader can tail and merge across runs.
+ * The one counter channel is `usage` (usageEvent below): one CUMULATIVE token line per
+ * model call, so live tokens/cost can render before collect banks run.json. Feed display
+ * skips them — the dashboard reads the last one, never the stream.
  *
  * Append-only and immutable once written, same philosophy as the narrator log: a reader
  * racing an append sees at worst one torn tail line, which every reader here skips.
@@ -34,4 +37,27 @@ export function runEvent(stamp: string, kind: string, detail: Record<string, unk
 		if (!appendWarned) console.warn(`run-events: append failed (${err instanceof Error ? err.message : String(err)}) — further event-log failures are silent`);
 		appendWarned = true;
 	}
+}
+
+/**
+ * The `usage` event: cumulative token totals so far, emitted after every model call. One
+ * helper so the emission sites (agent loop, explore streamCall, final-verdict convergence)
+ * cannot drift on field names — the detail shape is a frozen contract with the dashboard,
+ * which feeds it straight into the cost math (field names match TokenCounts in
+ * src/bench/cost.ts, plus model/modelCalls). CUMULATIVE, not deltas: the consumer takes the
+ * LAST line it sees, which survives torn tail lines and tail caps.
+ */
+export function usageEvent(
+	stamp: string,
+	model: string,
+	usage: { modelCalls: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number },
+): void {
+	runEvent(stamp, "usage", {
+		model,
+		modelCalls: usage.modelCalls,
+		inputTokens: usage.inputTokens,
+		outputTokens: usage.outputTokens,
+		cacheReadTokens: usage.cacheReadTokens,
+		cacheCreationTokens: usage.cacheCreationTokens,
+	});
 }

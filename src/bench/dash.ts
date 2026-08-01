@@ -300,7 +300,7 @@ function liveFor(e: ManifestEntry, fleet: FleetView): Pick<EntryView, "status" |
 	return { status: e.state };
 }
 
-function entryView(e: ManifestEntry, fleet: FleetView, live?: Map<string, RunProgress>): EntryView {
+function entryView(e: ManifestEntry, fleet: FleetView, live?: Map<string, RunProgress>, defaultModel?: string): EntryView {
 	const m = e.metrics;
 	if (e.collected) {
 		const cost = m ? estimateCost(m, m.model ?? e.model) : undefined;
@@ -363,7 +363,17 @@ function entryView(e: ManifestEntry, fleet: FleetView, live?: Map<string, RunPro
 
 	// Only the uncollected branch carries `live` — a collected entry's real metrics render
 	// above, and keeping both would put two answers to "how many steps" on one row.
-	const progress = live?.get(e.jobId);
+	let progress = live?.get(e.jobId);
+	// Live cost, priced HERE with the same math as collected rows (estimateCost) and the same
+	// fallback ladder as priceWithFallback: the run-recorded model first, then a retry at the
+	// dispatch/default model when that recorded id has no rate card. Attached as a COPY — the
+	// underlying progress objects are cached (progressCache / remoteRuns) and must not grow a
+	// price stamped with one entry's model fallbacks. Invariant (RunProgress header): this usd
+	// is provisional display only — it never feeds rollup()/cost totals/hero tiles.
+	if (progress && (progress.inputTokens !== undefined || progress.outputTokens !== undefined || progress.cacheReadTokens !== undefined || progress.cacheCreationTokens !== undefined)) {
+		const usd = estimateCost(progress, progress.model ?? e.model) ?? estimateCost(progress, e.model ?? defaultModel);
+		if (usd !== undefined) progress = { ...progress, usd };
+	}
 
 	return { jobId: e.jobId, host: e.host, submittedAt: e.submittedAt, collected: false, ...liveFor(e, fleet), ...(progress ? { live: progress } : {}) };
 }
@@ -497,7 +507,7 @@ function passView(arm: Arm, model: string | undefined, entries: ManifestEntry[],
 					},
 				}
 			: {}),
-		entries: entries.map((e) => entryView(e, fleet, live)),
+		entries: entries.map((e) => entryView(e, fleet, live, defaultModel)),
 	};
 }
 
@@ -743,7 +753,11 @@ export function storeEvents(dashRing: DashEvent[], limit = 200, outRoot = outDir
 			}
 			let parsed: DashEvent[];
 			try {
+				// Usage events are a counter channel, not narrative — one per model call would
+				// crowd the display tail with counter noise. They render in the metric columns
+				// (RunProgress folds them); only the FEED skips them.
 				parsed = parseRunEvents(fs.readFileSync(file, "utf8").split("\n").slice(-(EVENT_TAIL_LINES + 1)).join("\n"))
+					.filter((ev) => ev.kind !== "usage")
 					.map((ev) => ({ t: ev.t, line: runEventLine(ev.kind, ev.detail), runKey: d.name, source: "run" as const }));
 			} catch {
 				continue;
@@ -825,6 +839,22 @@ export interface RunProgress {
 	fatal?: string;
 	/** Teardown outcome as one line: "3 restored" / "1 failed" / the error. */
 	cleanup?: string;
+	/**
+	 * Token usage off the newest "usage" event — the harness emits one per model call carrying
+	 * CUMULATIVE totals, so last-one-wins IS the run's usage so far. Field names match
+	 * EntryView's collected fields (and cost.ts's TokenCounts) so the page treats live and
+	 * collected symmetrically. `usd` is filled by the VIEW layer (entryView, with the same
+	 * estimateCost + model fallbacks as collected rows), never by this aggregator — pricing
+	 * needs the manifest's dispatch/default model, which an event log does not carry.
+	 */
+	inputTokens?: number;
+	outputTokens?: number;
+	cacheReadTokens?: number;
+	cacheCreationTokens?: number;
+	modelCalls?: number;
+	/** The resolved model id the usage event named — pricing's first candidate. */
+	model?: string;
+	usd?: number;
 }
 
 /** Fold a run's events into results-so-far. Field checks are defensive per event, not per file: one malformed detail loses itself, never the run. */
@@ -878,6 +908,18 @@ export function aggregateRunEvents(raw: RawRunEvent[]): RunProgress | undefined 
 
 			case "fatal": {
 				if (typeof d.error === "string") p.fatal = d.error;
+				break;
+			}
+
+			case "usage": {
+				// Cumulative totals by contract — the newest event IS the run's usage so far, so
+				// later events simply overwrite earlier ones, field by field, defensively.
+				if (typeof d.inputTokens === "number") p.inputTokens = d.inputTokens;
+				if (typeof d.outputTokens === "number") p.outputTokens = d.outputTokens;
+				if (typeof d.cacheReadTokens === "number") p.cacheReadTokens = d.cacheReadTokens;
+				if (typeof d.cacheCreationTokens === "number") p.cacheCreationTokens = d.cacheCreationTokens;
+				if (typeof d.modelCalls === "number") p.modelCalls = d.modelCalls;
+				if (typeof d.model === "string" && d.model) p.model = d.model;
 				break;
 			}
 
@@ -2006,7 +2048,9 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		[...remoteRuns]
 			.filter(([jobId]) => !fs.existsSync(path.join(outDir(), LIVE_DIR, jobId, RUN_FILES.events)))
 			.flatMap(([jobId, s]) =>
-				s.raw.slice(-EVENT_TAIL_LINES).map((ev) => ({ t: ev.t, line: runEventLine(ev.kind, ev.detail), runKey: jobId, source: "run" as const })));
+				// Usage events skip the feed (counter channel, not narrative — they render in the
+				// metric columns); filtered BEFORE the tail cap so counters never eat the window.
+				s.raw.filter((ev) => ev.kind !== "usage").slice(-EVENT_TAIL_LINES).map((ev) => ({ t: ev.t, line: runEventLine(ev.kind, ev.detail), runKey: jobId, source: "run" as const })));
 
 	/** Results-so-far per uncollected entry: the remote tail while the fleet holds the run, the local file otherwise. */
 	const liveProgress = (): Map<string, RunProgress> => {
