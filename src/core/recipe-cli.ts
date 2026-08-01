@@ -69,6 +69,11 @@ export function compileFromStamp(stamp: string): { recipe: Recipe; path: string 
 	try {
 		fs.mkdirSync(runDir(stamp), { recursive: true });
 		fs.writeFileSync(runPath(stamp, RUN_FILES.recipe), JSON.stringify(recipe, null, "\t"));
+		// And re-link the backup. This write lands LONG after the source run terminated and took
+		// its backup, so without this the recipe exists in live and not in archive — and the whole
+		// point of the archive is that dropping the live copy loses nothing. Any post-terminal
+		// writer has this obligation; archiveRun only links what the archive is missing.
+		archiveRun(stamp);
 	} catch {
 		// The source run may predate the consolidated layout; the canonical write above stands.
 	}
