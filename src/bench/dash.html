@@ -1083,7 +1083,7 @@ const TASK_HEAD = "<tr>" + th("Variant", VARIANT_TIP) +
 	th("Steps", "actions the run took (hover for the verified count)", "num-h") + th("Time", "wall-clock per run — ticking while the run executes", "num-h") +
 	th("Tokens", "OUTPUT tokens the run spent", "num-h") + th("Cost", "published-rate estimate per run — not an invoice · ? = tokens recorded but no pricing", "num-h") +
 	th("Actions", "explore rows — actions the grounding pass took", "num-h") +
-	th("Controls", "explore rows — actuated/dismissed/seen (the stamp's own order): of every control the pass observed (seen), how many it operated (actuated) vs swept off the frontier without operating (dismissed). The pass ends when the frontier empties, and dismissing is a legitimate way to empty it", "num-h") +
+	th("Controls", "explore rows — seen/actuated/dismissed: every control the pass observed (seen, the total), then how many it operated (actuated) vs swept off the frontier without operating (dismissed). The pass ends when the frontier empties, and dismissing is a legitimate way to empty it", "num-h") +
 	th("Surfaces", "explore rows — distinct screens/panels/tabs/dialogs controls were SEEN on: what you navigate BETWEEN; controls live ON them. The distilled appmap graph (Map column) typically keeps fewer surface nodes than this", "num-h") +
 	th("Nodes", "explore rows — distilled appmap graph nodes", "num-h") +
 	th("Ambig", "explore rows — settings editable at two scopes under one identity (same settingKey, different scope) — the wrong-scope trap; each gets a prompt warning", "num-h") +
@@ -1309,8 +1309,8 @@ function exploreCellsFor(a, e) {
 			: "";
 		return num(fmtNum(st.actions))
 			+ (st.controlsSeen != null
-				? num(`${st.controlsActuated}/${st.controlsDismissed}/${st.controlsSeen}${declared}`,
-					`actuated ${st.controlsActuated} · dismissed ${st.controlsDismissed} · seen ${st.controlsSeen}`)
+				? num(`${st.controlsSeen}/${st.controlsActuated}/${st.controlsDismissed}${declared}`,
+					`seen ${st.controlsSeen} (total observed) · actuated ${st.controlsActuated} · dismissed ${st.controlsDismissed}`)
 				: num("–"))
 			+ num(fmtNum(st.surfaces)) + num(fmtNum(st.graphNodes)) + num(fmtNum(st.scopeAmbiguities));
 	}
