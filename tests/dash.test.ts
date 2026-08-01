@@ -1120,3 +1120,13 @@ test("WatchStoreChain__FiresOnChange__When__StoreWipedAndRecreated", async () =>
 		fs.rmSync(out, { recursive: true, force: true });
 	}
 });
+
+test("ParseDashArgs__RecordsWhetherTheDateWasNamed__When__FlagIsAbsent", () => {
+	// A resolved date and a chosen one are different things, and conflating them is why a
+	// long-lived dash can never move: on 2026-08-01 four instances booted while 2026-07-31 was
+	// the newest non-empty manifest and watched it all night while the pass ran under 08-01.
+	// Any benchmark crossing UTC midnight reproduces it.
+	assert.equal(parseDashArgs(["--date", "2026-07-31"]).dateExplicit, true, "a named date is pinned forever");
+	assert.equal(parseDashArgs([]).dateExplicit, false, "a resolved date follows the newest pass");
+	assert.equal(parseDashArgs(["--date", "2026-07-31"]).date, "2026-07-31");
+});

@@ -1429,6 +1429,8 @@ export interface DashOptions {
 	port: number;
 	date: string;
 	autoCollect: boolean;
+	/** Set when --date was passed: pin to it. Absent/false means follow the newest pass. */
+	dateExplicit?: boolean;
 }
 
 /**
@@ -1476,9 +1478,21 @@ export function parseDashArgs(args: string[]): DashOptions {
 		return i >= 0 ? args[i + 1] : undefined;
 	};
 
+	const explicit = flag("--date");
+
 	return {
 		port: Number(flag("--port") ?? process.env.DASH_PORT ?? 4642),
-		date: flag("--date") ?? defaultDashDate(),
+		date: explicit ?? defaultDashDate(),
+		/**
+		 * Whether the operator NAMED a date. Without this the resolved date is indistinguishable
+		 * from a chosen one, so a long-lived dash can never safely move: it resolves once at
+		 * startup and watches that day forever. On 2026-08-01 four dash processes booted while
+		 * the newest non-empty manifest was 2026-07-31 and spent the night on it while the pass
+		 * ran under 2026-08-01 — a benchmark that crosses UTC midnight hits this every time.
+		 *
+		 * An explicit --date is honoured forever; a resolved one is re-resolved as passes land.
+		 */
+		dateExplicit: explicit !== undefined,
 		// READ-ONLY by default (David, 2026-08-01): out/bench/live is the runner's store and the
 		// dash is a reader over it — `--collect` arms the collect loop explicitly. The old
 		// opt-out `--no-collect` is deliberately still accepted (as a no-op): launchers and
@@ -1559,7 +1573,10 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	// Before ANYTHING that calls makeClient — the defaultModel resolution just below and
 	// every narrate tick read the key env vars this seeds.
 	loadEnvFallback();
-	const { port, date, autoCollect } = opts;
+	const { port, autoCollect } = opts;
+	// Mutable: a dash that did not have its date named follows the newest drained pass, so a
+	// benchmark starting after the one it booted on does not leave it watching yesterday.
+	let date = opts.date;
 
 	let manifest = readStoredManifest(date);
 	let fleet: FleetView = { rows: [] };
@@ -1827,6 +1844,25 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		// Failures land in the events ring instead.
 		try {
 			storeWatch.rearm(); // the cheap existence probe that replaces the startup mkdir
+			/**
+			 * Follow the newest pass, unless the operator named a date.
+			 *
+			 * The date used to be resolved once in parseDashArgs and closed over forever, so a
+			 * dash outlived the pass it booted on: four instances started while 2026-07-31 was
+			 * the newest non-empty manifest and stayed there while the live pass ran under
+			 * 2026-08-01. Any benchmark crossing UTC midnight reproduces it.
+			 *
+			 * Only ever moves to a date that HAS a non-empty manifest — defaultDashDate's own
+			 * rule — so an empty next-day husk minted by a post-midnight collect cannot pull the
+			 * view off a pass that is still draining.
+			 */
+			if (!opts.dateExplicit) {
+				const newest = defaultDashDate();
+				if (newest !== date) {
+					addEvent(`following the newer pass: ${date} -> ${newest}`);
+					date = newest;
+				}
+			}
 			manifest = readStoredManifest(date);
 			clearStaleNarrative();
 			push();
