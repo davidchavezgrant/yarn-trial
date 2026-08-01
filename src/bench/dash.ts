@@ -133,6 +133,13 @@ export interface PassView {
 	collected: number;
 	successes: number;
 	usd: number;
+	/**
+	 * Runs that actually priced (a card existed, directly or via the default-model fallback).
+	 * On the wire so the page's filtered recompute counts what the server counts — tokenless
+	 * entries (compiles, refusals) are neither priced nor unpriced, which `collected −
+	 * unpriced` cannot express. Optional only for wire-compat with a server that predates it.
+	 */
+	priced?: number;
 	unpriced: number;
 	/** Of the priced runs, how many were priced by ASSUMING the pass's default-model rates. */
 	assumed: number;
@@ -451,6 +458,9 @@ function passView(arm: Arm, model: string | undefined, entries: ManifestEntry[],
 		successes: r.successes,
 		usd: priced.reduce((s, p) => s + (p.usd ?? 0), 0),
 		// Tokenless entries (compiles) are neither priced nor unpriced — see priceWithFallback.
+		// `priced` rides the wire so the page's target-filtered recompute counts exactly what
+		// the server counts (collected − unpriced overcounts by every tokenless compile).
+		priced: priced.filter((p) => p.usd !== undefined).length,
 		unpriced: priced.filter((p) => p.usd === undefined && !p.tokenless).length,
 		assumed: priced.filter((p) => p.assumed).length,
 		...(r.meanSteps !== undefined ? { meanSteps: r.meanSteps } : {}),

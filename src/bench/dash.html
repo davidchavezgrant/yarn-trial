@@ -27,6 +27,15 @@
 		--warning: #fab219;
 		--serious: #ec835a;
 		--critical: #d03b3b;
+		/* Semantic state tokens, deliberately OUTSIDE both the series and status palettes.
+		   running/busy is NOT --s1: a series hue must never carry state, or repainting a chart
+		   silently recolors every live chip. refused is NOT --s5: magenta already means
+		   "mutated by this run" on the map. stopped is darker than --muted so a killed run
+		   never color-twins a queued one — queued/pending share --muted (both are the
+		   waiting family; the label tells them apart). */
+		--running: #38b6d8;
+		--refused: #a86ed4;
+		--stopped: #5c5b56;
 	}
 	* { box-sizing: border-box; }
 	body {
@@ -130,7 +139,7 @@
 	/* Phase badge on task/replay rows: phases interleave inside a lineage group, so each row
 	   carries its own. */
 	.pbadge {
-		font-size: 9px; border: 1px solid var(--border); border-radius: 7px; padding: 0 4px;
+		font-size: 10px; border: 1px solid var(--border); border-radius: 7px; padding: 0 4px;
 		margin-left: 6px; color: var(--muted); letter-spacing: .04em; vertical-align: 1px;
 	}
 	/* App scope picker: reuses the chip idiom; the selected chip borrows .chip.sel's border. */
@@ -142,18 +151,33 @@
 		border-radius: 10px; padding: 1px 8px; margin: 1px 3px 1px 0; font-size: 11px; white-space: nowrap;
 	}
 	.chip .dot { flex: none; }
+	/* An UNMAPPED status renders hollow — visibly "the page does not know this state" —
+	   instead of borrowing the solid gray that means queued/stopped. */
+	.dot.unknown { background: none !important; border: 1.5px solid var(--muted); }
+	.js-elapsed { font-variant-numeric: tabular-nums; }
 	.chip[data-job] { cursor: pointer; }
 	.chip.sel { border-color: var(--s1); }
+	/* .num is for NUMBERS: ink-2 + right-aligned in table cells so magnitudes scan down a
+	   column. Non-numeric cells that only want the ink-2 color wear .txt — putting text in
+	   .num would right-align prose the moment it lands in a td. */
 	.num { color: var(--ink-2); }
+	td.num { text-align: right; }
+	th.num-h { text-align: right; }
+	.txt { color: var(--ink-2); }
 	tr.mrow { cursor: pointer; }
 	tr.mrow:hover td { background: rgba(255, 255, 255, 0.035); }
 	/* Explore rows: faint neutral wash so the two board sections read apart at a glance.
 	   Subtler than the hover wash, which outranks it (specificity), so hover still reads. */
 	tr.exp-row td { background: rgba(255, 255, 255, 0.03); }
 	td.arm .dn { color: var(--ink); }
-	/* Rank dot on explore group headers: comprehensiveness rank within the target. Color
-	   never alone — the tooltip carries the rank text. */
-	td.arm .rankdot { margin-right: 6px; cursor: help; }
+	/* Rank badge on explore group headers: comprehensiveness rank within the target as TEXT
+	   ("1/3"), border-tinted by rank. A solid dot here was indistinguishable from the status
+	   dots two cells over — same glyph, same hues, different meaning. The ordinal is the
+	   fact; the border is only a glance aid. */
+	td.arm .rankbadge {
+		font-size: 10px; border: 1px solid var(--border); border-radius: 8px; padding: 0 5px;
+		margin-right: 6px; color: var(--ink-2); cursor: help; font-variant-numeric: tabular-nums;
+	}
 	/* The Runs column: the run-selector chips, one per run (statusChip keeps them minimal). */
 	td.runs { max-width: 260px; }
 	td.treecell { text-align: center; white-space: nowrap; }
@@ -188,7 +212,8 @@
 	.ctrl.mut { border-color: var(--s5); }
 	.stepno {
 		display: inline-block; min-width: 13px; text-align: center; background: var(--s1);
-		color: #fff; border-radius: 8px; font-size: 10px; padding: 0 4px; margin-left: 5px; vertical-align: 1px;
+		/* --plane on --s1 ≈ 5.3:1 (AA); white was 3.6:1 — step order is load-bearing. */
+		color: var(--plane); border-radius: 8px; font-size: 10px; padding: 0 4px; margin-left: 5px; vertical-align: 1px;
 	}
 	/* per-run stats strip: the selected run's own numbers atop the dropdown — muted labels,
 	   tabular numbers, wraps to a second line on narrow viewports. */
@@ -235,14 +260,17 @@
 	/* events */
 	#events { max-height: 260px; overflow-y: auto; font-family: ui-monospace, monospace; font-size: 11px; }
 	#events .t { color: var(--muted); margin-right: 8px; }
-	#events .rk { color: var(--s1); margin-right: 6px; }
+	/* Run keys wear text ink; the --s1 left border is the mark that says "this line belongs
+	   to a run" (dash-operational lines have none). Text in a series color is the anti-pattern
+	   — and this blue also means "running" one card up. */
+	#events .rk { color: var(--ink-2); border-left: 2px solid var(--s1); padding-left: 5px; margin-right: 6px; }
 	#events div { padding: 1px 0; }
 	.scroll { max-height: 420px; overflow-y: auto; }
 </style>
 </head>
 <body>
 <header>
-	<h1><span id="conn"></span>bench dash</h1>
+	<h1><span id="conn"></span>bench dash <span id="conn-word" class="meta"></span></h1>
 	<span class="meta" id="metaline">Connecting…</span>
 	<div class="hero">
 		<div class="tile"><div class="v" id="h-submitted">–</div><div class="k">Submitted / Planned</div></div>
@@ -268,7 +296,7 @@
 	</section>
 
 	<section class="grid2">
-		<div class="card"><h2>Phase 1 — Discovery per Backend</h2><div class="sub">controls seen / actuated / dismissed per Explore arm — the leaner-vs-blinder question</div><div id="chart-explore"></div></div>
+		<div class="card"><h2>Phase 1 — Discovery per Backend</h2><div class="sub">controls seen / actuated / dismissed per Explore arm (x̃ across each arm's passes) — the leaner-vs-blinder question</div><div id="chart-explore"></div></div>
 		<div class="card"><h2>Task Outcomes by Arm</h2><div class="sub">collected runs by verdict; pending = submitted, not yet collected</div><div id="chart-outcomes"></div></div>
 		<div class="card"><h2>Explore Effect — Steps x̄</h2><div class="sub">explored vs unexplored, per backend (phase 2 core)</div><div id="chart-steps"></div></div>
 		<div class="card"><h2>Explore Effect — Output Tokens x̄</h2><div class="sub">same arms, token cost of going in blind</div><div id="chart-tokens"></div></div>
@@ -301,8 +329,13 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
-const SERIES = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181"];
-const RED = "#e66767";
+// var() strings, not hex: :root is the single source of truth for every color on this page
+// (inline styles and SVG fill/stroke both resolve var() — treeSvg always has). A raw hex
+// that shadows a token is a drift bug: edit :root and half the views desync.
+const SERIES = ["var(--s1)", "var(--s2)", "var(--s3)", "var(--s4)", "var(--s5)"];
+// State tokens that are deliberately neither series nor status hues (see :root).
+const RUNNING = "var(--running)";
+const REFUSED = "var(--refused)";
 // One explainer, three homes (legend tip, inline chip tip, tree-node tip) — the wrong-scope
 // trap is the single most decision-relevant marker on the map, so the full story travels
 // with every ⚠ rather than living in one place.
@@ -312,15 +345,32 @@ const AMB_TIP = "this setting exists at TWO scopes under one identity (same sett
 const DECLARED_TIP = "DECLARED — the vision-only pass has no element list to count against, so these tallies are the model's own report; not comparable like-for-like with mechanically counted passes.";
 // The multi-pass matrix runs n>1 explores per arm; the explore columns aggregate as medians.
 const MED_TIP = "median across N passes — medians resist a degenerate pass (an 8-node husk map happened)";
-const STATUS = { good: "#0ca30c", warning: "#fab219", serious: "#ec835a", critical: "#d03b3b" };
+const STATUS = { good: "var(--good)", warning: "var(--warning)", serious: "var(--serious)", critical: "var(--critical)" };
+// Every status the wire can put on an entry has an explicit entry here; statusChip renders
+// anything NOT in this map as a hollow "unknown" dot rather than dressing it as a known
+// state. Families share a hue and the chip label discriminates within the family:
+//   critical = the agent failed the task (failed, gave-up)
+//   serious  = technical/invalid, not an agent verdict (crashed, unready = host problem,
+//              grounding-mismatch = run completed but did not measure what the arm claims)
+//   refused  = a gate deliberately declined to run/compile (refused, hinted-refused) —
+//              its own token: --s5 magenta already means "mutated by this run" on the map
+//   muted    = the waiting family (queued dots and the outcomes chart's pending segments)
+//   stopped  = operator-terminated: terminal-inert, darker than the waiting gray
+//   ink-2    = collected: banked with no success verdict (explores, compiles) — bright
+//              "done", never the queued gray it used to fall back to
 const OUTCOME_COLORS = {
-	succeeded: STATUS.good, "gave-up": STATUS.critical, unready: STATUS.warning,
-	crashed: STATUS.serious, stopped: "#898781", "hinted-refused": "#d55181",
+	succeeded: STATUS.good, "gave-up": STATUS.critical, unready: STATUS.serious,
+	crashed: STATUS.serious, "grounding-mismatch": STATUS.serious,
+	stopped: "var(--stopped)", "hinted-refused": REFUSED,
 	// "refused": a metric-less collected entry whose manifest state is failed — a compile
 	// the gate refused. Same refusal family (and color) as hinted-refused.
-	refused: "#d55181",
-	failed: STATUS.critical, pending: "#383835",
+	refused: REFUSED,
+	failed: STATUS.critical, pending: "var(--muted)",
+	collected: "var(--ink-2)",
 };
+// One resolver for chart segments AND their legend swatches, so a segment can never render
+// a color its legend doesn't show. Unknown kinds get ink — visible, claimed by no state.
+const outcomeColor = (k) => OUTCOME_COLORS[k] || "var(--ink)";
 const fmtMoney = (n) => n < 0.01 && n > 0 ? "$" + n.toFixed(4) : "$" + n.toFixed(2);
 // Seconds stay visible past the hour mark — they are what makes a live ticker read as live.
 // Floor the seconds component everywhere: rounding rolled 59.5s over to "60s" and "1m60s".
@@ -393,7 +443,11 @@ function visibleStats() {
 	const byPass = {};
 	for (const a of arms) for (const p of a.passes) {
 		const b = byPass[p.model] = byPass[p.model] || { pass: p.model, usd: 0, priced: 0, unpriced: 0, assumed: 0 };
-		b.usd += p.usd; b.priced += p.collected - p.unpriced; b.unpriced += p.unpriced; b.assumed += p.assumed;
+		// p.priced is the server's own count (a tokenless compile/refusal is neither priced
+		// nor unpriced); collected−unpriced is the pre-`priced`-field approximation, kept only
+		// for a server that predates the field.
+		b.usd += p.usd; b.priced += p.priced ?? Math.max(0, p.collected - p.unpriced);
+		b.unpriced += p.unpriced; b.assumed += p.assumed;
 	}
 	const passes = Object.values(byPass).filter((p) => p.priced || p.unpriced);
 	const cost = {
@@ -478,11 +532,12 @@ function vBars(groups, series, opts = {}) {
 		const total = series.length * bw + (series.length - 1) * 2; // 2px surface gap between bars
 		series.forEach((s, si) => {
 			const v = g.values[si];
-			if (v == null) return;
+			if (v == null) return; // missing data: no mark, no label — absent, not zero
 			const bx = cx - total / 2 + si * (bw + 2);
 			const by = y(v), bh = padT + ih - by;
 			svg += `<path d="${barPath(bx, by, bw, bh, 4, false)}" fill="${s.color}" data-tip="${esc(g.label)} — ${esc(s.name)}: ${fmt(v)}"/>`;
-			if (labelBars && v > 0) svg += `<text class="val" x="${bx + bw / 2}" y="${by - 4}" text-anchor="middle">${fmt(v)}</text>`;
+			// A genuine 0 gets its label so it never reads as missing (the mark is zero-height).
+			if (labelBars) svg += `<text class="val" x="${bx + bw / 2}" y="${(v > 0 ? by : padT + ih) - 4}" text-anchor="middle">${fmt(v)}</text>`;
 		});
 		svg += `<text class="lbl" x="${cx}" y="${H - 6}" text-anchor="middle">${esc(g.label)}</text>`;
 	});
@@ -523,8 +578,12 @@ function hBars(groups, series, opts = {}) {
 			: `<text class="lbl" x="${padL - 8}" y="${mid + 4}" text-anchor="end">${esc(g.label)}</text>`;
 		series.forEach((s, si) => {
 			const v = g.values[si];
-			if (v == null || v <= 0) return; // a zero draws no mark — the axis baseline says 0
+			if (v == null) return; // missing data: nothing — absent must not read as zero
 			const by = gy + si * (bh + gap);
+			if (v <= 0) { // a genuine 0 draws no mark but SAYS "0" — distinguishable from absent
+				svg += `<text class="val" x="${padL + 4}" y="${by + bh - 2}">0</text>`;
+				return;
+			}
 			const bw = Math.max(v / max * iw, 1.5);
 			svg += `<path d="${barPath(padL, by, bw, bh, 4, true)}" fill="${s.color}" data-tip="${esc(g.label)}${g.sub ? " · " + esc(g.sub) : ""} — ${esc(s.name)}: ${fmt(v)}"/>`;
 			svg += `<text class="val" x="${padL + bw + 4}" y="${by + bh - 2}">${fmt(v)}</text>`;
@@ -621,9 +680,14 @@ function statusChip(e, rowKey, selected) {
 	// crashed statuses and this fallback goes quiet.)
 	const pane = logPanes[e.jobId + "@" + e.host];
 	const dead = e.status === "awaiting-collect" && pane && (pane.state === "failed" || pane.state === "orphaned");
-	const color = dead ? STATUS.critical :
-		e.status === "running" ? SERIES[0] : e.status === "queued" ? "#898781" :
-		e.status === "awaiting-collect" ? STATUS.warning : OUTCOME_COLORS[e.status] || "#898781";
+	// A dead run's dot matches what the BOARD would show for that verdict (orphaned = the
+	// crashed family), not a blanket red; unmapped statuses go hollow (dot.unknown), never
+	// the solid gray that means queued/stopped.
+	const known = dead || e.status === "running" || e.status === "queued"
+		|| e.status === "awaiting-collect" || e.status in OUTCOME_COLORS;
+	const color = dead ? (OUTCOME_COLORS[pane.state === "orphaned" ? "crashed" : pane.state] || STATUS.critical) :
+		e.status === "running" ? RUNNING : e.status === "queued" ? "var(--muted)" :
+		e.status === "awaiting-collect" ? STATUS.warning : OUTCOME_COLORS[e.status];
 	// Chips are minimal on purpose: dot + Status + elapsed — per-run detail lives in the
 	// tooltip and the row dropdown, not on the chip line. The elapsed ticks while Running
 	// (js-elapsed span so the 1s ticker advances it between SSE pushes — a static
@@ -631,12 +695,20 @@ function statusChip(e, rowKey, selected) {
 	// duration once it finishes: how long a run took must not vanish the moment it lands.
 	// Queued chips show no time — nothing has started.
 	const took = e.elapsedSec != null ? e.elapsedSec : e.runSec != null ? e.runSec : (liveMem[e.jobId] || {}).elapsed;
+	// A running entry whose poll carried no elapsedSec renders plain "Running" (with the
+	// liveMem pin as fallback) — fabricating "Running 0s" off a missing number reads as a
+	// fresh start that never happened.
+	const runBase = e.elapsedSec != null ? e.elapsedSec
+		: (liveMem[e.jobId] || {}).start != null ? (receivedAt - liveMem[e.jobId].start) / 1000 : null;
 	let label = e.status === "running"
-		? `Running ${elapsedSpan(e.elapsedSec)}`
+		? `Running${runBase != null ? " " + elapsedSpan(runBase) : ""}`
 		: esc(statusLabel(e.status)) + (e.status !== "queued" && took != null ? " " + fmtDur(took) : "");
+	// The dead override changes the LABEL too: two states must never share a name and be
+	// told apart by dot color alone.
+	if (dead) label = esc(statusLabel(pane.state)) + (took != null ? " " + fmtDur(took) : "") + " — uncollected";
 	if (e.status === "queued" && e.queuePosition) label += " #" + e.queuePosition;
 	if (e.stalled) label += " ⚠ Stalled";
-	const judge = e.judgeTrajectory ? ` · Judge ${e.judgeTrajectory[0]}` : "";
+	const judge = e.judgeTrajectory ? ` · Judge ${e.judgeTrajectory}` : "";
 	// Tooltip economics: raw token classes are provider-shaped (Anthropic's input excludes
 	// cache reads, Azure's includes them) — shown per run, never summed across runs.
 	const tok = [
@@ -661,12 +733,14 @@ function statusChip(e, rowKey, selected) {
 	// logPanes-fallback note: name the registry verdict, or the red dot reads as a collected result.
 	const registry = dead ? `\nregistry: ${pane.state}${pane.exitCode != null ? ` (exit ${pane.exitCode})` : ""} — not yet collected` : "";
 	return `<span class="chip${selected ? " sel" : ""}"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${esc(when)}${e.note ? "\n" + esc(e.note) : ""}${esc(preCollect)}${esc(registry)}\nclick to view on the map${esc(econ)}">` +
-		`<span class="dot" style="background:${color}"></span>${label}${esc(judge)}</span>`;
+		`<span class="dot${known ? "" : " unknown"}"${known ? ` style="background:${color}"` : ""}></span>${label}${esc(judge)}</span>`;
 }
 
-/** An elapsed readout the 1s ticker keeps advancing. base = seconds as of receivedAt. */
+/** An elapsed readout the 1s ticker keeps advancing. base = seconds as of receivedAt.
+ *  null stays "–" (the page's missing-data mark) — coercing to 0 fabricated a just-started
+ *  reading that then ticked up from zero. */
 function elapsedSpan(sec) {
-	return `<span class="js-elapsed" data-base="${sec || 0}">${fmtDur(sec || 0)}</span>`;
+	return sec == null ? "–" : `<span class="js-elapsed" data-base="${sec}">${fmtDur(sec)}</span>`;
 }
 
 function renderFleet() {
@@ -736,9 +810,13 @@ function hostCard(name) {
 }
 
 function hostInfoHtml(r) {
-	const color = !r.reachable ? STATUS.critical : r.state === "busy" ? SERIES[0] : r.state === "idle" ? STATUS.good : STATUS.warning;
+	// busy = the running token (never --s1: series hue), idle = good, unreachable = critical.
+	// Any OTHER state ("unknown" — an armed host that fell out of the poll) is hollow, not
+	// warning-amber: amber claims knowledge ("needs attention") the poll doesn't have.
+	const known = !r.reachable || r.state === "busy" || r.state === "idle";
+	const color = !r.reachable ? STATUS.critical : r.state === "busy" ? RUNNING : r.state === "idle" ? STATUS.good : "";
 	const busy = r.state === "busy"
-		? `<div class="row"><span class="num">${esc(r.app || "?")}</span><span class="meta">${elapsedSpan(r.elapsedSec)}</span></div>
+		? `<div class="row"><span class="txt">${esc(r.app || "?")}</span><span class="meta">${elapsedSpan(r.elapsedSec)}</span></div>
 		   <div class="q">${esc(r.jobId || "")}${r.stalled ? ' <span class="warn">⚠ Stalled ' + fmtDur(r.logSilenceSec) + ' silent</span>' : ""}</div>`
 		: "";
 	const queue = r.queue && r.queue.length
@@ -749,7 +827,7 @@ function hostInfoHtml(r) {
 	// cleared when a later attach succeeds — the panel stays a quiet Idle box, never an
 	// error dump.
 	const err = peekErrors[r.name] ? ` <span class="pk-err" data-tip="${esc(peekErrors[r.name])}">⚠</span>` : "";
-	return `<div class="row"><span class="dot" style="background:${color}"></span><span class="name">${esc(r.name)}</span>${err}
+	return `<div class="row"><span class="dot${known ? "" : " unknown"}"${known ? ` style="background:${color}"` : ""}></span><span class="name">${esc(r.name)}</span>${err}
 		<span class="meta">${esc(statusLabel(r.reachable ? r.state : "unreachable"))}${r.operator ? " · " + esc(r.operator) : ""}</span></div>
 		${busy}${queue}${tcc}${r.reason ? `<div class="q">${esc(r.reason)}</div>` : ""}`;
 }
@@ -767,7 +845,8 @@ function armOf(jobId) {
 // rendering one as "0/1 ok" read as a failure — and Actions IS the explore's steps).
 // Flags live in the arm tooltip (the display name is derived from them) and per-run
 // completion lives on the chips, so neither needs a column.
-const th = (label, tip) => `<th${tip ? ` data-tip="${esc(tip)}"` : ""}>${label}</th>`;
+// cls "num-h" right-aligns a numeric column's header so it sits over its right-aligned cells.
+const th = (label, tip, cls) => `<th${cls ? ` class="${cls}"` : ""}${tip ? ` data-tip="${esc(tip)}"` : ""}>${label}</th>`;
 const VARIANT_TIP = "hover for the arm id, flags and the decision this cell informs · click to expand the selected run's dropdown (stats · prompt · live log) · pick the run via its chip in the Runs column";
 const RUNS_TIP = "one chip per run — click a chip to select that run: the row's dropdown and ⤢ map follow the selected chip";
 // No target column: the app scope picker above the board carries the target, and inside a
@@ -785,14 +864,14 @@ const TASK_HEAD = "<tr>" + th("Variant", VARIANT_TIP) +
 	th("Sees", "what the agent SEES: AX tree or DOM elements, plus vision — or pixels only") +
 	th("Acts With", "what injects the input: AX (cua driver) or CDP") +
 	th("Model", "what actually ran, off the run logs") +
-	th("Success", "self-reported: succeeded / collected (the judge's verdict lives in the Judge card)") +
-	th("Steps", "mean actions per run") + th("Time", "mean wall-clock per run") +
-	th("Tokens", "mean OUTPUT tokens per run") + th("Cost", "published-rate estimate across collected runs — not an invoice") +
-	th("Actions", "explore rows — actions the grounding pass took (x̃ = median across the arm's passes; hover the cell for elapsed)") +
-	th("Controls", "explore rows — seen/actuated/dismissed: every control the pass observed, how many it operated, how many it swept off the frontier without operating. The pass ends when the frontier empties, and dismissing is a legitimate way to empty it") +
-	th("Surfaces", "explore rows — distinct screens/panels/tabs/dialogs controls were SEEN on: what you navigate BETWEEN; controls live ON them. The distilled appmap graph (Map column) typically keeps fewer surface nodes than this") +
-	th("Nodes", "explore rows — distilled appmap graph nodes (hover the cell for edges)") +
-	th("Ambig", "explore rows — settings editable at two scopes under one identity (same settingKey, different scope) — the wrong-scope trap; each gets a prompt warning") +
+	th("Success", "self-reported: succeeded / collected (the judge's verdict lives in the Judge card)", "num-h") +
+	th("Steps", "mean actions per run", "num-h") + th("Time", "mean wall-clock per run", "num-h") +
+	th("Tokens", "mean OUTPUT tokens per run", "num-h") + th("Cost", "published-rate estimate across collected runs — not an invoice · +N? = N runs missing pricing", "num-h") +
+	th("Actions", "explore rows — actions the grounding pass took (x̃ = median across the arm's passes; hover the cell for elapsed)", "num-h") +
+	th("Controls", "explore rows — actuated/dismissed/seen (the stamp's own order): of every control the pass observed (seen), how many it operated (actuated) vs swept off the frontier without operating (dismissed). The pass ends when the frontier empties, and dismissing is a legitimate way to empty it", "num-h") +
+	th("Surfaces", "explore rows — distinct screens/panels/tabs/dialogs controls were SEEN on: what you navigate BETWEEN; controls live ON them. The distilled appmap graph (Map column) typically keeps fewer surface nodes than this", "num-h") +
+	th("Nodes", "explore rows — distilled appmap graph nodes (hover the cell for edges)", "num-h") +
+	th("Ambig", "explore rows — settings editable at two scopes under one identity (same settingKey, different scope) — the wrong-scope trap; each gets a prompt warning", "num-h") +
 	th("Started", "when the row's LATEST run began — collected runs off the run log, running runs derived from their ticking elapsed; a queued run shows – until it starts. Hover lists every run") +
 	th("Runs", RUNS_TIP) +
 	th("Map", "the appmap as a full node-link tree — edge thickness = traversal heat, blue = the run's path") + "</tr>";
@@ -816,8 +895,11 @@ function modelCell(p) {
 	// key precedence) until collected runs report what ACTUALLY ran, which always wins.
 	const fallback = p.model === "(default)" ? (state.defaultModel ? normModel(state.defaultModel) : "default") : p.model;
 	const shown = p.ranModels ? [...new Set(p.ranModels.map(normModel))].join(", ") : fallback;
-	const tip = (p.ranModels ? `ran: ${p.ranModels.join(", ")}` : `expected (uncollected): ${state.defaultModel ?? "unknown"}`) + `\ndispatched as: ${p.model}`;
-	return `<td class="num" data-tip="${esc(tip)}">${esc(shown)}</td>`;
+	// The expected-model line must respect an explicit dispatch model — claiming the env
+	// default for a pass dispatched as azure/… contradicted the cell one pixel up.
+	const expected = p.model === "(default)" ? (state.defaultModel ?? "unknown") : p.model;
+	const tip = (p.ranModels ? `ran: ${p.ranModels.join(", ")}` : `expected (uncollected): ${expected}`) + `\ndispatched as: ${p.model}`;
+	return `<td class="txt" data-tip="${esc(tip)}">${esc(shown)}</td>`;
 }
 
 // Which run a row's detail (and its tree button) shows: the explicitly selected one, else
@@ -835,16 +917,19 @@ function treeCell(p, key) {
 
 const ordinal = (n) => { const s = ["th", "st", "nd", "rd"], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };
 
-// Rank dot on explore group headers: green = the target's most comprehensive map, red =
-// least, yellow = between (1 pass ranked = no dot; 2 = green+red). Rank comes off the wire
-// (rankExplore in dash.ts) so the page never re-derives an ordering the server already owns.
+// Rank badge on explore group headers: "1/3" = the target's most comprehensive map of 3
+// ranked (1 pass ranked = no badge). The ordinal is TEXT — a solid dot in status hues was
+// indistinguishable from the succeeded/failed dots in the Runs column — and the border
+// tint (good/critical/warning for best/worst/between) is only a glance aid. Rank comes off
+// the wire (rankExplore in dash.ts) so the page never re-derives an ordering the server
+// already owns.
 function rankDot(a, p) {
 	if (a.kind !== "explore" || !p.exploreRank || p.exploreRank.of < 2) return "";
 	const { rank, of } = p.exploreRank;
-	const color = rank === 1 ? "#0ca30c" : rank === of ? "#d03b3b" : "#fab219";
+	const color = rank === 1 ? STATUS.good : rank === of ? STATUS.critical : STATUS.warning;
 	const tip = `Comprehensiveness rank within ${targetLabel(a.targetKey)} — by distilled map size (graph nodes; 'seen' deliberately unused, it inflates on repetitive content)\n${ordinal(rank)} of ${of}`
 		+ (a.flags && a.flags.includes("--no-ax") ? "\n" + DECLARED_TIP : "");
-	return `<span class="dot rankdot" style="background:${color}" data-tip="${esc(tip)}"></span>`;
+	return `<span class="rankbadge" style="border-color:${color}" data-tip="${esc(tip)}">${rank}/${of}</span>`;
 }
 
 // The run selector: minimal chips (dot + Status + ticking elapsed while Running) in their
@@ -902,12 +987,15 @@ function startedCell(p) {
 	const lines = p.entries.map((e) => {
 		const dur = e.elapsedSec != null ? e.elapsedSec : e.runSec != null ? e.runSec : (liveMem[e.jobId] || {}).elapsed;
 		const st = entryStart(e);
+		// "finished <submit time>" was a lie for collected runs whose log carried no
+		// endedAt — say what the timestamp actually is.
 		return shortJob(e.jobId) + " — " +
-			(e.collected ? "finished " + startStamp(Date.parse(e.endedAt || e.submittedAt) || null) + (dur != null ? ` — took ${fmtDur(dur)}` : "")
+			(e.collected ? (e.endedAt ? "finished " + startStamp(Date.parse(e.endedAt) || null)
+				: "collected (submitted " + startStamp(Date.parse(e.submittedAt) || null) + ")") + (dur != null ? ` — took ${fmtDur(dur)}` : "")
 			: st != null ? "started " + startStamp(st) + (e.status !== "running" && dur != null ? ` — ran ${fmtDur(dur)}` : "")
 			: `${e.status} (submitted ${startStamp(Date.parse(e.submittedAt) || null)})`);
 	}).join("\n");
-	return `<td class="num" data-tip="${esc(lines)}">${startStamp(starts.length ? Math.max(...starts) : null)}</td>`;
+	return `<td class="txt" data-tip="${esc(lines)}">${startStamp(starts.length ? Math.max(...starts) : null)}</td>`;
 }
 
 function armCell(a, p) {
@@ -924,14 +1012,20 @@ function armCell(a, p) {
 		: "";
 	return `<td class="arm" data-tip="${esc(tip)}">${rankDot(a, p)}<span class="dn">${esc(displayName(a))}</span>${badge}</td>
 		${taskCell}
-		<td class="num">${esc(a.perception || "–")}</td>
-		<td class="num">${esc(a.actuation || "–")}</td>
+		<td class="txt">${esc(a.perception || "–")}</td>
+		<td class="txt">${esc(a.actuation || "–")}</td>
 		${modelCell(p)}`;
 }
 
 // The five explore-discovery columns, dashed on task/replay rows so every row spans the
 // same 18 columns without colspan bookkeeping.
 const NO_EXPLORE_CELLS = `<td class="num">–</td>`.repeat(5);
+
+// Cost cell, report costCell parity: "$X +N?" when some runs priced and N weren't (a bare
+// "$X" over a half-unpriced pass read as fully priced — the cheap-matrix lie), "?×N" when
+// none priced, "–" when nothing to price.
+const costCell = (p) => p.usd ? fmtMoney(p.usd) + (p.unpriced ? " +" + p.unpriced + "?" : "")
+	: p.unpriced ? "?×" + p.unpriced : "–";
 
 function taskRow(a, p) {
 	const key = rowId(a, p);
@@ -940,7 +1034,7 @@ function taskRow(a, p) {
 		<td class="num">${fmtNum(p.meanSteps)}</td>
 		<td class="num">${p.meanElapsedSec != null ? fmtDur(p.meanElapsedSec) : "–"}</td>
 		<td class="num">${fmtK(p.meanOutputTokens)}</td>
-		<td class="num">${p.usd ? fmtMoney(p.usd) : p.unpriced ? "?×" + p.unpriced : "–"}</td>
+		<td class="num">${costCell(p)}</td>
 		${NO_EXPLORE_CELLS}${startedCell(p)}${runsCell(p, key)}${treeCell(p, key)}</tr>` + (openRows[key] ? detailRowHtml(a, p, key) : "");
 }
 
@@ -968,10 +1062,10 @@ function exploreRow(a, p, first) {
 		<td class="num">–</td>
 		<td class="num">${p.meanElapsedSec != null ? fmtDur(p.meanElapsedSec) : "–"}</td>
 		<td class="num">${fmtK(p.meanOutputTokens)}</td>
-		<td class="num">${p.usd ? fmtMoney(p.usd) : p.unpriced ? "?×" + p.unpriced : "–"}</td>
-		${num(fmtNum(ex.actions), "actions the pass took" + (ex.elapsed ? "\nelapsed " + ex.elapsed : "") + "\n" + MED_TIP)}
-		${num((ex.controlsSeen != null ? `${ex.controlsSeen}/${ex.controlsActuated}/${ex.controlsDismissed}` : "–") + declared,
-			(ex.controlsSeen != null ? `seen ${ex.controlsSeen} · actuated ${ex.controlsActuated} · dismissed ${ex.controlsDismissed}\n` : "") + MED_TIP)}
+		<td class="num">${costCell(p)}</td>
+		${num(fmtNum(ex.actions), "actions x̃ across the arm's passes" + (ex.elapsed ? "\nelapsed (first pass) " + ex.elapsed : "") + "\n" + MED_TIP)}
+		${num(ex.controlsSeen != null ? `${ex.controlsActuated}/${ex.controlsDismissed}/${ex.controlsSeen}${declared}` : "–",
+			(ex.controlsSeen != null ? `actuated ${ex.controlsActuated} · dismissed ${ex.controlsDismissed} · seen ${ex.controlsSeen}\n` : "") + MED_TIP)}
 		${num(fmtNum(ex.surfaces), MED_TIP)}
 		${num(fmtNum(ex.graphNodes), (ex.graphEdges != null ? ex.graphEdges + " edges\n" : "") + MED_TIP)}
 		${num(fmtNum(ex.scopeAmbiguities), MED_TIP)}${startedCell(p)}${runsCell(p, key)}${treeCell(p, key)}</tr>` + (openRows[key] ? detailRowHtml(a, p, key) : "");
@@ -1089,7 +1183,10 @@ function detailRowHtml(a, p, key) {
 	const note = d && d.narratorNote
 		? `<div class="d-note" style="max-width:90ch;white-space:pre-wrap">${esc(d.narratorNote.text)} <span class="meta">— narrator, ${hhmm(d.narratorNote.t)} · verify before quoting</span></div>`
 		: "";
-	return `<tr class="detail-row"><td colspan="${NCOLS}">${statsStrip(a, e)}<div class="d-prompt">${prompt}</div>${note}
+	// A failed detail fetch caches its reason in d.note — surface it, or the dropdown reads
+	// as "this run simply has nothing" when the truth is "the fetch failed".
+	const fetchNote = d && d.note && !d.graph ? `<div class="d-note">⚠ ${esc(d.note)}</div>` : "";
+	return `<tr class="detail-row"><td colspan="${NCOLS}">${statsStrip(a, e)}<div class="d-prompt">${prompt}</div>${note}${fetchNote}
 		<div class="logwrap" data-logjob="${esc(sel)}" data-loghost="${esc(e.host || "")}"></div></td></tr>`;
 }
 
@@ -1224,7 +1321,10 @@ function treeSvg(d) {
 		// facts outrank map-intrinsic ones; the ⚠ glyph and the tooltip keep carrying
 		// dual-scope whenever a higher state claims the ring.
 		const fill = steps.length ? "var(--s1)" : n.kind === "surface" ? "var(--ink-2)" : "none";
-		const stroke = isMut ? "var(--s5)" : isGated ? RED : amb ? "var(--s2)" : n.kind === "control" && !steps.length ? "#199e70" : "none";
+		// gated = the pass REFUSED to operate it — the refusal family's violet, same family
+		// as refused/hinted-refused chips (the old #e66767 read as "failed/danger", which a
+		// deliberate safety refusal is not).
+		const stroke = isMut ? "var(--s5)" : isGated ? REFUSED : amb ? "var(--s2)" : n.kind === "control" && !steps.length ? "var(--s3)" : "none";
 		const tip = [
 			`${n.kind}: ${n.id}`,
 			n.settingKey ? `setting: ${n.settingKey} (${n.scope} scope)` : n.scope ? `${n.scope} scope` : "",
@@ -1245,7 +1345,16 @@ function treeSvg(d) {
 
 function openTree(job) {
 	const d = detailCache[job];
-	if (!d || !d.graph) return;
+	if (!d) return; // not fetched yet — requestTree's pendingTree path handles the race
+	// No graph is an ANSWER, not a reason to no-op: a ⤢ click that does nothing at all is
+	// indistinguishable from a broken button.
+	if (!d.graph) {
+		$("tm-title").textContent = "appmap tree";
+		$("tm-sub").textContent = `${d.armId || ""} · ${job}`;
+		$("tm-body").innerHTML = `<div class="empty" style="padding:24px 16px">${esc(d.note || "no appmap graph for this arm yet")}</div>`;
+		$("treeModal").classList.add("on");
+		return;
+	}
 	$("tm-title").textContent = "appmap tree";
 	// Two different surface universes exist and the mismatch confuses: the row's "surfaces"
 	// column is the pass's coverage stamp (every surface controls were SEEN on), while this
@@ -1260,10 +1369,10 @@ function openTree(job) {
 	const ring = (c) => `<span class="sw" style="background:none;border:2px solid ${c};border-radius:50%"></span>`;
 	$("tm-body").innerHTML = `<div class="legend" style="padding:10px 16px 0;margin:0">`
 		+ `<span><span class="sw" style="background:var(--ink-2);border-radius:50%"></span>surface (a place)</span>`
-		+ `<span>${ring("#199e70")}seen control</span>`
+		+ `<span>${ring("var(--s3)")}seen control</span>`
 		+ `<span><span class="sw" style="background:var(--s1);border-radius:50%"></span>this run's path (numbers = step order)</span>`
 		+ `<span data-tip="${esc(AMB_TIP)}" style="cursor:help;text-decoration:underline dotted">${ring("var(--s2)")}⚠ dual-scope</span>`
-		+ `<span>${ring(RED)}gated (pass refused)</span>`
+		+ `<span>${ring(REFUSED)}gated (pass refused)</span>`
 		+ `<span>${ring("var(--s5)")}mutated by this run</span>`
 		+ `<span>thick edge = traversed often across ${d.heat ? d.heat.runs : 0} collected run(s)</span>`
 		+ `</div>` + treeSvg(d);
@@ -1330,17 +1439,24 @@ function b64bytes(b64) {
 
 function logChip(pane) {
 	if (!pane.state && pane.error) return `<span class="chip"><span class="dot" style="background:${STATUS.critical}"></span>${esc(pane.error)}</span>`;
-	if (!pane.state) return `<span class="chip"><span class="dot" style="background:#898781"></span>loading…</span>`;
-	if (pane.state === "running") return `<span class="chip"><span class="dot" style="background:${SERIES[0]}"></span>Running</span>`;
-	if (pane.state === "queued") return `<span class="chip"><span class="dot" style="background:#898781"></span>Queued</span>`;
+	// Not-yet-answered and registry-unknown both render the hollow dot: the page genuinely
+	// does not know, and dressing "unknown" as failure asserts a verdict nobody observed.
+	if (!pane.state) return `<span class="chip"><span class="dot unknown"></span>loading…</span>`;
+	if (pane.state === "unknown") return `<span class="chip"><span class="dot unknown"></span>Unknown</span>`;
+	if (pane.state === "running") return `<span class="chip"><span class="dot" style="background:${RUNNING}"></span>Running</span>`;
+	if (pane.state === "queued") return `<span class="chip"><span class="dot" style="background:var(--muted)"></span>Queued</span>`;
 	// done → "Done exit 0"; failed/orphaned/stopped keep their name — collapsing them into
 	// "Done" would assert an exit nobody observed. statusLabel: the same render-time Title
 	// Caser every other label goes through.
 	const name = pane.state === "done" ? "Done" : statusLabel(pane.state);
-	// The dot must agree with the STATE, not the exit code: a run the registry graded
-	// "failed" can still exit 0 (the child died cleanly; the RUN failed), and a green dot
-	// under a "Failed" label reads as success.
-	const color = pane.state === "done" && pane.exitCode === 0 ? STATUS.good : STATUS.critical;
+	// The dot must agree with the STATE, not the exit code — and with the BOARD's color for
+	// the same verdict: stopped was gray on the board chip but red here, on one screen.
+	// (orphaned wears crashed's serious, matching liveFor's own mapping; a run the registry
+	// graded "failed" stays critical even at exit 0 — the child died cleanly, the RUN failed.)
+	// done with a LOST exit code goes neutral: red would assert a failure nobody observed.
+	const color = pane.state === "done"
+		? (pane.exitCode === 0 ? STATUS.good : typeof pane.exitCode === "number" ? STATUS.critical : "var(--muted)")
+		: OUTCOME_COLORS[pane.state === "orphaned" ? "crashed" : pane.state] || STATUS.critical;
 	return `<span class="chip"><span class="dot" style="background:${color}"></span>${esc(name)}${pane.exitCode != null ? " exit " + pane.exitCode : ""}</span>`;
 }
 
@@ -1519,6 +1635,10 @@ function renderBoard(progress) {
 		html += `<tr class="phase-h"><td colspan="${NCOLS}">Compiles — local recipe compiles, no model in the loop</td></tr>`;
 		html += timelineRows(compiles).map(({ a, p }) => compileRow(a, p)).join("");
 	}
+	// The one section that had no empty state: a bare 18-column header floating over nothing
+	// was indistinguishable from a board that failed to render its rows.
+	if (!groups.length && !Object.keys(deps).length && !ungrounded.length && !compiles.length)
+		html += `<tr><td colspan="${NCOLS}"><div class="empty">nothing submitted for ${esc(targetLabel(currentTarget()))} yet — arms appear as bench phase submits</div></td></tr>`;
 	$("board").innerHTML = html + "</tbody></table>";
 	// No explainer sentence (per David) — the heroes carry the numbers and the tooltips
 	// carry the semantics.
@@ -1566,16 +1686,20 @@ function renderExplore() {
 	// per-model passes multiply the groups, and vBars' centered x-labels stepped on each
 	// other until the axis was unreadable. The gutter fits the full words (the old "+vis"
 	// compaction hack is gone) and the model rides its own muted sub-line.
-	const exploreLabel = (a) => !a.perception ? a.id.replace("p1-explore-", "") : a.url ? `${a.perception} (web)` : a.perception;
+	// The ⚠ declared marker rides the LABEL here (SVG text can't carry a tooltip): a
+	// vision-only arm's tallies are self-reported, and the board flags the same numbers.
+	const exploreLabel = (a) => (!a.perception ? a.id.replace("p1-explore-", "") : a.url ? `${a.perception} (web)` : a.perception)
+		+ (a.flags && a.flags.includes("--no-ax") ? " ⚠ declared" : "");
 	const groups = arms.flatMap((a) => a.passes.filter((p) => p.explore && p.explore.controlsSeen != null).map((p) => ({
 		label: exploreLabel(a),
 		...(p.model !== "(default)" ? { sub: normModel(p.model) } : {}),
 		values: [p.explore.controlsSeen, p.explore.controlsActuated, p.explore.controlsDismissed],
 	})));
-	// seen/actuated/dismissed as green/blue/red (found / operated / skipped) — green and red
-	// are never adjacent (blue sits between) and the bars carry direct labels.
+	// seen/actuated/dismissed in SERIES hues — all three are categorical facets of one
+	// funnel. Dismissed used to be a danger red, which painted the documented-legitimate
+	// "swept off the frontier" as failure (104 dismissals read as 104 problems).
 	$("chart-explore").innerHTML = hBars(groups, [
-		{ name: "Seen", color: SERIES[2] }, { name: "Actuated", color: SERIES[0] }, { name: "Dismissed", color: RED },
+		{ name: "Seen", color: SERIES[2] }, { name: "Actuated", color: SERIES[0] }, { name: "Dismissed", color: SERIES[1] },
 	]);
 }
 
@@ -1593,33 +1717,55 @@ function renderOutcomes() {
 				label: a.id + (p.model !== "(default)" ? " · " + p.model : ""),
 				segs: [
 					{ name: statusLabel("succeeded"), color: OUTCOME_COLORS.succeeded, value: p.successes },
-					...Object.entries(kinds).map(([k, v]) => ({ name: statusLabel(k), color: OUTCOME_COLORS[k] || STATUS.critical, value: v })),
+					...Object.entries(kinds).map(([k, v]) => ({ name: statusLabel(k), color: outcomeColor(k), value: v })),
 					{ name: statusLabel("pending"), color: OUTCOME_COLORS.pending, value: p.submitted - p.collected },
 				],
 			});
 		}
 	}
 	if (!rows.length) { $("chart-outcomes").innerHTML = `<div class="empty">no task runs submitted yet</div>`; return; }
-	const names = ["succeeded", "gave-up", "unready", "hinted-refused", "stopped", "crashed", "failed", "pending"];
-	$("chart-outcomes").innerHTML = hStack(rows, names.map((n) => ({ name: statusLabel(n), color: OUTCOME_COLORS[n] })), { padL: 170, fmt: (v) => String(Math.round(v)) });
+	// Legend = the fixed vocabulary PLUS anything the rows actually contain, through the
+	// same color resolver as the segments — a segment must never render a color its legend
+	// doesn't show (grounding-mismatch used to paint fallback-red with no legend entry).
+	const names = ["succeeded", "gave-up", "unready", "hinted-refused", "stopped", "crashed", "grounding-mismatch", "failed", "pending"];
+	for (const r of rows) for (const s of r.segs) if (!names.some((n) => statusLabel(n) === s.name)) names.push(s.name.toLowerCase().replace(/ /g, "-"));
+	$("chart-outcomes").innerHTML = hStack(rows, names.map((n) => ({ name: statusLabel(n), color: outcomeColor(n) })), { padL: 170, fmt: (v) => String(Math.round(v)) });
 }
 
+// Every model pass charts — passes[0] alone silently dropped later model passes in the
+// multi-model matrix, and the bars compared different models with nothing saying so. One
+// group per (backend × model), the model on the hBars sub-line exactly as renderExplore
+// does it (hBars, not vBars: labels grow a model id and multiply per model — the same
+// reason renderExplore went horizontal).
 function groundingChart(el, pick, fmt) {
-	const cell = (backend, grounded) => {
-		const arm = visibleArms().find((a) => a.id === `p2-${backend}-${grounded ? "grounded" : "ungrounded"}`);
-		const p = arm && arm.passes[0];
-		return p && p.collected ? pick(p) : null;
-	};
-	const groups = ["ax", "cdp"].map((b) => ({ label: b, values: [cell(b, true), cell(b, false)] }));
+	const groups = [];
+	for (const b of ["ax", "cdp"]) {
+		const armOf = (grounded) => visibleArms().find((a) => a.id === `p2-${b}-${grounded ? "grounded" : "ungrounded"}`);
+		const models = new Set();
+		for (const grounded of [true, false])
+			for (const p of armOf(grounded)?.passes ?? []) if (p.collected) models.add(p.model);
+		for (const m of models) {
+			const v = (grounded) => {
+				const p = (armOf(grounded)?.passes ?? []).find((x) => x.model === m);
+				return p && p.collected ? pick(p) : null;
+			};
+			groups.push({ label: b, ...(m !== "(default)" ? { sub: normModel(m) } : {}), values: [v(true), v(false)] });
+		}
+	}
 	if (!groups.some((g) => g.values.some((v) => v != null))) { $(el).innerHTML = `<div class="empty">waiting for phase-2 core runs…</div>`; return; }
-	$(el).innerHTML = vBars(groups, [{ name: "Explored", color: SERIES[0] }, { name: "Unexplored", color: SERIES[1] }], { fmt });
+	$(el).innerHTML = hBars(groups, [{ name: "Explored", color: SERIES[0] }, { name: "Unexplored", color: SERIES[1] }], { fmt, padL: 90 });
 }
 
 function renderAttention() {
 	const arms = visibleArms().filter((a) => /^p2-(ax|cdp)-(un)?grounded$/.test(a.id) && a.passes.some((p) => p.meanObsNodes != null));
 	if (!arms.length) { $("chart-attention").innerHTML = `<div class="empty">waiting for phase-2 runs…</div>`; return; }
-	const groups = arms.map((a) => ({ label: a.id.replace("p2-", ""), values: [a.passes[0].meanObsNodes, a.passes[0].meanShownLines] }));
-	$("chart-attention").innerHTML = vBars(groups, [{ name: "Observed Nodes", color: SERIES[0] }, { name: "Shown to Model", color: SERIES[1] }]);
+	// One group per (arm × model pass) — passes[0] alone dropped every later model pass.
+	const groups = arms.flatMap((a) => a.passes.filter((p) => p.meanObsNodes != null).map((p) => ({
+		label: a.id.replace("p2-", ""),
+		...(p.model !== "(default)" ? { sub: normModel(p.model) } : {}),
+		values: [p.meanObsNodes, p.meanShownLines],
+	})));
+	$("chart-attention").innerHTML = hBars(groups, [{ name: "Observed Nodes", color: SERIES[0] }, { name: "Shown to Model", color: SERIES[1] }], { padL: 120 });
 }
 
 function renderCost(c, series) {
@@ -1640,10 +1786,13 @@ function renderCost(c, series) {
 
 function renderJudge(j) {
 	if (!j.judged) { $("judge").innerHTML = `<div class="empty">no judged runs yet — the dash folds verdicts in after \`bench judge\` + collect</div>`; return; }
-	const line = (name, t) => `<div class="row" style="gap:14px"><span style="min-width:70px" class="num">${name}</span>
-		<span class="chip"><span class="dot" style="background:${STATUS.good}"></span>PASS ${t.pass}</span>
-		<span class="chip"><span class="dot" style="background:${STATUS.critical}"></span>FAIL ${t.fail}</span>
-		<span class="chip"><span class="dot" style="background:${STATUS.warning}"></span>UNPROVEN ${t.unproven}</span></div>`;
+	// A zero-count chip dims: a full-strength red dot beside "FAIL 0" says "failures exist"
+	// at a glance. The chip stays (proof the judge ran and found none) — it just recedes.
+	const vchip = (color, word, n) => `<span class="chip"${n ? "" : ' style="opacity:.45"'}><span class="dot" style="background:${color}"></span>${word} ${n}</span>`;
+	const line = (name, t) => `<div class="row" style="gap:14px"><span style="min-width:70px" class="txt">${name}</span>
+		${vchip(STATUS.good, "PASS", t.pass)}
+		${vchip(STATUS.critical, "FAIL", t.fail)}
+		${vchip(STATUS.warning, "UNPROVEN", t.unproven)}</div>`;
 	let html = `<div class="sub">${j.judged} run(s) judged</div>` + line("Trajectory", j.trajectory) + line("Visual", j.visual);
 	html += `<div class="sub" style="margin-top:10px">disagreements</div>`;
 	html += j.disagreements.length
@@ -1733,23 +1882,31 @@ function render() {
 	if (targetFilter && !targetKeys().includes(targetFilter)) targetFilter = "";
 	// One aggregate for everything scope-aware: hero tiles, board sub, cost, judge. The
 	// fleet, off-matrix strip, narrative and events stay global — they are not arm-scoped.
-	// The filtered recompute can trip on a malformed datum; the "All" path only aliases
-	// server-built fields (it cannot throw on non-null state), so it is the safe fallback.
+	// The filtered recompute can trip on a malformed datum; the fallback aliases the
+	// server-built fields VERBATIM (they exist on every state frame, so this cannot throw) —
+	// setting targetFilter to "All" here used to re-run the exact recompute that just threw,
+	// uncaught, since no "All" path exists.
 	let vs;
 	try {
 		vs = visibleStats();
 	} catch (err) {
-		console.error("dash: filtered aggregates failed — falling back to All", err);
-		targetFilter = "All";
-		vs = visibleStats();
+		console.error("dash: filtered aggregates failed — serving server-verbatim numbers", err);
+		vs = { progress: state.progress, cost: state.cost, costSeries: state.costSeries, judge: state.judge };
 	}
 	const p = vs.progress;
 	safe("hero", null, () => {
 		$("h-submitted").textContent = `${p.submitted} / ${p.planned}`;
 		$("h-live").textContent = `${p.running} · ${p.queued}`;
 		$("h-collected").textContent = String(p.collected);
-		$("h-success").textContent = `${p.successes} OK`;
-		$("metaline").textContent = `${state.date} · Fleet ${state.fleet.polledAt ? hhmm(state.fleet.polledAt) : "–"} · ${state.autoCollect ? "Auto-collect on" : "Collect off (pure reader)"} · Updated ${hhmm(state.generatedAt)}`;
+		// "Succeeded", the word every other surface uses — and marked self-reported, the
+		// distinction the judge pipeline exists to expose.
+		$("h-success").textContent = `${p.successes} Succeeded`;
+		$("h-success").dataset.tip = "self-reported successes — the judge's verdicts live in the Judge card";
+		// A failing fleet poll must say so: the wall silently freezing on stale rows while
+		// tickers advance read as a healthy fleet.
+		const fleetSeg = `Fleet ${state.fleet.polledAt ? hhmm(state.fleet.polledAt) : "–"}${state.fleet.error ? " ⚠ poll failing" : ""}`;
+		$("metaline").textContent = `${state.date} · ${fleetSeg} · ${state.autoCollect ? "Auto-collect on" : "Collect off (pure reader)"} · Updated ${hhmm(state.generatedAt)}`;
+		$("metaline").dataset.tip = state.fleet.error ? `fleet poll error: ${state.fleet.error}` : "";
 	});
 	safe("fleet", null, renderFleet);
 	safe("scope picker", "target-picker", renderTargetPicker);
@@ -2083,11 +2240,15 @@ var esErrored = false;
 var es = null;
 
 // Absolute time on the tip, not "Ns ago" — a static relative time lies within seconds.
+// The dot never stands alone: #conn-word says the state in a word ("live"/"stale"/"down"),
+// because an 8px color-only dot with its meaning in a hover tip is color-alone encoding.
 function setConn(mode, tip) {
 	const el = $("conn");
 	el.classList.toggle("ok", mode === "ok");
 	el.classList.toggle("stale", mode === "stale");
 	el.dataset.tip = tip;
+	$("conn-word").textContent = mode === "ok" ? "live" : mode === "stale" ? "stale" : "down";
+	$("conn-word").dataset.tip = tip;
 }
 setConn("down", "connecting…");
 
