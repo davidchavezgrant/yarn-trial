@@ -43,11 +43,6 @@ export const parseCli = (
 	// parseTarget returns the FALLBACK name for an app run, not the positional, so the slug
 	// below would stamp this pass's output to "notion-calendar" no matter which app was named —
 	// overwriting another app's committed map. Rebuild the target from the resolved name.
-	// electronTarget on the cdp path, matching agent/cli.ts:73. Without cdpAttach the CDP
-	// backend never launches the app with a debug port — it only probes 9222 and fails — so
-	// an explore worked ONLY while some earlier flagged run had left the app running. Cold
-	// start removed that accident and the cdp arms began failing immediately with "no CDP
-	// endpoint at http://127.0.0.1:9222".
 	if (target.kind === "app") target = { kind: "app", name: app };
 	// `buildRunArgs` keeps the label in positional 0 for a web target too, so that guidance
 	// stays where every caller already puts it. Drop it here rather than teaching the guidance
