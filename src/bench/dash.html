@@ -928,7 +928,8 @@ function statusChip(e, rowKey, selected) {
 		? `\ntokens — ${tok.join(" · ")}` + (e.usd != null ? `\nest cost ${fmtMoney(e.usd)} (published rates, not an invoice)` : "")
 		: "";
 	const open = rowKey ? ` data-row="${esc(rowKey)}" data-job="${esc(e.jobId)}"` : "";
-	// Start time rides the chip tip too (the Started column shows only the row's latest);
+	// Start time rides the chip tip too (split rows carry their own start in the Started
+	// column, but compile rows aggregate — the tip works everywhere);
 	// a not-yet-started entry shows its submit time instead.
 	const st = entryStart(e);
 	const when = st != null ? `\nstarted ${startStamp(st)}` : e.submittedAt ? `\nsubmitted ${startStamp(Date.parse(e.submittedAt) || null)}` : "";
