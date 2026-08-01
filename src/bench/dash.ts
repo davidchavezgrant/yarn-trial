@@ -2950,11 +2950,30 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			if (peeks.get(p.host) !== p || p.closing) return teardownSckTunnel(p);
 			const { connectLiveviewClient } = await import("../remote/liveview-client.js");
 			const engine = await connectLiveviewClient(`ws://127.0.0.1:${local}/?t=${encodeURIComponent(token)}`);
-			if (peeks.get(p.host) !== p || p.closing || p.engine) {
+			if (peeks.get(p.host) !== p || p.closing) {
 				engine.close();
 				teardownSckTunnel(p);
 
 				return;
+			}
+			if (p.engine) {
+				// An engine that started DELIVERING while the verb round-tripped won the race —
+				// app/web CDP beats SCK, keep it. But a refusing or frameless engine (the parked
+				// web leg on an ax arm, an attach that never produced a frame) is exactly what
+				// sentinel #3 fired against, and it HOLDS p.engine: discarding the SCK engine
+				// here re-runs the whole dance every tick — spawn a capture server, tunnel,
+				// connect, throw it all away — and the panel stays dark forever. Displace it,
+				// corpse-guarded like the primary-upgrade path.
+				if (p.gotFrame && !p.refusing && Date.now() - p.lastFrameAt <= SCK_FALLBACK_AFTER_MS) {
+					engine.close();
+					teardownSckTunnel(p);
+
+					return;
+				}
+				const loser = p.engine;
+				p.engine = undefined; // BEFORE close — the corpse's onExit must no-op
+				p.source = undefined;
+				loser.close();
 			}
 			attachSckEngine(p, engine);
 		} catch (err) {
