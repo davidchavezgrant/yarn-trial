@@ -240,6 +240,33 @@ test("tunnelArgv__CarriesTheSamePinning__When__ForwardingThePortalPort", () => {
 	assert.equal(argv.at(-1), "administrator@10.0.0.1");
 });
 
+test("tunnelArgv__PutsAntiMuxOptionsBeforeTheBaseBlock__When__BothSetControlOptions", () => {
+	// OpenSSH keeps the FIRST value it sees for a repeated option. sshBaseArgv sets
+	// ControlMaster=auto and a real ControlPath, so the tunnel's anti-mux options are only
+	// overrides if they PRECEDE the base block — appended after it they are dead letters, and
+	// every tunnel silently joins the fleet poll's shared master (verified with `ssh -G`,
+	// 2026-07-31: the effective config read `controlmaster auto` with the cm- socket path,
+	// keepalives configured the mux client rather than the connection carrying the forward,
+	// and killing a tunnel left its forward leaked in the master). Membership checks cannot
+	// catch a regression here — only position can.
+	const argv = tunnelArgv(host("mac1", "10.0.0.1"), 9222, 54321);
+	const first = (pred: (a: string) => boolean): number => argv.findIndex(pred);
+
+	const antiMaster = first((a) => a === "ControlMaster=no");
+	const baseMaster = first((a) => a === "ControlMaster=auto");
+	const antiPath = first((a) => a === "ControlPath=none");
+	const basePath = first((a) => a.startsWith("ControlPath=") && a !== "ControlPath=none");
+
+	assert.ok(antiMaster >= 0 && baseMaster >= 0 && antiPath >= 0 && basePath >= 0, "both the overrides and the base mux block must be present");
+	assert.ok(antiMaster < baseMaster, "ControlMaster=no must precede the base ControlMaster=auto — first-value-wins would otherwise reinstate the mux");
+	assert.ok(antiPath < basePath, "ControlPath=none must precede the base block's real socket path");
+	// Each override rides its own -o, not a neighbouring option's.
+	assert.equal(argv[antiMaster - 1], "-o");
+	assert.equal(argv[antiPath - 1], "-o");
+	// The localPort parameter: the local side binds the caller's port, the remote side the target's.
+	assert.equal(argv.includes("54321:127.0.0.1:9222"), true);
+});
+
 test("tunnelArgv__Throws__When__ThePortIsNotForwardable", () => {
 	for (const bad of [0, -1, 65536, 1.5, Number.NaN]) assert.throws(() => tunnelArgv(host("mac1", "10.0.0.1"), bad), /forwardable/);
 });

@@ -122,22 +122,36 @@ export function tunnelArgv(host: HostEntry, port: number, localPort = port): str
 	if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error(`not a forwardable port: ${port}`);
 	if (!Number.isInteger(localPort) || localPort <= 0 || localPort > 65535) throw new Error(`not a forwardable port: ${localPort}`);
 
-	// Multiplexing OFF for the tunnel, and this is the whole bug behind the "white sign-in
-	// screen" (measured 2026-07-31). sshBaseArgv turns on ControlMaster=auto so the fleet's
-	// 15s status poll reuses one connection — correct there, fatal here: when a master socket
-	// for this host already EXISTS, a new `ssh -L` joins it as a client and ssh refuses the
-	// forward with "Could not request local forwarding", exiting nonzero. The local port then
-	// accepts and instantly resets (ECONNRESET), so the viewer loads into a dead socket and
-	// paints blank. A tunnel is long-lived and single-purpose — it gains nothing from sharing —
-	// so it takes its own connection: ControlPath=none overrides the base block's setting.
+	// Multiplexing OFF for the tunnel — and the anti-mux options go BEFORE the base block,
+	// which is what makes them real: OpenSSH keeps the FIRST value it sees for a repeated
+	// option, so an `-o ControlPath=none` appended after sshBaseArgv's own ControlPath is a
+	// dead letter, not an override. This function shipped in that appended form, so every
+	// tunnel silently joined the shared master anyway (verified with `ssh -G`, 2026-07-31):
+	// the keepalives below configured the short-lived mux client rather than the master's
+	// connection actually carrying the forward, and killing the tunnel process left its
+	// forward held open in the master, where leaked forwards accumulated.
+	//
+	// Why the tunnel must not share (the "white sign-in screen", measured 2026-07-31):
+	// sshBaseArgv turns on ControlMaster=auto so the fleet's 15s status poll reuses one
+	// connection — correct there, fatal here. When a master socket for this host already
+	// EXISTS, a new `ssh -L` joins it as a client, and the master refuses the forward with
+	// "Could not request local forwarding" whenever it cannot bind the local port — e.g. a
+	// forward a killed tunnel leaked into it. The local port then accepts and instantly
+	// resets (ECONNRESET), so the viewer loads into a dead socket and paints blank. The
+	// night that was diagnosed, these options sat in the dead-letter position — the relief
+	// actually came from the same commit's other half, clearing the port on both ends around
+	// every spawn. A tunnel is long-lived and single-purpose — it gains nothing from
+	// sharing — so it takes its own connection, for real this time.
 	return [
-		...sshBaseArgv(host),
 		"-o", "ControlPath=none",
 		"-o", "ControlMaster=no",
-		// Notice a dead tunnel instead of holding a port open against a wedged link.
+		// Notice a dead tunnel instead of holding a port open against a wedged link. These
+		// three have no base-block duplicate, so position is not load-bearing for them — they
+		// sit with the mux overrides because all five describe "this connection is its own".
 		"-o", "ServerAliveInterval=15",
 		"-o", "ServerAliveCountMax=3",
 		"-o", "ExitOnForwardFailure=yes",
+		...sshBaseArgv(host),
 		"-L", `${localPort}:127.0.0.1:${port}`,
 		"-N",
 		`${host.ssh.user}@${host.ssh.host}`,
