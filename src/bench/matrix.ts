@@ -85,6 +85,14 @@ export interface Arm {
 	informs?: string;
 	/** Unverified fleet-side requirement (install/sign-in). Printed loudly by `bench plan`. */
 	prereq?: string;
+	/**
+	 * An explore arm whose map no task arm reads, on purpose. Phase 1 measures GROUNDING —
+	 * map size, surfaces, cost — which is an output in itself; requiring every map to feed a
+	 * task arm conflates that with phase 2's question. Reading a map nothing writes is a
+	 * correctness bug; writing one nothing reads is a cost decision, and this flag is where
+	 * that decision is recorded.
+	 */
+	comparisonOnly?: boolean;
 }
 
 export const BENCH_APP = "Yarn";
@@ -223,6 +231,56 @@ const PHASE1: Arm[] = [
 		informs: "can grounding be done from the element tree alone — map size and cost vs the same pass with screenshots",
 	},
 	/**
+	 * The three remaining cells of the perception grid, added 2026-08-01 (David: "so we're
+	 * comprehensive"). The element channel has four states — AX+DOM attrs, AX alone, DOM via
+	 * cdp, none — crossed with screenshots on/off. Seven are viable (no elements AND no
+	 * screenshots is refused); four already existed.
+	 *
+	 * The axdom pair is the valuable half. AXDOM=0 removes the Swift sidecar that joins DOM
+	 * attributes onto AX elements, which on Yarn named 955 of 1044 otherwise-anonymous nodes.
+	 * A map IS names, so a pass without it should produce a measurably worse one — and that
+	 * is the only test of whether the sidecar earns its keep AT GROUNDING TIME. The existing
+	 * p2-ax-grounded-axdom-off arm tests it at RUN time, against a map that had it.
+	 *
+	 * Adding one costs the same as adding three: six runs is two waves across three Macs and
+	 * nine is three, so the marginal cost of the last two is tokens, not time.
+	 */
+	{
+		id: "p1-explore-ax-noaxdom",
+		phase: 1,
+		kind: "explore",
+		app: BENCH_APP,
+		n: 1,
+		dispatch: { backend: "ax", axdomOff: true },
+		informs: "does the axdom sidecar earn its keep at GROUNDING time — map size and named-control count vs p1-explore-ax",
+	},
+	{
+		id: "p1-explore-ax-noaxdom-no-vision",
+		phase: 1,
+		kind: "explore",
+		app: BENCH_APP,
+		n: 1,
+		dispatch: { backend: "ax", axdomOff: true, noVision: true },
+		/**
+		 * COMPARISON-ONLY: no task arm reads this map, deliberately. It completes the
+		 * perception grid so the other three ax cells can be read against a floor, and a
+		 * grounding pass is a measurement in its own right — map size, surfaces reached and
+		 * cost are the phase-1 outputs. Adding a task consumer would mean three more phase-2
+		 * runs to answer a question the grid already answers.
+		 */
+		comparisonOnly: true,
+		informs: "the bare AX tree alone: the floor of the element channel, with neither DOM attrs nor screenshots",
+	},
+	{
+		id: "p1-explore-cdp-no-vision",
+		phase: 1,
+		kind: "explore",
+		app: BENCH_APP,
+		n: 1,
+		dispatch: { backend: "cdp", noVision: true },
+		informs: "what screenshots buy on the SHIPPING backend — the ax answer may not transfer",
+	},
+	/**
 	 * The vision-only GROUNDING pass — discovery from screenshots alone, no element list.
 	 *
 	 * This is the arm the matrix was missing: it had three vision-only TASK arms and no
@@ -255,13 +313,16 @@ const PHASE2_CORE: Arm[] = BACKENDS.flatMap((backend) => [
 
 /** Phase 2 permutation slices — each maps to a fork in the implementation Aman inherits. */
 const PHASE2_SLICES: Arm[] = [
-	task("p2-ax-grounded-axdom-off", { backend: "ax", axdomOff: true }, "is the Swift sidecar worth shipping (outcomes, not naming counts)"),
+	// Grounds on the map a sidecar-less pass wrote, so the arm measures the sidecar's absence
+	// END TO END rather than only at run time. Without this it read yarn.ax — a map the
+	// sidecar helped build — and could only ever have shown half the effect.
+	task("p2-ax-grounded-axdom-off", { backend: "ax", axdomOff: true }, "is the Swift sidecar worth shipping, end to end (grounding AND run)"),
 	// Grounds on the map an element-only pass wrote, so the map's vocabulary matches what this
 	// run can perceive — the same reason the vision arm reads the vision map. Also the only
 	// thing that consumes p1-explore-no-vision's output; without it that pass writes an
 	// artifact nobody reads.
 	task("p2-ax-grounded-no-vision", { backend: "ax", noVision: true }, "what the screenshot channel buys on ax", { env: { APPMAP_VARIANT: "novision" } }),
-	task("p2-cdp-grounded-no-vision", { backend: "cdp", noVision: true }, "same on cdp — DOM snapshot is text-rich; fleet-scale cost"),
+	task("p2-cdp-grounded-no-vision", { backend: "cdp", noVision: true }, "same on cdp — DOM snapshot is text-rich; fleet-scale cost", { env: { APPMAP_VARIANT: "novision" } }),
 	task("p2-ax-curated", { backend: "ax", useRecipe: true }, "explore pass vs 10 minutes of human notes"),
 	// Vision-only is ax-backend-only by construction: cdp observations ARE ref lists.
 	task("p2-vision-only-ungrounded", { backend: "ax", noAx: true, noGrounding: true }, "the floor: screenshots alone, cold"),
@@ -496,6 +557,7 @@ export const armAppmapSlug = (arm: Arm): string =>
 	appmapSlug(arm.app, {
 		visionOnly: Boolean(arm.dispatch.noAx),
 		noVision: Boolean(arm.dispatch.noVision),
+		axdomOff: Boolean(arm.dispatch.axdomOff),
 		...(arm.dispatch.backend ? { backend: arm.dispatch.backend } : {}),
 	});
 

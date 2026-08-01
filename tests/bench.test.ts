@@ -72,7 +72,10 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// existed with no vision-only GROUNDING); the element-only one 2026-08-01, closing the
 	// mirror gap — phase 2 tested dropping screenshots during a task but never during
 	// grounding, which is where they cost the most.
-	assert.equal(phaseRunCount(1), 6);
+	// Nine: ax x2 and cdp x2 (the reference arms, repeated for an error bar), plus the five
+	// single-condition cells that complete the perception grid — element channel in four
+	// states crossed with screenshots on/off, minus the refused empty one.
+	assert.equal(phaseRunCount(1), 9);
 	// Phase 2: core 2 backends × 2 grounding × 3, plus 6 slices × 3. Two blocks were cut
 	// 2026-07-31 after their prerequisites were CHECKED rather than assumed (matrix.ts holds
 	// the full reasoning at each site): the Notion Calendar slice (4 arms × 2 = 8 runs — the
@@ -244,15 +247,24 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		const fake = fakeDispatch();
 		const code = await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
 		assert.equal(code, EXIT_OK);
-		// Six: ax x2, cdp x2, and the two single-channel passes.
-		assert.equal(fake.calls.length, 6);
+		// Nine: the two reference arms twice each, plus five single-condition cells.
+		assert.equal(fake.calls.length, 9);
 		// The two single-channel passes must differ ONLY in which channel they drop — same
 		// backend, same app — or they are not a comparison.
 		const single = fake.calls.filter((c) => c.noAx || c.noVision);
-		assert.equal(single.length, 2);
-		for (const c of single) assert.equal(c.backend, "ax", "both single-channel passes drive through the same actuator");
-		assert.equal(single.filter((c) => c.noAx).length, 1);
-		assert.equal(single.filter((c) => c.noVision).length, 1);
+		// Four single-channel cells now: vision-only, ax-no-vision, ax-noaxdom-no-vision and
+		// cdp-no-vision. Vision-only must stay on ax — cdp addresses actions by ref, so
+		// dropping the element list drops the addressing with it.
+		assert.equal(single.length, 4);
+		assert.equal(single.filter((c) => c.noAx).length, 1, "exactly one screenshots-only pass");
+		for (const c of single.filter((x) => x.noAx)) assert.equal(c.backend, "ax", "vision-only is ax-only by construction");
+		assert.equal(single.filter((c) => c.noVision).length, 3);
+		// The perception grid must span BOTH backends, or the screenshot question is only
+		// answered on the fallback path and not on the one that ships.
+		assert.ok(single.some((c) => c.backend === "cdp" && c.noVision), "cdp gets a no-vision cell too");
+		// And the sidecar axis is present, which is the only test of whether axdom earns its
+		// keep at grounding time rather than only at run time.
+		assert.equal(fake.calls.filter((c) => c.axdomOff).length, 2);
 		// The vision-only pass is the one that drops the element list; it must still keep
 		// vision, which the explore CLI enforces (--no-ax --no-vision leaves nothing).
 		const visionPass = fake.calls.find((c) => c.noAx === true);
@@ -270,7 +282,7 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		assert.ok(fake.calls.every((c) => c.app === "Yarn"), "every phase-1 arm targets Yarn");
 		// Every accepted job landed in the manifest, uncollected.
 		const m = readManifest(DATE, dir);
-		assert.equal(m.entries.length, 6);
+		assert.equal(m.entries.length, 9);
 		assert.ok(m.entries.every((e) => !e.collected && e.host === "mac1"));
 	});
 });
@@ -288,6 +300,9 @@ test("runPhase__ShapesOptionsPerArm__When__Phase2Dispatches", async () => {
 			// silent duplicate of the ungrounded one. Phase 2 refusing here IS the protection.
 			entry("p1-explore-vision", "explore-v", { collected: true, state: "done" }),
 			entry("p1-explore-no-vision", "explore-nv", { collected: true, state: "done" }),
+			entry("p1-explore-ax-noaxdom", "explore-na", { collected: true, state: "done" }),
+			entry("p1-explore-ax-noaxdom-no-vision", "explore-nanv", { collected: true, state: "done" }),
+			entry("p1-explore-cdp-no-vision", "explore-cnv", { collected: true, state: "done" }),
 		]);
 		writeManifest(m, dir);
 
@@ -355,6 +370,9 @@ test("runPhase__SubmitsOnlyMissingSamples__When__ManifestAlreadyHoldsSome", asyn
 			entry("p1-explore-ax", "explore-a"),
 			entry("p1-explore-cdp", "explore-c"),
 			entry("p1-explore-vision", "explore-v"),
+			entry("p1-explore-ax-noaxdom", "explore-na"),
+			entry("p1-explore-ax-noaxdom-no-vision", "explore-nanv"),
+			entry("p1-explore-cdp-no-vision", "explore-cnv"),
 		]);
 		writeManifest(m, dir);
 
@@ -797,12 +815,12 @@ test("runPhase__ScopesSampleCountsToTheModelPass__When__TwoModelsRunTheMatrix", 
 	await withTempAsync("bench-", async (dir) => {
 		const a = fakeDispatch();
 		await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: a.fn, log: () => {}, model: "openai/gpt-5.6-sol:nitro" });
-		assert.equal(a.calls.length, 6, "pass A submits the full phase");
+		assert.equal(a.calls.length, 9, "pass A submits the full phase");
 		for (const c of a.calls) assert.equal(c.model, "openai/gpt-5.6-sol:nitro");
 
 		const b = fakeDispatch();
 		await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: b.fn, log: () => {}, model: "claude-fable-5" });
-		assert.equal(b.calls.length, 6, "pass B submits the full phase again — pass A's entries are not its samples");
+		assert.equal(b.calls.length, 9, "pass B submits the full phase again — pass A's entries are not its samples");
 		for (const c of b.calls) assert.equal(c.model, "claude-fable-5");
 
 		// And a re-run of pass A tops up nothing.
@@ -994,15 +1012,27 @@ test("MATRIX__ConsumesEveryMapItProduces__When__ExploresAndTaskArmsArePaired", (
 	const reads = (a: Arm): string => {
 		const v = a.env?.APPMAP_VARIANT;
 		const tier = v === "vision" ? ".vision" : v === "novision" ? ".novision" : "";
+		// The runner sets AXDOM=0 for an axdomOff arm and the reader appends .noaxdom from it,
+		// so the sidecar is part of the lookup exactly as the backend and tier are. Modelling
+		// only two of the three axes is how this check passed while a map went unread.
+		const sidecar = a.dispatch.axdomOff ? ".noaxdom" : "";
 
-		return `${appmapSlug(a.app)}.${a.dispatch.backend}${tier}`;
+		return `${appmapSlug(a.app)}.${a.dispatch.backend}${sidecar}${tier}`;
 	};
 	const written = new Set(MATRIX.filter((a) => a.kind === "explore").map(armAppmapSlug));
 	const consumers = MATRIX.filter((a) => a.kind === "task" && !a.dispatch.noGrounding && !a.dispatch.useRecipe);
 
-	// Every grounded arm's map exists.
+	// THE CORRECTNESS DIRECTION: every grounded arm's map is written by some explore arm.
+	// A miss here is not a wasted run — loadGrounding degrades an absent map to provenance
+	// "none", so the arm runs UNGROUNDED while the report calls it grounded.
 	for (const a of consumers) assert.ok(written.has(reads(a)), `${a.id} grounds on ${reads(a)}, which no explore arm writes`);
-	// And every map written is read by someone.
+
+	// THE COST DIRECTION: a map nothing reads is ~30 minutes and ~$14 spent on a comparison
+	// alone. Legitimate — a grounding pass measures map size, surfaces and cost by itself —
+	// but it must be a DECLARED choice, not an oversight, so the arm carries comparisonOnly.
 	const read = new Set(consumers.map(reads));
-	for (const w of written) assert.ok(read.has(w), `${w} is written by an explore arm and read by nothing`);
+	for (const e of MATRIX.filter((a) => a.kind === "explore")) {
+		if (read.has(armAppmapSlug(e)) || e.comparisonOnly) continue;
+		assert.fail(`${e.id} writes ${armAppmapSlug(e)}, which nothing reads — wire a consumer or mark it comparisonOnly`);
+	}
 });

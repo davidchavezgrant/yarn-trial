@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { appmapVariant } from "../harness.js";
+import { appmapAxdom, appmapVariant } from "../harness.js";
 import { appmapsDir, recipesDir } from "../../paths.js";
 
 export interface GroundingMeta {
@@ -22,7 +22,8 @@ export function loadGrounding(slug: string, backend?: string): GroundingMeta {
 	// Backend-specific first, plain second. A map is not backend-portable — the ax and cdp
 	// passes name the same surfaces differently, and a run resolves controls by name — but
 	// legacy and hand-curated maps live under the plain slug and must keep working.
-	const variant = appmapVariant();
+	// Both axes, in the order the writer assembles them: backend, then sidecar, then tier.
+	const variant = `${appmapAxdom()}${appmapVariant()}`;
 	const candidates = [...(backend ? [`${appmapsDir()}/${slug}.${backend}${variant}.md`] : []), `${appmapsDir()}/${slug}${variant}.md`];
 	const explorePath = candidates.find((c) => fs.existsSync(c)) ?? candidates[candidates.length - 1];
 	const recipePath = `${recipesDir()}/${slug}.md`;

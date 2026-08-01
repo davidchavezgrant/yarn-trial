@@ -438,6 +438,16 @@ export const appmapVariant = (): string => {
 };
 
 /**
+ * The sidecar half of the ax element channel, as a filename fragment.
+ *
+ * Separate from appmapVariant because it is a separate axis: a pass can be
+ * screenshots-only OR element-only AND with or without DOM attributes, and all four
+ * combinations write different maps. Read from the env the sidecar itself reads, so the
+ * name can never disagree with what actually ran.
+ */
+export const appmapAxdom = (): string => (process.env.AXDOM === "0" ? ".noaxdom" : "");
+
+/**
  * Takes the artifact SLUG, not an app name: a web target's slug is derived from its origin
  * rather than by folding whitespace, so `appSlug` is no longer the right thing to apply here
  * and applying it twice would mangle one. Callers own the slug (see `targetSlug`).
@@ -455,7 +465,7 @@ export function loadAppMapGraph(slug: string, backend?: string): AppMap | undefi
 	//
 	// The variant still has NO fallback: a vision-grounded run taking the element-grounded
 	// graph would leak knowledge the model never read into its scope warnings.
-	const variant = appmapVariant();
+	const variant = `${appmapAxdom()}${appmapVariant()}`;
 	const path = [...(backend ? [`${appmapsDir()}/${slug}.${backend}${variant}.json`] : []), `${appmapsDir()}/${slug}${variant}.json`].find((c) => fs.existsSync(c));
 	if (!path) return undefined;
 

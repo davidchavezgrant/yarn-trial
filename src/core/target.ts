@@ -162,7 +162,7 @@ export function isBrowserApp(name: string): boolean {
  * `visionOnly` selects the `.vision` pair a screenshots-only pass writes, which is a separate
  * artifact precisely so it cannot overwrite the element-grounded map.
  */
-export function appmapSlug(appOrUrl: string, opts: { visionOnly?: boolean; noVision?: boolean; backend?: string } = {}): string {
+export function appmapSlug(appOrUrl: string, opts: { visionOnly?: boolean; noVision?: boolean; axdomOff?: boolean; backend?: string } = {}): string {
 	// The BACKEND is part of the filename because a map is not backend-portable. The ax pass
 	// and the cdp pass name the same place differently — `editor` vs `draft-editor`, measured
 	// 2026-08-01 — and a grounded run resolves controls BY NAME. Grounding an ax run on a
@@ -176,8 +176,13 @@ export function appmapSlug(appOrUrl: string, opts: { visionOnly?: boolean; noVis
 	// two arms sharing a filename means the later pass silently overwrites the earlier. An
 	// earlier version of this fix included only the backend, and p1-explore-ax and
 	// p1-explore-no-vision — same backend, different perception — collided exactly as before.
+	// Three independent axes, all in the name. `axdomOff` joins them because the sidecar is a
+	// SEPARATE element channel layered on AX — a pass without it names controls the bare AX
+	// tree could name, which on Yarn was 955 of 1044 anonymous nodes fewer. Two passes whose
+	// maps differ that much must not share a filename; without this they both write yarn.ax
+	// and the later one wins.
 	const tier = opts.visionOnly ? ".vision" : opts.noVision ? ".novision" : "";
-	const variant = `${opts.backend ? `.${opts.backend}` : ""}${tier}`;
+	const variant = `${opts.backend ? `.${opts.backend}` : ""}${opts.axdomOff ? ".noaxdom" : ""}${tier}`;
 	// A URL is recognised by being one, not by a caller remembering to say so.
 	if (/^https?:\/\//i.test(appOrUrl.trim())) {
 		try {

@@ -17,7 +17,7 @@ export const newPass = (target: Target, app: string, backendKind: string, vision
 	// not overwrite a cdp one (the two name the same surfaces differently, so a run grounded on
 	// the wrong vocabulary fails to resolve controls for reasons that look like backend
 	// weakness). appmapSlug owns the naming so writers and readers cannot drift.
-	const slug = appmapSlug(targetSlug(target), { visionOnly, noVision: !vision, backend: backendKind });
+	const slug = appmapSlug(targetSlug(target), { visionOnly, noVision: !vision, axdomOff: process.env.AXDOM === "0", backend: backendKind });
 	const outPath = `${appmapsDir()}/${slug}.md`;
 	const graphPath = `${appmapsDir()}/${slug}.json`;
 	fs.mkdirSync(appmapsDir(), { recursive: true });
