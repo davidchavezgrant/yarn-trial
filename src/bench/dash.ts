@@ -306,11 +306,12 @@ export function narratorPrompt(digest: Record<string, unknown>, previous?: strin
 		"surfaces, graph nodes, scope ambiguities); what vision costs/buys; whether recipe replay",
 		"is fleet-ready; judge disagreements with self-reports.",
 		"",
-		"Write 2-5 short paragraphs of plain-English findings the CURRENT data actually supports.",
-		"Lead with whatever is newest or most decision-relevant. Use concrete numbers and ratios.",
-		"Never speculate past the data; an empty cell is 'not in yet', not a finding. Plain prose,",
-		"no headers, no bullet lists, no markdown emphasis.",
-		...(previous ? ["", "Your previous note (readers have seen it — lead with what CHANGED):", previous] : []),
+		"Write AT MOST 5 sentences, 100 words total. Every sentence is one finding carried by its",
+		"numbers (ratios beat raw counts). Newest or most decision-relevant first. No preamble, no",
+		"inventory of what hasn't run, no hedging boilerplate — at most one short sample-size",
+		"caveat, and only where it changes the conclusion. Never speculate past the data. Plain",
+		"prose, no headers, no lists, no markdown.",
+		...(previous ? ["", "Your previous note (already seen — write only what CHANGED or sharpened):", previous] : []),
 		"",
 		"Data:",
 		JSON.stringify(digest, null, 1),
@@ -748,7 +749,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			const digest = narratorDigest(buildState(manifest, fleet, [], autoCollect, defaultModel));
 			const res = await client.messages.create({
 				model,
-				max_tokens: 1000,
+				max_tokens: 400,
 				messages: [{ role: "user", content: narratorPrompt(digest, narrative?.text) }],
 			});
 			const text = (res.content ?? [])
