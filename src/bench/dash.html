@@ -219,6 +219,15 @@
 	   tabular numbers, wraps to a second line on narrow viewports. */
 	.d-stats { display: flex; gap: 4px 16px; flex-wrap: wrap; margin: 8px 0 0; font-size: 12px; color: var(--ink); font-variant-numeric: tabular-nums; }
 	.d-stats .k { color: var(--muted); font-size: 10px; margin-right: 6px; text-transform: uppercase; letter-spacing: .05em; }
+	/* results-so-far strip (liveStrip): same idiom as .d-stats, visually claimed as live —
+	   softer ink and a LIVE tag, so counters off a run's event log never read as collected
+	   results. The tag reuses the stepno pill contrast pair (--plane on --s1). */
+	.d-stats.live-strip { color: var(--ink-2); }
+	.d-stats.live-strip .meta { align-self: center; }
+	.livetag {
+		background: var(--s1); color: var(--plane); border-radius: 8px; font-size: 10px;
+		padding: 0 6px; letter-spacing: .08em; text-transform: uppercase; align-self: center;
+	}
 	/* run log pane — one component, two mounts (matrix row dropdown + fleet under-peek) */
 	.d-prompt { color: var(--ink); font-size: 12px; white-space: pre-wrap; max-width: 110ch; margin: 8px 0 2px; }
 	.d-prompt .k { color: var(--muted); font-size: 10px; margin-right: 8px; text-transform: uppercase; letter-spacing: .05em; }
@@ -680,12 +689,22 @@ function statusChip(e, rowKey, selected) {
 	// crashed statuses and this fallback goes quiet.)
 	const pane = logPanes[e.jobId + "@" + e.host];
 	const dead = e.status === "awaiting-collect" && pane && (pane.state === "failed" || pane.state === "orphaned");
+	// Results-so-far off the run's own event log (EntryView.live) — provisional by contract:
+	// present only while uncollected, and rendered as live counters, never as a result.
+	const lp = e.live;
+	// The run's own done(success) claim, the moment the verdict event lands: the gap between
+	// a run exiting and a collect pass banking it used to render as amber awaiting-collect
+	// even though the run had already said how it ended. The dot matches the claim; the label
+	// says who claimed it. The registry override (dead) wins — an abnormal exit outranks the
+	// run's own last words.
+	const claimed = !dead && !e.collected && e.status === "awaiting-collect" && lp && lp.verdict ? lp.verdict : null;
 	// A dead run's dot matches what the BOARD would show for that verdict (orphaned = the
 	// crashed family), not a blanket red; unmapped statuses go hollow (dot.unknown), never
 	// the solid gray that means queued/stopped.
-	const known = dead || e.status === "running" || e.status === "queued"
+	const known = dead || claimed || e.status === "running" || e.status === "queued"
 		|| e.status === "awaiting-collect" || e.status in OUTCOME_COLORS;
 	const color = dead ? (OUTCOME_COLORS[pane.state === "orphaned" ? "crashed" : pane.state] || STATUS.critical) :
+		claimed ? (claimed.success ? OUTCOME_COLORS.succeeded : STATUS.critical) :
 		e.status === "running" ? RUNNING : e.status === "queued" ? "var(--muted)" :
 		e.status === "awaiting-collect" ? STATUS.warning : OUTCOME_COLORS[e.status];
 	// Chips are minimal on purpose: dot + Status + elapsed — per-run detail lives in the
@@ -706,6 +725,15 @@ function statusChip(e, rowKey, selected) {
 	// The dead override changes the LABEL too: two states must never share a name and be
 	// told apart by dot color alone.
 	if (dead) label = esc(statusLabel(pane.state)) + (took != null ? " " + fmtDur(took) : "") + " — uncollected";
+	// Same rule for a self-reported verdict: its own label, never a green dot on "Awaiting collect".
+	if (claimed) label = (claimed.success ? "Succeeded" : "Failed") + (took != null ? " " + fmtDur(took) : "") + " — self-reported";
+	// Live counters on a running chip — what the run just landed, off its own event log.
+	// Counters, not results: the row's metric columns stay empty until collect banks them.
+	if (e.status === "running" && lp) {
+		if (lp.steps != null) label += ` · step ${lp.steps}${lp.verified != null ? ` (${lp.verified}✓)` : ""}`;
+		else if (lp.actions != null) label += ` · ${lp.actions} actions`;
+		if (lp.fatal) label += " · ⚠ fatal";
+	}
 	if (e.status === "queued" && e.queuePosition) label += " #" + e.queuePosition;
 	if (e.stalled) label += " ⚠ Stalled";
 	const judge = e.judgeTrajectory ? ` · Judge ${e.judgeTrajectory}` : "";
@@ -732,7 +760,16 @@ function statusChip(e, rowKey, selected) {
 		: "";
 	// logPanes-fallback note: name the registry verdict, or the red dot reads as a collected result.
 	const registry = dead ? `\nregistry: ${pane.state}${pane.exitCode != null ? ` (exit ${pane.exitCode})` : ""} — not yet collected` : "";
-	return `<span class="chip${selected ? " sel" : ""}"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${esc(when)}${e.note ? "\n" + esc(e.note) : ""}${esc(preCollect)}${esc(registry)}\nclick to view on the map${esc(econ)}">` +
+	// The event-log tail, one tooltip line: last step, claim, cleanup. Named as provisional
+	// so a hover never reads live counters as collected numbers.
+	const liveTip = lp ? "\nlive (event log, provisional): " + [
+		lp.steps != null ? `step ${lp.steps}, ${lp.verified != null ? lp.verified : 0}✓` : "",
+		lp.actions != null ? `${lp.actions} actions` + (lp.frontier != null ? `, frontier ${lp.frontier}` : "") + (lp.nodes != null ? `, ${lp.nodes} nodes` : "") : "",
+		lp.lastStep ? `last: ${lp.lastStep}` : "",
+		lp.verdict ? `claimed ${lp.verdict.success ? "success" : "failure"} — not yet collected/judged` : "",
+		lp.cleanup ? `cleanup: ${lp.cleanup}` : "",
+	].filter(Boolean).join(" · ") : "";
+	return `<span class="chip${selected ? " sel" : ""}"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${esc(when)}${e.note ? "\n" + esc(e.note) : ""}${esc(preCollect)}${esc(registry)}${esc(liveTip)}\nclick to view on the map${esc(econ)}">` +
 		`<span class="dot${known ? "" : " unknown"}"${known ? ` style="background:${color}"` : ""}></span>${label}${esc(judge)}</span>`;
 }
 
@@ -1159,6 +1196,26 @@ function statsStrip(a, e) {
 	return cells ? `<div class="d-stats">${cells}</div>` : "";
 }
 
+// Results-so-far strip (EntryView.live): the run's own event log, folded into counters while
+// collect has nothing to show. Uncollected entries only — the moment collect banks the run,
+// the field is gone from the wire and the real stats above are the only numbers on the row.
+// The LIVE tag + trailing caveat are what keep a glance from reading these as results.
+function liveStrip(a, e) {
+	const lp = e.live;
+	if (!lp || e.collected) return "";
+	const pairs = a.kind === "explore"
+		? [["Actions", lp.actions], ["Frontier", lp.frontier], ["Seen", lp.seen], ["Nodes", lp.nodes], ["Stopped", lp.finished]]
+		: [["Steps", lp.steps], ["Verified", lp.verified], ["Last", lp.lastStep]];
+	if (lp.verdict) pairs.push(["Claimed", (lp.verdict.success ? "success" : "failure") + (lp.verdict.summary ? " — " + lp.verdict.summary : "")]);
+	if (lp.cleanup) pairs.push(["Cleanup", lp.cleanup]);
+	if (lp.fatal) pairs.push(["Fatal", lp.fatal]);
+	const cells = pairs.filter(([, v]) => v != null && v !== "")
+		.map(([k, v]) => `<span><span class="k">${k}</span>${esc(String(v))}</span>`).join("");
+	return cells
+		? `<div class="d-stats live-strip"><span class="livetag">live</span>${cells}<span class="meta">from the run's event log — provisional until collected</span></div>`
+		: "";
+}
+
 // No run-selector tabs here: the chips in the row's Runs column are the selector, and the
 // displayed run's chip is the highlighted one.
 // The dropdown is the run's live console: its stats strip, the prompt it was given in
@@ -1186,7 +1243,7 @@ function detailRowHtml(a, p, key) {
 	// A failed detail fetch caches its reason in d.note — surface it, or the dropdown reads
 	// as "this run simply has nothing" when the truth is "the fetch failed".
 	const fetchNote = d && d.note && !d.graph ? `<div class="d-note">⚠ ${esc(d.note)}</div>` : "";
-	return `<tr class="detail-row"><td colspan="${NCOLS}">${statsStrip(a, e)}<div class="d-prompt">${prompt}</div>${note}${fetchNote}
+	return `<tr class="detail-row"><td colspan="${NCOLS}">${statsStrip(a, e)}${liveStrip(a, e)}<div class="d-prompt">${prompt}</div>${note}${fetchNote}
 		<div class="logwrap" data-logjob="${esc(sel)}" data-loghost="${esc(e.host || "")}"></div></td></tr>`;
 }
 

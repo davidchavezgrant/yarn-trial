@@ -7,6 +7,7 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readJournal } from "../core/journal.js";
 import type { FleetRow } from "../remote/control/fleet.js";
+import type { HostEntry, Inventory } from "../remote/control/hosts.js";
 import type { EngineHandle } from "../remote/liveview.js";
 import { readJob as readLocalJob, readLog } from "../remote/runner/jobs.js";
 import { ARCHIVE_DIR, LIVE_DIR, OLD_ARCHIVE_DIR, OLD_LIVE_DIR, RUN_FILES, appSlug, dataRoot, outDir, resolveRunDir, runFile } from "../paths.js";
@@ -110,6 +111,13 @@ export interface EntryView {
 	startedAt?: string;
 	endedAt?: string;
 	note?: string;
+	/**
+	 * Results-so-far off the run's OWN event log — the realtime channel for an entry collect
+	 * has not banked yet (local file, or ssh-tailed from its fleet host). Provisional by
+	 * contract: attached to UNCOLLECTED entries only, gone the moment metrics exist, and
+	 * never read by rollups/cost — the page must render it visibly as live, not as a result.
+	 */
+	live?: RunProgress;
 	/**
 	 * Explore runs: THIS pass's own stamp numbers. The row aggregates medians across the
 	 * arm's passes (multi-pass matrix), so the dropdown needs the per-pass figures here.
@@ -292,7 +300,7 @@ function liveFor(e: ManifestEntry, fleet: FleetView): Pick<EntryView, "status" |
 	return { status: e.state };
 }
 
-function entryView(e: ManifestEntry, fleet: FleetView): EntryView {
+function entryView(e: ManifestEntry, fleet: FleetView, live?: Map<string, RunProgress>): EntryView {
 	const m = e.metrics;
 	if (e.collected) {
 		const cost = m ? estimateCost(m, m.model ?? e.model) : undefined;
@@ -353,7 +361,11 @@ function entryView(e: ManifestEntry, fleet: FleetView): EntryView {
 		};
 	}
 
-	return { jobId: e.jobId, host: e.host, submittedAt: e.submittedAt, collected: false, ...liveFor(e, fleet) };
+	// Only the uncollected branch carries `live` — a collected entry's real metrics render
+	// above, and keeping both would put two answers to "how many steps" on one row.
+	const progress = live?.get(e.jobId);
+
+	return { jobId: e.jobId, host: e.host, submittedAt: e.submittedAt, collected: false, ...liveFor(e, fleet), ...(progress ? { live: progress } : {}) };
 }
 
 /**
@@ -439,7 +451,7 @@ export function rankExplore(passes: Array<{ graphNodes?: number; surfaces?: numb
 	return ranks;
 }
 
-function passView(arm: Arm, model: string | undefined, entries: ManifestEntry[], fleet: FleetView, defaultModel?: string): PassView {
+function passView(arm: Arm, model: string | undefined, entries: ManifestEntry[], fleet: FleetView, defaultModel?: string, live?: Map<string, RunProgress>): PassView {
 	const r = rollup(arm, entries);
 	const collectedMetrics = r.collected.map((e) => e.metrics).filter((m): m is NonNullable<ManifestEntry["metrics"]> => m !== undefined);
 
@@ -485,7 +497,7 @@ function passView(arm: Arm, model: string | undefined, entries: ManifestEntry[],
 					},
 				}
 			: {}),
-		entries: entries.map((e) => entryView(e, fleet)),
+		entries: entries.map((e) => entryView(e, fleet, live)),
 	};
 }
 
@@ -699,7 +711,7 @@ export function runEventLine(kind: string, detail: unknown): string {
  * the page's renderer tolerate both shapes. Torn tail lines (a writer append racing this
  * read) are skipped, same as every jsonl reader here.
  */
-export function storeEvents(dashRing: DashEvent[], limit = 200, outRoot = outDir()): DashEvent[] {
+export function storeEvents(dashRing: DashEvent[], limit = 200, outRoot = outDir(), extra: DashEvent[] = []): DashEvent[] {
 	const fromRuns: DashEvent[] = [];
 	try {
 		const liveRoot = path.join(outRoot, LIVE_DIR);
@@ -729,18 +741,10 @@ export function storeEvents(dashRing: DashEvent[], limit = 200, outRoot = outDir
 				fromRuns.push(...cached.events);
 				continue;
 			}
-			const parsed: DashEvent[] = [];
+			let parsed: DashEvent[];
 			try {
-				for (const line of fs.readFileSync(file, "utf8").split("\n").slice(-(EVENT_TAIL_LINES + 1))) {
-					if (!line.trim()) continue;
-					try {
-						const ev = JSON.parse(line);
-						if (typeof ev?.t !== "string" || typeof ev?.kind !== "string") continue;
-						parsed.push({ t: ev.t, line: runEventLine(ev.kind, ev.detail), runKey: d.name, source: "run" });
-					} catch {
-						// torn or foreign line — not an event
-					}
-				}
+				parsed = parseRunEvents(fs.readFileSync(file, "utf8").split("\n").slice(-(EVENT_TAIL_LINES + 1)).join("\n"))
+					.map((ev) => ({ t: ev.t, line: runEventLine(ev.kind, ev.detail), runKey: d.name, source: "run" as const }));
 			} catch {
 				continue;
 			}
@@ -751,10 +755,168 @@ export function storeEvents(dashRing: DashEvent[], limit = 200, outRoot = outDir
 		// No live store yet — the dash ring alone is the feed.
 	}
 
-	return [...fromRuns, ...dashRing.map((e) => ({ ...e, source: e.source ?? ("dash" as const) }))]
+	// `extra` is the remote tails (startDash's ssh fetch of running fleet jobs' event logs) —
+	// lines the local scan above cannot see because the files are still on the colo Mac.
+	// The fetch loop drops a job's tail the moment its events exist locally (pull landed),
+	// so a line never arrives from both sides of this merge.
+	return [...fromRuns, ...extra, ...dashRing.map((e) => ({ ...e, source: e.source ?? ("dash" as const) }))]
 		.sort((a, b) => (a.t < b.t ? 1 : a.t > b.t ? -1 : 0))
 		.slice(0, limit)
 		.reverse();
+}
+
+/* ---- results-so-far: a run's own event log, aggregated while collect has nothing ---------- */
+
+/** One line of a run's events.jsonl, parsed but not yet interpreted. */
+export interface RawRunEvent {
+	t: string;
+	kind: string;
+	detail: Record<string, unknown>;
+}
+
+/** Parse events.jsonl text. Torn tail lines (a writer append racing the read) are skipped, same as every jsonl reader here. */
+export function parseRunEvents(text: string): RawRunEvent[] {
+	const out: RawRunEvent[] = [];
+	for (const line of text.split("\n")) {
+		if (!line.trim()) continue;
+		try {
+			const ev = JSON.parse(line);
+			if (typeof ev?.t !== "string" || typeof ev?.kind !== "string") continue;
+			out.push({ t: ev.t, kind: ev.kind, detail: ev.detail && typeof ev.detail === "object" ? ev.detail : {} });
+		} catch {
+			// torn or foreign line — not an event
+		}
+	}
+
+	return out;
+}
+
+/**
+ * Results about a run BEFORE collect has anything to read: the run log is written once, at
+ * the end (`writeRunLog`), but the event log is appended the instant each step lands — so
+ * counters folded off it are the only numbers that exist while the run executes. Everything
+ * here is PROVISIONAL BY CONTRACT: it renders only on uncollected entries, it vanishes the
+ * moment collect banks the real metrics, and it is never fed into rollups or cost — those
+ * read collected metrics only, which is what keeps the dashboard unable to disagree with
+ * the report. The step event is emitted from the same StepRecord the run log gets
+ * (agent/run.ts: "the event cannot disagree with the run log"), so these counters converge
+ * exactly to parseRunMetrics's numbers when the run terminates.
+ */
+export interface RunProgress {
+	/** Newest event's own timestamp — the reading's honest age. */
+	updatedAt: string;
+	/** Task/replay: step events seen so far, and how many of them verified. */
+	steps?: number;
+	verified?: number;
+	/** The newest step, human-shaped: `click "Save" ✓` — the "what is it doing right now" line. */
+	lastStep?: string;
+	/** Explore heartbeats (every 10th action) + chapter marks — coarse by design (run-events.ts). */
+	actions?: number;
+	frontier?: number;
+	seen?: number;
+	nodes?: number;
+	/** The finish event's stop reason (frontier-empty, action-ceiling, interrupted…). */
+	finished?: string;
+	/** The run's OWN final claim (verdict event) — self-reported, pre-collect, pre-judge. */
+	verdict?: { success: boolean; summary?: string };
+	fatal?: string;
+	/** Teardown outcome as one line: "3 restored" / "1 failed" / the error. */
+	cleanup?: string;
+}
+
+/** Fold a run's events into results-so-far. Field checks are defensive per event, not per file: one malformed detail loses itself, never the run. */
+export function aggregateRunEvents(raw: RawRunEvent[]): RunProgress | undefined {
+	const last = raw[raw.length - 1];
+	if (!last) return undefined;
+	const p: RunProgress = { updatedAt: last.t };
+	let steps = 0;
+	let verified = 0;
+	for (const ev of raw) {
+		const d = ev.detail;
+		switch (ev.kind) {
+			case "step": {
+				steps += 1;
+				if (d.verified === true) verified += 1;
+				p.lastStep = `${String(d.action ?? "?")}${typeof d.target === "string" ? ` "${d.target}"` : ""} ${d.verified === true ? "✓" : "✗"}`;
+				break;
+			}
+
+			case "progress": {
+				if (typeof d.actions === "number") p.actions = d.actions;
+				if (typeof d.frontier === "number") p.frontier = d.frontier;
+				if (typeof d.seen === "number") p.seen = d.seen;
+				break;
+			}
+
+			case "chapter": {
+				if (typeof d.nodes === "number") p.nodes = d.nodes;
+				break;
+			}
+
+			case "finish": {
+				if (typeof d.stopped === "string") p.finished = d.stopped;
+				if (typeof d.actions === "number") p.actions = d.actions;
+				if (typeof d.nodes === "number") p.nodes = d.nodes;
+				break;
+			}
+
+			case "verdict": {
+				if (typeof d.success === "boolean")
+					p.verdict = { success: d.success, ...(typeof d.summary === "string" && d.summary ? { summary: d.summary } : {}) };
+				break;
+			}
+
+			case "fatal": {
+				if (typeof d.error === "string") p.fatal = d.error;
+				break;
+			}
+
+			case "cleanup": {
+				p.cleanup = typeof d.error === "string"
+					? `teardown error: ${d.error}`
+					: `${Number(d.restored ?? 0)} restored${Number(d.failed ?? 0) ? `, ${Number(d.failed)} failed` : ""}`;
+				break;
+			}
+		}
+	}
+	if (steps) {
+		p.steps = steps;
+		p.verified = verified;
+	}
+
+	return p;
+}
+
+/** Aggregates keyed by file path, valid while (mtime, size) hold still — same idiom as eventTailCache. */
+const progressCache = new Map<string, { mtimeMs: number; size: number; progress?: RunProgress }>();
+
+/**
+ * Results-so-far for a run whose events.jsonl is on THIS machine (local runs, and remote
+ * runs once pulled). The WHOLE file, unlike storeEvents' display tail: counters must not
+ * saturate at a tail cap — a 96-action explore writes more heartbeats than 50 lines hold.
+ * Live-only on purpose: an uncollected run lives in out/bench/live, and a run old enough
+ * to need the archive fallback has real metrics to read instead.
+ */
+export function localRunProgress(runKey: string, outRoot = outDir()): RunProgress | undefined {
+	const file = path.join(outRoot, LIVE_DIR, runKey, RUN_FILES.events);
+	let st: fs.Stats;
+	try {
+		st = fs.statSync(file);
+	} catch {
+		return undefined;
+	}
+	const hit = progressCache.get(file);
+	if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.progress;
+	let progress: RunProgress | undefined;
+	try {
+		progress = aggregateRunEvents(parseRunEvents(fs.readFileSync(file, "utf8")));
+	} catch {
+		return undefined;
+	}
+	if (progressCache.size > 500) progressCache.clear();
+	progressCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, progress });
+
+	return progress;
 }
 
 /** The narrator's event-log filename — the pass-level file beside the manifests AND one per run dir. */
@@ -972,7 +1134,7 @@ function displayTitle(arm: Arm): string {
 	return (filmed ? "Filmed " : "") + (ARM_TITLE_COPY[base] ?? base);
 }
 
-export function buildState(manifest: Manifest, fleet: FleetView, events: DashEvent[], autoCollect: boolean, defaultModel?: string): DashState {
+export function buildState(manifest: Manifest, fleet: FleetView, events: DashEvent[], autoCollect: boolean, defaultModel?: string, live?: Map<string, RunProgress>): DashState {
 	const arms: ArmView[] = MATRIX.map((arm) => ({
 		id: arm.id,
 		title: displayTitle(arm),
@@ -995,7 +1157,7 @@ export function buildState(manifest: Manifest, fleet: FleetView, events: DashEve
 		targetKey: arm.dispatch.url ?? arm.app,
 		...(arm.informs ? { informs: arm.informs } : {}),
 		passes: modelPasses(manifest, arm.id)
-			.map((model) => passView(arm, model, manifest.entries.filter((e) => e.armId === arm.id && e.model === model), fleet, defaultModel))
+			.map((model) => passView(arm, model, manifest.entries.filter((e) => e.armId === arm.id && e.model === model), fleet, defaultModel, live))
 			.filter((p) => p.submitted > 0),
 	}));
 
@@ -1660,6 +1822,106 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	// exactly what happened the night of the store move. Mid-drain restarts still seed.
 	let narrative: Narrative | undefined = manifest.entries.some((e) => e.collected) ? readPersistedNarrative(date) : undefined;
 
+	/*
+	 * Results-so-far transport for FLEET runs — dashboard-side only, the runner untouched.
+	 *
+	 * A running fleet job's events.jsonl lives on the colo Mac until collect's pull, so the
+	 * live counters need their own read: `cat` the file over the same pinned, multiplexed
+	 * ssh the fleet poll rides (one extra exec per busy host per poll — the master connection
+	 * already exists). The remote path reaches a login shell, exactly like an rsync
+	 * destination, so it passes the same gate (assertSafeRemotePath) and its variable parts
+	 * are validated individually: the data root is what the host's own doctor reported
+	 * (cached per host — it cannot change under a running runner), the job id must match the
+	 * stamp alphabet. Whole-file each tick, no offset bookkeeping: an event log is ~15-25
+	 * lines by contract (run-events.ts), so deltas would save bytes nobody is missing.
+	 */
+	const { assertSafeRemotePath, remoteDataRoot, runSsh } = await import("../remote/control/ssh.js");
+	const { loadHosts, resolveHost } = await import("../remote/control/hosts.js");
+	let inventory: Inventory | undefined;
+	try {
+		inventory = loadHosts();
+	} catch {
+		// No hosts.json (a laptop-only checkout) — local runs still get live counters.
+	}
+	const remoteRuns = new Map<string, { host: string; raw: RawRunEvent[]; misses: number }>();
+	const remoteRootCache = new Map<string, string>();
+	// Same alphabet dispatch.ts enforces on job ids — path segments on both machines.
+	const SAFE_RUN_ID = /^[A-Za-z0-9._-]+$/;
+
+	const pollRemoteEvents = async (): Promise<void> => {
+		const busy = fleet.rows.filter((r) => r.name !== "local" && r.state === "busy" && typeof r.jobId === "string");
+		for (const r of busy) {
+			const cur = remoteRuns.get(r.jobId as string);
+			remoteRuns.set(r.jobId as string, cur ? { ...cur, host: r.name, misses: 0 } : { host: r.name, raw: [], misses: 0 });
+		}
+		// Grace fetches: the verdict/cleanup events are written as the run EXITS — after its
+		// last busy sighting — so a departed job is tailed for two more polls to catch its
+		// final words. Dropped the moment the truth exists locally (pull landed, or the entry
+		// collected), which is also what keeps a line from reaching the merged feed twice.
+		for (const [jobId, s] of [...remoteRuns]) {
+			if (busy.some((r) => r.jobId === jobId)) continue;
+			s.misses += 1;
+			const entry = manifest.entries.find((en) => en.jobId === jobId);
+			const localFile = path.join(outDir(), LIVE_DIR, jobId, RUN_FILES.events);
+			if (s.misses > 2 || entry?.collected || fs.existsSync(localFile)) remoteRuns.delete(jobId);
+		}
+		// Parallel across hosts (≤3, one run each); per-job isolation — one dead host must
+		// not starve the others' counters. Failures keep the last good tail rather than
+		// blanking it: a 4s ssh timeout on a busy Mac is routine, not evidence.
+		await Promise.all([...remoteRuns].map(async ([jobId, s]) => {
+			if (!inventory || !SAFE_RUN_ID.test(jobId)) return;
+			let host: HostEntry;
+			try {
+				host = resolveHost(s.host, inventory);
+			} catch {
+				return; // a fleet row not in the inventory (renamed host) — nothing to ssh to
+			}
+			let root = remoteRootCache.get(s.host);
+			if (!root) {
+				root = await remoteDataRoot(host, runSsh);
+				if (!root) return; // host did not answer doctor — retry next poll
+
+				remoteRootCache.set(s.host, root);
+			}
+			const remote = `${root}/out/${LIVE_DIR}/${jobId}/${RUN_FILES.events}`;
+			try {
+				assertSafeRemotePath(remote);
+			} catch {
+				return; // a doctor-reported root outside the safe alphabet — refuse, don't quote
+			}
+			const res = await runSsh(host, ["cat", remote], {});
+			// Nonzero covers "no file yet" (just-started or a runner predating event logs)
+			// and transport hiccups alike — keep what we had.
+			if (res.code === 0) s.raw = parseRunEvents(res.stdout);
+		}));
+	};
+
+	/**
+	 * The remote tails as feed lines — what storeEvents' local scan cannot see yet. The
+	 * existence probe re-checks at feed time, not only at poll time: a pull landing the
+	 * local file between fleet ticks would otherwise double every line for one interval.
+	 */
+	const remoteFeed = (): DashEvent[] =>
+		[...remoteRuns]
+			.filter(([jobId]) => !fs.existsSync(path.join(outDir(), LIVE_DIR, jobId, RUN_FILES.events)))
+			.flatMap(([jobId, s]) =>
+				s.raw.slice(-EVENT_TAIL_LINES).map((ev) => ({ t: ev.t, line: runEventLine(ev.kind, ev.detail), runKey: jobId, source: "run" as const })));
+
+	/** Results-so-far per uncollected entry: the remote tail while the fleet holds the run, the local file otherwise. */
+	const liveProgress = (): Map<string, RunProgress> => {
+		const map = new Map<string, RunProgress>();
+		for (const e of manifest.entries) {
+			if (e.collected) continue;
+			const remote = remoteRuns.get(e.jobId);
+			// Remote-first while a tail exists: a local copy of a still-running job (a manual
+			// mid-run pull) is a snapshot; the tail is the run speaking now.
+			const p = (remote?.raw.length ? aggregateRunEvents(remote.raw) : undefined) ?? localRunProgress(e.jobId);
+			if (p) map.set(e.jobId, p);
+		}
+
+		return map;
+	};
+
 	// The ONE state builder for anything a client can receive. `narrative` used to be attached
 	// only inside push(), so GET /api/state and the initial /events frame omitted it — a page
 	// that connected after the note was minted showed nothing until an unrelated push came by.
@@ -1667,7 +1929,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	// recomputed per push (mtime-cached tails, see storeEvents), so run events reach the page
 	// on the same cadence as everything else without any new watcher.
 	const currentState = (): DashState => {
-		const state = buildState(manifest, fleet, storeEvents(events), autoCollect, defaultModel);
+		const state = buildState(manifest, fleet, storeEvents(events, 200, outDir(), remoteFeed()), autoCollect, defaultModel, liveProgress());
 		if (narrative) state.narrative = narrative;
 
 		return state;
@@ -1905,6 +2167,10 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 				}
 			}
 			manifest = readStoredManifest(date);
+			// After the fleet snapshot and the manifest, before the push: the tail wants the
+			// fresh busy set (which jobs to fetch) and the fresh manifest (which to drop), and
+			// the push wants the tail's counters on the frame it is about to send.
+			await pollRemoteEvents();
 			clearStaleNarrative();
 			push();
 		} catch (e) {

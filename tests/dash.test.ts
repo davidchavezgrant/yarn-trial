@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { appendNarrativeEvent, buildDetail, buildState, type DashEvent, defaultDashDate, type FleetView, fromStore, groundingArmId, legacyNarrativeLogPath, loadEnvFallback, matchPath, narrativeLogPath, type NarrativeEvent, narratorPrompt, notedRunKeys, parseDashArgs, parseEnvLine, parseLogFrames, rankExplore, readPersistedNarrative, runEventLine, storeEvents, utf8Tail, watchStoreChain } from "../src/bench/dash.js";
+import { aggregateRunEvents, appendNarrativeEvent, buildDetail, buildState, type DashEvent, defaultDashDate, type FleetView, fromStore, groundingArmId, legacyNarrativeLogPath, loadEnvFallback, localRunProgress, matchPath, narrativeLogPath, type NarrativeEvent, narratorPrompt, notedRunKeys, parseDashArgs, parseEnvLine, parseLogFrames, parseRunEvents, rankExplore, readPersistedNarrative, runEventLine, type RunProgress, storeEvents, utf8Tail, watchStoreChain } from "../src/bench/dash.js";
 // The submodule, not the core/harness.ts barrel: the barrel loads the Anthropic SDK and the
 // cua driver, which a unit test of a 30-line appender has no business paying for.
 import { runEvent } from "../src/core/harness/run-events.js";
@@ -1205,4 +1205,125 @@ test("ParseDashArgs__RecordsWhetherTheDateWasNamed__When__FlagIsAbsent", () => {
 	assert.equal(parseDashArgs(["--date", "2026-07-31"]).dateExplicit, true, "a named date is pinned forever");
 	assert.equal(parseDashArgs([]).dateExplicit, false, "a resolved date follows the newest pass");
 	assert.equal(parseDashArgs(["--date", "2026-07-31"]).date, "2026-07-31");
+});
+
+/*
+ * Results-so-far (RunProgress): counters folded off a run's own event log, the only numbers
+ * that exist while collect has nothing. The contract under test is provisionality — attached
+ * to uncollected entries only, absent the moment metrics land — and convergence: the step
+ * counters must agree with what parseRunMetrics will read once the run log exists.
+ */
+
+test("AggregateRunEvents__CountsStepsAndVerified__When__StepEventsPresent", () => {
+	const p = aggregateRunEvents(parseRunEvents([
+		JSON.stringify({ t: "2026-08-01T10:00:01.000Z", kind: "start", detail: { task: "t", app: "Yarn" } }),
+		JSON.stringify({ t: "2026-08-01T10:00:02.000Z", kind: "step", detail: { step: 1, action: "click", target: "Settings", verified: true, channel: "text" } }),
+		JSON.stringify({ t: "2026-08-01T10:00:03.000Z", kind: "step", detail: { step: 2, action: "type_text", verified: false } }),
+		JSON.stringify({ t: "2026-08-01T10:00:04.000Z", kind: "step", detail: { step: 3, action: "click", target: "Save", verified: true } }),
+	].join("\n")));
+	assert.equal(p?.steps, 3);
+	assert.equal(p?.verified, 2);
+	// The newest step, human-shaped — the chip tooltip's "what is it doing right now".
+	assert.equal(p?.lastStep, 'click "Save" ✓');
+	// The reading's age is the newest event's own stamp, never a fabricated now.
+	assert.equal(p?.updatedAt, "2026-08-01T10:00:04.000Z");
+});
+
+test("AggregateRunEvents__CapturesVerdictAndCleanup__When__RunEnded", () => {
+	const p = aggregateRunEvents(parseRunEvents([
+		JSON.stringify({ t: "2026-08-01T10:00:01.000Z", kind: "step", detail: { step: 1, action: "click", verified: true } }),
+		JSON.stringify({ t: "2026-08-01T10:00:05.000Z", kind: "cleanup", detail: { restored: 2, failed: 1 } }),
+		JSON.stringify({ t: "2026-08-01T10:00:06.000Z", kind: "verdict", detail: { success: true, summary: "changed the cursor style" } }),
+	].join("\n")));
+	assert.deepEqual(p?.verdict, { success: true, summary: "changed the cursor style" });
+	assert.equal(p?.cleanup, "2 restored, 1 failed");
+	// A fatal error is its own field, not a verdict — the run may still salvage (explore).
+	const f = aggregateRunEvents(parseRunEvents(JSON.stringify({ t: "2026-08-01T10:00:07.000Z", kind: "fatal", detail: { error: "driver died" } })));
+	assert.equal(f?.fatal, "driver died");
+	assert.equal(f?.verdict, undefined);
+});
+
+test("AggregateRunEvents__TracksExploreHeartbeat__When__ProgressAndFinishPresent", () => {
+	// Explore emits COARSE heartbeats (every 10th action) rather than per-step events, so the
+	// counters come from the LATEST heartbeat/chapter/finish — not from counting lines.
+	const p = aggregateRunEvents(parseRunEvents([
+		JSON.stringify({ t: "2026-08-01T10:00:01.000Z", kind: "progress", detail: { actions: 10, frontier: 40, seen: 55, elapsed: "4m" } }),
+		JSON.stringify({ t: "2026-08-01T10:05:00.000Z", kind: "chapter", detail: { chapter: 2, findings: 12, nodes: 34 } }),
+		JSON.stringify({ t: "2026-08-01T10:10:00.000Z", kind: "progress", detail: { actions: 20, frontier: 31, seen: 78, elapsed: "9m" } }),
+	].join("\n")));
+	assert.equal(p?.actions, 20);
+	assert.equal(p?.frontier, 31);
+	assert.equal(p?.seen, 78);
+	assert.equal(p?.nodes, 34);
+	assert.equal(p?.steps, undefined, "an explore pass has heartbeats, not task steps");
+	const done = aggregateRunEvents(parseRunEvents(JSON.stringify({ t: "2026-08-01T10:40:00.000Z", kind: "finish", detail: { stopped: "frontier-empty", actions: 47, findings: 30, nodes: 150 } })));
+	assert.equal(done?.finished, "frontier-empty");
+	assert.equal(done?.actions, 47);
+	assert.equal(done?.nodes, 150);
+});
+
+test("LocalRunProgress__ReadsTheWholeFile__When__RunDirIsInLive", () => {
+	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-progress-"));
+	try {
+		// More step events than storeEvents' display tail holds — the counters must not
+		// saturate at a tail cap, which is why this reads the whole file.
+		const lines = Array.from({ length: 60 }, (_, i) =>
+			JSON.stringify({ t: `2026-08-01T10:${String(Math.floor(i / 60)).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}.000Z`, kind: "step", detail: { step: i + 1, action: "click", verified: i % 2 === 0 } }));
+		plant(out, ["bench", "live", "run-long", "events.jsonl"], `${lines.join("\n")}\n`);
+		const p = localRunProgress("run-long", out);
+		assert.equal(p?.steps, 60);
+		assert.equal(p?.verified, 30);
+		// No events file at all is the common case (runs predating the log) — undefined, not a throw.
+		assert.equal(localRunProgress("no-such-run", out), undefined);
+	} finally {
+		fs.rmSync(out, { recursive: true, force: true });
+	}
+});
+
+test("BuildState__AttachesLiveProgress__When__EntryUncollected", () => {
+	const live = new Map<string, RunProgress>([["job-1", { updatedAt: "2026-08-01T10:00:04.000Z", steps: 3, verified: 2 }]]);
+	const s = buildState(
+		manifest(entry({})),
+		fleet([{ name: "mac1", reachable: true, state: "busy", jobId: "job-1", elapsedSec: 42 }]),
+		[],
+		true,
+		undefined,
+		live,
+	);
+	const e = armView(s, "p2-ax-grounded")?.passes[0]?.entries[0];
+	assert.equal(e?.live?.steps, 3);
+	assert.equal(e?.live?.verified, 2);
+});
+
+test("BuildState__OmitsLiveProgress__When__EntryCollected", () => {
+	// Once collect banks the run, its real metrics are the only numbers on the row — carrying
+	// the provisional counters past that point would put two answers to "how many steps" on
+	// one entry, and the rollups' independence from `live` is what keeps the dashboard unable
+	// to disagree with the report.
+	const live = new Map<string, RunProgress>([["job-1", { updatedAt: "2026-08-01T10:00:04.000Z", steps: 3, verified: 2 }]]);
+	const s = buildState(
+		manifest(entry({ state: "done", collected: true, metrics: { success: true, steps: 5, verifiedSteps: 5 } })),
+		fleet([]),
+		[],
+		true,
+		undefined,
+		live,
+	);
+	const e = armView(s, "p2-ax-grounded")?.passes[0]?.entries[0];
+	assert.equal(e?.live, undefined);
+	assert.equal(e?.steps, 5, "the collected number stands alone");
+});
+
+test("StoreEvents__MergesRemoteTails__When__ExtraEventsPassed", () => {
+	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-events-extra-"));
+	try {
+		plant(out, ["bench", "live", "run-local", "events.jsonl"], `${JSON.stringify({ t: "2026-08-01T10:00:01.000Z", kind: "start", detail: {} })}\n`);
+		// A remote tail line (startDash's ssh fetch) — same shape the local scan produces.
+		const extra: DashEvent[] = [{ t: "2026-08-01T10:00:02.000Z", line: "step step=1 action=click verified=true", runKey: "run-remote", source: "run" }];
+		const merged = storeEvents([], 200, out, extra);
+		assert.deepEqual(merged.map((e) => e.runKey), ["run-local", "run-remote"]);
+		assert.equal(merged[1]?.source, "run");
+	} finally {
+		fs.rmSync(out, { recursive: true, force: true });
+	}
 });
