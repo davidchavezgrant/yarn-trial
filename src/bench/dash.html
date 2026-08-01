@@ -686,17 +686,23 @@ function armOf(jobId) {
 // as a failure). Flags live in the arm tooltip (the display name is derived from them) and
 // per-run completion lives on the chips, so neither needs a column.
 const th = (label, tip) => `<th${tip ? ` data-tip="${esc(tip)}"` : ""}>${label}</th>`;
-const NAME_TIP = "hover for the arm id, flags and the decision this cell informs · click to expand the selected run's dropdown (stats · prompt · live log) · pick the run via its chip in the Runs column";
+const ARM_TIP = "hover for the arm id, flags and the decision this cell informs · click to expand the selected run's dropdown (stats · prompt · live log) · pick the run via its chip in the Runs column";
 const RUNS_TIP = "one chip per run — click a chip to select that run: the row's dropdown and ⤢ map follow the selected chip";
 // No target column: the app scope picker above the board carries the target, and inside a
 // lineage group every row shares the group's target anyway.
-const TASK_HEAD = "<tr>" + th("Name", NAME_TIP) +
-	th("Perceives", "what the agent SEES: AX tree or DOM elements, plus vision — or pixels only") +
+// Ordering: the two wide prose cells (Arm, Task) together at the left, then the three
+// short config tokens (Sees, Acts, Model), then the five-column metric band exploreRow
+// spans with ONE colspan=5 cell — reordering across that band means colspan surgery.
+// "Success", not "Passed": PASS/FAIL is the judge's vocabulary and this column is
+// self-reported success — the distinction the judge pipeline exists to expose.
+const TASK_HEAD = "<tr>" + th("Arm", ARM_TIP) +
+	th("Task", "the goal-only prompt the run was given") +
+	th("Sees", "what the agent SEES: AX tree or DOM elements, plus vision — or pixels only") +
 	th("Acts", "what injects the input: AX (cua driver) or CDP") +
-	th("Task", "the goal-only prompt the run was given") + th("Model", "what actually ran, off the run logs") +
-	th("OK", "succeeded / collected") +
+	th("Model", "what actually ran, off the run logs") +
+	th("Success", "self-reported: succeeded / collected (the judge's verdict lives in the Judge card)") +
 	th("Steps", "mean actions per run") + th("Time", "mean wall-clock per run") +
-	th("Out-Tok", "mean output tokens per run") + th("Est $", "published-rate estimate across collected runs — not an invoice") +
+	th("Tokens", "mean OUTPUT tokens per run") + th("Cost", "published-rate estimate across collected runs — not an invoice") +
 	th("Started", "when the row's LATEST run began — collected runs off the run log, running runs derived from their ticking elapsed; a queued run shows – until it starts. Hover lists every run") +
 	th("Runs", RUNS_TIP) +
 	th("Map", "the appmap as a full node-link tree — edge thickness = traversal heat, blue = the run's path") + "</tr>";
@@ -813,9 +819,9 @@ function armCell(a, p) {
 		? `<span class="pbadge" data-tip="phase ${a.phase} arm — lineage groups interleave phases">P${a.phase}</span>`
 		: "";
 	return `<td class="arm" data-tip="${esc(tip)}">${rankDot(a, p)}<span class="dn">${esc(displayName(a))}</span>${badge}</td>
+		${taskCell}
 		<td class="num">${esc(a.perception || "–")}</td>
 		<td class="num">${esc(a.actuation || "–")}</td>
-		${taskCell}
 		${modelCell(p)}`;
 }
 
@@ -834,8 +840,8 @@ function taskRow(a, p) {
 // they live in ONE cell spanning the five task-metric columns, since the board's single
 // sticky header is task-shaped and explore medians must never sit under "Steps"/"Tokens"
 // labels. Each segment carries the tooltip its old column header + cell held — with the
-// headers gone, the segment tip is the only place the column semantics survive. Name,
-// Perceives, Acts, Task("Explore"), Model, Runs and Map stay real cells so they align
+// headers gone, the segment tip is the only place the column semantics survive. Arm,
+// Task("Explore"), Sees, Acts, Model, Runs and Map stay real cells so they align
 // with the task rows beneath. `first` marks the group's first row for .gsep air.
 function exploreRow(a, p, first) {
 	const key = rowId(a, p);
