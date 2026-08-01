@@ -657,7 +657,13 @@ function hBars(groups, series, opts = {}) {
 /** Horizontal stacked bars. rows: [{label, tip, segs:[{name,color,value}]}]. */
 function hStack(rows, seriesNames, opts = {}) {
 	const fmt = opts.fmt || fmtNum;
-	const W = 460, rowH = 22, padL = opts.padL || 150, padR = 46;
+	// The label gutter auto-fits the longest row label (~5.8 viewBox units per char at the
+	// .lbl size) and the viewBox widens by the same amount so the bar area keeps its usual
+	// width — a fixed padL clipped "p6-cdp-procedure-from-ungrounded · Sol 5.6" off the
+	// left edge. When every label fits the caller's padL, this renders exactly as before.
+	const rowH = 22, padR = 46;
+	const padL = Math.max(opts.padL || 150, 8 + Math.ceil(5.8 * Math.max(0, ...rows.map((r) => r.label.length))));
+	const W = Math.max(460, padL + 244 + padR);
 	const H = rows.length * rowH + 8;
 	const max = Math.max(1, ...rows.map((r) => r.segs.reduce((a, s) => a + s.value, 0)));
 	const iw = W - padL - padR;
