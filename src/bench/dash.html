@@ -226,12 +226,13 @@
 	   tabular numbers, wraps to a second line on narrow viewports. */
 	.d-stats { display: flex; gap: 4px 16px; flex-wrap: wrap; margin: 8px 0 0; font-size: 12px; color: var(--ink); font-variant-numeric: tabular-nums; }
 	.d-stats .k { color: var(--muted); font-size: 10px; margin-right: 6px; text-transform: uppercase; letter-spacing: .05em; }
-	/* results-so-far strip (liveStrip): same idiom as .d-stats, visually claimed as live —
-	   softer ink and a LIVE tag, so counters off a run's event log never read as collected
-	   results. The tag reuses the stepno pill contrast pair (--plane on --s1). */
+	/* results-so-far strip (liveStrip): same idiom as .d-stats, softer ink so counters off a
+	   run's event log never read as collected results. The LIVE tag rides only a RUNNING
+	   entry's strip; it reuses the stepno pill contrast pair (--plane on --s1). */
 	.d-stats.live-strip { color: var(--ink-2); }
-	/* live metric cells (liveNumCell): the running hue + italic + the ~ in the label — three
-	   signals that this number is a run speaking mid-flight, not a collected aggregate. */
+	/* live metric cells (liveNumCell): the running hue + italic mean a run is actually
+	   RUNNING and still updating this number. A run that ended early keeps its event-log
+	   value in normal ink — only the ~ in the label marks it provisional. */
 	td.num.livecell { color: var(--running); font-style: italic; }
 	.d-stats.live-strip .meta { align-self: center; }
 	.livetag {
@@ -369,10 +370,13 @@ const AMB_TIP = "this setting exists at TWO scopes under one identity (same sett
 // self-reported. One explainer, two homes: the row's ⚠ and the rank dot's tooltip.
 const DECLARED_TIP = "DECLARED — the Vision-only pass has no element list to count against, so these tallies are the model's own report; not comparable like-for-like with mechanically counted passes.";
 // Live cells: an uncollected run's metric cells read the run's OWN event-log counters
-// (EntryView.live) instead of rendering "–" until collect. ~tilde + --running tint + this
-// tip keep a provisional number from ever reading as a collected one; the moment collect
-// banks the run, the run log's numbers take the line back.
+// (EntryView.live) instead of rendering "–" until collect. The ~tilde and these tips keep
+// a provisional number from ever reading as a collected one. Blue means RUNNING: the
+// --running tint is earned only while the run is still running — a run that ended keeps
+// its value in normal ink under the ENDED tip. The moment collect banks the run, the run
+// log's numbers take the line back.
 const LIVE_CELL_TIP = "LIVE — off the running run's own event log; provisional until collected";
+const ENDED_CELL_TIP = "run ended — value off its event log; provisional until collected";
 const STATUS = { good: "var(--good)", warning: "var(--warning)", serious: "var(--serious)", critical: "var(--critical)" };
 // Every status the wire can put on an entry has an explicit entry here; statusChip renders
 // anything NOT in this map as a hollow "unknown" dot rather than dressing it as a known
@@ -1234,27 +1238,31 @@ function armCell(a, p, span = "") {
 // same 17 columns without colspan bookkeeping.
 const NO_EXPLORE_CELLS = `<td class="num">–</td>`.repeat(5);
 
-// A metric cell carrying a live value: ~ marks it approximate, .livecell tints it --running.
-const liveNumCell = (label, extraTip) =>
-	`<td class="num livecell" data-tip="${esc(LIVE_CELL_TIP + (extraTip ? "\n" + extraTip : ""))}">${esc(label)}</td>`;
+// A metric cell carrying an event-log value: ~ marks it approximate. Blue means RUNNING —
+// the .livecell tint + LIVE tip are worn only while the entry is running; an entry that
+// ended keeps its value in normal ink under the ENDED tip.
+const liveNumCell = (e, label, extraTip) => {
+	const running = e.status === "running";
+	return `<td class="num${running ? " livecell" : ""}" data-tip="${esc((running ? LIVE_CELL_TIP : ENDED_CELL_TIP) + (extraTip ? "\n" + extraTip : ""))}">${esc(label)}</td>`;
+};
 
 /* Per-run metric cells. Per cell, collected always wins: the run's own event-log counters
-   (EntryView.live) stand in ONLY while the run is uncollected, marked ~/tinted per
-   LIVE_CELL_TIP, so a provisional number can never blend with a banked one. */
+   (EntryView.live) stand in ONLY while the run is uncollected, marked ~ (tinted only while
+   it runs), so a provisional number can never blend with a banked one. */
 
 function stepsCellFor(e) {
 	if (e.steps != null)
 		return `<td class="num"${e.verifiedSteps != null ? ` data-tip="${esc(`${e.verifiedSteps} of ${e.steps} steps verified`)}"` : ""}>${fmtNum(e.steps)}</td>`;
 	const lp = !e.collected && e.live;
 	return lp && lp.steps != null
-		? liveNumCell(`~${fmtNum(lp.steps)}${lp.verified != null ? ` (${fmtNum(lp.verified)}✓)` : ""}`, "steps so far (verified in parens)")
+		? liveNumCell(e, `~${fmtNum(lp.steps)}${lp.verified != null ? ` (${fmtNum(lp.verified)}✓)` : ""}`, "steps so far (verified in parens)")
 		: `<td class="num">–</td>`;
 }
 
 // Wall-clock: the run log's duration once collected; a RUNNING run ticks live (the same
 // 1s ticker that advances its chip); a finished-but-uncollected run serves the remembered
-// live elapsed (liveMem — the same fallback the chip uses) so the number survives the
-// awaiting-collect window.
+// last elapsed (liveMem — the same fallback the chip uses) in normal ink, so the number
+// survives the awaiting-collect window without claiming to still tick.
 function timeCellFor(e) {
 	const took = e.collected ? (e.elapsedSec != null ? e.elapsedSec : e.runSec) : null;
 	if (took != null) return `<td class="num">${fmtDur(took)}</td>`;
@@ -1265,7 +1273,7 @@ function timeCellFor(e) {
 	}
 	const mem = (liveMem[e.jobId] || {}).elapsed;
 	return !e.collected && PRE_COLLECT_TERMINAL.has(e.status) && mem != null
-		? liveNumCell(`~${fmtDur(mem)}`)
+		? `<td class="num" data-tip="run ended — the last elapsed the dashboard saw while it ran; the run log's exact duration lands at collect">~${fmtDur(mem)}</td>`
 		: `<td class="num">–</td>`;
 }
 
@@ -1274,19 +1282,19 @@ function timeCellFor(e) {
 const tokensCellFor = (e) => e.outputTokens != null
 	? `<td class="num">${fmtK(e.outputTokens)}</td>`
 	: !e.collected && e.live && e.live.outputTokens != null
-		? liveNumCell(`~${fmtK(e.live.outputTokens)}`, "output tokens so far — cumulative, off the run's usage events")
+		? liveNumCell(e, `~${fmtK(e.live.outputTokens)}`, "output tokens so far — cumulative, off the run's usage events")
 		: `<td class="num">–</td>`;
 // Per-run cost: "?" = tokens recorded but no pricing (the report's unpriced), "–" = nothing
-// to price (queued, or a tokenless entry). A running run serves its live estimate (usd is
-// priced server-side in entryView, same estimateCost + fallbacks as collected rows).
+// to price (queued, or a tokenless entry). An uncollected run serves its live estimate (usd
+// is priced server-side in entryView, same estimateCost + fallbacks as collected rows).
 const costCellFor = (e) => e.usd != null ? `<td class="num">${fmtMoney(e.usd)}</td>`
 	: e.collected && e.outputTokens != null
 		? `<td class="num" data-tip="tokens recorded but no pricing for this run's model">?</td>`
 		: !e.collected && e.live && e.live.usd != null
-			? liveNumCell(`~${fmtMoney(e.live.usd)}`, "est cost so far — published rates, not an invoice")
+			? liveNumCell(e, `~${fmtMoney(e.live.usd)}`, "est cost so far — published rates, not an invoice")
 			: `<td class="num">–</td>`;
 
-// The five explore-discovery cells for ONE pass (EntryView.exploreStamp); an in-flight
+// The five explore-discovery cells for ONE pass (EntryView.exploreStamp); an uncollected
 // pass serves its heartbeat counters (actions/frontier/seen/nodes — surfaces and ambig are
 // stamped only at finish).
 function exploreCellsFor(a, e) {
@@ -1308,11 +1316,11 @@ function exploreCellsFor(a, e) {
 	}
 	const lp = !e.collected && e.live;
 	return (lp && lp.actions != null
-			? liveNumCell(`~${fmtNum(lp.actions)}`, lp.frontier != null ? `frontier: ${fmtNum(lp.frontier)} controls left un-operated (the pass ends when this empties)` : "")
+			? liveNumCell(e, `~${fmtNum(lp.actions)}`, lp.frontier != null ? `frontier: ${fmtNum(lp.frontier)} controls left un-operated (the pass ends when this empties)` : "")
 			: num("–"))
-		+ (lp && lp.seen != null ? liveNumCell(`~${fmtNum(lp.seen)} seen`) : num("–"))
+		+ (lp && lp.seen != null ? liveNumCell(e, `~${fmtNum(lp.seen)} seen`) : num("–"))
 		+ num("–")
-		+ (lp && lp.nodes != null ? liveNumCell(`~${fmtNum(lp.nodes)}`) : num("–"))
+		+ (lp && lp.nodes != null ? liveNumCell(e, `~${fmtNum(lp.nodes)}`) : num("–"))
 		+ num("–");
 }
 
@@ -1442,15 +1450,17 @@ function statsStrip(a, e) {
 // Results-so-far strip (EntryView.live): the run's own event log, folded into counters while
 // collect has nothing to show. Uncollected entries only — the moment collect banks the run,
 // the field is gone from the wire and the real stats above are the only numbers on the row.
-// The LIVE tag + trailing caveat are what keep a glance from reading these as results.
+// The trailing caveat keeps a glance from reading these as results; the LIVE tag is worn
+// only by a RUNNING entry — a run that ended keeps the provenance line without the live claim.
 function liveStrip(a, e) {
 	const lp = e.live;
 	if (!lp || e.collected) return "";
+	const running = e.status === "running";
 	const pairs = a.kind === "explore"
 		? [["Actions", lp.actions], ["Frontier", lp.frontier], ["Seen", lp.seen], ["Nodes", lp.nodes], ["Stopped", lp.finished]]
 		: [["Steps", lp.steps], ["Verified", lp.verified], ["Last", lp.lastStep]];
 	// Usage is common to both kinds (one event per model call, cumulative). Same ~ prefix as
-	// the live cells; the strip's LIVE tag + caveat already mark the whole row provisional.
+	// the live cells; the strip's trailing caveat already marks the whole row provisional.
 	if (lp.outputTokens != null) pairs.push(["Out", "~" + fmtK(lp.outputTokens)]);
 	if (lp.modelCalls != null) pairs.push(["Calls", "~" + fmtNum(lp.modelCalls)]);
 	if (lp.usd != null) pairs.push(["Est Cost", "~" + fmtMoney(lp.usd)]);
@@ -1460,7 +1470,7 @@ function liveStrip(a, e) {
 	const cells = pairs.filter(([, v]) => v != null && v !== "")
 		.map(([k, v]) => `<span><span class="k">${k}</span>${esc(String(v))}</span>`).join("");
 	return cells
-		? `<div class="d-stats live-strip"><span class="livetag">live</span>${cells}<span class="meta">from the run's event log — provisional until collected</span></div>`
+		? `<div class="d-stats live-strip">${running ? `<span class="livetag">live</span>` : ""}${cells}<span class="meta">${running ? "from the run's event log — provisional until collected" : "run ended — from its event log, provisional until collected"}</span></div>`
 		: "";
 }
 
