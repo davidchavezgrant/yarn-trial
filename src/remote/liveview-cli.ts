@@ -214,13 +214,25 @@ async function main(): Promise<void> {
 		return;
 	}
 
+	// View-only: the dash's peek wall streams a running benchmark and must not be able to drive
+	// it, so the server drops every inbound input frame (peek-capture sets this). Read BEFORE the
+	// run-in-flight guard because it gates it.
+	const viewOnly = process.env.LIVEVIEW_VIEW_ONLY === "1";
 	// Local mode: run the server here. This is where capture actually happens, so this is where
-	// the run-in-flight guard belongs — refuse to bring up a login stream while a demo recording
+	// the run-in-flight guard belongs — refuse to bring up a SIGN-IN stream while a demo recording
 	// holds this Mac, or the two capture sessions collide (and a password could land in the take).
-	const blocked = loginBlockedByRun();
-	if (blocked) {
-		console.error(blocked);
-		process.exit(1);
+	//
+	// A VIEW-ONLY peek is the deliberate exception: it exists PRECISELY to show a run in flight
+	// (an ax arm holds the lease and opens no debug port, so SCK is the only way to see it). Its
+	// capture is read-only — it injects nothing and cannot corrupt the recording — so the guard
+	// that refuses under a lease would defeat the whole fallback. peek-capture already dropped the
+	// runner-side lease check; this is the same decision one process deeper.
+	if (!viewOnly) {
+		const blocked = loginBlockedByRun();
+		if (blocked) {
+			console.error(blocked);
+			process.exit(1);
+		}
 	}
 	// The runner spawns this detached and passes a pinned token + lifetime deadlines by env, so it
 	// can hand out a complete URL and so a walked-away sign-in cannot leave a capture server
@@ -230,9 +242,6 @@ async function main(): Promise<void> {
 	const token = process.env.LIVEVIEW_TOKEN || undefined;
 	const maxLifetimeMs = process.env.LIVEVIEW_MAX_LIFETIME_MS ? Number(process.env.LIVEVIEW_MAX_LIFETIME_MS) : undefined;
 	const idleAfterCloseMs = process.env.LIVEVIEW_IDLE_AFTER_CLOSE_MS ? Number(process.env.LIVEVIEW_IDLE_AFTER_CLOSE_MS) : undefined;
-	// View-only: the dash's peek wall streams a running benchmark and must not be able to drive
-	// it, so the server drops every inbound input frame (peek-capture sets this).
-	const viewOnly = process.env.LIVEVIEW_VIEW_ONLY === "1";
 	// The runner names the sign-in target so the engine can crop/guard the browser leg; a local
 	// second positional does the same for a human running this by hand.
 	const targetApp = process.env.LIVEVIEW_APP || app || undefined;

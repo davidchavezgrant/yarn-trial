@@ -118,6 +118,26 @@ test("connectLiveviewClient__FiresOnExit__When__TheSocketCloses", async () => {
 	}
 });
 
+test("connectLiveviewClient__Rejects__When__TheSocketClosesBeforeTheUpgrade", async () => {
+	// A clean FIN before the 101 (the runner's liveview server hit its lifetime, or the tunnel
+	// dropped, between the caller's readiness probe and the handshake) emits 'end'/'close' with
+	// NO 'error'. Without settling on that, the connect promise hangs forever and the caller's
+	// sckInFlight guard wedges — so this must reject, not hang.
+	const server = createServer((socket) => {
+		// Accept the TCP connection, read the client's GET, then close without writing the 101.
+		socket.on("data", () => socket.end());
+	});
+	const port: number = await new Promise((r) => server.listen(0, "127.0.0.1", () => r((server.address() as { port: number }).port)));
+	try {
+		await assert.rejects(
+			connectLiveviewClient(`ws://127.0.0.1:${port}/?t=tok`, { connectTimeoutMs: 5000 }),
+			/closed before the WebSocket upgrade/,
+		);
+	} finally {
+		server.close();
+	}
+});
+
 test("connectLiveviewClient__Rejects__When__ServerRefusesTheUpgrade", async () => {
 	// A 403 (bad token) has no 101 status line — the client must reject, not hang or half-open.
 	const server = createServer((socket) => {

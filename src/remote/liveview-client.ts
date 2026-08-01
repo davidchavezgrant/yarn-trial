@@ -160,6 +160,16 @@ export function connectLiveviewClient(wsUrl: string, opts: LiveviewClientOptions
 			if (exited) return;
 			exited = true;
 			clearTimeout(to);
+			// A clean FIN BEFORE the upgrade (the server hit its lifetime, or the tunnel dropped, in
+			// the gap between the caller's readiness probe and the 101) emits 'end'/'close' with no
+			// 'error' — so without this, the connect promise never settles and the caller's await
+			// hangs forever, wedging its sckInFlight guard. Reject so the caller's catch runs.
+			if (!settled) {
+				settled = true;
+				reject(new Error("liveview client: socket closed before the WebSocket upgrade"));
+
+				return;
+			}
 			for (const cb of exitCbs) {
 				try {
 					cb();
