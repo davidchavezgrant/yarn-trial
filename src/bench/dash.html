@@ -935,8 +935,9 @@ function statusChip(e, rowKey, selected) {
 	// logPanes-fallback note: name the registry verdict, or the red dot reads as a collected result.
 	const registry = dead ? `\nregistry: ${pane.state}${pane.exitCode != null ? ` (exit ${pane.exitCode})` : ""} — not yet collected` : "";
 	// The event-log tail, one tooltip line: last step, claim, cleanup. Named as provisional
-	// so a hover never reads live counters as collected numbers.
-	const liveTip = lp ? "\nlive (event log, provisional): " + [
+	// so a hover never reads live counters as collected numbers — and named "live" only
+	// while the run actually runs; an ended run's tail says so.
+	const liveTip = lp ? (e.status === "running" ? "\nlive (event log, provisional): " : "\nevent log (run ended, provisional): ") + [
 		lp.steps != null ? `step ${lp.steps}, ${lp.verified != null ? lp.verified : 0}✓` : "",
 		lp.actions != null ? `${lp.actions} actions` + (lp.frontier != null ? `, frontier ${lp.frontier}` : "") + (lp.nodes != null ? `, ${lp.nodes} nodes` : "") : "",
 		// Live economics ride the same provisional line, ~-prefixed: outputTokens is the
@@ -1258,9 +1259,9 @@ function stepsCellFor(e) {
 		: `<td class="num">–</td>`;
 }
 
-// Wall-clock: the run log's duration once collected; a RUNNING run ticks live (the same
-// 1s ticker that advances its chip); a finished-but-uncollected run serves the remembered
-// last elapsed (liveMem — the same fallback the chip uses) in normal ink, so the number
+// Wall-clock: the run log's duration once collected; a RUNNING run ticks live (the shared
+// 1s js-elapsed ticker); a finished-but-uncollected run serves the remembered last elapsed
+// (liveMem — the same fallback the chip tooltip uses) in normal ink, so the number
 // survives the awaiting-collect window without claiming to still tick.
 function timeCellFor(e) {
 	const took = e.collected ? (e.elapsedSec != null ? e.elapsedSec : e.runSec) : null;
@@ -2652,8 +2653,8 @@ setInterval(() => {
 // busy host by itself — a reload within the server's 30s idle linger still rejoins the live
 // sessions with zero tunnel/engine setup, just via syncPeekArming instead of storage.
 
-// Elapsed tickers between pushes: every js-elapsed span (fleet cards AND matrix run chips)
-// advances from the last push's base — the page reads as live even between SSE frames.
+// Elapsed tickers between pushes: every js-elapsed span (fleet cards AND Time-column live
+// cells) advances from the last push's base — the page reads as live even between SSE frames.
 setInterval(() => {
 	if (!state) return;
 	document.querySelectorAll(".js-elapsed").forEach((el) => {
