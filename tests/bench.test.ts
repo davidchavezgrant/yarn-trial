@@ -799,7 +799,16 @@ test("renderReport__ListsStampsAndSections__When__ManifestHasEntries", () => {
 	const md = renderReport(m);
 	assert.match(md, /## Phase 1 — node discovery/);
 	assert.match(md, /## Phase 2 — backend × grounding \(core\)/);
-	assert.match(md, /## Phase 2 — generalization \(Notion Calendar\)/);
+	// Notion was killed as an approach (David, 2026-08-01), so the SECTION it rendered — empty
+	// ever since the slice was cut — goes with it. An empty table reads as "we measured this and
+	// found nothing", which is the opposite of what happened.
+	//
+	// Narrowly a check on HEADINGS, not on the word: the report should still say in prose that
+	// every Notion arm was cut and cross-app transfer is therefore unmeasured. Dropping that
+	// sentence with the table would turn an admitted gap into an unmentioned one.
+	const headings = md.split("\n").filter((l) => l.startsWith("## "));
+	assert.deepEqual(headings.filter((h) => /notion/i.test(h)), [], "no section may exist for arms that do not");
+	assert.match(md, /Notion arm was cut|Notion cut entirely/, "the cut should stay visible as a stated limit");
 	assert.match(md, /## Phase 3 — recipes/);
 	assert.match(md, /## Timing/);
 	assert.match(md, /## For Aman/);

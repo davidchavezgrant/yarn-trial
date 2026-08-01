@@ -105,45 +105,21 @@ export const BENCH_APP = "Yarn";
 export const CANONICAL_TASK = "show me how to change the cursor type";
 
 /**
- * The generalization slice's app + task. The phrasing is the one the clean 2026-07-29
- * evening re-measure used on this app (out/runs/*notion-calendar.json), kept identical so
- * the new numbers are comparable with the old ones. Goal-only: names the outcome, not the
- * gutter label, the menu item, or any interaction verb.
+ * NOTION IS GONE (David, 2026-08-01) — not deferred, killed as an approach.
+ *
+ * Three things used to live here and all are removed: `NC_APP`/`NC_TASK` (the Notion Calendar
+ * generalization slice, cut when the app turned out to be installed on none of the three Macs),
+ * and `WEB_EXPLORE_URL`/`WEB_TASK` (app.notion.com as the canonical web target, cut the same
+ * day — the grounding pass was the longest in the matrix at 1h14m and the prompt and frontier
+ * fixes forced a re-run of every pass).
+ *
+ * Recorded rather than silently deleted because "add a second app" is a reasonable idea someone
+ * will have again, and the reason it did not happen here is logistical, not conceptual: nothing
+ * in the matrix measures cross-APP transfer, only cross-task (phase 4). Their data is kept —
+ * docs/appmaps/web-app.notion.com.*, notion-calendar.* and docs/recipes/notion-calendar.md are
+ * the only record of what those passes produced.
  */
-// Kept though currently unreferenced: the Notion Calendar slice above was dropped for a
-// MISSING APP, not a bad idea, and restoring it should not mean re-deriving the task string.
-export const NC_APP = "Notion Calendar";
-export const NC_TASK = "Change my calendar's time zone to Paris";
 
-/**
- * Phase 1's web-explore verification target. Wikipedia is the repo's prior cdp web target
- * (docs/recipes/www.wikipedia.org.*.recipe.json) — low-risk, public, no sign-in.
- */
-/**
- * The canonical web target (set by David 2026-07-31). Wikipedia was here first, as a thin
- * regression check that `cdp` still covered web exploration after `dom` was deleted — a
- * portal with a search box and some links, which proved almost nothing about whether any of
- * this transfers to a real application.
- *
- * Notion is the generalization test the matrix lost when the Notion Calendar slice was cut
- * for the app not being installed on the fleet. A web target needs no install — only a
- * signed-in browser profile, which every Mac now has.
- *
- * NOTE .com, not .so: David corrected this, and the profile signed in on each Mac is the
- * one for this host.
- */
-export const WEB_EXPLORE_URL = "https://app.notion.com";
-
-/**
- * Goal-only, and deliberately multi-step: a new document, a table view inside it, and five
- * columns filled. It names OUTCOMES — no menu, no slash-command, no keystroke — so it passes
- * auditTaskPrompt (verified: `hinted: false`).
- *
- * "Create a NEW document" is also the sandbox rule doing real work here. This runs against a
- * live personal workspace, and an agent that edited existing pages instead of making its own
- * would be a failure even on a run that passed every check.
- */
-export const WEB_TASK = "Create a new document with a table view and populate its first five columns";
 
 /**
  * Phase 4's second task (chosen by David, 2026-08-01): motion blur.

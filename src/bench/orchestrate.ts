@@ -501,7 +501,7 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 /** `bench plan` — the whole resolved matrix, no side effects. */
 export function printPlan(log: (line: string) => void = console.log): void {
 	const total = MATRIX.reduce((sum, a) => sum + a.n, 0);
-	log(`benchmark matrix — ${MATRIX.length} arms, ${total} runs (dom cut; Notion Calendar slice cut, vision-only tier completed 2026-07-31 — reasons in matrix.ts)`);
+	log(`benchmark matrix — ${MATRIX.length} arms, ${total} runs (dom cut; Notion cut entirely; procedures added 2026-08-01 — reasons in matrix.ts)`);
 	for (const phase of [1, 2, 3, 4, 5, 6] as Phase[]) {
 		const note =
 			phase === 4
