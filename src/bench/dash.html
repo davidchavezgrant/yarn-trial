@@ -1346,7 +1346,7 @@ function exploreCellsFor(a, e) {
 		? (lp.actuated != null && lp.dismissed != null
 			? `<td class="num livecell" data-tip="${esc(LIVE_CELL_TIP + `\nactuated ${fmtNum(lp.actuated)} · dismissed ${fmtNum(lp.dismissed)} · seen ${fmtNum(lp.seen)}`)}">~${controlsTriple(lp.actuated, lp.dismissed, lp.seen)}</td>`
 			: liveNumCell(`~${fmtNum(lp.seen)} seen`))
-		: num("–");
+		: num("–", "arrives with the pass's heartbeat");
 	return (lp && lp.actions != null
 			? liveNumCell(`~${fmtNum(lp.actions)}`, lp.frontier != null ? `frontier: ${fmtNum(lp.frontier)} controls left un-operated (the pass ends when this empties)` : "")
 			: num("–", "arrives with the pass's heartbeat"))
