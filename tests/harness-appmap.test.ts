@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";
 import { Driver } from "../src/core/driver.js";
-import { unifySettingKeys, checkHome, findScopeAmbiguities, resetToHome, rootControlLabels, rootSurface, scopeWarnings } from "../src/core/harness.js";
+import { routeTo, unifySettingKeys, checkHome, findScopeAmbiguities, resetToHome, rootControlLabels, rootSurface, scopeWarnings } from "../src/core/harness.js";
 import type { ActionRequest, AppMap, AppMapEdge, AppMapNode } from "../src/types.js";
 
 // --- appmap graph: the structured companion to the prose map. It earns its place by
@@ -482,4 +482,39 @@ test("findScopeAmbiguities__StillPairsOnAnExactKeyMatch__When__NoRepairIsNeeded"
 		edges: [],
 	};
 	assert.deepEqual(findScopeAmbiguities(map).map((a) => a.settingKey), ["x"]);
+});
+
+test("routeTo__StopsAtTheFirstRevisit__When__TheGraphHasACycle", () => {
+	// The old walk was bounded by node count so a cycle could not HANG it — and it then
+	// emitted the cycle that many times. The vision map's agent-effort route rendered as
+	// "click Library → click a draft card" repeated dozens of times: 5,570 characters of
+	// scope warning on a 5,084-character map, and a nonsense instruction handed to the agent
+	// as navigation.
+	const cyclic: any = {
+		nodes: [
+			{ id: "library", title: "Library", kind: "surface", scope: "app" },
+			{ id: "draft", title: "Draft", kind: "surface", scope: "document" },
+			{ id: "draft/setting", title: "Setting", kind: "control", scope: "document" },
+		],
+		edges: [
+			{ from: "library", to: "draft", action: "click a draft card" },
+			{ from: "draft", to: "library", action: "click Library" },
+		],
+	};
+	const route = routeTo(cyclic, "draft/setting");
+	// One hop each at most — the cycle is walked once, not once per node.
+	assert.equal(route.split("→").length <= 2, true, `route looped: ${route}`);
+	assert.ok(!/click Library.*click Library/s.test(route), `route repeats itself: ${route}`);
+});
+
+test("routeTo__StillWalksToRoot__When__TheChainIsAcyclic", () => {
+	// The ordinary case is untouched: hops accumulate from root down to the control's surface.
+	const linear: any = {
+		nodes: [{ id: "brand-kit/type/font", title: "Font", kind: "control", scope: "brand" }],
+		edges: [
+			{ from: "root", to: "brand-kit", action: "click Brand Kit" },
+			{ from: "brand-kit", to: "brand-kit/type", action: "click Type" },
+		],
+	};
+	assert.equal(routeTo(linear, "brand-kit/type/font"), "click Brand Kit → click Type");
 });

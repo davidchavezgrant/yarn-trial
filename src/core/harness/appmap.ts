@@ -398,9 +398,19 @@ export function routeTo(map: AppMap, nodeId: string): string {
 		? nodeId.split("/").slice(0, -1).join("/")
 		: nodeId;
 	const hops: string[] = [];
+	// VISITED, not just a hop budget. The old loop was bounded by node count so a cyclic graph
+	// could not hang — but it happily emitted the cycle that many times: the vision map's
+	// agent-effort route rendered as "click Library → click a draft card" repeated dozens of
+	// times, 5,570 characters of scope warning on a 5,084-character map. Worse than bloat, it
+	// is a nonsense instruction handed to the agent as navigation.
+	//
+	// Stopping at the first revisit yields the real tail of the path. It may not reach root —
+	// a cycle means there is no clean parent chain to find — and a short honest prefix beats a
+	// long fabricated one.
+	const seen = new Set<string>();
 	let cursor = surface;
-	// Walk parents until root; bounded by node count so a cyclic graph cannot hang us.
-	for (let i = 0; i <= map.nodes.length; i++) {
+	while (!seen.has(cursor)) {
+		seen.add(cursor);
 		const edge = map.edges.find((e) => e.to === cursor);
 		if (!edge) break;
 		hops.unshift(edge.action);
