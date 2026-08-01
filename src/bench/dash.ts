@@ -48,6 +48,10 @@ import { judgeDisagreements, modelPasses, passLabel, rollup } from "./report.js"
 export interface DashEvent {
 	t: string;
 	line: string;
+	/** The run whose events.jsonl this line was tailed from. Absent on dash-operational lines. */
+	runKey?: string;
+	/** Where the line came from: "run" = a run folder's event log, "dash" = this process's own ring. */
+	source?: "run" | "dash";
 }
 
 export interface FleetView {
@@ -514,6 +518,105 @@ export function fromStore(relParts: string[], outRoot = outDir()): string {
  */
 const readStoredManifest = (date: string): Manifest => readManifest(date, storeRoot([date, "manifest.json"]));
 
+/*
+ * Run-folder event logs → the Events card.
+ *
+ * Every run appends structured lifecycle events to its own <runDir>/events.jsonl (runEvent,
+ * src/core/harness/run-events.ts). The dash's own ring only ever held dash-operational lines
+ * (collect, narrator, fleet-poll failures), so the feed said nothing about what the RUNS were
+ * doing. storeEvents merges the two: tail the newest run dirs' logs, tag each side with its
+ * source, and serve one chronological feed. Read-only, like every other dash read of the store.
+ */
+
+/** Newest-mtime run dirs scanned per collection — a full drain holds hundreds; the feed needs the live tail. */
+const EVENT_SCAN_DIRS = 20;
+/** Lines tailed per events.jsonl — an 8-action run writes ~12; explores heartbeat every 10 actions. */
+const EVENT_TAIL_LINES = 50;
+/**
+ * Parsed tails keyed by file path, valid while (mtime, size) hold still. storeEvents runs on
+ * every push, so without this each SSE frame re-reads and re-parses up to 20 files that
+ * almost never changed. Cleared wholesale when it grows past its bound — eviction bookkeeping
+ * is not worth it for a cache this cheap to rebuild.
+ */
+const eventTailCache = new Map<string, { mtimeMs: number; size: number; events: DashEvent[] }>();
+
+/** One event rendered as a feed line: the kind plus `k=v` pairs, bounded so one huge detail cannot flood the card. */
+export function runEventLine(kind: string, detail: unknown): string {
+	if (!detail || typeof detail !== "object" || !Object.keys(detail).length) return kind;
+	const parts = Object.entries(detail as Record<string, unknown>).map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`);
+	const line = `${kind} ${parts.join(" ")}`;
+
+	return line.length > 240 ? `${line.slice(0, 239)}…` : line;
+}
+
+/**
+ * The merged Events feed: run-folder event logs + the dash's in-memory operational ring.
+ *
+ * Scans the live store's run dirs newest-mtime first (capped — see EVENT_SCAN_DIRS), tails
+ * each events.jsonl, tags those lines source:"run" with their runKey, tags the ring's lines
+ * source:"dash", and returns the newest `limit` in CHRONOLOGICAL order — the wire has always
+ * been oldest-first (the page reverses for display), and keeping that contract is what lets
+ * the page's renderer tolerate both shapes. Torn tail lines (a writer append racing this
+ * read) are skipped, same as every jsonl reader here.
+ */
+export function storeEvents(dashRing: DashEvent[], limit = 200, outRoot = outDir()): DashEvent[] {
+	const fromRuns: DashEvent[] = [];
+	try {
+		const liveRoot = path.join(outRoot, LIVE_DIR);
+		const dirs = fs.readdirSync(liveRoot, { withFileTypes: true })
+			.filter((d) => d.isDirectory())
+			.map((d) => {
+				try {
+					return { name: d.name, mtimeMs: fs.statSync(path.join(liveRoot, d.name)).mtimeMs };
+				} catch {
+					return undefined; // raced a delete — skip the dir, keep the scan
+				}
+			})
+			.filter((x): x is { name: string; mtimeMs: number } => x !== undefined)
+			.sort((a, b) => b.mtimeMs - a.mtimeMs)
+			.slice(0, EVENT_SCAN_DIRS);
+		if (eventTailCache.size > 10 * EVENT_SCAN_DIRS) eventTailCache.clear();
+		for (const d of dirs) {
+			const file = path.join(liveRoot, d.name, RUN_FILES.events);
+			let st: fs.Stats;
+			try {
+				st = fs.statSync(file);
+			} catch {
+				continue; // most runs predate the event log — no file is the common case
+			}
+			const cached = eventTailCache.get(file);
+			if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
+				fromRuns.push(...cached.events);
+				continue;
+			}
+			const parsed: DashEvent[] = [];
+			try {
+				for (const line of fs.readFileSync(file, "utf8").split("\n").slice(-(EVENT_TAIL_LINES + 1))) {
+					if (!line.trim()) continue;
+					try {
+						const ev = JSON.parse(line);
+						if (typeof ev?.t !== "string" || typeof ev?.kind !== "string") continue;
+						parsed.push({ t: ev.t, line: runEventLine(ev.kind, ev.detail), runKey: d.name, source: "run" });
+					} catch {
+						// torn or foreign line — not an event
+					}
+				}
+			} catch {
+				continue;
+			}
+			eventTailCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, events: parsed });
+			fromRuns.push(...parsed);
+		}
+	} catch {
+		// No live store yet — the dash ring alone is the feed.
+	}
+
+	return [...fromRuns, ...dashRing.map((e) => ({ ...e, source: e.source ?? ("dash" as const) }))]
+		.sort((a, b) => (a.t < b.t ? 1 : a.t > b.t ? -1 : 0))
+		.slice(0, limit)
+		.reverse();
+}
+
 /** The narrator's event-log filename — the pass-level file beside the manifests AND one per run dir. */
 const NARRATIVE_FILE = "narrative.jsonl";
 
@@ -821,7 +924,9 @@ export function buildState(manifest: Manifest, fleet: FleetView, events: DashEve
 				...(e.metrics?.judgeScope ? { judgeScope: e.metrics.judgeScope } : {}),
 			})),
 		},
-		events: events.slice(-100),
+		// -200, matching storeEvents' cap: the caller hands in the ALREADY-merged feed (run
+		// events + dash ring), and halving it here would silently drop the older run lines.
+		events: events.slice(-200),
 	};
 }
 
@@ -1361,8 +1466,11 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	// The ONE state builder for anything a client can receive. `narrative` used to be attached
 	// only inside push(), so GET /api/state and the initial /events frame omitted it — a page
 	// that connected after the note was minted showed nothing until an unrelated push came by.
+	// The Events feed is the run folders' event logs merged with the dash's own ring —
+	// recomputed per push (mtime-cached tails, see storeEvents), so run events reach the page
+	// on the same cadence as everything else without any new watcher.
 	const currentState = (): DashState => {
-		const state = buildState(manifest, fleet, events, autoCollect, defaultModel);
+		const state = buildState(manifest, fleet, storeEvents(events), autoCollect, defaultModel);
 		if (narrative) state.narrative = narrative;
 
 		return state;

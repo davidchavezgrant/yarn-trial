@@ -237,6 +237,7 @@
 	/* events */
 	#events { max-height: 260px; overflow-y: auto; font-family: ui-monospace, monospace; font-size: 11px; }
 	#events .t { color: var(--muted); margin-right: 8px; }
+	#events .rk { color: var(--s1); margin-right: 6px; }
 	#events div { padding: 1px 0; }
 	.scroll { max-height: 420px; overflow-y: auto; }
 </style>
@@ -1538,7 +1539,10 @@ function renderEvents() {
 	// rows added. Parked at the top (the common case) stays at the top, showing the newest.
 	const atTop = el.scrollTop <= 4;
 	const oldTop = el.scrollTop, oldH = el.scrollHeight;
-	el.innerHTML = state.events.slice().reverse().map((e) => `<div><span class="t">${hhmm(e.t)}</span>${esc(e.line)}</div>`).join("");
+	// Run-folder events carry runKey/source (storeEvents); dash-operational lines render as
+	// they always have. Old-shape events (no source) fall through to the plain branch.
+	el.innerHTML = state.events.slice().reverse().map((e) =>
+		`<div><span class="t">${hhmm(e.t)}</span>${e.source === "run" && e.runKey ? `<span class="rk">${esc(shortJob(e.runKey))}</span>` : ""}${esc(e.line)}</div>`).join("");
 	if (!atTop) el.scrollTop = oldTop + (el.scrollHeight - oldH);
 }
 

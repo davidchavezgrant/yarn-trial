@@ -3,7 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { appendNarrativeEvent, buildDetail, buildState, defaultDashDate, type FleetView, fromStore, groundingArmId, legacyNarrativeLogPath, loadEnvFallback, matchPath, narrativeLogPath, type NarrativeEvent, narratorPrompt, notedRunKeys, parseDashArgs, parseEnvLine, parseLogFrames, rankExplore, readPersistedNarrative, utf8Tail } from "../src/bench/dash.js";
+import { appendNarrativeEvent, buildDetail, buildState, type DashEvent, defaultDashDate, type FleetView, fromStore, groundingArmId, legacyNarrativeLogPath, loadEnvFallback, matchPath, narrativeLogPath, type NarrativeEvent, narratorPrompt, notedRunKeys, parseDashArgs, parseEnvLine, parseLogFrames, rankExplore, readPersistedNarrative, runEventLine, storeEvents, utf8Tail } from "../src/bench/dash.js";
+// The submodule, not the core/harness.ts barrel: the barrel loads the Anthropic SDK and the
+// cua driver, which a unit test of a 30-line appender has no business paying for.
+import { runEvent } from "../src/core/harness/run-events.js";
 import type { Manifest, ManifestEntry } from "../src/bench/manifest.js";
 import { MATRIX, armAppmapSlug, armById } from "../src/bench/matrix.js";
 
@@ -870,5 +873,127 @@ test("groundingArmId__AttributesTheMapTheArmActuallyReads__When__VariantsCombine
 		const id = groundingArmId(arm);
 		assert.ok(armById(id), `${arm.id} attributed to "${id}", which is not an arm`);
 		assert.equal(armAppmapSlug(armById(id)!), armAppmapSlug(arm), `${arm.id} attributed to ${id}, a different map`);
+	}
+});
+
+/*
+ * The run-folder event log: runEvent (writer, src/core/harness/run-events.ts) and
+ * storeEvents (reader, the dash's Events feed). The writer is best-effort by contract — a
+ * failed append must never affect the run — and the reader must survive everything a live
+ * store throws at it: missing files, torn tail lines, a ring racing the run logs.
+ */
+
+test("RunEvent__AppendsShapedLine__When__RunDirDoesNotExistYet", () => {
+	const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "run-events-"));
+	const saved = process.env.YARN_RUNNER_DATA;
+	process.env.YARN_RUNNER_DATA = dataRoot;
+	try {
+		// No mkdir first — the appender owns creating the run dir it writes into.
+		runEvent("2026-08-01T00-00-00-000-test", "start", { task: "t", app: "Yarn", backend: "cdp" });
+		runEvent("2026-08-01T00-00-00-000-test", "step", { step: 1, verified: true });
+		const file = path.join(dataRoot, "out", "bench", "live", "2026-08-01T00-00-00-000-test", "events.jsonl");
+		const lines = fs.readFileSync(file, "utf8").trimEnd().split("\n");
+		assert.equal(lines.length, 2);
+		const first = JSON.parse(lines[0]!);
+		assert.equal(first.kind, "start");
+		assert.deepEqual(first.detail, { task: "t", app: "Yarn", backend: "cdp" });
+		// t is a real ISO timestamp, not a placeholder.
+		assert.ok(!Number.isNaN(Date.parse(first.t)));
+		assert.deepEqual(JSON.parse(lines[1]!).detail, { step: 1, verified: true });
+	} finally {
+		if (saved === undefined) delete process.env.YARN_RUNNER_DATA;
+		else process.env.YARN_RUNNER_DATA = saved;
+		fs.rmSync(dataRoot, { recursive: true, force: true });
+	}
+});
+
+test("RunEvent__SwallowsFailure__When__DataRootIsUnwritable", () => {
+	// Point the data root UNDER a plain file so the mkdir inside the appender fails with
+	// ENOTDIR — the contract is one console warning at most and never a throw.
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "run-events-bad-"));
+	const blocker = path.join(tmp, "a-file");
+	fs.writeFileSync(blocker, "not a directory");
+	const saved = process.env.YARN_RUNNER_DATA;
+	process.env.YARN_RUNNER_DATA = blocker;
+	try {
+		assert.doesNotThrow(() => runEvent("2026-08-01T00-00-00-000-test", "start", {}));
+		assert.doesNotThrow(() => runEvent("2026-08-01T00-00-00-000-test", "verdict", { success: false }));
+	} finally {
+		if (saved === undefined) delete process.env.YARN_RUNNER_DATA;
+		else process.env.YARN_RUNNER_DATA = saved;
+		fs.rmSync(tmp, { recursive: true, force: true });
+	}
+});
+
+test("RunEventLine__RendersKindAndPairs__When__DetailVaries", () => {
+	assert.equal(runEventLine("start", { task: "change tz", step: 3, ok: true }), "start task=change tz step=3 ok=true");
+	// Empty or absent detail renders as the bare kind — no trailing space, no "{}" noise.
+	assert.equal(runEventLine("finish", {}), "finish");
+	assert.equal(runEventLine("finish", undefined), "finish");
+	// Bounded: one huge detail must not flood the feed card.
+	assert.ok(runEventLine("step", { note: "x".repeat(500) }).length <= 240);
+});
+
+test("StoreEvents__MergesTagsAndSorts__When__RunLogsAndRingCoexist", () => {
+	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-events-"));
+	try {
+		plant(out, ["bench", "live", "2026-08-01T10-00-00-000-yarn", "events.jsonl"], [
+			JSON.stringify({ t: "2026-08-01T10:00:01.000Z", kind: "start", detail: { task: "t", app: "Yarn" } }),
+			JSON.stringify({ t: "2026-08-01T10:00:05.000Z", kind: "verdict", detail: { success: true } }),
+			"",
+		].join("\n"));
+		const ring: DashEvent[] = [{ t: "2026-08-01T10:00:03.000Z", line: "collect: 1 run(s) landed" }];
+		const merged = storeEvents(ring, 200, out);
+		// Chronological on the wire (the page reverses for display), run and dash interleaved by t.
+		assert.deepEqual(merged.map((e) => e.line), ["start task=t app=Yarn", "collect: 1 run(s) landed", "verdict success=true"]);
+		assert.deepEqual(merged.map((e) => e.source), ["run", "dash", "run"]);
+		assert.equal(merged[0]?.runKey, "2026-08-01T10-00-00-000-yarn");
+		// Dash lines never gain a runKey; the ring passed in is not mutated.
+		assert.equal(merged[1]?.runKey, undefined);
+		assert.equal(ring[0]?.source, undefined);
+	} finally {
+		fs.rmSync(out, { recursive: true, force: true });
+	}
+});
+
+test("StoreEvents__SkipsTornLines__When__WriterRacesTheRead", () => {
+	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-events-torn-"));
+	try {
+		plant(out, ["bench", "live", "run-a", "events.jsonl"], [
+			JSON.stringify({ t: "2026-08-01T10:00:01.000Z", kind: "start", detail: {} }),
+			'{"t":"2026-08-01T10:00:02.000Z","kind":"ste', // torn mid-append
+			"not json at all",
+			JSON.stringify({ t: "2026-08-01T10:00:03.000Z", kind: "verdict", detail: { success: false } }),
+		].join("\n"));
+		const merged = storeEvents([], 200, out);
+		assert.deepEqual(merged.map((e) => e.line), ["start", "verdict success=false"]);
+	} finally {
+		fs.rmSync(out, { recursive: true, force: true });
+	}
+});
+
+test("StoreEvents__KeepsTheNewest__When__FeedOverflowsTheLimit", () => {
+	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-events-cap-"));
+	try {
+		const line = (sec: number, kind: string) => JSON.stringify({ t: `2026-08-01T10:00:0${sec}.000Z`, kind, detail: {} });
+		plant(out, ["bench", "live", "run-a", "events.jsonl"], `${[line(1, "a1"), line(3, "a3"), line(5, "a5")].join("\n")}\n`);
+		plant(out, ["bench", "live", "run-b", "events.jsonl"], `${[line(2, "b2"), line(6, "b6")].join("\n")}\n`);
+		const ring: DashEvent[] = [{ t: "2026-08-01T10:00:04.000Z", line: "d4" }];
+		// Six events, limit 4: the two OLDEST fall off, and what remains stays chronological.
+		const merged = storeEvents(ring, 4, out);
+		assert.deepEqual(merged.map((e) => e.line), ["a3", "d4", "a5", "b6"]);
+	} finally {
+		fs.rmSync(out, { recursive: true, force: true });
+	}
+});
+
+test("StoreEvents__ServesRingAlone__When__NoLiveStoreExists", () => {
+	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-events-none-"));
+	try {
+		const merged = storeEvents([{ t: "2026-08-01T10:00:00.000Z", line: "only dash" }], 200, out);
+		assert.deepEqual(merged.map((e) => e.line), ["only dash"]);
+		assert.equal(merged[0]?.source, "dash");
+	} finally {
+		fs.rmSync(out, { recursive: true, force: true });
 	}
 });

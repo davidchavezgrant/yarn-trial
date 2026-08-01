@@ -226,7 +226,7 @@ async function main(): Promise<void> {
 			const journal = readJournal(journalPath);
 			if (journal.length) {
 				const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, modelCalls: 0 };
-				await runTeardown({
+				const report = await runTeardown({
 					stepsDir: `${LIVE_DIR}/${stamp}/${RUN_FILES.steps}`,
 					driver,
 					cdp,
@@ -242,10 +242,16 @@ async function main(): Promise<void> {
 					vision: false,
 					usage,
 				});
+				runEvent(stamp, "cleanup", { restored: report.restored ?? 0, failed: report.failed ?? 0 });
 			}
 		}
 
 		exitCode = result.ok ? 0 : 1;
+	} catch (err) {
+		// Name the cause in the event log before rethrowing to main's catch — a replay that
+		// died mid-acquire otherwise leaves an event log that just stops after "start".
+		runEvent(stamp, "fatal", { error: (err instanceof Error ? err.message : String(err)).slice(0, 300) });
+		throw err;
 	} finally {
 		overlay.setDriving(false);
 		await driver?.close();
