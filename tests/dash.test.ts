@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { appendNarrativeEvent, buildDetail, buildState, type DashEvent, defaultDashDate, type FleetView, fromStore, groundingArmId, legacyNarrativeLogPath, loadEnvFallback, matchPath, narrativeLogPath, type NarrativeEvent, narratorPrompt, notedRunKeys, parseDashArgs, parseEnvLine, parseLogFrames, rankExplore, readPersistedNarrative, runEventLine, storeEvents, utf8Tail } from "../src/bench/dash.js";
+import { appendNarrativeEvent, buildDetail, buildState, type DashEvent, defaultDashDate, type FleetView, fromStore, groundingArmId, legacyNarrativeLogPath, loadEnvFallback, matchPath, narrativeLogPath, type NarrativeEvent, narratorPrompt, notedRunKeys, parseDashArgs, parseEnvLine, parseLogFrames, rankExplore, readPersistedNarrative, runEventLine, storeEvents, utf8Tail, watchStoreChain } from "../src/bench/dash.js";
 // The submodule, not the core/harness.ts barrel: the barrel loads the Anthropic SDK and the
 // cua driver, which a unit test of a 30-line appender has no business paying for.
 import { runEvent } from "../src/core/harness/run-events.js";
@@ -61,6 +61,46 @@ test("BuildState__MarksEntryQueued__When__JobWaitsInHostQueue", () => {
 
 test("BuildState__MarksAwaitingCollect__When__HostAnsweredWithoutTheJob", () => {
 	const s = buildState(manifest(entry({})), fleet([{ name: "mac1", reachable: true, state: "idle" }]), [], true);
+	assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.entries[0]?.status, "awaiting-collect");
+});
+
+test("BuildState__MarksEntryFailed__When__HostRegistryReportsTheJobDied", () => {
+	// The window this exists for: the run died on the Mac, no collect pass has happened, and
+	// the host answered without the job. Before the registry feed, that rendered as the same
+	// amber "awaiting-collect" as a healthy finish. `orphaned` maps to "crashed" — collect's
+	// own failureKind vocabulary — and `stopped` passes through.
+	const s = buildState(
+		manifest(entry({}), entry({ jobId: "job-2" }), entry({ jobId: "job-3" })),
+		fleet([
+			{
+				name: "mac1",
+				reachable: true,
+				state: "idle",
+				recent: [
+					{ jobId: "job-1", state: "failed", exitCode: 1, endedAt: "2026-07-31T20:04:00.000Z" },
+					{ jobId: "job-2", state: "orphaned", exitCode: null },
+					{ jobId: "job-3", state: "stopped", exitCode: null },
+				],
+			},
+		]),
+		[],
+		true,
+	);
+	const entries = armView(s, "p2-ax-grounded")?.passes[0]?.entries ?? [];
+	assert.equal(entries.find((e) => e.jobId === "job-1")?.status, "failed");
+	assert.equal(entries.find((e) => e.jobId === "job-2")?.status, "crashed");
+	assert.equal(entries.find((e) => e.jobId === "job-3")?.status, "stopped");
+});
+
+test("BuildState__KeepsAwaitingCollect__When__HostRegistryReportsTheJobDone", () => {
+	// A `done` record finished fine and genuinely is just waiting for a collect pass — the
+	// amber chip is the truth, not a failure hiding behind it.
+	const s = buildState(
+		manifest(entry({})),
+		fleet([{ name: "mac1", reachable: true, state: "idle", recent: [{ jobId: "job-1", state: "done", exitCode: 0, endedAt: "2026-07-31T20:04:00.000Z" }] }]),
+		[],
+		true,
+	);
 	assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.entries[0]?.status, "awaiting-collect");
 });
 
@@ -712,8 +752,11 @@ test("AppendNarrativeEvent__RoundTripsThroughBothLogs__When__NoteIsMinted", () =
 	// The SAME event lands in the run dir AND the pass-level log; the pass-level shape gains
 	// runKey/armId/collectedAtMint but keeps t/model/text, so readPersistedNarrative serves it
 	// (with the trigger fields) and notedRunKeys recovers the guard from the same bytes.
+	// The run dir exists first, as it does for any collected run — the note follows the run to
+	// its CURRENT home (live here; the archive case is the next test).
 	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-narr-"));
 	try {
+		fs.mkdirSync(path.join(out, "bench", "live", "job-rt"), { recursive: true });
 		const ev: NarrativeEvent = { t: "2026-08-01T03:00:00.000Z", runKey: "job-rt", armId: "p2-ax-grounded", collectedAtMint: 7, model: "test-model", text: "the note" };
 		appendNarrativeEvent(ev, out);
 		assert.deepEqual(JSON.parse(fs.readFileSync(path.join(out, "bench", "live", "job-rt", "narrative.jsonl"), "utf8").trim()), ev);
@@ -724,6 +767,23 @@ test("AppendNarrativeEvent__RoundTripsThroughBothLogs__When__NoteIsMinted", () =
 		assert.equal(n?.runKey, "job-rt");
 		assert.equal(n?.collected, 7);
 		assert.equal(notedRunKeys(out).has("job-rt"), true);
+	} finally {
+		fs.rmSync(out, { recursive: true, force: true });
+	}
+});
+
+test("AppendNarrativeEvent__WritesIntoTheArchiveCopy__When__TheFailedRunWasEvicted", () => {
+	// Collect evicts a failure from live before the narrator's tick sees the collection, so the
+	// per-run note must land in the run's archive copy — a live-only write would recreate a stub
+	// dir for every failed run and strand the note outside its backup.
+	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-narr-"));
+	try {
+		fs.mkdirSync(path.join(out, "bench", "archive", "job-ev"), { recursive: true });
+		const ev: NarrativeEvent = { t: "2026-08-01T04:00:00.000Z", runKey: "job-ev", armId: "p2-ax-grounded", collectedAtMint: 8, model: "test-model", text: "failed and evicted" };
+		appendNarrativeEvent(ev, out);
+		assert.deepEqual(JSON.parse(fs.readFileSync(path.join(out, "bench", "archive", "job-ev", "narrative.jsonl"), "utf8").trim()), ev);
+		assert.equal(fs.existsSync(path.join(out, "bench", "live", "job-ev")), false, "the eviction must not be undone by a note");
+		assert.equal(notedRunKeys(out).has("job-ev"), true);
 	} finally {
 		fs.rmSync(out, { recursive: true, force: true });
 	}
@@ -996,6 +1056,67 @@ test("StoreEvents__ServesRingAlone__When__NoLiveStoreExists", () => {
 		assert.deepEqual(merged.map((e) => e.line), ["only dash"]);
 		assert.equal(merged[0]?.source, "dash");
 	} finally {
+		fs.rmSync(out, { recursive: true, force: true });
+	}
+});
+
+/*
+ * The manifest watcher chain, against a REAL tmp tree. fs.watch on macOS (FSEvents) needs
+ * settle time and delivers with latency, so every event assertion polls a callback counter
+ * (bounded ~3s) instead of sleeping fixed amounts. The wipe step's FIRE comes from the
+ * surviving ancestor — `out` sees its direct child `bench` vanish; the dead descendants'
+ * cleanup is asserted as re-arm BOOKKEEPING (watching() contents) rather than event
+ * delivery, because macOS emits nothing on the deleted dirs' own watchers.
+ */
+
+test("WatchStoreChain__FiresOnChange__When__StoreWipedAndRecreated", async () => {
+	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-watch-"));
+	let fired = 0;
+	// The same thunk main() passes: re-resolve the manifest dir through the store adapter,
+	// so a wiped store re-chains to the last-candidate path and a recreated one back to live.
+	const w = watchStoreChain(() => path.dirname(fromStore(REL, out)), out, () => { fired++; });
+	const settle = () => new Promise((r) => setTimeout(r, 200));
+	const firedPast = async (mark: number): Promise<boolean> => {
+		const deadline = Date.now() + 3000;
+		while (Date.now() < deadline && fired <= mark) await new Promise((r) => setTimeout(r, 25));
+
+		return fired > mark;
+	};
+	try {
+		// Arm against the full tree: every dir from out down to the date dir gets a watcher.
+		plant(out, ["bench", "live", ...REL]);
+		w.rearm();
+		assert.deepEqual(
+			w.watching().sort(),
+			[out, path.join(out, "bench"), path.join(out, "bench", "live"), path.join(out, "bench", "live", "2026-08-01")].sort(),
+		);
+
+		// A manifest rewrite fires the date-dir watcher — the realtime edit path.
+		await settle();
+		let mark = fired;
+		fs.writeFileSync(path.join(out, "bench", "live", ...REL), '{"touched":1}');
+		assert.ok(await firedPast(mark), "manifest write did not fire the chain");
+
+		// Wipe the store. The date dir's own watcher hears nothing — the fire must come from
+		// `out`, whose direct child vanished.
+		mark = fired;
+		fs.rmSync(path.join(out, "bench"), { recursive: true, force: true });
+		assert.ok(await firedPast(mark), "store wipe did not fire from the surviving ancestor");
+		// The event's own re-arm drops the dead watchers; only the survivor remains.
+		await settle();
+		assert.deepEqual(w.watching(), [out]);
+
+		// Recreate and rearm (the poll-tick stand-in): the chain re-resolves to the full
+		// ancestry, and a manifest write reaches the callback again.
+		plant(out, ["bench", "live", ...REL]);
+		w.rearm();
+		assert.equal(w.watching().length, 4);
+		await settle();
+		mark = fired;
+		fs.writeFileSync(path.join(out, "bench", "live", ...REL), '{"touched":2}');
+		assert.ok(await firedPast(mark), "post-recreation write did not fire");
+	} finally {
+		w.close();
 		fs.rmSync(out, { recursive: true, force: true });
 	}
 });

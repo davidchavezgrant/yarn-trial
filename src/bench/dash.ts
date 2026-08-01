@@ -9,7 +9,7 @@ import { readJournal } from "../core/journal.js";
 import type { FleetRow } from "../remote/control/fleet.js";
 import type { EngineHandle } from "../remote/liveview.js";
 import { readJob as readLocalJob, readLog } from "../remote/runner/jobs.js";
-import { ARCHIVE_DIR, LIVE_DIR, OLD_ARCHIVE_DIR, OLD_LIVE_DIR, RUN_FILES, appSlug, dataRoot, outDir, runFile, runPath } from "../paths.js";
+import { ARCHIVE_DIR, LIVE_DIR, OLD_ARCHIVE_DIR, OLD_LIVE_DIR, RUN_FILES, appSlug, dataRoot, outDir, resolveRunDir, runFile } from "../paths.js";
 import { appmapSlug } from "../core/target.js";
 import { archiveDirFor } from "./collect.js";
 import { estimateCost } from "./cost.js";
@@ -70,7 +70,8 @@ export interface EntryView {
 	/**
 	 * running/queued come from the live fleet (authoritative while the poll is fresh);
 	 * succeeded/failed kinds from collected metrics; "awaiting-collect" when the job's host
-	 * answered and no longer holds it; the manifest's stale state string otherwise.
+	 * answered and no longer holds it — unless the host's job registry says it DIED, in which
+	 * case failed/crashed/stopped surface pre-collect; the manifest's stale state otherwise.
 	 */
 	status: string;
 	/** Seconds the run has been going (running) or took per its own log (collected). */
@@ -252,9 +253,19 @@ function liveFor(e: ManifestEntry, fleet: FleetView): Pick<EntryView, "status" |
 		return { status: "running", ...(host.elapsedSec !== undefined ? { elapsedSec: host.elapsedSec } : {}), ...(host.stalled ? { stalled: true } : {}) };
 	const pos = host?.queue?.findIndex((q) => q.jobId === e.jobId) ?? -1;
 	if (pos >= 0) return { status: "queued", queuePosition: pos + 1 };
-	// The host answered and doesn't hold the job: it finished and is waiting for a collect
-	// pass. An unreachable host proves nothing, so the manifest's last-known state stands.
-	if (host?.reachable && host.state !== "unknown") return { status: "awaiting-collect" };
+	// The host answered and doesn't hold the job: it terminated. The host's job registry may
+	// still say HOW — a failure must render loudly NOW, not hide behind the same amber
+	// "awaiting-collect" as a healthy finish until a collect pass. `orphaned` maps to
+	// "crashed", collect's own vocabulary (RunMetrics.failureKind: terminal with no run log,
+	// an orphan, or a kill signal); a `done` record genuinely is just waiting for collection.
+	if (host?.reachable && host.state !== "unknown") {
+		const rec = host.recent?.find((r) => r.jobId === e.jobId);
+		if (rec?.state === "failed" || rec?.state === "stopped") return { status: rec.state };
+		if (rec?.state === "orphaned") return { status: "crashed" };
+
+		return { status: "awaiting-collect" };
+	}
+	// An unreachable host proves nothing, so the manifest's last-known state stands.
 
 	return { status: e.state };
 }
@@ -518,6 +529,99 @@ export function fromStore(relParts: string[], outRoot = outDir()): string {
  */
 const readStoredManifest = (date: string): Manifest => readManifest(date, storeRoot([date, "manifest.json"]));
 
+/**
+ * The manifest watcher — a self-healing CHAIN of non-recursive fs.watches over the path
+ * ancestry from `outRoot` down to the manifest's directory (out → out/bench → out/bench/live
+ * → out/bench/live/<date>), all funneling into one `onChange`.
+ *
+ * Why directories at all: the manifest is replaced atomically (temp + rename), and a rename
+ * never fires a change event on the watched file itself — the deepest watcher is the
+ * manifest-edit realtime path.
+ *
+ * Why a chain: wiping the store (`rm -rf out/bench/live` or higher) fires NOTHING on the
+ * date-dir watcher — macOS FSEvents is silent when a watched dir's ancestor tree goes — and
+ * before this, a wipe reached the browser only on the next 20s poll tick. A non-recursive
+ * watcher on an ancestor DOES see its direct child appear or vanish, so whichever ancestor
+ * survives the wipe reports it in ~real time. Volume stays low for the same reason: ancestors
+ * see direct-child entry churn (run-dir creation), never writes inside run dirs.
+ *
+ * Why self-healing: the predecessor latched a `watchingManifest` boolean true on first arm
+ * and never reset it — no error handler, no existence re-check — so it could watch a ghost
+ * forever (and on Linux, where inotify emits 'error' when the watched dir is deleted, an
+ * unhandled FSWatcher 'error' crashes the process outright). Here every fired event re-arms
+ * the whole chain (a fired ancestor usually means descendants just appeared or vanished),
+ * a watcher 'error' closes and drops just that path, and rearm() re-resolves the manifest
+ * dir per call — the store root can move under the dash (live → archive fallback), so the
+ * chain is never cached.
+ *
+ * READ-ONLY POSTURE: rearm() only ever OBSERVES — never mkdirs. Creating store directories
+ * is the writer's job; until a dir exists its watcher stays unarmed and the caller's
+ * poll-cadence rearm keeps probing, so an unwatched gap degrades to poll latency, never to
+ * missing data.
+ */
+export function watchStoreChain(manifestDir: () => string, outRoot: string, onChange: () => void): { rearm: () => void; close: () => void; watching: () => string[] } {
+	const watchers = new Map<string, fs.FSWatcher>();
+
+	const chain = (): string[] => {
+		const root = path.resolve(outRoot);
+		const dirs: string[] = [];
+		let dir = path.resolve(manifestDir());
+		for (;;) {
+			dirs.push(dir);
+			if (dir === root) break;
+			const parent = path.dirname(dir);
+			if (parent === dir) break; // hit the fs root without meeting outRoot — a dir outside the tree still terminates
+
+			dir = parent;
+		}
+
+		return dirs;
+	};
+
+	const drop = (p: string): void => {
+		const w = watchers.get(p);
+		if (!w) return;
+		watchers.delete(p);
+		try {
+			w.close();
+		} catch {}
+	};
+
+	const rearm = (): void => {
+		const want = new Set(chain());
+		// Drop first — a dir that vanished or fell out of the re-resolved chain gets a fresh
+		// watch on recreation. FSEvents happens to survive same-path recreation and inotify
+		// does not; relying on either behavior is how the latch bug lasted.
+		for (const p of [...watchers.keys()]) if (!want.has(p) || !fs.existsSync(p)) drop(p);
+		for (const p of want) {
+			if (watchers.has(p) || !fs.existsSync(p)) continue;
+			try {
+				const w = fs.watch(p, () => {
+					// A fired ancestor often means descendants just appeared or vanished —
+					// re-arm the gaps before notifying, so the NEXT event comes from the
+					// deepest surviving dir instead of waiting on the poll tick.
+					rearm();
+					onChange();
+				});
+				w.on("error", () => drop(p));
+				watchers.set(p, w);
+			} catch {
+				// Vanished between the existsSync probe and the watch — the next rearm re-probes.
+			}
+		}
+	};
+
+	rearm();
+
+	return {
+		rearm,
+		close: (): void => {
+			for (const p of [...watchers.keys()]) drop(p);
+		},
+		watching: (): string[] => [...watchers.keys()],
+	};
+}
+
 /*
  * Run-folder event logs → the Events card.
  *
@@ -652,10 +756,15 @@ export interface NarrativeEvent {
  * rewritten, so a reader racing an append at worst sees one torn tail line, which every
  * reader here skips. The mkdirs are defensive: the run dir already exists for any collected
  * run, and the store dir exists once the runner has written anything.
+ *
+ * resolveRunDir, not runPath: the note is minted AFTER collection, and collect evicts a failed
+ * run's directory from live the moment its metrics are banked — a live-only write here would
+ * recreate a stub dir for every failed run and strand the note outside its backup. Resolving
+ * lands the note in the run's current home: live for successes, the archive copy for evictees.
  */
 export function appendNarrativeEvent(ev: NarrativeEvent, outRoot?: string): void {
 	const line = `${JSON.stringify(ev)}\n`;
-	const runLog = runPath(ev.runKey, NARRATIVE_FILE, outRoot ?? outDir());
+	const runLog = path.join(resolveRunDir(ev.runKey, outRoot ?? outDir()), NARRATIVE_FILE);
 	fs.mkdirSync(path.dirname(runLog), { recursive: true });
 	fs.appendFileSync(runLog, line);
 	const passLog = narrativeLogPath(outRoot);
@@ -1513,7 +1622,17 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 
 	const push = (): void => {
 		const data = `data: ${JSON.stringify(currentState())}\n\n`;
-		for (const res of clients) res.write(data);
+		for (const res of clients) {
+			// One torn-down socket must not abort the fan-out for every other viewer (a throw
+			// here used to escape pollFleet's tail as an unhandled rejection). The connection's
+			// close handler deletes from `clients`; a res that throws before that handler ran
+			// is already dead — drop it now rather than retry it every frame.
+			try {
+				res.write(data);
+			} catch {
+				clients.delete(res);
+			}
+		}
 	};
 
 	// The narrator, PER RUN (David, 2026-08-01): every newly collected run gets its own note,
@@ -1600,36 +1719,42 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		}
 	};
 
-	// The manifest is replaced atomically (temp + rename), so watch the DIRECTORY — a rename
-	// never fires a change event on the watched file itself. Debounced because one collect
-	// pass rewrites the manifest once per entry.
-	//
-	// READ-ONLY POSTURE: the dash no longer mkdirs the bench dir at startup — creating store
-	// directories is the writer's job. The watcher arms only once the manifest's directory
-	// exists (the dir CONTAINING the store-resolved manifest, so watch and read agree on
-	// which copy counts); until then armManifestWatch() is retried on the fleet cadence — a
-	// cheap existence probe, and pollFleet re-reads the manifest every tick anyway, so an
-	// unwatched gap degrades to poll latency, never to missing data.
-	let watchTimer: NodeJS.Timeout | undefined;
-	let watchingManifest = false;
-	const armManifestWatch = (): void => {
-		if (watchingManifest) return;
-		const dir = path.dirname(fromStore([date, "manifest.json"]));
-		if (!fs.existsSync(dir)) return;
-		try {
-			fs.watch(dir, () => {
-				clearTimeout(watchTimer);
-				watchTimer = setTimeout(() => {
-					manifest = readStoredManifest(date);
-					push();
-				}, 300);
-			});
-			watchingManifest = true;
-		} catch {
-			// The dir vanished between the probe and the watch — the next fleet tick re-arms.
-		}
+	// A note minted before a wipe must not outlive the store it described — currentState()
+	// grafts `narrative` onto every frame, so a stale note survived even browser refreshes.
+	// Conservative on purpose: an empty manifest ALONE clears nothing (a fresh empty next-day
+	// manifest coexists with yesterday's real narrative log); only manifest and log gone
+	// together means the store the note narrated is gone.
+	const clearStaleNarrative = (): void => {
+		if (narrative && !manifest.entries.length && !fs.existsSync(narrativeLogPath())) narrative = undefined;
 	};
-	armManifestWatch();
+
+	// The manifest watcher chain (watchStoreChain above — the WHY lives on it): directories
+	// because the manifest is replaced atomically (temp + rename) and a rename never fires on
+	// the watched file itself; a chain up to outDir() because a store wipe is silent on the
+	// date-dir watcher and must report from whichever ancestor survives; self-healing because
+	// the old single watcher latched a boolean on first arm and a wipe left it watching a
+	// ghost until restart. Debounced because one collect pass rewrites the manifest once per
+	// entry. rearm() never mkdirs (READ-ONLY posture); pollFleet re-arms on its cadence and
+	// re-reads the manifest every tick anyway, so an unwatched gap degrades to poll latency.
+	let watchTimer: NodeJS.Timeout | undefined;
+	const storeWatch = watchStoreChain(
+		// The LIVE ancestry, deterministically — NOT fromStore's resolution. fromStore falls
+		// back by existence, so on an empty store it resolves to the legacy plain-out layout
+		// and the chain would watch a phantom ancestry while writers recreate out/bench/live
+		// (measured: a recreated store rode the 20s poll because out/bench was unwatched).
+		// Watch where data APPEARS — live is the writers' canonical target; archive and the
+		// legacy roots are read-side fallbacks, and reads still resolve via fromStore.
+		() => path.join(outDir(), LIVE_DIR, date),
+		outDir(),
+		() => {
+			clearTimeout(watchTimer);
+			watchTimer = setTimeout(() => {
+				manifest = readStoredManifest(date);
+				clearStaleNarrative();
+				push();
+			}, 300);
+		},
+	);
 
 	// Fleet poll — lazy import so `buildState` stays importable without the ssh machinery.
 	const { fleetStatus } = await import("../remote/control/fleet.js");
@@ -1696,9 +1821,18 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		} finally {
 			polling = false;
 		}
-		armManifestWatch(); // no-op once armed — the cheap poll that replaces the startup mkdir
-		manifest = readStoredManifest(date);
-		push();
+		// This tail sat OUTSIDE the try above, so a throw from state-building or a client
+		// write escaped the interval callback as an unhandled rejection — while the SSE
+		// heartbeat kept flowing, which is what made the wedge invisible from the browser.
+		// Failures land in the events ring instead.
+		try {
+			storeWatch.rearm(); // the cheap existence probe that replaces the startup mkdir
+			manifest = readStoredManifest(date);
+			clearStaleNarrative();
+			push();
+		} catch (e) {
+			addEvent(`dash refresh failed: ${(e as Error).message}`);
+		}
 	};
 
 	// Collect loop — the "results come in" mechanism, OPT-IN via --collect. In the default

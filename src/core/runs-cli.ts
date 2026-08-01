@@ -32,6 +32,13 @@ interface RunRow {
 	 * by-hand decision.
 	 */
 	legacy?: boolean;
+	/**
+	 * The run exists only in out/bench/archive — its live copy was dropped by hand or evicted
+	 * by collect (failed runs leave live automatically once their metrics are banked; see
+	 * evictFailedRun in bench/collect.ts). Listed so the inventory still answers "where did
+	 * that run go"; drop/purge skip these, since there is nothing in live to remove.
+	 */
+	archivedOnly?: boolean;
 }
 
 function dirBytes(dir: string): number {
@@ -91,7 +98,36 @@ export function listRuns(root = outDir()): RunRow[] {
 			});
 	};
 
-	return [...scan(LIVE_DIR, ARCHIVE_DIR, false), ...scan(OLD_LIVE_DIR, OLD_ARCHIVE_DIR, true)].sort((a, b) => a.key.localeCompare(b.key));
+	const rows = [...scan(LIVE_DIR, ARCHIVE_DIR, false), ...scan(OLD_LIVE_DIR, OLD_ARCHIVE_DIR, true)];
+
+	// Backup-only runs: in the canonical archive with no live sibling — dropped or auto-evicted.
+	// Without these the inventory silently forgets every failed run the moment collect evicts it.
+	const seen = new Set(rows.map((r) => r.key));
+	let archived: string[];
+	try {
+		archived = fs.readdirSync(path.join(root, ARCHIVE_DIR), { withFileTypes: true })
+			.filter((d) => d.isDirectory())
+			.map((d) => d.name);
+	} catch {
+		archived = [];
+	}
+	for (const key of archived) {
+		// Same manifest-family exclusion as the live scan: archiveBench files pass indexes here too.
+		if (seen.has(key) || fs.existsSync(path.join(root, ARCHIVE_DIR, key, "manifest.json"))) continue;
+		const dir = path.join(root, ARCHIVE_DIR, key);
+		const log = readJsonOr<{ app?: string; success?: boolean } | undefined>(path.join(dir, RUN_FILES.log), undefined);
+		rows.push({
+			key,
+			...(log?.app ? { app: log.app } : {}),
+			...(typeof log?.success === "boolean" ? { success: log.success } : {}),
+			backedUp: true,
+			mtimeMs: fs.statSync(dir).mtimeMs,
+			bytes: dirBytes(dir),
+			archivedOnly: true,
+		});
+	}
+
+	return rows.sort((a, b) => a.key.localeCompare(b.key));
 }
 
 const mb = (bytes: number): string => `${(bytes / 1e6).toFixed(1)} MB`;
@@ -106,10 +142,12 @@ export function dropRun(key: string, root = outDir()): { dropped: boolean; backe
 	const dir = runDir(key, root);
 	if (!fs.existsSync(dir)) {
 		// Canonical only, by design — but say WHERE the run actually is when the answer is the
-		// pre-bench leftover tree, so the refusal reads as a fact rather than a lie.
-		const reason = fs.existsSync(path.join(root, OLD_LIVE_DIR, key))
-			? `run is a leftover in the pre-bench out/${OLD_LIVE_DIR} — drop operates on out/${LIVE_DIR} only; remove it by hand if you mean it`
-			: "no such run in out/bench/live";
+		// pre-bench leftover tree or the archive, so the refusal reads as a fact rather than a lie.
+		const reason = fs.existsSync(archiveRunDir(key, root))
+			? `already out of live — only the backup in out/${ARCHIVE_DIR} remains`
+			: fs.existsSync(path.join(root, OLD_LIVE_DIR, key))
+				? `run is a leftover in the pre-bench out/${OLD_LIVE_DIR} — drop operates on out/${LIVE_DIR} only; remove it by hand if you mean it`
+				: "no such run in out/bench/live";
 
 		return { dropped: false, backedUp: false, reason };
 	}
@@ -147,11 +185,15 @@ function main(): void {
 			return;
 		}
 		for (const r of rows) {
-			const state = r.success === undefined ? "in flight / no log" : r.success ? "success" : "FAILED";
-			console.log(`${r.key}  ${state}${r.app ? `  ${r.app}` : ""}  ${mb(r.bytes)}${r.backedUp ? "" : "  [NOT BACKED UP]"}${r.legacy ? `  [legacy out/${OLD_LIVE_DIR}]` : ""}`);
+			// An archived-only run with no log is a dropped/evicted crash, not one still executing.
+			const state = r.success === undefined ? (r.archivedOnly ? "no log" : "in flight / no log") : r.success ? "success" : "FAILED";
+			console.log(`${r.key}  ${state}${r.app ? `  ${r.app}` : ""}  ${mb(r.bytes)}${r.backedUp ? "" : "  [NOT BACKED UP]"}${r.legacy ? `  [legacy out/${OLD_LIVE_DIR}]` : ""}${r.archivedOnly ? "  [archived only]" : ""}`);
 		}
-		console.log(`\n${rows.length} run(s), ${mb(rows.reduce((n, r) => n + r.bytes, 0))} in ${path.join(root, LIVE_DIR)}`);
+		const liveRows = rows.filter((r) => !r.archivedOnly);
+		console.log(`\n${liveRows.length} run(s), ${mb(liveRows.reduce((n, r) => n + r.bytes, 0))} in ${path.join(root, LIVE_DIR)}`);
 		console.log(`backups: ${path.join(root, ARCHIVE_DIR)}`);
+		const evicted = rows.filter((r) => r.archivedOnly);
+		if (evicted.length) console.log(`${evicted.length} run(s) archived only — dropped or evicted from live; the backup is the record`);
 		const leftovers = rows.filter((r) => r.legacy);
 		if (leftovers.length) console.log(`${leftovers.length} leftover(s) in the pre-bench out/${OLD_LIVE_DIR} — listed only; drop/purge never touch them`);
 
@@ -173,11 +215,12 @@ function main(): void {
 	}
 
 	if (verb === "purge") {
-		// Canonical rows ONLY: leftovers in the pre-bench out/live are inventory, not targets —
-		// dropRun would not find them and deleting from that tree is a by-hand decision.
+		// Canonical LIVE rows ONLY: leftovers in the pre-bench out/live are inventory, not targets —
+		// dropRun would not find them and deleting from that tree is a by-hand decision — and
+		// archived-only rows have nothing in live left to purge.
 		const legacyCount = listRuns(root).filter((r) => r.legacy).length;
 		if (legacyCount) console.log(`leaving ${legacyCount} leftover(s) in the pre-bench out/${OLD_LIVE_DIR} untouched`);
-		const rows = listRuns(root).filter((r) => !r.legacy);
+		const rows = listRuns(root).filter((r) => !r.legacy && !r.archivedOnly);
 		if (!rows.length) {
 			console.log(`nothing to purge in ${path.join(root, LIVE_DIR)}`);
 

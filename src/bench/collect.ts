@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { findScopeAmbiguities } from "../core/harness.js";
 import { readJournal } from "../core/journal.js";
-import { RUN_FILES, appSlug, dataRoot as dataRootDir, liveDir, outDir, resourcesRoot, runFile } from "../paths.js";
+import { dropRun } from "../core/runs-cli.js";
+import { ARCHIVE_DIR, LIVE_DIR, RUN_FILES, appSlug, dataRoot as dataRootDir, liveDir, outDir, resourcesRoot, runDir, runFile } from "../paths.js";
 import { appmapSlug } from "../core/target.js";
 import type { JobRecord } from "../remote/runner/jobs.js";
 import { type Arm, armAppmapSlug, armById } from "./matrix.js";
@@ -16,6 +17,9 @@ import { writeReport } from "./report.js";
  * re-runs anything, and computing the same entry twice writes the same bytes — which is what
  * lets it run repeatedly while the queue drains, folding in whatever has landed since. The
  * parse functions are exported and pure so tests feed them fixture files instead of out/.
+ * ONE store-side effect breaks the pure-reader rule, deliberately (2026-08-01): once a
+ * terminal FAILURE's metrics are banked in the manifest, its artifact directory is evicted
+ * from out/bench/live — see evictFailedRun. Everything else stays read-only.
  *
  * Judgment stays out of this module by design. The journal's `scope` values are recorded
  * per mutation exactly as written; whether a document-scope mutation was WRONG for a given
@@ -271,10 +275,13 @@ export async function collect(opts: CollectOptions = {}): Promise<CollectOutcome
 
 		const next = groundingChecked(collectEntry(entry, job, dataDir, state, benchDir(date, liveRoot)));
 		await humanizePulled(entry, job, dataDir, log);
-		manifest = updateEntry(manifest, next);
+		// Eviction comes AFTER humanize so a filmed failure's cursor render is on disk before the
+		// backup-then-delete runs — dropRun's archive pass links whatever exists at that moment.
+		const final = evictFailedRun(next, path.join(dataDir, "out"), log);
+		manifest = updateEntry(manifest, final);
 		writeManifest(manifest, liveRoot);
 		collected.push(entry.jobId);
-		log(`✓ ${entry.armId} ${entry.jobId}: ${state}${next.note ? ` — ${next.note}` : ""}`);
+		log(`✓ ${entry.armId} ${entry.jobId}: ${state}${final.note ? ` — ${final.note}` : ""}`);
 	}
 
 	// After the pass, before the report: a host that is failing everything identically will
@@ -487,6 +494,47 @@ export function technicalFailure(state: string, metrics: RunMetrics, arm: Arm | 
 		return { kind: "crashed", detail: "explore failed before committing a map — no grounding produced" };
 
 	return undefined;
+}
+
+/**
+ * Take a failed run's artifact directory out of out/bench/live, once its metrics are banked.
+ *
+ * Live is for runs in flight and runs that succeeded. A failure's EVIDENCE survives it twice
+ * over — the manifest row (which always stays: a board with the failures scrubbed off is a
+ * lie) and the hard-linked backup in out/bench/archive — so keeping a third copy in live only
+ * meant every failed arm left a directory an operator had to `runs drop` by hand before the
+ * re-run was unambiguous. This automates exactly that command, nothing more.
+ *
+ * A terminal failure is any of three signals, because they cover different deaths:
+ * `success === false` is the run's own verdict (or collect's no-run-log ruling), `failureKind`
+ * is the classification — including grounding-mismatch, which can sit on a success-true run
+ * that got the wrong grounding and is therefore not a sample — and `technical` is the
+ * died-not-measured class whose metrics may be nearly empty.
+ *
+ * The machinery is dropRun — the SAME guarded archive-then-delete `runs drop` uses, not a
+ * second implementation: back up first, re-linking whatever the archive is missing, and REFUSE
+ * to delete anything that could not be backed up. A refusal leaves the directory in live and
+ * lands on the entry's note rather than being swallowed. A directory that is not in live at
+ * all (a run that died before writing artifacts, or one already dropped by hand) is a no-op,
+ * not an error. Readers keep working either way: runFile/resolveRunDir fall back
+ * live → archive, so the dash log pane, the offline judge and `cleanup` all still open
+ * evicted runs.
+ */
+export function evictFailedRun(entry: ManifestEntry, outRoot: string, log: (line: string) => void): ManifestEntry {
+	const failed = entry.technical !== undefined || entry.metrics?.success === false || entry.metrics?.failureKind !== undefined;
+	if (!failed) return entry;
+	if (!fs.existsSync(runDir(entry.jobId, outRoot))) return entry;
+
+	const res = dropRun(entry.jobId, outRoot);
+	if (res.dropped) {
+		log(`  ↳ evicted ${entry.jobId} from out/${LIVE_DIR} — the manifest row stays, artifacts at out/${ARCHIVE_DIR}/${entry.jobId}`);
+
+		return entry;
+	}
+	const why = `eviction refused: ${res.reason ?? "backup failed"} — left in out/${LIVE_DIR}`;
+	log(`  ↳ ${entry.jobId}: ${why}`);
+
+	return { ...entry, note: entry.note ? `${entry.note}; ${why}` : why };
 }
 
 /** Metrics for one terminal entry, from whatever artifacts landed. Missing files become notes. */

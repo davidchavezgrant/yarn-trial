@@ -504,6 +504,37 @@ test("fleetStatus__CarriesTheQueue__When__TheRunnerReportsOne", async () => {
 	assert.deepEqual(rows[0].queue, [{ jobId: "j-2", operator: "sam", app: "Yarn", kind: "explore", queuedAt: "2026-07-31T11:56:56Z" }]);
 });
 
+test("fleetStatus__CarriesRecentOutcomes__When__TheRunnerReportsThem", async () => {
+	// The pre-collect failure feed: these entries decide whether the dash paints a run FAILED
+	// before any collect pass, so they get the queue's shape-check discipline — no string
+	// jobId or a state outside the terminal set means dropped, not trusted.
+	const rows = await fleetStatus({
+		inventory: inventory(host("mac1", "10.0.0.1")),
+		timeoutMs: 500,
+		run: async () => ({
+			code: 0,
+			stdout: `${JSON.stringify({
+				state: "idle",
+				recent: [
+					{ jobId: "j-dead", state: "failed", exitCode: 1, endedAt: "2026-08-01T10:05:00Z" },
+					{ jobId: "j-fine", state: "done", exitCode: 0, endedAt: "2026-08-01T10:00:00Z" },
+					{ jobId: "j-orphan", state: "orphaned", exitCode: null },
+					{ state: "failed" }, // no jobId — cannot be matched to any entry
+					{ jobId: "j-alive", state: "running" }, // not terminal — the current-job field owns it
+					"garbage",
+				],
+			})}\n`,
+			stderr: "",
+		}),
+	});
+
+	assert.deepEqual(rows[0].recent, [
+		{ jobId: "j-dead", state: "failed", exitCode: 1, endedAt: "2026-08-01T10:05:00Z" },
+		{ jobId: "j-fine", state: "done", exitCode: 0, endedAt: "2026-08-01T10:00:00Z" },
+		{ jobId: "j-orphan", state: "orphaned", exitCode: null },
+	]);
+});
+
 test("pickShortestQueue__PrefersTheShortestLine__When__NobodyIsIdle", () => {
 	const rows: FleetRow[] = [
 		{ name: "mac1", reachable: true, state: "busy", queue: [{ jobId: "a" }, { jobId: "b" }] },

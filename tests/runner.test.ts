@@ -903,6 +903,38 @@ test("status__ReportsLogSilence__When__ARunIsInFlight", async () => {
 	});
 });
 
+test("status__CarriesRecentTerminalJobs__When__TheRegistryHoldsThem", async () => {
+	// The pre-collect failure feed: a dead run and a finished one both read as "host answered,
+	// job gone" without these records, so the dash painted them identically until a collect
+	// pass. Newest-ENDED first — a long run started earlier can end later, so the id stamp is
+	// the wrong sort key — and running jobs stay out: the jobId/queue fields own them.
+	await withTempAsync("yr-serve-", async (dir) => {
+		const prevData = process.env.YARN_RUNNER_DATA;
+		process.env.YARN_RUNNER_DATA = dir;
+		const runner = await startRunner(dir, { ...noSwap, log: () => {} });
+		try {
+			// Seed the registry directly — terminal records are what earlier runs leave behind.
+			// The failed job has the OLDER id stamp but the NEWER end, pinning the endedAt sort.
+			createJob({ id: "2026-08-01T09-00-00-yarn", kind: "task", app: "Yarn", task: "t", operator: "dave" });
+			updateJob("2026-08-01T09-00-00-yarn", { state: "failed", exitCode: 1, endedAt: "2026-08-01T10:05:00.000Z" });
+			createJob({ id: "2026-08-01T10-00-00-yarn", kind: "task", app: "Yarn", task: "t", operator: "dave" });
+			updateJob("2026-08-01T10-00-00-yarn", { state: "done", exitCode: 0, endedAt: "2026-08-01T10:01:00.000Z" });
+			createJob({ id: "2026-08-01T11-00-00-yarn", kind: "task", app: "Yarn", task: "t", operator: "dave" });
+
+			const [res] = await request(runner.socketPath, "status");
+			assert.equal(res.state, "idle");
+			assert.deepEqual(res.recent, [
+				{ jobId: "2026-08-01T09-00-00-yarn", state: "failed", exitCode: 1, endedAt: "2026-08-01T10:05:00.000Z" },
+				{ jobId: "2026-08-01T10-00-00-yarn", state: "done", exitCode: 0, endedAt: "2026-08-01T10:01:00.000Z" },
+			]);
+		} finally {
+			await runner.close();
+			if (prevData === undefined) delete process.env.YARN_RUNNER_DATA;
+			else process.env.YARN_RUNNER_DATA = prevData;
+		}
+	});
+});
+
 test("submit__CarriesTheModelToTheChildEnv__When__AModelIsAsked", async () => {
 	await withTempAsync("yr-serve-", async (dir) => {
 		const prevData = process.env.YARN_RUNNER_DATA;

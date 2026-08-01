@@ -1311,6 +1311,9 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 	/** Log silence past this is flagged `stalled: true` in status. Advisory, never a kill. */
 	const STALL_SEC = envNum("JOB_STALL_MINS", 30) * 60;
 
+	/** Terminal records `status` carries — enough for a dash poll, not a history API. */
+	const RECENT_JOBS = 20;
+
 	function status(): RunnerResponse {
 		const perms = opts.permissions?.();
 		// When this PROCESS started, so a caller can tell whether the runner predates the code
@@ -1338,8 +1341,25 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			...(q.queuedAt ? { queuedAt: q.queuedAt } : {}),
 		}));
 		const queue = queued.length ? { queue: queued } : {};
+		// Terminal outcomes ride the reply so a poller can tell a run that DIED from one that
+		// finished and merely awaits collection — without these, both read as "host answered,
+		// job gone" and a dead run hides behind an amber Collect chip until a collect pass.
+		// Newest-ended first (endedAt, not the id stamp — a long run started earlier can end
+		// later) and capped, because status is a poll, not a history API.
+		const terminal = listJobs(root)
+			.filter((r) => r.state === "done" || r.state === "failed" || r.state === "orphaned" || r.state === "stopped")
+			.sort((a, b) => (b.endedAt ?? "").localeCompare(a.endedAt ?? ""))
+			.slice(0, RECENT_JOBS)
+			.map((r) => ({
+				jobId: r.id,
+				state: r.state,
+				// Null when the child was signalled or nobody collected it — the record's own convention.
+				exitCode: r.exitCode ?? null,
+				...(r.endedAt ? { endedAt: r.endedAt } : {}),
+			}));
+		const recent = terminal.length ? { recent: terminal } : {};
 		const { holder } = inspect(runnerDir);
-		if (!holder) return { ok: true, state: "idle", startedAt, ...tcc, ...queue };
+		if (!holder) return { ok: true, state: "idle", startedAt, ...tcc, ...queue, ...recent };
 
 		const silence = logSilenceSec(holder.lease.jobId);
 
@@ -1355,6 +1375,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			...(silence !== undefined ? { logSilenceSec: silence, ...(silence >= STALL_SEC ? { stalled: true } : {}) } : {}),
 			...tcc,
 			...queue,
+			...recent,
 		};
 	}
 

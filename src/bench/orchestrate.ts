@@ -620,6 +620,9 @@ phase    dispatch that phase's runs to the fleet queue. WITHOUT --go: preview an
          \`npm run humanize -- <stamp>\` per filmed run.
 collect  pull artifacts for every uncollected manifest entry, compute metrics, rewrite
          the report skeleton. Idempotent; run it as often as you like while the queue drains.
+         A terminal FAILURE's run directory is evicted from out/bench/live once its metrics
+         are banked (same guarded backup-then-delete as \`runs drop\`; the manifest row and
+         the out/bench/archive backup both stay).
 truecost reconciles the report's ESTIMATE against Anthropic's own accounting: token counts
          from /v1/organizations/usage_report/messages (minute granularity, grouped by API key
          and model) priced at published rates, plus the daily /cost_report total. Needs an

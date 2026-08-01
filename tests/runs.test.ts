@@ -152,7 +152,8 @@ test("runRel__StaysPosix__When__BuildingAWirePath", () => {
 
 test("dropRun__RemovesFromLiveAndKeepsTheBackup__When__ARunNeedsReRunning", () => {
 	// The stated workflow: a run fails, it comes out of live so the re-run is not confused with
-	// it, and the evidence is still there afterwards.
+	// it, and the evidence is still there afterwards — INCLUDING on the inventory, which lists
+	// the backup as archived-only rather than forgetting the run existed.
 	withOut((root) => {
 		makeRun(root, "run-e", { app: "Yarn", success: false });
 		const res = dropRun("run-e", root);
@@ -160,7 +161,13 @@ test("dropRun__RemovesFromLiveAndKeepsTheBackup__When__ARunNeedsReRunning", () =
 		assert.deepEqual(res, { dropped: true, backedUp: true });
 		assert.equal(fs.existsSync(runDir("run-e", root)), false);
 		assert.ok(fs.existsSync(path.join(archiveRunDir("run-e", root), RUN_FILES.log)));
-		assert.deepEqual(listRuns(root), []);
+		const rows = listRuns(root);
+		assert.deepEqual(rows.map((r) => [r.key, r.archivedOnly === true, r.backedUp, r.success]), [["run-e", true, true, false]]);
+
+		// A second drop refuses, naming the archive as where the run now lives.
+		const again = dropRun("run-e", root);
+		assert.equal(again.dropped, false);
+		assert.match(again.reason ?? "", /already out of live/);
 	});
 });
 

@@ -23,6 +23,19 @@ export interface FleetQueueEntry {
 	queuedAt?: string;
 }
 
+/** One finished job the host's registry still remembers, as the runner's `status` reports it. */
+export interface FleetRecentEntry {
+	jobId: string;
+	/** Terminal states only — the registry's own vocabulary (jobs.ts JobState). */
+	state: "done" | "failed" | "orphaned" | "stopped";
+	/** Null when the child was signalled or nobody collected it — the job record's convention. */
+	exitCode?: number | null;
+	endedAt?: string;
+}
+
+/** The states a `recent` entry may carry; anything else off the wire is dropped, not trusted. */
+const RECENT_STATES: ReadonlyArray<FleetRecentEntry["state"]> = ["done", "failed", "orphaned", "stopped"];
+
 export interface FleetRow {
 	name: string;
 	reachable: boolean;
@@ -46,6 +59,12 @@ export interface FleetRow {
 	 * with a cancel button, so both cross rather than just a count.
 	 */
 	queue?: FleetQueueEntry[];
+	/**
+	 * Terminal jobs the host's registry still remembers, newest-ended first. What lets a
+	 * poller tell a run that DIED from one that finished and merely awaits collection —
+	 * absent entirely when the runner predates the field, which must render exactly as before.
+	 */
+	recent?: FleetRecentEntry[];
 	/** Seconds since the running job's log last grew — the live-but-wedged signal. */
 	logSilenceSec?: number;
 	/**
@@ -132,6 +151,20 @@ async function hostStatus(host: HostEntry, run: SshRunner, timeoutMs: number): P
 				}))
 		: [];
 
+	// Same discipline as the queue: these entries decide whether a run renders as FAILED, so
+	// an entry with no string jobId or a state outside the terminal set is dropped rather than
+	// trusted. An old runner sends no `recent` at all and the row simply omits the field.
+	const recent: FleetRecentEntry[] = Array.isArray(parsed?.recent)
+		? parsed.recent
+				.filter((r: unknown): r is Record<string, unknown> => !!r && typeof r === "object" && typeof (r as any).jobId === "string" && RECENT_STATES.includes((r as any).state))
+				.map((r) => ({
+					jobId: String(r.jobId),
+					state: r.state as FleetRecentEntry["state"],
+					...(typeof r.exitCode === "number" || r.exitCode === null ? { exitCode: r.exitCode as number | null } : {}),
+					...(typeof r.endedAt === "string" ? { endedAt: r.endedAt } : {}),
+				}))
+		: [];
+
 	return {
 		name: host.name,
 		reachable: true,
@@ -144,6 +177,7 @@ async function hostStatus(host: HostEntry, run: SshRunner, timeoutMs: number): P
 		...(typeof parsed?.startedAt === "string" ? { startedAt: parsed.startedAt } : {}),
 		...(parsed?.stalled === true ? { stalled: true } : {}),
 		...(queue.length ? { queue } : {}),
+		...(recent.length ? { recent } : {}),
 		...(typeof parsed?.tccOk === "boolean" ? { tccOk: parsed.tccOk } : {}),
 		...(Array.isArray(parsed?.staleGrants) && parsed.staleGrants.length ? { staleGrants: parsed.staleGrants.map(String) } : {}),
 		...(state === "unknown" ? { reason: `runner reported state ${JSON.stringify(parsed?.state)}` } : {}),

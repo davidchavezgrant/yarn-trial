@@ -611,9 +611,14 @@ function statusChip(e, rowKey, selected) {
 	// a not-yet-started entry shows its submit time instead.
 	const st = entryStart(e);
 	const when = st != null ? `\nstarted ${startStamp(st)}` : e.submittedAt ? `\nsubmitted ${startStamp(Date.parse(e.submittedAt) || null)}` : "";
+	// A failure surfaced BEFORE any collect pass (liveFor read it off the host's job
+	// registry): say where the verdict came from, or the red chip reads as a collected result.
+	const preCollect = !e.collected && (e.status === "failed" || e.status === "crashed" || e.status === "stopped")
+		? "\nnot yet collected — outcome read from the host's job registry"
+		: "";
 	// logPanes-fallback note: name the registry verdict, or the red dot reads as a collected result.
 	const registry = dead ? `\nregistry: ${pane.state}${pane.exitCode != null ? ` (exit ${pane.exitCode})` : ""} — not yet collected` : "";
-	return `<span class="chip${selected ? " sel" : ""}"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${esc(when)}${e.note ? "\n" + esc(e.note) : ""}${esc(registry)}\nclick to view on the map${esc(econ)}">` +
+	return `<span class="chip${selected ? " sel" : ""}"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${esc(when)}${e.note ? "\n" + esc(e.note) : ""}${esc(preCollect)}${esc(registry)}\nclick to view on the map${esc(econ)}">` +
 		`<span class="dot" style="background:${color}"></span>${label}${esc(judge)}</span>`;
 }
 
@@ -1361,15 +1366,19 @@ function mountLogPanes() {
 // waiting in line never sorts above a run that is actually going. Oldest→newest within
 // every band, so the next collect lands where the eye already is. The same bands order
 // the chips inside a row's Runs cell (runsCell).
+// Pre-collect statuses that mean the run has ENDED on its host: awaiting-collect, plus the
+// failure verdicts liveFor reads off the host's job registry before any collect pass runs.
+const PRE_COLLECT_TERMINAL = new Set(["awaiting-collect", "failed", "crashed", "stopped"]);
 function entryBand(e) {
-	return e.collected || e.status === "awaiting-collect" ? 0 : e.status === "running" ? 1 : 2;
+	return e.collected || PRE_COLLECT_TERMINAL.has(e.status) ? 0 : e.status === "running" ? 1 : 2;
 }
 
 function entryTime(e) {
 	if (e.collected) return Date.parse(e.endedAt || e.submittedAt) || 0;
-	// Awaiting-collect: finished on its host but no endedAt on the wire yet — approximate
-	// the finish from the remembered live start + elapsed so it sorts near its real end.
-	if (e.status === "awaiting-collect") {
+	// Ended on its host but no endedAt on the wire yet (awaiting-collect, or a registry-read
+	// failure verdict) — approximate the finish from the remembered live start + elapsed so
+	// it sorts near its real end.
+	if (PRE_COLLECT_TERMINAL.has(e.status)) {
 		const m = liveMem[e.jobId];
 		if (m && m.start != null) return m.start + (m.elapsed || 0) * 1000;
 	}
@@ -1592,8 +1601,20 @@ function renderJudge(j) {
 }
 
 function renderNarrative() {
-	if (!state.narrative) return;
 	const el = $("narrative");
+	if (!state.narrative) {
+		// Same contract as renderEvents: an empty frame restores the static placeholder —
+		// text, inline styles AND the sub-line, so a cleared card is indistinguishable from
+		// a fresh page. Guarded: empty-to-empty pushes leave the DOM alone.
+		if (!el.classList.contains("empty")) {
+			el.classList.add("empty");
+			el.style.whiteSpace = "";
+			el.style.maxWidth = "";
+			el.textContent = "the narrator writes its first note once something collects";
+			$("narrative-sub").textContent = "model-written commentary on the live rollups — verify against the report before quoting anywhere";
+		}
+		return;
+	}
 	el.classList.remove("empty");
 	el.style.whiteSpace = "pre-wrap";
 	el.style.maxWidth = "90ch";
@@ -1605,8 +1626,14 @@ function renderNarrative() {
 }
 
 function renderEvents() {
-	if (!state.events.length) return;
 	const el = $("events");
+	if (!state.events.length) {
+		// A wiped store pushes a truthfully empty frame; holding the pre-wipe rows would make
+		// the card lie until a manual refresh. Restore the static placeholder (guarded — an
+		// empty-to-empty push must not rewrite the DOM).
+		if (!el.classList.contains("empty")) { el.classList.add("empty"); el.textContent = "nothing yet"; }
+		return;
+	}
 	el.classList.remove("empty");
 	// Newest-first list, rebuilt per push: a reader parked mid-scroll must not have their line
 	// yanked as new rows prepend, so the reading position is restored by the height the new
@@ -1989,14 +2016,17 @@ $("tm-close").addEventListener("click", () => $("treeModal").classList.remove("o
 document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") $("treeModal").classList.remove("on"); });
 
 /* ---- SSE connection + liveness ---------------------------------------------------------- */
-// The #conn dot tells three truths (green live / amber stale / red down), because green used
-// to mean only "a message arrived at least once": the server's keepalives were SSE COMMENTS
-// (": ping"), which never fire onmessage, so a silently dead link (half-open TCP after sleep,
-// a wedged tunnel) kept the dot green indefinitely. The server now heartbeats a REAL
-// {"ev":"hb"} data frame (dash.ts SSE_HEARTBEAT_MS, 15s) alongside the ~20s fleet-poll state
-// pushes, and the watchdog below treats >45s of frame silence (~3 missed beats) as stale.
+// The #conn dot tells three truths (green live / amber stale / red down). Green has lied twice:
+// first when the server's keepalives were SSE COMMENTS (": ping"), which never fire onmessage,
+// so a silently dead link (half-open TCP after sleep, a wedged tunnel) kept the dot green
+// indefinitely — cured by a REAL {"ev":"hb"} data frame (dash.ts SSE_HEARTBEAT_MS, 15s) and the
+// watchdog below treating >45s of frame silence (~3 missed beats) as stale. Second, heartbeats
+// ride their own server timer, so a wedged STATE pusher kept the dot green on hb frames alone —
+// green now also requires a state frame within 60s (~3 missed ~20s fleet polls); a socket alive
+// on heartbeats alone shows amber. syncConn() derives the mode from both clocks.
 const hhmmss = (t) => { const d = new Date(t); return [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, "0")).join(":"); };
 var lastMsgAt = 0; // any REAL frame (state, hb, reload) — SSE comments don't count, correctly
+var lastStateAt = 0; // state frames only — hb proves the socket, not the state pusher
 var esErrored = false;
 var es = null;
 
@@ -2009,6 +2039,15 @@ function setConn(mode, tip) {
 }
 setConn("down", "connecting…");
 
+// The displayed mode derives from what is KNOWN at call time — no path writes the dot from a
+// frame directly, so the state-freeze flip does not need a frame to arrive.
+function syncConn() {
+	if (esErrored) { setConn("down", `stream down — browser retrying; last update ${lastMsgAt ? hhmmss(lastMsgAt) : "never"}`); return; }
+	if (!lastMsgAt) return; // nothing received yet — keep "connecting…"
+	if (lastStateAt && Date.now() - lastStateAt <= 60000) setConn("ok", `stream live — last update ${hhmmss(lastMsgAt)}`);
+	else setConn("stale", `socket alive — no state since ${lastStateAt ? hhmmss(lastStateAt) : "never"}`);
+}
+
 // --dev hot reload, page half. Two boundaries reload the page: an explicit {reload:true}
 // push (the server watched dash.html change), and reconnect-after-error — the EventSource
 // auto-reconnects when a tsx-watch restart drops the stream, and this page's JS may be
@@ -2019,16 +2058,17 @@ function connectES() {
 	es.onmessage = (ev) => {
 		const d = JSON.parse(ev.data);
 		lastMsgAt = Date.now();
-		setConn("ok", `stream live — last update ${hhmmss(lastMsgAt)}`);
 		if (d && d.reload === true) { location.reload(); return; } // never falls through to render with a non-state object
-		if (d && d.ev === "hb") return; // liveness only — never touches state or receivedAt (the elapsed tickers' base)
+		if (d && d.ev === "hb") { syncConn(); return; } // liveness only — never touches state or receivedAt (the elapsed tickers' base)
+		lastStateAt = Date.now();
+		syncConn();
 		state = d;
 		receivedAt = Date.now();
 		sweepDetailCache(); // BEFORE render, so this same push repaints refetched details
 		render();
 	};
 	es.onopen = () => { if (esErrored) location.reload(); };
-	es.onerror = () => { esErrored = true; setConn("down", `stream down — browser retrying; last update ${lastMsgAt ? hhmmss(lastMsgAt) : "never"}`); };
+	es.onerror = () => { esErrored = true; syncConn(); };
 }
 connectES();
 
@@ -2040,6 +2080,7 @@ connectES();
 // → red, and the hot-reload boundary above still handles the server coming back.
 var lastForcedReconnect = 0;
 setInterval(() => {
+	syncConn(); // the state-freeze amber must flip on the clock, not wait for a frame
 	if (!lastMsgAt || esErrored) return; // never connected, or browser already reporting down — red either way
 	if (Date.now() - lastMsgAt <= 45000) return;
 	setConn("stale", `stale — nothing since ${hhmmss(lastMsgAt)}; reconnecting`);

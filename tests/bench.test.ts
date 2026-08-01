@@ -12,7 +12,7 @@ import type { DispatchOptions } from "../src/remote/control/dispatch.js";
 import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, auditPhase, dateArg, dispatchOptionsFor, findCompileSource, plannedRuns, runPhase } from "../src/bench/orchestrate.js";
 import { renderReport, reportFileName, writeReport } from "../src/bench/report.js";
 import { host, withTemp, withTempAsync } from "./fixtures.js";
-import { liveDir } from "../src/paths.js";
+import { ARCHIVE_DIR, archiveRunDir, liveDir, RUN_FILES, runDir } from "../src/paths.js";
 import { phaseProgress, watchPhase } from "../src/bench/watch.js";
 
 /**
@@ -742,6 +742,67 @@ test("collect__CountsRunAsFailure__When__TerminalJobHasNoRunLog", async () => {
 		assert.equal(e.collected, true);
 		assert.equal(e.metrics?.success, false);
 		assert.match(e.note ?? "", /no run log/);
+	});
+});
+
+test("collect__EvictsFailedRunFromLiveKeepingItsManifestRow__When__EntryIsTerminalFailure", async () => {
+	await withTempAsync("bench-", async (dir) => {
+		const outRoot = path.join(dir, "out");
+		// Both runs sit in the CONSOLIDATED store — the tree eviction operates on.
+		fs.mkdirSync(runDir("job-ok", outRoot), { recursive: true });
+		fs.writeFileSync(path.join(runDir("job-ok", outRoot), RUN_FILES.log), JSON.stringify(RUN_LOG));
+		fs.mkdirSync(runDir("job-bad", outRoot), { recursive: true });
+		fs.writeFileSync(path.join(runDir("job-bad", outRoot), RUN_FILES.log), JSON.stringify({ ...RUN_LOG, success: false }));
+		let m = readManifest(DATE, liveDir(outRoot));
+		m = recordSubmissions(m, [entry("p2-ax-grounded", "job-ok"), entry("p2-ax-grounded", "job-bad")]);
+		writeManifest(m, liveDir(outRoot));
+
+		const outcome = await collect({
+			date: DATE,
+			outRoot,
+			dataDir: dir,
+			pull: async (_host, jobId) => ({ ok: true, job: doneJob(jobId, {}) }),
+			reportDir: path.join(dir, "report"),
+			log: () => {},
+		});
+
+		// The failure left live; its artifacts survive in the backup; its manifest row stays —
+		// evidence of failure remains on the board, only the directory moved.
+		assert.equal(fs.existsSync(runDir("job-bad", outRoot)), false);
+		assert.ok(fs.existsSync(path.join(archiveRunDir("job-bad", outRoot), RUN_FILES.log)));
+		const bad = outcome.manifest.entries.find((e) => e.jobId === "job-bad");
+		assert.equal(bad?.collected, true);
+		assert.equal(bad?.metrics?.success, false);
+		// The success is untouched: live is exactly the in-flight-plus-successes set.
+		assert.ok(fs.existsSync(path.join(runDir("job-ok", outRoot), RUN_FILES.log)));
+	});
+});
+
+test("collect__RefusesEvictionAndNotesWhy__When__TheBackupCannotBeTaken", async () => {
+	await withTempAsync("bench-", async (dir) => {
+		const outRoot = path.join(dir, "out");
+		fs.mkdirSync(runDir("job-bad", outRoot), { recursive: true });
+		fs.writeFileSync(path.join(runDir("job-bad", outRoot), RUN_FILES.log), JSON.stringify({ ...RUN_LOG, success: false }));
+		let m = readManifest(DATE, liveDir(outRoot));
+		m = recordSubmissions(m, [entry("p2-ax-grounded", "job-bad")]);
+		writeManifest(m, liveDir(outRoot));
+		// A FILE where the archive root belongs: every mkdir under it fails, so the backup cannot
+		// be taken and eviction must refuse rather than delete the only copy.
+		fs.writeFileSync(path.join(outRoot, ARCHIVE_DIR), "not a directory");
+
+		const outcome = await collect({
+			date: DATE,
+			outRoot,
+			dataDir: dir,
+			pull: async () => ({ ok: true, job: doneJob("job-bad", {}) }),
+			reportDir: path.join(dir, "report"),
+			log: () => {},
+		});
+
+		const e = outcome.manifest.entries[0];
+		assert.equal(e.collected, true);
+		assert.ok(fs.existsSync(path.join(runDir("job-bad", outRoot), RUN_FILES.log)), "the only copy must survive a failed backup");
+		assert.match(e.note ?? "", /eviction refused/);
 	});
 });
 
