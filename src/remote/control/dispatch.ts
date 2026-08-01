@@ -4,7 +4,7 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
 import { compileRecipe, readRecipe, recipeFileFor } from "../../core/recipe.js";
-import { LIVE_DIR, RUN_FILES, dataRoot, recipesDir, runFile, runRel } from "../../paths.js";
+import { LIVE_DIR, RUN_FILES, archiveRun, dataRoot, recipesDir, runFile, runRel } from "../../paths.js";
 import { EXIT_REFUSED as CTL_REFUSED, EXIT_UNREACHABLE as CTL_UNREACHABLE } from "../runner/ctl.js";
 import type { JobArtifacts, JobKind, JobRecord } from "../runner/jobs.js";
 import { autoSync, autoSyncProcedures, autoSyncRecipes, type SyncOptions } from "./appmaps.js";
@@ -661,6 +661,19 @@ export async function pull(host: HostEntry | string, jobId: string, opts: PullOp
 	}
 
 	const failed = artifacts.filter((a) => a.state === "failed");
+	/**
+	 * Back the pulled run up locally. The run's OWN archiveRun fired on the colo Mac, so the
+	 * backup exists there and not here — and "every finished run has a backup" is the invariant
+	 * `./run runs purge` is safe under. `drop`/`purge` do back up before deleting, so nothing was
+	 * ever at risk; this closes the gap between the documented rule and the disk.
+	 *
+	 * Non-fatal, and after the artifacts land: a backup that cannot be taken must not turn a
+	 * successful pull into a failed one.
+	 */
+	if (!failed.length)
+		try {
+			archiveRun(jobId, path.join(localRoot, "out"));
+		} catch {}
 
 	return {
 		ok: failed.length === 0,
