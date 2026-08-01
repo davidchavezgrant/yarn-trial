@@ -84,8 +84,10 @@
 	.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
 	.q { color: var(--muted); font-size: 11px; margin-top: 4px; }
 	.warn { color: var(--warning); font-size: 11px; }
-	/* The busy card's prompt line clamps at 3 lines — the full text rides the data-tip. */
+	/* The task's prompt sits between the peek window and its logs (per David, 2026-08-01),
+	   clamped at 3 lines — the full text rides the data-tip. */
 	.host .prompt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+	.hostprompt { margin-top: 6px; }
 
 	/* peek panel: one per card, fixed 16:10 — idle, waiting and live all occupy the SAME box,
 	   so a stream starting or dying never shifts the layout. */
@@ -112,6 +114,21 @@
 	.peekbox[data-state="live"]:hover .pk-full, .peekbox[data-state="live"]:focus-within .pk-full,
 	.peekbox[data-state="live"]:hover .pk-cap { opacity: 1; }
 	.peekbox:fullscreen { border: none; border-radius: 0; }
+	/* OSD strip, top edge of the peek window: live tokens/cost + the convergence meter,
+	   repainted per SSE push. Always visible while the host runs (unlike the hover chrome) —
+	   these are the numbers an operator glances at, not player controls. The right inset
+	   clears the ⛶ corner; chips are individually boxed so they read over live video and
+	   the idle panel alike. */
+	.peekbox .pk-stats { position: absolute; top: 6px; left: 8px; right: 34px; display: flex; gap: 6px; flex-wrap: wrap; z-index: 1; }
+	.pk-stats .pk-chip {
+		background: rgba(0, 0, 0, 0.55); border-radius: 4px; padding: 1px 6px; font-size: 11px;
+		color: var(--ink-2); font-variant-numeric: tabular-nums; cursor: help; white-space: nowrap;
+	}
+	/* Convergence meter: consumed share of the discovered frontier as a tiny fill bar. The
+	   fill wears --running — the "this number is still moving" token, never a series hue. */
+	.pk-chip.pk-conv { display: inline-flex; align-items: center; gap: 5px; }
+	.pk-convbar { width: 44px; height: 4px; border-radius: 2px; background: var(--grid); overflow: hidden; }
+	.pk-convfill { display: block; height: 100%; background: var(--running); }
 
 	/* logs disclosure shell — the log-tailing wave fills .hostlogs-body (keyed by the
 	   #host-logs-<name> id + data-job) without restructuring the card. */
@@ -1009,6 +1026,16 @@ function renderFleet() {
 		}
 		prev = card;
 		card.querySelector(".hostinfo").innerHTML = hostInfoHtml(r);
+		// The two per-push slots outside .hostinfo: the task's prompt (between the window and
+		// its logs) and the window's OSD strip (live tokens/cost + convergence). Both derive
+		// from the running run's arm/live counters, so a non-busy card clears them.
+		const run = r.state === "busy" ? runOf(r.jobId) : null;
+		const promptEl = card.querySelector(".hostprompt");
+		const promptText = run ? run.arm.task || run.arm.url || "" : "";
+		promptEl.hidden = !promptText;
+		promptEl.textContent = promptText;
+		if (promptText) promptEl.dataset.tip = promptText; else delete promptEl.dataset.tip;
+		card.querySelector(".pk-stats").innerHTML = run ? peekStatsHtml(run.entry) : "";
 		const logs = card.querySelector(".hostlogs");
 		logs.hidden = r.state !== "busy";
 		if (r.state === "busy") logs.dataset.job = r.jobId || "";
@@ -1020,8 +1047,11 @@ function renderFleet() {
 }
 
 // The persistent card skeleton: .hostinfo re-renders per push; .peekbox and .hostlogs are
-// created once and mutated in place. The logs disclosure is a placeholder SHELL — the log
-// tailing wave fills .hostlogs-body, addressing the card by #host-logs-<name> + data-job.
+// created once and mutated in place. .pk-stats (the window's OSD) and .hostprompt (the task
+// prompt between window and logs) are per-push slots renderFleet repaints — inside/after the
+// persistent shell so a streaming frame survives the update. The logs disclosure is a
+// placeholder SHELL — the log tailing wave fills .hostlogs-body, addressing the card by
+// #host-logs-<name> + data-job.
 function hostCard(name) {
 	const card = document.createElement("div");
 	card.className = "host";
@@ -1031,9 +1061,11 @@ function hostCard(name) {
 			<div class="pk-idle">Idle</div>
 			<div class="pk-wait"><div class="spinner"></div><div class="pk-msg"></div></div>
 			<img class="pk-img" alt="">
+			<div class="pk-stats"></div>
 			<button class="btnv pk-full" data-peekfull data-tip="fullscreen">⛶</button>
 			<div class="pk-cap"></div>
 		</div>
+		<div class="q prompt hostprompt" hidden></div>
 		<details class="hostlogs" id="host-logs-${esc(name)}" data-hostlogs="${esc(name)}" hidden>
 			<summary>Logs</summary>
 			<div class="hostlogs-body q">Log tailing lands with the next wave</div>
@@ -1042,9 +1074,9 @@ function hostCard(name) {
 }
 
 // A busy card leads with WHAT is running, not the fact that it runs: app + ticking elapsed,
-// the running arm's display title, one sentence for its configuration ("Explore sees with
-// AX + DOM attrs + Vision and acts with CDP using azure/gpt-5.6-sol") and the prompt
-// (clamped, full text in the hover; explore arms have no prompt, so no line). The old
+// the running arm's display title and one sentence for its configuration ("Explore sees with
+// AX + DOM attrs + Vision and acts with CDP using azure/gpt-5.6-sol"). The prompt moved out
+// of this body to the .hostprompt slot under the peek window (renderFleet paints it). The old
 // "Busy · operator" label, raw-job-id line and "Queue: …" arm chain are gone — a card
 // with a running variant is self-evidently busy, and the ids live in the title's hover.
 function hostInfoHtml(r) {
@@ -1082,13 +1114,59 @@ function busyCardBody(r) {
 	const cfg = [arm.perception ? `sees with ${arm.perception}` : "", arm.actuation ? `acts with ${arm.actuation}` : ""]
 		.filter(Boolean).join(" and ");
 	const sentence = `${kind}${cfg ? " " + cfg : ""} using ${busyModel(run)}`;
-	// Task arms show the goal-only prompt (clamped — hover for the full text); web arms with
-	// no prompt show their URL; explore arms have neither, so no line — nothing fabricated.
-	const prompt = arm.task || arm.url || "";
 	return app
 		+ `<div class="row"><span class="txt" data-tip="${esc(arm.id + "\n" + r.jobId)}">${esc(displayName(arm))}</span>${stalled}</div>`
-		+ `<div class="q">${esc(sentence)}</div>`
-		+ (prompt ? `<div class="q prompt" data-tip="${esc(prompt)}">${esc(prompt)}</div>` : "");
+		+ `<div class="q">${esc(sentence)}</div>`;
+}
+
+/**
+ * The peek window's OSD chips: live tokens/cost, and the convergence meter on explore runs.
+ * Everything here is off the run's own event log (EntryView.live) and wears the page's
+ * provisional marks — ~ on the numbers, the full breakdown and the LIVE disclaimer in the
+ * tip — so an OSD reading never passes for a collected result. Empty string when the run
+ * carries no live counters yet (or the bench never dispatched it): the strip just isn't there.
+ */
+function peekStatsHtml(e) {
+	const lp = e && e.live;
+	if (!lp) return "";
+	const chips = [];
+	if (lp.outputTokens != null || lp.usd != null) {
+		// Same wording as the status chip's economics tip — one vocabulary, two homes.
+		const tok = [
+			lp.inputTokens != null ? `in ${fmtK(lp.inputTokens)}` : "",
+			lp.outputTokens != null ? `out ${fmtK(lp.outputTokens)}` : "",
+			lp.cacheReadTokens != null ? `cache-read ${fmtK(lp.cacheReadTokens)}` : "",
+			lp.cacheCreationTokens != null ? `cache-write ${fmtK(lp.cacheCreationTokens)}` : "",
+		].filter(Boolean).join(" · ");
+		const tip = `${LIVE_CELL_TIP}\ntokens — ${tok}${lp.usd != null ? `\nest cost ${fmtMoney(lp.usd)} (published rates, not an invoice)` : ""}`;
+		// outputTokens is the headline token number (repo convention); cost beside it.
+		const text = [
+			lp.outputTokens != null ? `~${fmtK(lp.outputTokens)} out` : "",
+			lp.usd != null ? `~${fmtMoney(lp.usd)}` : "",
+		].filter(Boolean).join(" · ");
+		chips.push(`<span class="pk-chip" data-tip="${esc(tip)}">${esc(text)}</span>`);
+	}
+	const conv = convergenceMeter(lp);
+	if (conv) chips.push(`<span class="pk-chip pk-conv" data-tip="${esc(conv.tip)}"><span class="pk-convbar"><span class="pk-convfill" style="width:${conv.pct}%"></span></span>${conv.pct}%</span>`);
+	return chips.join("");
+}
+
+/**
+ * Convergence as ONE number: the consumed share of the discovered frontier. done = actuated +
+ * dismissed (both leave the frontier), total = done + what is still un-operated — so 100%
+ * means frontier empty, the explore's own stop condition. The meter can move BACKWARD when
+ * discovery outpaces consumption; that is the honest reading of a pass still expanding, not
+ * a bug. Null (no meter) for task runs and for pre-enrichment logs whose heartbeats carried
+ * no actuated/dismissed — a 0% built from missing fields would read as a stuck pass.
+ */
+function convergenceMeter(lp) {
+	if (lp.frontier == null || (lp.actuated == null && lp.dismissed == null)) return null;
+	const done = (lp.actuated ?? 0) + (lp.dismissed ?? 0);
+	const total = done + lp.frontier;
+	if (!total) return null;
+	const pct = Math.round(done / total * 100);
+	const tip = `convergence ${pct}% — ${done} of ${total} discovered controls consumed (${lp.actuated ?? 0} actuated + ${lp.dismissed ?? 0} dismissed) · frontier ${lp.frontier} un-operated · 100% = frontier empty${lp.nodes != null ? ` · map ${lp.nodes} nodes` : ""}\nlive off the run's event log, provisional until collected`;
+	return { pct, tip };
 }
 
 // modelCell's precedence, worded for the sentence: what THIS run's usage events named (the
