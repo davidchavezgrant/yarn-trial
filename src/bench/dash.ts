@@ -604,7 +604,19 @@ function resolveGraph(
 
 /** The graph fields the page renders — including gated node ids, the per-node "refused" signal. */
 function shapeGraph(g: Record<string, any>): NonNullable<DashDetail["graph"]> {
-	const gated = Array.isArray(g.gated) ? g.gated.map((x: any) => String(x?.id)).filter(Boolean) : [];
+	// The appmap writer records gated ids BARE ("publish") while graph node ids are
+	// path-qualified ("draft-editor/publish"), so a raw pass-through never matched a node
+	// and gated rings were invisible on every map. Resolve each bare id to the node(s)
+	// whose id equals it or ends with "/<bare>" — the bare id lost its surface, so when
+	// several same-named controls exist, marking all of them gated is the honest reading.
+	const nodeIds: string[] = Array.isArray(g.nodes) ? g.nodes.map((n: any) => String(n?.id)) : [];
+	const gated = [
+		...new Set(
+			(Array.isArray(g.gated) ? g.gated.map((x: any) => String(x?.id)).filter(Boolean) : []).flatMap((bare: string) =>
+				nodeIds.some((id) => id === bare) ? [bare] : nodeIds.filter((id) => id.endsWith(`/${bare}`)),
+			),
+		),
+	];
 
 	return {
 		nodes: g.nodes,

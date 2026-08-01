@@ -247,3 +247,24 @@ test("BuildDetail__AggregatesHeatAcrossCollectedRuns__When__RunsShareTheGraph", 
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+test("BuildDetail__QualifiesBareGatedIds__When__AppmapRecordsThemUnpathed", () => {
+	// The appmap writer records gated ids bare ("cursor-style"); graph node ids are
+	// path-qualified. The shape step must resolve them or gated rings never render.
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dash-gated-"));
+	try {
+		fs.mkdirSync(path.join(dir, "docs", "appmaps"), { recursive: true });
+		fs.mkdirSync(path.join(dir, "out", "runs"), { recursive: true });
+		fs.writeFileSync(path.join(dir, "docs", "appmaps", "yarn.json"), JSON.stringify({ ...GRAPH, gated: [{ id: "cursor-style" }, { id: "brand-kit" }] }));
+		fs.writeFileSync(path.join(dir, "out", "runs", "job-g.json"), JSON.stringify({ steps: [] }));
+		const m = manifest(entry({ jobId: "job-g", state: "done", collected: true }));
+		const d = buildDetail("job-g", m, { dataDir: dir, benchRoot: path.join(dir, "bench") });
+		// Suffix matches resolve to BOTH same-named controls; an exact match passes through.
+		assert.deepEqual(
+			(d.graph?.gated ?? []).sort(),
+			["brand-kit", "brand-kit/screen-clips/cursor-style", "draft/design/cursor-style"],
+		);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
