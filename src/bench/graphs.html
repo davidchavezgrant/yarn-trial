@@ -1,0 +1,927 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>run graphs</title>
+<style>
+	/* Chrome mirrors dash.html so the two pages read as one product. Dark-only, like the board.
+	   Series/status hexes validated 2026-08-01 against surface #1a1a19 (dataviz six checks):
+	   worst adjacent CVD ΔE 8.4, normal-vision 19.3, all ≥3:1 contrast. */
+	:root {
+		color-scheme: dark;
+		--plane: #0d0d0d; --surface: #1a1a19;
+		--ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+		--grid: #2c2c2a; --baseline: #383835; --border: rgba(255,255,255,.10);
+		--s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
+		--good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+		--other: #6b6a64; /* de-emphasis / "Other" — never a series slot */
+	}
+	* { box-sizing: border-box; }
+	body { margin: 0; background: var(--plane); color: var(--ink-2); font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+	a { color: var(--s1); text-decoration: none; }
+	a:hover { text-decoration: underline; }
+	#page { max-width: 1180px; margin: 0 auto; padding: 18px 20px 80px; }
+	header h1 { font-size: 17px; color: var(--ink); margin: 2px 0 2px; font-weight: 600; }
+	header .sub, .card .sub { color: var(--muted); margin: 0 0 8px; }
+	#crumb { color: var(--muted); font-size: 12px; }
+	#updated { float: right; color: var(--muted); font-size: 11px; }
+
+	/* Stat tiles: label + value (+quiet detail). Proportional figures on values by design. */
+	#stats { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 6px; }
+	.tile { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; min-width: 86px; }
+	.tile .l { color: var(--muted); font-size: 11px; }
+	.tile .v { color: var(--ink); font-size: 17px; font-weight: 600; margin-top: 1px; }
+	.tile .d { color: var(--muted); font-size: 11px; }
+
+	/* One filter row above everything it scopes (runs). Chip idiom borrowed from the board. */
+	#filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 10px 0 16px; }
+	#filters .fl { color: var(--muted); font-size: 11px; margin-right: 2px; }
+	.chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 999px;
+		padding: 2px 10px; cursor: pointer; color: var(--muted); background: var(--surface); font-size: 12px; user-select: none; }
+	.chip.sel { color: var(--ink); border-color: var(--ink-2); }
+	.chip .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+
+	#cards { display: flex; flex-direction: column; gap: 14px; }
+	#cards.stale { opacity: .6; transition: opacity .15s; } /* held frame during refetch — never a skeleton */
+	.card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px 12px; }
+	.card h2 { font-size: 13px; color: var(--ink); margin: 0 0 2px; font-weight: 600; }
+	.card .hd { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+	.card .tgl { background: none; border: 1px solid var(--border); border-radius: 4px; color: var(--muted); font-size: 11px;
+		padding: 1px 8px; cursor: pointer; flex: none; }
+	.card .tgl:hover { color: var(--ink); }
+	.empty { color: var(--muted); padding: 18px 4px; }
+	svg { display: block; }
+	svg text { font: 11px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--muted); }
+	svg .lbl { fill: var(--ink-2); }
+	svg .axis { stroke: var(--baseline); stroke-width: 1; }
+	svg .gridl { stroke: var(--grid); stroke-width: 1; }
+
+	.legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 6px 2px 2px; color: var(--muted); font-size: 11px; }
+	.legend .k { display: inline-flex; align-items: center; gap: 5px; }
+	.legend .swr { width: 10px; height: 10px; border-radius: 2px; }
+	.legend .swl { width: 14px; height: 2px; }
+
+	table.tv { border-collapse: collapse; width: 100%; margin-top: 6px; font-size: 12px; }
+	table.tv th { text-align: left; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--baseline); padding: 3px 8px 3px 0; }
+	table.tv td { border-bottom: 1px solid var(--grid); padding: 3px 8px 3px 0; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+	/* Confusion grid — the chart IS a table; disagreement cells get status borders. */
+	table.cf { border-collapse: separate; border-spacing: 4px; margin-top: 4px; }
+	table.cf th { color: var(--muted); font-weight: 500; font-size: 11px; padding: 2px 6px; }
+	table.cf td { background: var(--plane); border: 1px solid var(--border); border-radius: 5px; padding: 6px 10px; min-width: 84px; vertical-align: top; }
+	table.cf td .n { color: var(--ink); font-size: 15px; font-weight: 600; }
+	table.cf td .jobs { color: var(--muted); font-size: 10px; margin-top: 2px; }
+	table.cf td.bad { border-color: var(--critical); }
+	table.cf td.odd { border-color: var(--warning); }
+
+	/* Scope-trap ladder rows */
+	.trap { border-top: 1px solid var(--grid); padding: 7px 0; }
+	.trap:first-child { border-top: none; }
+	.trap .k { color: var(--ink); font-weight: 600; }
+	.trap .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+	.nchip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; font-size: 12px; }
+	.nchip .dot { width: 8px; height: 8px; border-radius: 50%; }
+	.nchip .mut { color: var(--warning); font-weight: 700; }
+
+	#tip { position: fixed; pointer-events: none; background: #222220; border: 1px solid var(--border); border-radius: 5px;
+		padding: 6px 9px; font-size: 11.5px; color: var(--ink-2); max-width: 340px; z-index: 10; display: none; box-shadow: 0 4px 14px rgba(0,0,0,.5); }
+	#tip .tv1 { color: var(--ink); font-weight: 600; }
+	#tip .row { display: flex; gap: 6px; align-items: center; }
+	#tip .lk { width: 10px; height: 2px; flex: none; }
+
+	.ctl { display: flex; align-items: center; gap: 10px; margin: 6px 0 2px; color: var(--muted); font-size: 11.5px; }
+	.ctl input[type=range] { width: 220px; accent-color: var(--s1); }
+	.panelgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+	@media (max-width: 800px) { .panelgrid { grid-template-columns: 1fr; } }
+	.paneltitle { color: var(--muted); font-size: 11px; margin: 2px 0 2px; }
+</style>
+</head>
+<body>
+<div id="page">
+	<header>
+		<span id="updated"></span>
+		<div id="crumb"><a href="/">← board</a></div>
+		<h1 id="title">loading…</h1>
+		<div class="sub" id="subtitle"></div>
+		<div id="stats"></div>
+	</header>
+	<div id="filters"></div>
+	<div id="cards"></div>
+</div>
+<div id="tip"></div>
+<script>
+"use strict";
+/* ================= shared helpers ================= */
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const SERIES = ["var(--s1)", "var(--s2)", "var(--s3)", "var(--s4)", "var(--s5)"];
+const STATUS = { good: "var(--good)", warning: "var(--warning)", serious: "var(--serious)", critical: "var(--critical)" };
+const OTHER = "var(--other)";
+/* Evidence-strength ordinal ramp (blue, validated --ordinal on #1a1a19): strong → most visible. */
+const EVIDENCE = { text: "#86b6ef", geometry: "#3987e5", pixel: "#184f95", none: "#383835" };
+/* Scope identity — fixed assignment, never cycled; unknown folds to gray. */
+const SCOPE_COLOR = { app: "var(--s1)", workspace: "var(--s2)", brand: "var(--s3)", document: "var(--s4)", unknown: OTHER };
+const fmtNum = (v, d = 1) => (v == null || !isFinite(v) ? "—" : (Math.round(v * 10 ** d) / 10 ** d).toLocaleString());
+const fmtK = (v) => (v == null ? "—" : v >= 1000 ? `${fmtNum(v / 1000)}k` : String(Math.round(v)));
+const fmtMoney = (v) => (v == null ? "—" : `$${v.toFixed(2)}`);
+const fmtDur = (s) => (s == null ? "—" : s >= 3600 ? `${Math.floor(s / 3600)}h${String(Math.round(s % 3600 / 60)).padStart(2, "0")}` : s >= 60 ? `${Math.floor(s / 60)}m${String(Math.round(s % 60)).padStart(2, "0")}` : `${Math.round(s)}s`);
+const shortJob = (j) => String(j).replace(/^explore-/, "").replace(/-[a-z.]+$/i, "").replace(/^\d{4}-/, "");
+const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : undefined);
+const median = (xs) => { if (!xs.length) return undefined; const s = [...xs].sort((a, b) => a - b); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+const quantile = (sorted, q) => { if (!sorted.length) return undefined; const i = Math.min(sorted.length - 1, Math.max(0, Math.round(q * (sorted.length - 1)))); return sorted[i]; };
+
+/* SVG element builder — attributes only, text via textContent (labels are untrusted data). */
+const SVGNS = "http://www.w3.org/2000/svg";
+function el(name, attrs = {}, text) {
+	const n = document.createElementNS(SVGNS, name);
+	for (const [k, v] of Object.entries(attrs)) if (v != null) n.setAttribute(k, String(v));
+	if (text != null) n.textContent = String(text);
+	return n;
+}
+function html(tag, cls, text) {
+	const n = document.createElement(tag);
+	if (cls) n.className = cls;
+	if (text != null) n.textContent = String(text);
+	return n;
+}
+
+/* Tooltip singleton: rows of [swatch?, label, strongValue]; values lead, labels follow. */
+const tip = $("tip");
+function tipShow(ev, rows) {
+	tip.replaceChildren();
+	for (const r of rows) {
+		if (typeof r === "string") { tip.appendChild(html("div", r === rows[0] ? "tv1" : "", r)); continue; }
+		const row = html("div", "row");
+		if (r.color) { const k = html("span", "lk"); k.style.background = r.color; row.appendChild(k); }
+		if (r.value != null) { const v = html("span", "tv1", r.value); row.appendChild(v); }
+		if (r.label) row.appendChild(html("span", "", r.label));
+		tip.appendChild(row);
+	}
+	tip.style.display = "block";
+	tipMove(ev);
+}
+function tipMove(ev) {
+	const pad = 14, w = tip.offsetWidth, h = tip.offsetHeight;
+	tip.style.left = `${Math.min(ev.clientX + pad, innerWidth - w - 8)}px`;
+	tip.style.top = `${Math.min(ev.clientY + pad, innerHeight - h - 8)}px`;
+}
+function tipHide() { tip.style.display = "none"; }
+
+function legendEl(items) {
+	const box = html("div", "legend");
+	for (const it of items) {
+		const k = html("span", "k");
+		const sw = html("span", it.line ? "swl" : "swr");
+		sw.style.background = it.color;
+		k.appendChild(sw);
+		k.appendChild(html("span", "", it.name));
+		box.appendChild(k);
+	}
+	return box;
+}
+
+/* Card scaffold: header + chart/table toggle. Every chart ships its table twin. */
+const cardTables = {};
+function card(id, title, sub) {
+	let c = $(id);
+	if (!c) {
+		c = html("section", "card"); c.id = id;
+		const hd = html("div", "hd");
+		const left = html("div");
+		left.appendChild(html("h2", "", title));
+		left.appendChild(html("div", "sub", sub));
+		hd.appendChild(left);
+		const tgl = html("button", "tgl", "table");
+		tgl.onclick = () => {
+			const showing = c.dataset.tv === "1";
+			c.dataset.tv = showing ? "" : "1";
+			tgl.textContent = showing ? "table" : "chart";
+			renderAll();
+		};
+		hd.appendChild(tgl);
+		c.appendChild(hd);
+		c.appendChild(html("div", "body"));
+		$("cards").appendChild(c);
+	}
+	const body = c.querySelector(".body");
+	body.replaceChildren();
+	return { root: c, body, tableMode: c.dataset.tv === "1" };
+}
+function tableView(body, cols, rows) {
+	const t = html("table", "tv");
+	const tr = html("tr");
+	for (const col of cols) tr.appendChild(html("th", "", col));
+	t.appendChild(tr);
+	for (const r of rows) {
+		const row = html("tr");
+		for (const col of cols) row.appendChild(html("td", "", r[col] ?? ""));
+		t.appendChild(row);
+	}
+	body.appendChild(t);
+}
+function empty(body, msg) { body.appendChild(html("div", "empty", msg)); }
+
+/* Generic responsive svg */
+function svg(w, h) { const s = el("svg", { viewBox: `0 0 ${w} ${h}`, preserveAspectRatio: "xMidYMid meet" }); s.style.width = "100%"; return s; }
+function hover(node, rows) {
+	node.addEventListener("pointerenter", (ev) => tipShow(ev, typeof rows === "function" ? rows() : rows));
+	node.addEventListener("pointermove", tipMove);
+	node.addEventListener("pointerleave", tipHide);
+}
+
+/* ================= state ================= */
+const qs = new URLSearchParams(location.search);
+const ARM = qs.get("arm") ?? "";
+const MODEL = qs.get("model") ?? "";
+let data;            // /api/graphs/data payload
+let motion;          // /api/graphs/motion payload (fetched once, lazily)
+let motionState = "idle"; // idle | loading | absent
+let selRun = "all";  // the one page-level filter
+
+const filteredRuns = () => (data?.runs ?? []).filter((r) => selRun === "all" || r.jobId === selRun);
+const stepRuns = () => filteredRuns().filter((r) => Array.isArray(r.steps) && r.steps.length);
+
+/* ================= header ================= */
+function renderHeader() {
+	const a = data.arm, p = data.pass;
+	document.title = `graphs — ${a.id}`;
+	$("title").textContent = `${a.title ?? a.id}${data.model ? ` · ${data.model}` : ""}`;
+	const flags = (a.flags ?? []).join(" ");
+	$("subtitle").textContent = [a.app, a.task ? `“${a.task}”` : "", a.perception, a.actuation, flags].filter(Boolean).join(" · ");
+	const tiles = [];
+	const tile = (l, v, d) => tiles.push({ l, v, d });
+	tile("runs", `${p.collected ?? 0}/${a.n ?? "?"}`, "collected");
+	tile("success", `${p.successes ?? 0}/${p.collected ?? 0}`);
+	if (p.meanSteps != null) tile("steps x̄", fmtNum(p.meanSteps));
+	if (p.meanElapsedSec != null) tile("time x̄", fmtDur(p.meanElapsedSec));
+	if (p.meanModelCalls != null) tile("calls x̄", fmtNum(p.meanModelCalls));
+	if (p.meanOutputTokens != null) tile("out-tok x̄", fmtK(p.meanOutputTokens));
+	tile("cost", fmtMoney(p.usd), p.unpriced ? `+${p.unpriced} unpriced` : "");
+	if (p.rejections) tile("rejections", p.rejections);
+	if (p.documentScopeMutations) tile("doc-scope muts", p.documentScopeMutations);
+	if (p.explore) {
+		const x = p.explore;
+		tile("actions", x.actions ?? "—");
+		tile("controls", `${x.controlsActuated ?? "—"}/${x.controlsDismissed ?? "—"}/${x.controlsSeen ?? "—"}`, "actuated/dismissed/seen");
+		tile("surfaces", x.surfaces ?? "—");
+		tile("map", `${x.graphNodes ?? "—"}n·${x.graphEdges ?? "—"}e`);
+		tile("ambiguities", x.scopeAmbiguities ?? "—");
+	}
+	const box = $("stats");
+	box.replaceChildren();
+	for (const t of tiles) {
+		const d = html("div", "tile");
+		d.appendChild(html("div", "l", t.l));
+		d.appendChild(html("div", "v", t.v));
+		if (t.d) d.appendChild(html("div", "d", t.d));
+		box.appendChild(d);
+	}
+}
+
+function renderFilters() {
+	const box = $("filters");
+	box.replaceChildren();
+	box.appendChild(html("span", "fl", "runs:"));
+	const mk = (key, label, colorVar) => {
+		const c = html("span", `chip${selRun === key ? " sel" : ""}`);
+		if (colorVar) { const d = html("span", "dot"); d.style.background = colorVar; c.appendChild(d); }
+		c.appendChild(html("span", "", label));
+		c.onclick = () => { selRun = key; renderFilters(); renderAll(); };
+		box.appendChild(c);
+	};
+	mk("all", "all");
+	for (const r of data.runs ?? []) mk(r.jobId, shortJob(r.jobId), r.success === true ? STATUS.good : r.success === false ? STATUS.critical : OTHER);
+}
+
+/* ================= 1 · touch map ================= */
+function renderTouch() {
+	const { body, tableMode } = card("c-touch", "Touch map", "every action's landing spot over the app's own pixels — verified green, unverified red; drags drawn as lines");
+	const runs = stepRuns();
+	const pts = [];
+	for (const r of runs)
+		for (const s of r.steps) {
+			const cx = s.targetRect ? s.targetRect.x + s.targetRect.w / 2 : s.x;
+			const cy = s.targetRect ? s.targetRect.y + s.targetRect.h / 2 : s.y;
+			if (cx == null || cy == null) continue;
+			pts.push({ r, s, cx, cy });
+		}
+	if (!pts.length) return empty(body, runs.length ? "no step carried coordinates or a target rect" : "no step records on this row (explore passes carry none)");
+	if (tableMode)
+		return tableView(body, ["run", "step", "action", "target", "x", "y", "verified"],
+			pts.map((p) => ({ run: shortJob(p.r.jobId), step: p.s.index, action: p.s.name, target: p.s.targetName ?? "", x: Math.round(p.cx), y: Math.round(p.cy), verified: p.s.verified ? "✓" : "✗" })));
+
+	const shot = [...runs.flatMap((r) => r.steps)].reverse().find((s) => s.screenshotFile)?.screenshotFile;
+	const draw = (w, h, href) => {
+		const s = svg(w, h);
+		if (href) s.appendChild(el("image", { href, width: w, height: h, opacity: 0.35, preserveAspectRatio: "none" }));
+		else s.appendChild(el("rect", { width: w, height: h, fill: "var(--plane)" }));
+		for (const p of pts) {
+			if (p.s.toX != null && p.s.toY != null)
+				s.appendChild(el("line", { x1: p.cx, y1: p.cy, x2: p.s.toX, y2: p.s.toY, stroke: p.s.verified ? STATUS.good : STATUS.critical, "stroke-width": 2, opacity: 0.85 }));
+			const ring = el("circle", { cx: p.cx, cy: p.cy, r: 7, fill: "var(--surface)" });
+			const dot = el("circle", { cx: p.cx, cy: p.cy, r: 5, fill: p.s.verified ? STATUS.good : STATUS.critical });
+			const hit = el("circle", { cx: p.cx, cy: p.cy, r: 13, fill: "transparent" });
+			hover(hit, () => [`step ${p.s.index} · ${p.s.name}`,
+				{ value: p.s.targetName ?? "(no element)", label: p.s.targetRole ?? "" },
+				{ value: p.s.verified ? "verified" : "unverified", label: p.s.channel ?? "", color: p.s.verified ? STATUS.good : STATUS.critical },
+				shortJob(p.r.jobId)]);
+			s.appendChild(ring); s.appendChild(dot); s.appendChild(hit);
+		}
+		body.appendChild(s);
+		body.appendChild(legendEl([{ name: "verified", color: STATUS.good }, { name: "unverified", color: STATUS.critical }]));
+	};
+	if (shot) {
+		const img = new Image();
+		img.onload = () => draw(img.naturalWidth, img.naturalHeight, img.src);
+		img.onerror = () => draw(1440, 900);
+		img.src = `/api/graphs/shot?f=${encodeURIComponent(shot)}`;
+	} else draw(1440, 900);
+}
+
+/* ================= 2 · scope-trap ladder ================= */
+function renderTraps() {
+	const { body, tableMode } = card("c-traps", "Dual-scope traps", "settings this row's map exposes at more than one scope — the wrong-scope hazard, with this row's actual mutations marked ⚠");
+	const nodes = data.map?.nodes ?? [];
+	if (!nodes.length) return empty(body, "no grounding map resolved for this row");
+	const byKey = new Map();
+	for (const n of nodes) {
+		if (n.kind !== "control" || !n.settingKey) continue;
+		if (!byKey.has(n.settingKey)) byKey.set(n.settingKey, []);
+		byKey.get(n.settingKey).push(n);
+	}
+	const traps = [...byKey.entries()].filter(([, ns]) => new Set(ns.map((n) => n.scope)).size > 1);
+	const muts = [];
+	for (const r of filteredRuns()) for (const m of r.journal ?? []) if (m.settingKey) muts.push({ ...m, jobId: r.jobId, disclosed: r.judge?.scopeDisclosed });
+	if (tableMode)
+		return tableView(body, ["settingKey", "node", "scope", "mutated by"],
+			traps.flatMap(([k, ns]) => ns.map((n) => ({ settingKey: k, node: n.title, scope: n.scope, "mutated by": muts.filter((m) => m.settingKey === k && m.scope === n.scope).map((m) => shortJob(m.jobId)).join(", ") }))));
+	if (!traps.length) return empty(body, `no dual-scope settings in this map (${byKey.size} settingKeys, all single-scope) — that itself is a finding`);
+	for (const [k, ns] of traps) {
+		const row = html("div", "trap");
+		row.appendChild(html("span", "k", k));
+		const chips = html("div", "chips");
+		for (const n of ns) {
+			const hits = muts.filter((m) => m.settingKey === k && (!m.scope || m.scope === n.scope));
+			const chip = html("span", "nchip");
+			const d = html("span", "dot"); d.style.background = SCOPE_COLOR[n.scope] ?? OTHER;
+			chip.appendChild(d);
+			chip.appendChild(html("span", "", `${n.title} · ${n.scope}`));
+			if (hits.length) chip.appendChild(html("span", "mut", ` ⚠${hits.length > 1 ? hits.length : ""}`));
+			hover(chip, () => [k,
+				{ value: n.scope, label: n.title, color: SCOPE_COLOR[n.scope] ?? OTHER },
+				...(n.options ? [`options: ${n.options.join(", ")}`] : []),
+				...hits.map((m) => `⚠ ${shortJob(m.jobId)} step ${m.step} mutated it — disclosure: ${m.disclosed ?? "unjudged"}`)]);
+			chips.appendChild(chip);
+		}
+		row.appendChild(chips);
+		body.appendChild(row);
+	}
+	body.appendChild(legendEl(Object.entries(SCOPE_COLOR).map(([name, color]) => ({ name, color }))));
+}
+
+/* ================= 3 · surface flow ================= */
+function renderFlow() {
+	const { body, tableMode } = card("c-flow", "Surface flow", "each run's walk through the app's surfaces, step by step — stripes are room changes; colors are the surface's scope where the map knows it");
+	const runs = stepRuns();
+	if (!runs.length) return empty(body, "no step records on this row");
+	const surfScope = new Map();
+	for (const n of data.map?.nodes ?? []) if (n.kind === "surface") surfScope.set(String(n.title).toLowerCase(), n.scope);
+	const lanes = runs.map((r) => {
+		const segs = [];
+		for (const s of r.steps) {
+			const name = s.targetSurface ?? "(unknown)";
+			const last = segs[segs.length - 1];
+			if (last && last.name === name) last.n++;
+			else segs.push({ name, n: 1, from: s.index });
+		}
+		return { r, segs };
+	});
+	if (tableMode)
+		return tableView(body, ["run", "surface", "steps", "from step"],
+			lanes.flatMap((l) => l.segs.map((g) => ({ run: shortJob(l.r.jobId), surface: g.name, steps: g.n, "from step": g.from }))));
+	const W = 1080, laneH = 20, gap = 10, padL = 130;
+	const maxSteps = Math.max(...lanes.map((l) => l.r.steps.length));
+	const s = svg(W, lanes.length * (laneH + gap) + 24);
+	lanes.forEach((l, i) => {
+		const y = i * (laneH + gap) + 4;
+		s.appendChild(el("text", { x: 0, y: y + 14 }, shortJob(l.r.jobId)));
+		let x = 0;
+		for (const g of l.segs) {
+			const w = (g.n / maxSteps) * (W - padL);
+			const scope = surfScope.get(g.name.toLowerCase());
+			const rect = el("rect", { x: padL + x, y, width: Math.max(w - 2, 1), height: laneH, rx: 3,
+				fill: SCOPE_COLOR[scope] ?? OTHER, opacity: scope ? 0.9 : 0.55 });
+			hover(rect, () => [g.name, { value: `${g.n} step${g.n > 1 ? "s" : ""}`, label: `from step ${g.from}` }, scope ? `scope: ${scope}` : "not in the map's surface list"]);
+			s.appendChild(rect);
+			x += w;
+		}
+	});
+	body.appendChild(s);
+	body.appendChild(legendEl(Object.entries(SCOPE_COLOR).map(([name, color]) => ({ name, color }))));
+}
+
+/* ================= 4 · proof strips ================= */
+function renderProof() {
+	const { body, tableMode } = card("c-proof", "Proof strips", "per step: which evidence channel verified it (darker blue = weaker), pixel-change heat beneath, judge citations marked ▲");
+	const runs = stepRuns();
+	if (!runs.length) return empty(body, "no step records on this row");
+	if (tableMode)
+		return tableView(body, ["run", "step", "action", "channel", "pixelΔ", "cited", "note"],
+			runs.flatMap((r) => r.steps.map((s) => ({ run: shortJob(r.jobId), step: s.index, action: s.name,
+				channel: s.verified ? (s.channel ?? "?") : "—", "pixelΔ": s.pixelDelta != null ? `${(s.pixelDelta * 100).toFixed(1)}%` : "",
+				cited: (r.judge?.citations ?? []).some((c) => c.step === s.index) ? "▲" : "", note: s.note ?? "" }))));
+	const W = 1080, padL = 130, cellH = 16, heatH = 5, rowGap = 16;
+	const s = svg(W, runs.length * (cellH + heatH + rowGap) + 10);
+	runs.forEach((r, i) => {
+		const y = i * (cellH + heatH + rowGap) + 2;
+		s.appendChild(el("text", { x: 0, y: y + 12 }, shortJob(r.jobId)));
+		const cw = Math.min(22, (W - padL) / r.steps.length);
+		const cited = new Set((r.judge?.citations ?? []).map((c) => c.step).filter((n) => n != null));
+		r.steps.forEach((st, j) => {
+			const x = padL + j * cw;
+			const color = st.verified ? (EVIDENCE[st.channel] ?? EVIDENCE.geometry) : EVIDENCE.none;
+			const rect = el("rect", { x, y, width: Math.max(cw - 2, 1), height: cellH, rx: 2, fill: color });
+			hover(rect, () => [`step ${st.index} · ${st.name}`,
+				{ value: st.verified ? (st.channel ?? "verified") : "unverified", color },
+				...(st.targetName ? [{ value: st.targetName, label: st.targetRole ?? "" }] : []),
+				...(st.note ? [st.note] : []), ...(cited.has(st.index) ? ["▲ cited by the judge"] : [])]);
+			s.appendChild(rect);
+			if (st.pixelDelta != null) {
+				const alpha = 0.12 + Math.min(1, Math.sqrt(st.pixelDelta)) * 0.88; // sqrt: tiny repaints must still register
+				s.appendChild(el("rect", { x, y: y + cellH + 2, width: Math.max(cw - 2, 1), height: heatH, fill: `rgba(217,89,38,${alpha.toFixed(2)})` }));
+			}
+			if (cited.has(st.index)) s.appendChild(el("text", { x: x + cw / 2 - 4, y: y + cellH + heatH + 12, fill: "var(--ink-2)" }, "▲"));
+		});
+	});
+	body.appendChild(s);
+	body.appendChild(legendEl([
+		{ name: "text (strongest)", color: EVIDENCE.text }, { name: "geometry", color: EVIDENCE.geometry },
+		{ name: "pixel (weakest)", color: EVIDENCE.pixel }, { name: "unverified", color: EVIDENCE.none },
+		{ name: "pixel-change heat", color: "var(--s2)" },
+	]));
+}
+
+/* ================= 5 · verdict agreement ================= */
+function renderConfusion() {
+	const { body, tableMode } = card("c-confusion", "Harness × judge", "does the adversarial judge agree with the run's own verdict? red cells are contradictions, yellow is unproven success");
+	const runs = filteredRuns().filter((r) => r.collected);
+	if (!runs.length) return empty(body, "no collected runs yet");
+	if (tableMode)
+		return tableView(body, ["run", "harness", "judge trajectory", "judge visual", "cross judge", "scope disclosed"],
+			runs.map((r) => ({ run: shortJob(r.jobId), harness: r.success === true ? "success" : r.success === false ? "failed" : "—",
+				"judge trajectory": r.judge?.trajectory ?? "—", "judge visual": r.judge?.visual ?? "—",
+				"cross judge": r.judgeCross?.trajectory ?? "—", "scope disclosed": r.judge?.scopeDisclosed ?? "—" })));
+	const grid = (rowsDef, colsDef, rowOf, colOf, note) => {
+		const t = html("table", "cf");
+		const hr = html("tr"); hr.appendChild(html("th"));
+		for (const c of colsDef) hr.appendChild(html("th", "", c));
+		t.appendChild(hr);
+		for (const rd of rowsDef) {
+			const tr = html("tr");
+			tr.appendChild(html("th", "", rd));
+			for (const cd of colsDef) {
+				const hits = runs.filter((r) => rowOf(r) === rd && colOf(r) === cd);
+				const td = html("td");
+				if ((rd === "harness ✓" && cd === "FAIL") || (rd === "harness ✗" && cd === "PASS")) td.className = hits.length ? "bad" : "";
+				else if (rd === "harness ✓" && cd === "UNPROVEN") td.className = hits.length ? "odd" : "";
+				td.appendChild(html("div", "n", String(hits.length)));
+				if (hits.length) td.appendChild(html("div", "jobs", hits.slice(0, 4).map((r) => shortJob(r.jobId)).join(" ") + (hits.length > 4 ? ` +${hits.length - 4}` : "")));
+				tr.appendChild(td);
+			}
+			t.appendChild(tr);
+		}
+		if (note) body.appendChild(html("div", "paneltitle", note));
+		body.appendChild(t);
+	};
+	const hRow = (r) => (r.success === true ? "harness ✓" : r.success === false ? "harness ✗" : "no log");
+	grid(["harness ✓", "harness ✗", "no log"], ["PASS", "FAIL", "UNPROVEN", "—"], hRow, (r) => r.judge?.trajectory ?? "—", "trajectory verdict");
+	if (runs.some((r) => r.judge?.visual && r.judge.visual !== "UNAVAILABLE"))
+		grid(["harness ✓", "harness ✗", "no log"], ["PASS", "FAIL", "UNPROVEN", "UNAVAILABLE", "—"], hRow, (r) => r.judge?.visual ?? "—", "visual verdict (frames channel)");
+	if (runs.some((r) => r.judgeCross))
+		grid(["PASS", "FAIL", "UNPROVEN", "—"].map((v) => `judge ${v}`), ["PASS", "FAIL", "UNPROVEN", "—"],
+			(r) => `judge ${r.judge?.trajectory ?? "—"}`, (r) => r.judgeCross?.trajectory ?? "—", "main judge × cross-model judge");
+}
+
+/* ================= 6 · cost vs verified ================= */
+function renderCost() {
+	const { body, tableMode } = card("c-cost", "Cost per verified step", "what a dollar buys on this row (blue) against every other collected run on the board (gray)");
+	const mine = (data.runs ?? []).filter((r) => r.collected && r.usd != null);
+	const fld = (data.field ?? []).filter((f) => f.usd != null && !(f.armId === data.armId && (f.model ?? "") === (data.model ?? "")));
+	const all = [...mine.map((r) => ({ x: r.verifiedSteps ?? 0, y: r.usd, label: shortJob(r.jobId), mine: true, ok: r.success })),
+		...fld.map((f) => ({ x: f.verifiedSteps ?? 0, y: f.usd, label: `${f.armId} ${shortJob(f.jobId)}`, mine: false, ok: f.success }))];
+	if (!all.length) return empty(body, "no priced runs collected yet");
+	if (tableMode)
+		return tableView(body, ["run", "arm", "verified steps", "cost", "success"],
+			all.map((p) => ({ run: p.label, arm: p.mine ? data.armId : p.label.split(" ")[0], "verified steps": p.x, cost: fmtMoney(p.y), success: p.ok === true ? "✓" : p.ok === false ? "✗" : "—" })));
+	const W = 1080, H = 260, padL = 56, padB = 30, padT = 10, padR = 14;
+	const maxX = Math.max(...all.map((p) => p.x), 1), maxY = Math.max(...all.map((p) => p.y));
+	const X = (v) => padL + (v / maxX) * (W - padL - padR);
+	const Y = (v) => padT + (1 - v / maxY) * (H - padT - padB);
+	const s = svg(W, H);
+	for (let i = 0; i <= 4; i++) {
+		const gy = padT + (i / 4) * (H - padT - padB);
+		s.appendChild(el("line", { x1: padL, y1: gy, x2: W - padR, y2: gy, class: "gridl" }));
+		s.appendChild(el("text", { x: 4, y: gy + 4 }, fmtMoney(maxY * (1 - i / 4))));
+	}
+	s.appendChild(el("line", { x1: padL, y1: H - padB, x2: W - padR, y2: H - padB, class: "axis" }));
+	for (let i = 0; i <= 5; i++) s.appendChild(el("text", { x: X(maxX * i / 5) - 4, y: H - 10 }, Math.round(maxX * i / 5)));
+	s.appendChild(el("text", { x: W / 2 - 40, y: H - 0.5, class: "lbl" }, "verified steps"));
+	for (const p of all.filter((p) => !p.mine)) {
+		const d = el("circle", { cx: X(p.x), cy: Y(p.y), r: 4, fill: OTHER, opacity: 0.7 });
+		hover(d, () => [p.label, { value: fmtMoney(p.y), label: `${p.x} verified steps` }]);
+		s.appendChild(d);
+	}
+	for (const p of all.filter((p) => p.mine)) {
+		const hl = selRun !== "all" && p.label === shortJob(selRun);
+		s.appendChild(el("circle", { cx: X(p.x), cy: Y(p.y), r: hl ? 8 : 6, fill: "var(--surface)" }));
+		const d = el("circle", { cx: X(p.x), cy: Y(p.y), r: hl ? 6.5 : 4.5, fill: "var(--s1)" });
+		hover(d, () => [p.label, { value: fmtMoney(p.y), label: `${p.x} verified steps`, color: "var(--s1)" }, p.ok === true ? "success" : p.ok === false ? "failed" : ""]);
+		s.appendChild(d);
+	}
+	body.appendChild(s);
+	body.appendChild(legendEl([{ name: "this row", color: "var(--s1)" }, { name: "rest of the board", color: OTHER }]));
+}
+
+/* ================= 7 · attention ECDF ================= */
+function renderEcdf() {
+	const { body, tableMode } = card("c-ecdf", "Attention depth", "how deep into the offered element list the model actually reaches — the truncation decision, with the cutoff you'd pay for");
+	const steps = stepRuns().flatMap((r) => r.steps).filter((s) => s.chosenIndex != null);
+	if (!steps.length) return empty(body, "no step on this row recorded a chosen element index (vision-only or coordinate actions)");
+	const idx = steps.map((s) => s.chosenIndex).sort((a, b) => a - b);
+	const shown = steps.map((s) => s.listShownToModel).filter((v) => v != null);
+	const meanShown = mean(shown);
+	if (tableMode) {
+		const rows = [0.5, 0.75, 0.9, 0.95, 0.99, 1].map((q) => ({ quantile: `p${Math.round(q * 100)}`, "chosen index ≤": quantile(idx, q) }));
+		return tableView(body, ["quantile", "chosen index ≤"], rows);
+	}
+	const maxX = idx[idx.length - 1];
+	const W = 1080, H = 240, padL = 46, padB = 44, padT = 8, padR = 14;
+	const X = (v) => padL + (v / Math.max(maxX, 1)) * (W - padL - padR);
+	const Y = (v) => padT + (1 - v) * (H - padT - padB);
+	const s = svg(W, H);
+	for (const fy of [0.25, 0.5, 0.75, 1]) {
+		s.appendChild(el("line", { x1: padL, y1: Y(fy), x2: W - padR, y2: Y(fy), class: "gridl" }));
+		s.appendChild(el("text", { x: 4, y: Y(fy) + 4 }, `${fy * 100}%`));
+	}
+	s.appendChild(el("line", { x1: padL, y1: H - padB, x2: W - padR, y2: H - padB, class: "axis" }));
+	for (let i = 0; i <= 5; i++) s.appendChild(el("text", { x: X(maxX * i / 5) - 4, y: H - padB + 14 }, Math.round(maxX * i / 5)));
+	s.appendChild(el("text", { x: W / 2 - 60, y: H - padB + 28, class: "lbl" }, "element index chosen"));
+	let dPath = `M ${X(0)} ${Y(idx.filter((v) => v <= 0).length / idx.length)}`;
+	for (let k = 1; k <= maxX; k++) dPath += ` L ${X(k)} ${Y(idx.filter((v) => v <= k).length / idx.length)}`;
+	s.appendChild(el("path", { d: dPath, fill: "none", stroke: "var(--s1)", "stroke-width": 2, "stroke-linejoin": "round" }));
+	const cutG = el("g");
+	s.appendChild(cutG);
+	body.appendChild(s);
+	const ctl = html("div", "ctl");
+	const lab = html("span");
+	const range = document.createElement("input");
+	range.type = "range"; range.min = "1"; range.max = String(maxX); range.value = String(Math.min(quantile(idx, 0.95) ?? maxX, maxX));
+	const applyCut = () => {
+		const K = Number(range.value);
+		const cover = idx.filter((v) => v <= K).length / idx.length;
+		cutG.replaceChildren(
+			el("line", { x1: X(K), y1: padT, x2: X(K), y2: H - padB, stroke: "var(--ink-2)", "stroke-width": 1, "stroke-dasharray": null }),
+			el("text", { x: X(K) + 5, y: padT + 12, class: "lbl" }, `K=${K} covers ${(cover * 100).toFixed(1)}%`),
+		);
+		lab.textContent = meanShown != null
+			? `truncate the list at K=${K}: keeps ${(cover * 100).toFixed(1)}% of picks · saves x̄ ${Math.max(0, meanShown - K).toFixed(0)} of ${meanShown.toFixed(0)} prompt lines/step`
+			: `truncate at K=${K}: keeps ${(cover * 100).toFixed(1)}% of picks`;
+	};
+	range.oninput = applyCut;
+	ctl.appendChild(range); ctl.appendChild(lab);
+	body.appendChild(ctl);
+	applyCut();
+}
+
+/* ================= 8 · perception diff ================= */
+function renderMapDiff() {
+	const { body, tableMode } = card("c-mapdiff", "Perception diff", "what each backend's map saw that the other missed — controls compared by settingKey, surfaces by title");
+	const maps = data.maps ?? [];
+	if (maps.length < 2) return empty(body, maps.length ? "only one committed map variant exists for this app — nothing to diff yet" : "no committed maps for this app on this machine");
+	let a = renderMapDiff.a ?? 0, b = renderMapDiff.b ?? Math.min(1, maps.length - 1);
+	if (a >= maps.length) a = 0;
+	if (b >= maps.length) b = maps.length - 1;
+	const picker = html("div", "ctl");
+	const mkSel = (cur, set) => {
+		const sel = document.createElement("select");
+		maps.forEach((m, i) => { const o = document.createElement("option"); o.value = String(i); o.textContent = m.slug; if (i === cur) o.selected = true; sel.appendChild(o); });
+		sel.onchange = () => { set(Number(sel.value)); renderAll(); };
+		sel.style.cssText = "background:var(--plane);color:var(--ink-2);border:1px solid var(--border);border-radius:4px;padding:2px 6px";
+		return sel;
+	};
+	picker.appendChild(html("span", "", "A:"));
+	picker.appendChild(mkSel(a, (v) => { renderMapDiff.a = v; }));
+	picker.appendChild(html("span", "", "B:"));
+	picker.appendChild(mkSel(b, (v) => { renderMapDiff.b = v; }));
+	body.appendChild(picker);
+	const A = maps[a], B = maps[b];
+	const keyOf = (n) => (n.kind === "control" ? `c:${n.settingKey ?? n.id}` : `s:${String(n.title).toLowerCase()}`);
+	const ka = new Map(A.nodes.map((n) => [keyOf(n), n])), kb = new Map(B.nodes.map((n) => [keyOf(n), n]));
+	const cls = (kind) => {
+		const both = [], onlyA = [], onlyB = [];
+		for (const [k, n] of ka) if (n.kind === kind) (kb.has(k) ? both : onlyA).push(n);
+		for (const [k, n] of kb) if (n.kind === kind && !ka.has(k)) onlyB.push(n);
+		return { both, onlyA, onlyB };
+	};
+	const c = cls("control"), su = cls("surface");
+	if (tableMode)
+		return tableView(body, ["set", "controls", "surfaces", "control list"],
+			[{ set: "both", controls: c.both.length, surfaces: su.both.length, "control list": "" },
+			 { set: `only ${A.slug}`, controls: c.onlyA.length, surfaces: su.onlyA.length, "control list": c.onlyA.map((n) => n.title).join(", ") },
+			 { set: `only ${B.slug}`, controls: c.onlyB.length, surfaces: su.onlyB.length, "control list": c.onlyB.map((n) => n.title).join(", ") }]);
+	const rows = [
+		{ label: "controls", segs: [{ n: "both", v: c.both.length, col: OTHER }, { n: `only ${A.slug}`, v: c.onlyA.length, col: "var(--s1)" }, { n: `only ${B.slug}`, v: c.onlyB.length, col: "var(--s2)" }], lists: c },
+		{ label: "surfaces", segs: [{ n: "both", v: su.both.length, col: OTHER }, { n: `only ${A.slug}`, v: su.onlyA.length, col: "var(--s1)" }, { n: `only ${B.slug}`, v: su.onlyB.length, col: "var(--s2)" }], lists: su },
+	];
+	const W = 1080, rowH = 22, padL = 90;
+	const maxT = Math.max(...rows.map((r) => r.segs.reduce((s2, g) => s2 + g.v, 0)), 1);
+	const s = svg(W, rows.length * (rowH + 12) + 6);
+	rows.forEach((r, i) => {
+		const y = i * (rowH + 12) + 2;
+		s.appendChild(el("text", { x: 0, y: y + 15 }, r.label));
+		let x = padL;
+		for (const g of r.segs) {
+			if (!g.v) continue;
+			const w = (g.v / maxT) * (W - padL - 10);
+			const rect = el("rect", { x, y, width: Math.max(w - 2, 1), height: rowH, rx: 3, fill: g.col });
+			const list = g.n === "both" ? r.lists.both : g.n.startsWith(`only ${A.slug}`) ? r.lists.onlyA : r.lists.onlyB;
+			hover(rect, () => [g.n, { value: String(g.v), label: r.label, color: g.col }, list.slice(0, 14).map((n) => n.title).join(" · ") + (list.length > 14 ? ` +${list.length - 14}` : "")]);
+			s.appendChild(rect);
+			if (w > 34) s.appendChild(el("text", { x: x + 6, y: y + 15, class: "lbl" }, g.v));
+			x += w;
+		}
+	});
+	body.appendChild(s);
+	body.appendChild(legendEl([{ name: "seen by both", color: OTHER }, { name: `only ${A.slug}`, color: "var(--s1)" }, { name: `only ${B.slug}`, color: "var(--s2)" }]));
+}
+
+/* ================= 9 · wall-clock anatomy ================= */
+function renderAnatomy() {
+	const { body, tableMode } = card("c-anatomy", "Where the time went", "attributed per run: live typing and waits are measured; actuation+settle is ≈0.9s/step; the remainder is model thinking + observation");
+	const runs = stepRuns().filter((r) => r.elapsedSec != null || r.steps.some((s) => s.timestamp));
+	if (!runs.length) return empty(body, "no timed runs with step records");
+	const parts = runs.map((r) => {
+		const stamps = r.steps.map((s) => s.timestamp && Date.parse(s.timestamp)).filter(Boolean);
+		const total = (r.elapsedSec != null ? r.elapsedSec * 1000 : Math.max(...stamps) - Math.min(...stamps)) || 0;
+		const typing = r.steps.flatMap((s) => s.typed ?? []).reduce((acc, c) => acc + Math.max(0, c.e - c.s), 0);
+		const waiting = r.steps.filter((s) => s.name === "wait").reduce((acc, s) => acc + (s.seconds ?? 0.9) * 1000, 0);
+		const acting = r.steps.filter((s) => s.name !== "wait").length * 900 + r.steps.filter((s) => s.name === "drag").length * 600;
+		const thinking = Math.max(0, total - typing - waiting - acting);
+		return { r, total, segs: [{ n: "thinking + observing", v: thinking, col: "var(--s1)" }, { n: "actuation + settle", v: Math.min(acting, total), col: "var(--s2)" }, { n: "waiting", v: waiting, col: "var(--s3)" }, { n: "live typing", v: typing, col: "var(--s4)" }] };
+	});
+	if (tableMode)
+		return tableView(body, ["run", "total", "thinking + observing", "actuation + settle", "waiting", "live typing"],
+			parts.map((p) => ({ run: shortJob(p.r.jobId), total: fmtDur(p.total / 1000),
+				...Object.fromEntries(p.segs.map((g) => [g.n, fmtDur(g.v / 1000)])) })));
+	const W = 1080, rowH = 18, padL = 130;
+	const maxT = Math.max(...parts.map((p) => p.total), 1);
+	const s = svg(W, parts.length * (rowH + 10) + 6);
+	parts.forEach((p, i) => {
+		const y = i * (rowH + 10) + 2;
+		s.appendChild(el("text", { x: 0, y: y + 13 }, shortJob(p.r.jobId)));
+		let x = padL;
+		for (const g of p.segs) {
+			if (g.v <= 0) continue;
+			const w = (g.v / maxT) * (W - padL - 60);
+			const rect = el("rect", { x, y, width: Math.max(w - 2, 1), height: rowH, rx: 2, fill: g.col });
+			hover(rect, () => [shortJob(p.r.jobId), { value: fmtDur(g.v / 1000), label: g.n, color: g.col }, `${((g.v / p.total) * 100).toFixed(0)}% of ${fmtDur(p.total / 1000)}`]);
+			s.appendChild(rect);
+			x += w;
+		}
+		s.appendChild(el("text", { x: x + 6, y: y + 13 }, fmtDur(p.total / 1000)));
+	});
+	body.appendChild(s);
+	body.appendChild(legendEl(parts[0].segs.map((g) => ({ name: g.n, color: g.col }))));
+}
+
+/* ================= 10 · humanizer fidelity ================= */
+function renderMotion() {
+	const { body, tableMode } = card("c-motion", "Humanizer fidelity", "the recorded human motion corpus vs the synthetic fallback — launch asymmetry, mid-flight hesitation, bend, and why duration doesn't follow from distance");
+	if (motionState === "absent") return empty(body, "motion corpus not present on this machine (data/motion-segments.json)");
+	if (!motion) {
+		empty(body, "loading motion corpus…");
+		if (motionState === "idle") {
+			motionState = "loading";
+			fetch("/api/graphs/motion").then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+				.then((m) => { motion = m; renderAll(); })
+				.catch(() => { motionState = "absent"; renderAll(); });
+		}
+		return;
+	}
+	const segs = motion.segments ?? [], syn = motion.synthesized ?? [];
+	const pick = (arr, n) => { const step = Math.max(1, Math.floor(arr.length / n)); return arr.filter((_, i) => i % step === 0).slice(0, n); };
+	const ratioOf = (g) => {
+		let peak = 0;
+		for (let i = 1; i < g.t.length; i++) { const dt = g.t[i] - g.t[i - 1]; if (dt > 0) peak = Math.max(peak, (g.par[i] - g.par[i - 1]) / dt); }
+		return peak * g.durationMs;
+	};
+	const bendOf = (g) => Math.max(...g.perp.map(Math.abs)) * 100;
+	if (tableMode) {
+		const stat = (xs) => `${fmtNum(quantile([...xs].sort((x, y) => x - y), 0.5))} (p10 ${fmtNum(quantile([...xs].sort((x, y) => x - y), 0.1))}, p90 ${fmtNum(quantile([...xs].sort((x, y) => x - y), 0.9))})`;
+		return tableView(body, ["metric", "human corpus", "synthetic"],
+			[{ metric: "segments", "human corpus": segs.length, synthetic: syn.length },
+			 { metric: "peak/mean speed ratio", "human corpus": stat(segs.map(ratioOf)), synthetic: stat(syn.map(ratioOf)) },
+			 { metric: "max bend, % of distance", "human corpus": stat(segs.map(bendOf)), synthetic: stat(syn.map(bendOf)) },
+			 { metric: "duration ms (all distances)", "human corpus": stat(segs.map((g) => g.durationMs)), synthetic: stat(syn.map((g) => g.durationMs)) }]);
+	}
+	const grid = html("div", "panelgrid");
+	body.appendChild(grid);
+	const panel = (title) => { const d = html("div"); d.appendChild(html("div", "paneltitle", title)); grid.appendChild(d); return d; };
+
+	{ /* a — cumulative distance vs normalized time: the ballistic launch + long settle */
+		const p = panel("cumulative distance vs normalized time");
+		const W = 520, H = 210, padL = 40, padB = 26, padT = 6, padR = 8;
+		const X = (v) => padL + v * (W - padL - padR), Y = (v) => padT + (1 - v) * (H - padT - padB);
+		const s = svg(W, H);
+		for (const f of [0.5, 1]) s.appendChild(el("line", { x1: padL, y1: Y(f), x2: W - padR, y2: Y(f), class: "gridl" }));
+		s.appendChild(el("line", { x1: padL, y1: H - padB, x2: W - padR, y2: H - padB, class: "axis" }));
+		s.appendChild(el("text", { x: 2, y: Y(1) + 4 }, "100%")); s.appendChild(el("text", { x: 2, y: Y(0.5) + 4 }, "50%"));
+		s.appendChild(el("text", { x: W / 2 - 30, y: H - 8 }, "t / duration"));
+		const line = (g, color, width, opacity) => {
+			let d = "";
+			for (let i = 0; i < g.t.length; i++) d += `${i ? "L" : "M"} ${X(g.t[i] / g.durationMs)} ${Y(Math.min(1, Math.max(0, g.par[i])))} `;
+			s.appendChild(el("path", { d, fill: "none", stroke: color, "stroke-width": width, opacity }));
+		};
+		for (const g of pick(segs, 120)) line(g, "var(--s1)", 1, 0.08);
+		const gridT = Array.from({ length: 51 }, (_, i) => i / 50);
+		const med = gridT.map((ft) => median(pick(segs, 400).map((g) => {
+			const tt = ft * g.durationMs;
+			let i = g.t.findIndex((v) => v >= tt);
+			if (i < 0) i = g.t.length - 1;
+			return g.par[Math.max(0, i)];
+		})));
+		let d = "";
+		gridT.forEach((ft, i) => { d += `${i ? "L" : "M"} ${X(ft)} ${Y(Math.min(1, med[i] ?? 0))} `; });
+		s.appendChild(el("path", { d, fill: "none", stroke: "var(--s1)", "stroke-width": 2.5 }));
+		for (const g of syn) line(g, "var(--s2)", 1.5, 0.65);
+		p.appendChild(s);
+		p.appendChild(legendEl([{ name: "human (sampled) + median", color: "var(--s1)", line: true }, { name: "synthetic fallback", color: "var(--s2)", line: true }]));
+	}
+	{ /* b — peak/mean speed ratio */
+		const p = panel("peak speed ÷ mean speed (hesitation shows as high ratios)");
+		p.appendChild(histo(segs.map(ratioOf), syn.map(ratioOf), 2, 30, (v) => fmtNum(v, 0)));
+	}
+	{ /* c — bend */
+		const p = panel("max perpendicular deviation, % of movement distance");
+		p.appendChild(histo(segs.map(bendOf), syn.map(bendOf), 0, 40, (v) => `${fmtNum(v, 0)}%`));
+	}
+	{ /* d — Fitts scatter */
+		const p = panel("distance vs duration — Fitts's law barely holds (that's the point)");
+		const W = 520, H = 210, padL = 46, padB = 26, padT = 6, padR = 8;
+		const pts = pick(segs, 500).map((g) => ({ x: Math.log2(g.distancePx), y: g.durationMs }));
+		const spts = syn.map((g) => ({ x: Math.log2(g.distancePx), y: g.durationMs }));
+		const maxY = Math.min(3000, Math.max(...pts.map((q) => q.y)));
+		const minX = Math.min(...pts.map((q) => q.x)), maxX = Math.max(...pts.map((q) => q.x));
+		const X = (v) => padL + ((v - minX) / (maxX - minX)) * (W - padL - padR);
+		const Y = (v) => padT + (1 - Math.min(v, maxY) / maxY) * (H - padT - padB);
+		const s = svg(W, H);
+		s.appendChild(el("line", { x1: padL, y1: H - padB, x2: W - padR, y2: H - padB, class: "axis" }));
+		for (const v of [500, 1000, 1500, 2000, 2500]) if (v < maxY) { s.appendChild(el("line", { x1: padL, y1: Y(v), x2: W - padR, y2: Y(v), class: "gridl" })); s.appendChild(el("text", { x: 2, y: Y(v) + 4 }, `${v}`)); }
+		s.appendChild(el("text", { x: W / 2 - 50, y: H - 8 }, "log₂ distance (px)"));
+		for (const q of pts) s.appendChild(el("circle", { cx: X(q.x), cy: Y(q.y), r: 2, fill: OTHER, opacity: 0.5 }));
+		for (const q of spts) s.appendChild(el("circle", { cx: X(q.x), cy: Y(q.y), r: 3.5, fill: "var(--s2)" }));
+		const n = pts.length, sx = pts.reduce((a2, q) => a2 + q.x, 0), sy = pts.reduce((a2, q) => a2 + q.y, 0);
+		const sxx = pts.reduce((a2, q) => a2 + q.x * q.x, 0), sxy = pts.reduce((a2, q) => a2 + q.x * q.y, 0), syy = pts.reduce((a2, q) => a2 + q.y * q.y, 0);
+		const r = (n * sxy - sx * sy) / Math.sqrt((n * sxx - sx * sx) * (n * syy - sy * sy));
+		s.appendChild(el("text", { x: padL + 8, y: padT + 14, class: "lbl" }, `R² = ${(r * r).toFixed(2)} — distance explains almost none of duration`));
+		p.appendChild(s);
+		p.appendChild(legendEl([{ name: "human corpus", color: OTHER }, { name: "synthetic", color: "var(--s2)" }]));
+	}
+	function histo(values, synth, lo, hi, fmt) {
+		const wrap = html("div");
+		const W = 520, H = 170, padL = 34, padB = 26, padT = 6, padR = 8, BINS = 24;
+		const clamp = (v) => Math.max(lo, Math.min(hi, v));
+		const bins = new Array(BINS).fill(0);
+		for (const v of values) bins[Math.min(BINS - 1, Math.floor(((clamp(v) - lo) / (hi - lo)) * BINS))]++;
+		const maxB = Math.max(...bins, 1);
+		const s = svg(W, H);
+		const bw = (W - padL - padR) / BINS;
+		bins.forEach((b, i) => {
+			const bh = (b / maxB) * (H - padT - padB);
+			const rect = el("rect", { x: padL + i * bw, y: H - padB - bh, width: Math.max(bw - 2, 1), height: Math.max(bh, 0.5), rx: 2, fill: "var(--s1)" });
+			hover(rect, () => [`${fmt(lo + (i / BINS) * (hi - lo))} – ${fmt(lo + ((i + 1) / BINS) * (hi - lo))}`, { value: String(b), label: "human segments", color: "var(--s1)" }]);
+			s.appendChild(rect);
+		});
+		for (const v of synth) {
+			const x = padL + ((clamp(v) - lo) / (hi - lo)) * (W - padL - padR);
+			s.appendChild(el("line", { x1: x, y1: padT, x2: x, y2: H - padB, stroke: "var(--s2)", "stroke-width": 2, opacity: 0.8 }));
+		}
+		s.appendChild(el("line", { x1: padL, y1: H - padB, x2: W - padR, y2: H - padB, class: "axis" }));
+		for (let i = 0; i <= 4; i++) s.appendChild(el("text", { x: padL + (i / 4) * (W - padL - padR) - 6, y: H - 8 }, fmt(lo + (i / 4) * (hi - lo))));
+		wrap.appendChild(s);
+		wrap.appendChild(legendEl([{ name: "human corpus", color: "var(--s1)" }, { name: "synthetic", color: "var(--s2)", line: true }]));
+		return wrap;
+	}
+}
+
+/* ================= 11 · discovery convergence (explore rows) ================= */
+function renderConvergence() {
+	const runs = filteredRuns().filter((r) => Array.isArray(r.series) && r.series.length);
+	if (data.arm.kind !== "explore" && !runs.length) return; // task rows: card absent, not empty
+	const { body, tableMode } = card("c-conv", "Discovery convergence", "the shape of each explore pass: frontier burning down while the map climbs to meet it — ticks mark context resets; seen/dismissed ride their own panel so mass dismissals can't crush the scale");
+	if (!runs.length) return empty(body, "no discovery series pulled for this row yet");
+	if (tableMode)
+		return tableView(body, ["run", "t", "kind", "actions", "frontier", "actuated", "nodes", "seen", "dismissed"],
+			runs.flatMap((r) => r.series.map((pt) => ({ run: shortJob(r.jobId), t: fmtDur(pt.t / 1000), kind: pt.kind, actions: pt.actions ?? "", frontier: pt.frontier ?? "", actuated: pt.actuated ?? "", nodes: pt.nodes ?? "", seen: pt.seen ?? "", dismissed: pt.dismissed ?? "" }))));
+	const PANELS = [
+		[{ key: "frontier", color: "var(--s1)" }, { key: "actuated", color: "var(--s2)" }, { key: "nodes", color: "var(--s3)" }],
+		[{ key: "seen", color: "var(--s4)" }, { key: "dismissed", color: "var(--s5)" }],
+	];
+	for (const r of runs) {
+		body.appendChild(html("div", "paneltitle", shortJob(r.jobId)));
+		const maxT = Math.max(...r.series.map((pt) => pt.t), 1);
+		for (const series of PANELS) {
+			const W = 1080, H = 130, padL = 44, padB = 20, padT = 6, padR = 10;
+			const vals = r.series.flatMap((pt) => series.map((sd) => pt[sd.key]).filter((v) => v != null));
+			if (!vals.length) continue;
+			const maxV = Math.max(...vals, 1);
+			const X = (t) => padL + (t / maxT) * (W - padL - padR);
+			const Y = (v) => padT + (1 - v / maxV) * (H - padT - padB);
+			const s = svg(W, H);
+			s.appendChild(el("line", { x1: padL, y1: H - padB, x2: W - padR, y2: H - padB, class: "axis" }));
+			s.appendChild(el("text", { x: 2, y: padT + 10 }, fmtK(maxV)));
+			for (let i = 0; i <= 4; i++) s.appendChild(el("text", { x: X(maxT * i / 4) - 8, y: H - 6 }, fmtDur(maxT * i / 4 / 1000)));
+			for (const pt of r.series.filter((q) => q.kind === "chapter"))
+				s.appendChild(el("line", { x1: X(pt.t), y1: padT, x2: X(pt.t), y2: H - padB, stroke: "var(--baseline)", "stroke-width": 1 }));
+			for (const sd of series) {
+				const pts = r.series.filter((pt) => pt[sd.key] != null);
+				if (!pts.length) continue;
+				let d = "";
+				pts.forEach((pt, i) => { d += `${i ? "L" : "M"} ${X(pt.t)} ${Y(pt[sd.key])} `; });
+				s.appendChild(el("path", { d, fill: "none", stroke: sd.color, "stroke-width": 2, "stroke-linejoin": "round" }));
+				const lastPt = pts[pts.length - 1];
+				const dot = el("circle", { cx: X(lastPt.t), cy: Y(lastPt[sd.key]), r: 4, fill: sd.color });
+				hover(dot, () => [sd.key, { value: String(lastPt[sd.key]), label: `at ${fmtDur(lastPt.t / 1000)}`, color: sd.color }]);
+				s.appendChild(el("circle", { cx: X(lastPt.t), cy: Y(lastPt[sd.key]), r: 6, fill: "var(--surface)" }));
+				s.appendChild(dot);
+			}
+			body.appendChild(s);
+		}
+	}
+	body.appendChild(legendEl([{ name: "frontier", color: "var(--s1)", line: true }, { name: "actuated", color: "var(--s2)", line: true }, { name: "map nodes", color: "var(--s3)", line: true }, { name: "seen", color: "var(--s4)", line: true }, { name: "dismissed", color: "var(--s5)", line: true }]));
+}
+
+/* ================= orchestration ================= */
+function renderAll() {
+	if (!data) return;
+	renderHeader();
+	renderFilters();
+	const safe = (fn) => { try { fn(); } catch (e) { console.error(fn.name, e); } };
+	safe(renderConvergence);
+	safe(renderTouch);
+	safe(renderTraps);
+	safe(renderFlow);
+	safe(renderProof);
+	safe(renderConfusion);
+	safe(renderCost);
+	safe(renderEcdf);
+	safe(renderMapDiff);
+	safe(renderAnatomy);
+	safe(renderMotion);
+	$("updated").textContent = `updated ${new Date().toLocaleTimeString()}`;
+}
+
+let fetching = false;
+async function loadData() {
+	if (fetching) return;
+	fetching = true;
+	$("cards").classList.add("stale");
+	try {
+		const res = await fetch(`/api/graphs/data?arm=${encodeURIComponent(ARM)}${MODEL ? `&model=${encodeURIComponent(MODEL)}` : ""}`);
+		const body = await res.json();
+		if (!res.ok) { $("title").textContent = body.error ?? "error"; return; }
+		data = body;
+		renderAll();
+	} catch (e) {
+		console.error(e);
+	} finally {
+		fetching = false;
+		$("cards").classList.remove("stale");
+	}
+}
+
+/* Realtime: ride the board's own SSE stream; any state push means something may have landed.
+   Debounced — collect can push several frames in a burst. Same 45s staleness idiom as the board. */
+let esTimer, lastBeat = Date.now();
+function connectES() {
+	const es = new EventSource("/events");
+	es.onmessage = (ev) => {
+		lastBeat = Date.now();
+		try {
+			const msg = JSON.parse(ev.data);
+			if (msg?.reload) { location.reload(); return; }
+			if (msg?.ev === "hb") return;
+		} catch { return; }
+		clearTimeout(esTimer);
+		esTimer = setTimeout(loadData, 800);
+	};
+	es.onerror = () => {};
+	setInterval(() => { if (Date.now() - lastBeat > 45_000) { lastBeat = Date.now(); es.close(); connectES(); } }, 5000);
+}
+
+loadData();
+connectES();
+</script>
+</body>
+</html>

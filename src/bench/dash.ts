@@ -16,6 +16,9 @@ import { archiveDirFor } from "./collect.js";
 import { estimateCost } from "./cost.js";
 import { BENCH_PRIMARY_MODEL, MATRIX, armAppmapSlug, armById, armTitle, flagsLine, perceptionLine, phaseArms, type Arm, type Phase } from "./matrix.js";
 import { benchDir, type Manifest, type ManifestEntry, readManifest, utcDate } from "./manifest.js";
+// Deliberate call-time cycle: graphs.ts imports this module's exported functions (buildDetail,
+// exploreSeries) — safe because both sides only call across the boundary at request time.
+import { serveGraphs } from "./graphs.js";
 import { judgeDisagreements, modelPasses, passLabel, rollup } from "./report.js";
 
 /**
@@ -3294,6 +3297,11 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			res.write(`data: ${JSON.stringify(currentState())}\n\n`);
 			clients.add(res);
 			req.on("close", () => clients.delete(res));
+		} else if (url.startsWith("/graphs") || url.startsWith("/api/graphs/")) {
+			if (!serveGraphs(req, res, url, { manifest, currentState })) {
+				res.writeHead(404);
+				res.end("not found");
+			}
 		} else {
 			res.writeHead(404);
 			res.end("not found");
