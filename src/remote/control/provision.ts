@@ -222,6 +222,29 @@ export async function provisionHost(host: HostEntry, opts: ProvisionOptions = {}
 	}
 	if (!synced.ok) return fail("sync", synced.detail);
 	steps.push({ step: "sync", ok: true, detail: `${source} -> ${REMOTE_CHECKOUT}/` });
+	/**
+	 * SYNC IS NOT INERT ON A BUSY HOST, which the busy guard further down does not cover
+	 * because it only protects the launchagent step.
+	 *
+	 * The rsync lands new source under a run that is already executing. The parent process has
+	 * its modules loaded and is unaffected, but a run spawns children — `tsx` for cleanup, the
+	 * driver, a replay — and those compile the checkout AS IT IS WHEN THEY START. Swapping code
+	 * mid-pass means a run's second half is a different program from its first, and if the
+	 * synced tree does not compile they simply fail: this runner's log carries 28 restarts
+	 * preceded by `src/backends/dom.ts … error TS2305`, a file deleted days earlier.
+	 *
+	 * A warning rather than a refusal, because the sync itself is usually what the operator
+	 * came for and the row above already reports it landed. What was missing is anyone being
+	 * told it happened underneath a running pass.
+	 */
+	const busyAtSync = await attempt(() => run(host, runnerArgv("status"), { timeoutMs }));
+	if (busyAtSync.ok && /"state"\s*:\s*"busy"/.test(busyAtSync.stdout)) {
+		// Amends the sync row rather than adding a second one: the step list is a fixed sequence
+		// that callers and tests read positionally, and a duplicate entry is a worse lie than
+		// the silence it replaces.
+		const row = steps[steps.length - 1];
+		if (row) row.detail = `${row.detail} — WARNING: host was BUSY. The running pass's later child processes compile the new tree, so its second half is different code from its first. Re-run the affected arm.`;
+	}
 	// Everything below either installs or bounces something. A sync-only pass stops here so it
 	// cannot disturb a Mac that is mid-run.
 	if (opts.syncOnly) return { host: host.name, ok: true, steps };

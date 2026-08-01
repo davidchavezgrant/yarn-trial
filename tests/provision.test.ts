@@ -947,3 +947,32 @@ test("SYNC_EXCLUDES__WithholdsAppmaps__When__ShippingTheCheckout", async () => {
 		assert.ok(excluded.includes("/.env"), "the secret exclusions must survive any edit to this list");
 	});
 });
+
+test("provisionHost__WarnsOnTheSyncRow__When__TheHostIsBusy", async () => {
+	// The busy guard protects the LAUNCHAGENT step, and sync happens before it — so a provision
+	// against a busy Mac lands new source under a pass that is already running. The parent has
+	// its modules loaded, but a run spawns children (tsx for cleanup, the driver, a replay) and
+	// those compile the checkout AS IT IS WHEN THEY START: the second half of a pass becomes a
+	// different program from its first. This fleet's runner log carries 28 restarts preceded by
+	// `src/backends/dom.ts … error TS2305`, a file deleted days before.
+	//
+	// A warning, not a refusal: the sync is usually what the operator came for. What was missing
+	// was anyone being told it happened underneath a running pass.
+	await inTempDir("yarn-source-", async (source) => {
+		const rec = fleetDouble(source);
+		const inner = rec.opts.run!;
+		const res = await provisionHost(host("mac1"), {
+			...rec.opts,
+			run: async (h: any, argv: string[], o: any) =>
+				argv[0] === "runnerctl" && argv[1] === "status"
+					? ({ code: 0, stdout: `${JSON.stringify({ ok: true, state: "busy", jobId: "explore-in-flight" })}\n`, stderr: "" } as any)
+					: inner(h, argv, o),
+		});
+
+		const sync = res.steps.find((st) => st.step === "sync");
+		assert.match(sync?.detail ?? "", /WARNING: host was BUSY/);
+		// Exactly one sync row: the step list is read positionally, so a duplicate entry would
+		// be a worse lie than the silence it replaces.
+		assert.equal(res.steps.filter((st) => st.step === "sync").length, 1);
+	});
+});

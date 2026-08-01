@@ -429,6 +429,32 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 	const reaper = setInterval(reap, REAP_MS);
 	reaper.unref();
 
+	/**
+	 * Say why we are going, and name what we are taking with us.
+	 *
+	 * The runner had no signal handler, so a launchd bootout ended it mid-sentence: on
+	 * 2026-08-01 an in-flight 40-minute explore went from `started` straight to a NEW
+	 * incarnation's `orphaned … pid is gone`, with no line in between saying anything had
+	 * happened. Hours went into establishing what that silence meant, and the answer — the
+	 * runner was killed and launchd took the job's process group with it — was only reachable
+	 * by noticing that a deliberate restart logs `restart requested` and this had not.
+	 *
+	 * This does NOT stop the jobs. It cannot save them either: they are descendants of this
+	 * LaunchAgent's launchd job, and launchd terminates those on bootout regardless of the
+	 * `detached: true` session we spawn them in. Escaping that needs each run submitted as its
+	 * own launchd job — real work, tracked separately. Until then the least this can do is make
+	 * the loss legible in one line instead of four hours.
+	 */
+	for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const)
+		process.on(sig, () => {
+			const running = [...children.keys()];
+			log(`${sig} received — runner exiting. ${running.length ? `launchd will take ${running.length} running job(s) with it: ${running.join(", ")}` : "no jobs were running"}`);
+			// Default action, restored: exiting here rather than lingering keeps launchd's
+			// KeepAlive respawn prompt, and a handler that swallowed the signal would hang the
+			// bootout it is reporting.
+			process.exit(sig === "SIGINT" ? 130 : 143);
+		});
+
 	function currentJobId(): string | undefined {
 		return inspect(runnerDir).holder?.lease.jobId;
 	}
