@@ -885,26 +885,20 @@ function statusChip(e, rowKey, selected) {
 		claimed ? (claimed.success ? OUTCOME_COLORS.succeeded : STATUS.critical) :
 		e.status === "running" ? RUNNING : e.status === "queued" ? "var(--muted)" :
 		e.status === "awaiting-collect" ? STATUS.warning : OUTCOME_COLORS[e.status];
-	// Chips are minimal on purpose: dot + Status + elapsed — per-run detail lives in the
-	// tooltip and the row dropdown, not on the chip line. The elapsed ticks while Running
-	// (js-elapsed span so the 1s ticker advances it between SSE pushes — a static
-	// "Running 22m43s" that jumps every 20s reads as frozen) and FREEZES at the run's final
-	// duration once it finishes: how long a run took must not vanish the moment it lands.
-	// Queued chips show no time — nothing has started.
+	// Chips are STATUS-ONLY: dot + status word — since the per-run refactor the same row's
+	// Time column carries the wall-clock (ticking while running, frozen at the final
+	// duration), so a time readout on the chip said the same number twice. Duration stays
+	// discoverable here via the chip tooltip ("elapsed …" while running, "took …" once
+	// finished); queued chips carry neither — nothing has started.
 	const took = e.elapsedSec != null ? e.elapsedSec : e.runSec != null ? e.runSec : (liveMem[e.jobId] || {}).elapsed;
-	// A running entry whose poll carried no elapsedSec renders plain "Running" (with the
-	// liveMem pin as fallback) — fabricating "Running 0s" off a missing number reads as a
-	// fresh start that never happened.
 	const runBase = e.elapsedSec != null ? e.elapsedSec
 		: (liveMem[e.jobId] || {}).start != null ? (receivedAt - liveMem[e.jobId].start) / 1000 : null;
-	let label = e.status === "running"
-		? `Running${runBase != null ? " " + elapsedSpan(runBase) : ""}`
-		: esc(statusLabel(e.status)) + (e.status !== "queued" && took != null ? " " + fmtDur(took) : "");
+	let label = e.status === "running" ? "Running" : esc(statusLabel(e.status));
 	// The dead override changes the LABEL too: two states must never share a name and be
 	// told apart by dot color alone.
-	if (dead) label = esc(statusLabel(pane.state)) + (took != null ? " " + fmtDur(took) : "") + " — uncollected";
+	if (dead) label = esc(statusLabel(pane.state)) + " — uncollected";
 	// Same rule for a self-reported verdict: its own label, never a green dot on "Awaiting collect".
-	if (claimed) label = (claimed.success ? "Succeeded" : "Failed") + (took != null ? " " + fmtDur(took) : "") + " — self-reported";
+	if (claimed) label = (claimed.success ? "Succeeded" : "Failed") + " — self-reported";
 	// Chips stay minimal: the live counters moved to the metric COLUMNS (the per-run cells
 	// — David, 2026-08-01: "actions should be its own column"). Only a mid-run fatal stays
 	// on the chip — it is status, not a metric, and the columns have nowhere to say it.
@@ -928,6 +922,11 @@ function statusChip(e, rowKey, selected) {
 	// a not-yet-started entry shows its submit time instead.
 	const st = entryStart(e);
 	const when = st != null ? `\nstarted ${startStamp(st)}` : e.submittedAt ? `\nsubmitted ${startStamp(Date.parse(e.submittedAt) || null)}` : "";
+	// Duration rides the tip since it left the label: elapsed-as-of-this-push while running
+	// (tooltips are plain text — no ticker), the final duration once finished.
+	const dur = e.status === "running"
+		? (runBase != null ? `\nelapsed ${fmtDur(runBase)}` : "")
+		: (e.status !== "queued" && took != null ? `\ntook ${fmtDur(took)}` : "");
 	// A failure surfaced BEFORE any collect pass (liveFor read it off the host's job
 	// registry): say where the verdict came from, or the red chip reads as a collected result.
 	const preCollect = !e.collected && (e.status === "failed" || e.status === "crashed" || e.status === "stopped")
@@ -947,7 +946,7 @@ function statusChip(e, rowKey, selected) {
 		lp.verdict ? `claimed ${lp.verdict.success ? "success" : "failure"} — not yet collected/judged` : "",
 		lp.cleanup ? `cleanup: ${lp.cleanup}` : "",
 	].filter(Boolean).join(" · ") : "";
-	return `<span class="chip${selected ? " sel" : ""}"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${esc(when)}${e.note ? "\n" + esc(e.note) : ""}${esc(preCollect)}${esc(registry)}${esc(liveTip)}\nclick to view on the map${esc(econ)}">` +
+	return `<span class="chip${selected ? " sel" : ""}"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${esc(when)}${esc(dur)}${e.note ? "\n" + esc(e.note) : ""}${esc(preCollect)}${esc(registry)}${esc(liveTip)}\nclick to view on the map${esc(econ)}">` +
 		`<span class="dot${known ? "" : " unknown"}"${known ? ` style="background:${color}"` : ""}></span>${label}${esc(judge)}</span>`;
 }
 
