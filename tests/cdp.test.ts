@@ -113,6 +113,198 @@ test("parseAiSnapshot__TreatsCursorPointerAsInteractive__When__TheRoleIsGeneric"
 	assert.equal(rows[0].interactive, true);
 });
 
+// ---- Name synthesis: the anonymous-settings-control fix -------------------------------------
+// Yarn's settings <select>s reach the snapshot as `combobox [ref=..]` with an EMPTY name while
+// sibling static text carries "Cursor Style" — and the journal keys on (name, surface), so a
+// cdp run that changed the brand cursor journaled nothing (detectMutation refuses anonymous
+// targets, optionCommit skips anonymous owners). These fixtures reproduce that row shape and
+// pin the synthesis rules: nearest same-row text, preceding before following, garbage refused,
+// ambiguity refused, authored names untouchable.
+
+// The diagnosed Yarn shape: label text left, anonymous <select> right, one row container,
+// panel title on an ancestor. Second row has a control with NO adjacent text at all.
+const YARN_ROWS = `- generic [ref=e1] [box=0,0,800,600]:
+  - dialog "Screen Clip Settings" [ref=e2] [box=100,50,600,500]:
+    - generic [ref=e3] [box=110,60,580,40]:
+      - text: Cursor Style
+      - combobox [ref=e4] [box=400,65,280,30]:
+        - option "Original" [selected] [box=0,0,0,0]
+        - option "Pointer-first" [box=0,0,0,0]
+    - generic [ref=e5] [box=110,110,580,40]:
+      - combobox [ref=e6] [box=400,115,280,30]:
+        - option "Slow" [selected] [box=0,0,0,0]
+`;
+
+test("parseAiSnapshot__SynthesizesTheRowLabel__When__AnAnonymousComboboxSitsBesideStaticText", () => {
+	const { rows } = parseAiSnapshot(YARN_ROWS);
+	const combo = rows.find((r) => r.ref === "e4")!;
+	assert.equal(combo.name, "Cursor Style");
+	assert.equal(combo.nameSynthesized, true);
+	// The value-lift and the surface are untouched by synthesis — the journal needs all
+	// three: (name, surface) to match across observations, value to diff.
+	assert.equal(combo.value, "Original");
+	assert.equal(combo.surface, "Screen Clip Settings");
+});
+
+test("parseAiSnapshot__LeavesTheControlAnonymous__When__NoAdjacentTextExists", () => {
+	// No name is better than a wrong one: an unlabeled row stays unlabeled rather than
+	// adopting text from the neighboring row (which its sibling's options also block).
+	const { rows } = parseAiSnapshot(YARN_ROWS);
+	const combo = rows.find((r) => r.ref === "e6")!;
+	assert.equal(combo.name, "");
+	assert.equal(combo.nameSynthesized, undefined);
+});
+
+test("parseAiSnapshot__NamesOnlyTheAdjacentControl__When__TwoControlsFollowOneLabel", () => {
+	// Pinned behavior: a control never reads a label ACROSS another control, so the first
+	// control after the text takes it and the second stays anonymous.
+	const page = `- generic [ref=e1]:
+  - text: Cursor Style
+  - combobox [ref=e2] [box=0,0,50,20]
+  - combobox [ref=e3] [box=60,0,50,20]
+`;
+	const { rows } = parseAiSnapshot(page);
+	assert.equal(rows.find((r) => r.ref === "e2")?.name, "Cursor Style");
+	assert.equal(rows.find((r) => r.ref === "e3")?.name, "");
+});
+
+test("parseAiSnapshot__NamesNeither__When__OneLabelSitsBetweenTwoAnonymousControls", () => {
+	// Pinned behavior: control–text–control is a genuine tie (the text could be either's
+	// label), and a wrong pairing poisons the journal worse than anonymity — so neither.
+	const page = `- generic [ref=e1]:
+  - checkbox [ref=e2] [box=0,0,20,20]
+  - text: Motion Blur
+  - combobox [ref=e3] [box=60,0,50,20]
+`;
+	const { rows } = parseAiSnapshot(page);
+	assert.equal(rows.find((r) => r.ref === "e2")?.name, "");
+	assert.equal(rows.find((r) => r.ref === "e3")?.name, "");
+});
+
+test("parseAiSnapshot__NeverOverwritesAnAuthoredName__When__RowTextPrecedesANamedControl", () => {
+	const page = `- generic [ref=e1]:
+  - text: Cursor Style
+  - combobox "Speed" [ref=e2] [box=0,0,50,20]
+`;
+	const { rows } = parseAiSnapshot(page);
+	const combo = rows.find((r) => r.ref === "e2")!;
+	assert.equal(combo.name, "Speed");
+	assert.equal(combo.nameSynthesized, undefined);
+});
+
+test("parseAiSnapshot__NamesACheckboxFromTrailingText__When__NoPrecedingLabelExists", () => {
+	// The mirrored convention: checkbox first, label after. Following text is claimed only
+	// when nothing precedes, so label-left rows always win over this direction.
+	const page = `- generic [ref=e1]:
+  - checkbox [ref=e2] [box=0,0,20,20]
+  - text: Enable motion blur
+`;
+	const { rows } = parseAiSnapshot(page);
+	const box = rows.find((r) => r.ref === "e2")!;
+	assert.equal(box.name, "Enable motion blur");
+	assert.equal(box.nameSynthesized, true);
+});
+
+test("parseAiSnapshot__SkipsTheValueEcho__When__TheCurrentValueRendersAsSiblingText", () => {
+	// Custom dropdowns render their current value as adjacent text; that text is skipped
+	// NEUTRALLY so the scan still reaches the real label behind it.
+	const page = `- generic [ref=e1]:
+  - text: Cursor Style
+  - text: Original
+  - combobox [ref=e2] [box=0,0,50,20]:
+    - option "Original" [selected] [box=0,0,0,0]
+`;
+	const { rows } = parseAiSnapshot(page);
+	assert.equal(rows.find((r) => r.ref === "e2")?.name, "Cursor Style");
+});
+
+test("parseAiSnapshot__RefusesGarbageLabels__When__TextIsValueShapedOrSentenceShapedOrOverlong", () => {
+	const long = "x".repeat(61);
+	const page = `- generic [ref=e1]:
+  - generic [ref=e2]:
+    - text: 24
+    - combobox [ref=e3] [box=0,0,50,20]
+  - generic [ref=e4]:
+    - text: Choose how the cursor appears while you record.
+    - combobox [ref=e5] [box=0,30,50,20]
+  - generic [ref=e6]:
+    - text: ${long}
+    - combobox [ref=e7] [box=0,60,50,20]
+  - generic [ref=e8]:
+    - text: 1.5x
+    - slider [ref=e9] [box=0,90,50,20]
+`;
+	const { rows } = parseAiSnapshot(page);
+	for (const ref of ["e3", "e5", "e7", "e9"]) assert.equal(rows.find((r) => r.ref === ref)?.name, "", ref);
+});
+
+test("parseAiSnapshot__StripsTheTrailingColon__When__TheLabelRendersWithOne", () => {
+	const page = `- generic [ref=e1]:
+  - text: Cursor Style:
+  - combobox [ref=e2] [box=0,0,50,20]
+`;
+	const { rows } = parseAiSnapshot(page);
+	assert.equal(rows.find((r) => r.ref === "e2")?.name, "Cursor Style");
+});
+
+test("parseAiSnapshot__LeavesButtonsAnonymous__When__TheRoleIsNotAFormControl", () => {
+	// Role gate: an anonymous icon button beside unrelated text is the axdom sidecar's
+	// problem (DOM classes), not this pass's — buttons/links never synthesize.
+	const page = `- generic [ref=e1]:
+  - text: Delete recording
+  - button [ref=e2] [box=0,0,20,20]
+`;
+	const { rows } = parseAiSnapshot(page);
+	assert.equal(rows.find((r) => r.ref === "e2")?.name, "");
+});
+
+test("parseAiSnapshot__DoesNotPairAcrossAControl__When__ANamedControlSitsBetween", () => {
+	// "Never synthesize from another control's name" has a corollary: never read PAST
+	// another control either — the text more plausibly belongs to the nearer one.
+	const page = `- generic [ref=e1]:
+  - text: Cursor Style
+  - button "Reset" [ref=e2] [box=0,0,20,20]
+  - combobox [ref=e3] [box=30,0,50,20]
+`;
+	const { rows } = parseAiSnapshot(page);
+	assert.equal(rows.find((r) => r.ref === "e3")?.name, "");
+});
+
+test("parseAiSnapshot__NamesTheWrappedLabel__When__TheTextSitsOneWrapperDeep", () => {
+	// The settings-row variant where the label lives in a span beside the control: one
+	// wrapper of separation is admitted (the control is a direct child of the shared row).
+	const page = `- generic [ref=e1]:
+  - generic [ref=e2]:
+    - text: Cursor Scale
+  - slider [ref=e3] [box=0,0,50,20]
+`;
+	const { rows } = parseAiSnapshot(page);
+	const slider = rows.find((r) => r.ref === "e3")!;
+	assert.equal(slider.name, "Cursor Scale");
+	assert.equal(slider.nameSynthesized, true);
+});
+
+test("parseAiSnapshot__IgnoresDeeplyNestedText__When__ItIsNotOnTheSameRow", () => {
+	// Text buried two+ wrappers away is another region's content, not this row's label.
+	const page = `- generic [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]:
+      - text: Deep note
+  - combobox [ref=e4] [box=0,0,50,20]
+`;
+	const { rows } = parseAiSnapshot(page);
+	assert.equal(rows.find((r) => r.ref === "e4")?.name, "");
+});
+
+test("parseAiSnapshot__DoesNotAdoptAHeading__When__ItPrecedesAnAnonymousCombobox", () => {
+	// The probe fixture's own shape: heading "Probe page" above an anonymous combobox.
+	// Headings title sections, not controls — the combobox must stay anonymous.
+	const { rows } = parseAiSnapshot(SNAPSHOT);
+	const combo = rows.find((r) => r.role === "combobox")!;
+	assert.equal(combo.name, "");
+	assert.equal(combo.nameSynthesized, undefined);
+});
+
 test("originMatches__RefusesAPrefixSibling__When__TheHostMerelyStartsWithTheOrigin", () => {
 	// startsWith adopted https://x.community for https://x.com. The same comparison was in the
 	// dom backend's pickTab; that backend is deleted, this is where the rule lives now.

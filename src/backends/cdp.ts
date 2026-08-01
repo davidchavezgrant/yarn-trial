@@ -135,6 +135,11 @@ export interface SnapshotRow {
 	/** Bracket flags on the row: selected, checked, disabled, expanded, active, cursor=pointer… */
 	flags: Set<string>;
 	interactive: boolean;
+	/** True when `name` came from the synthesis pass (nearby row text), not from Chromium's
+	 *  accessible-name computation. The wire format is unchanged on purpose — journal,
+	 *  teardown and grounding consume the name transparently — the flag exists so nothing
+	 *  ever mistakes a synthesized name for author-provided labeling. */
+	nameSynthesized?: boolean;
 }
 
 /**
@@ -147,6 +152,145 @@ const INTERACTIVE_ROLES = new Set([
 	"checkbox", "radio", "switch", "slider", "spinbutton", "menuitem",
 	"menuitemcheckbox", "menuitemradio", "tab", "menubar", "treeitem",
 ]);
+
+/*
+ * ---- Name synthesis for anonymous form controls ---------------------------------------
+ *
+ * The CDP analogue of the axdom sidecar's enrichment (src/core/axdom.ts): Yarn's settings
+ * <select>s carry no aria-label and no associated <label>, so the snapshot yields
+ * `combobox [ref=..]` with an EMPTY name while a sibling static text carries the label the
+ * human reads ("Cursor Style" — the live run's steps recorded targetRole "combobox",
+ * name "", with exactly that text adjacent). Downstream, everything keys controls by
+ * (name, surface): detectMutation refuses anonymous targets and optionCommit skips
+ * anonymous owners (src/core/journal.ts), so a cdp run that changed the brand cursor
+ * journaled NOTHING, teardown restored nothing, and wrong-scope accounting read zero on
+ * cdp arms while the axdom-enriched AX path journaled normally. Synthesizing the row label
+ * into the name fixes every consumer at once, because they all read the name transparently.
+ *
+ * Why each source in the brief's priority order is (or is not) trustworthy here:
+ * (1) An associated <label>/aria-label needs no synthesis: Chromium's accessible-name
+ *     computation already folds those into the snapshot name, so an empty name is PROOF
+ *     no author-provided association exists. Source (1) is satisfied before this runs.
+ * (2) The nearest static text on the same settings ROW is the label a human reads the
+ *     control by — label-left/control-right is the diagnosed Yarn pattern and the dominant
+ *     settings-page convention (text trailing a checkbox is the same convention mirrored).
+ *     "Same row" is structural (a shared immediate container), never visual guesswork.
+ * (3) aria-describedby has no channel on this backend: ai-mode snapshots carry no
+ *     description attribute, so there is nothing already-parsed to fall back to.
+ *
+ * The guards are the moral equivalent of axdom's GENERATED_ID suppression — text that
+ * LOOKS like a name but is really a value, helper copy, or another control's label is
+ * worse than no name at all, because the journal would pair a mutation onto the wrong
+ * control (journal.ts's rationale for refusing anonymous targets applies doubly to
+ * misnamed ones). Hence: role-gated to value-bearing form controls, length-capped,
+ * value-echo / number-led / sentence-shaped text rejected, pairing never reads across
+ * another control, and a label claimed from both sides names neither.
+ */
+
+/** Form controls eligible for synthesis — the journal's clientele (value-bearing).
+ *  Buttons/links/menuitems are excluded on purpose: an icon button's neighbor text is
+ *  routinely unrelated (the axdom sidecar names those from DOM classes instead), and a
+ *  wrongly-named control poisons (name, surface) matching everywhere. */
+const SYNTH_ROLES = new Set([
+	"combobox", "listbox", "textbox", "searchbox", "checkbox", "radio", "switch", "slider", "spinbutton",
+]);
+
+/** Roles whose text reads as a row label. Headings are excluded — they title SECTIONS,
+ *  and adopting one would name a control after its page ("Probe page", "Screen Clip
+ *  Settings"). Interactive roles are excluded wholesale: never synthesize from another
+ *  control's name. */
+const LABEL_ROLES = new Set(["generic", "paragraph", "strong", "emphasis", "caption", "legend", "term", "definition"]);
+
+/**
+ * Clean a candidate label, or reject it with "". Rejections are the garbage guards:
+ * - length cap: a paragraph-sized string is helper copy, not a label;
+ * - no letters / leading digit: "24", "1.5x", "4px" are VALUES rendered as text;
+ * - sentence-shaped (terminal punctuation or an internal sentence break): the description
+ *   under a label, which sits closer to the control than the label itself in the common
+ *   label/description/control stack — rejecting it lets the scan reach the real label.
+ * A trailing colon is presentation ("Cursor Style:"), not part of the name.
+ */
+function labelText(raw: string): string {
+	const t = raw.trim().replace(/:\s*$/, "").trim();
+	if (!t || t.length > 60) return "";
+	if (!/\p{L}/u.test(t) || /^\d/.test(t)) return "";
+	if (/[.!?]$/.test(t) || t.includes(". ")) return "";
+
+	return t;
+}
+
+/**
+ * Do a label and a control share a settings row? True when one of them is a DIRECT child
+ * of the pair's nearest common ancestor and the other is at most one wrapper deeper —
+ * which admits plain siblings, a label wrapped in a span beside the control, and a control
+ * wrapped in a div beside its label, while refusing cousins under two different row
+ * containers (both one deep under a shared section — indistinguishable from a
+ * both-wrapped row by depth alone, so BOTH shapes are refused; an occasionally-anonymous
+ * control beats one named from the neighboring row).
+ */
+function sameRow(a: number[], b: number[]): boolean {
+	let i = 0;
+	while (i < a.length && i < b.length && a[i] === b[i]) i++;
+	const da = a.length - i;
+	const db = b.length - i;
+
+	return Math.min(da, db) === 0 && Math.max(da, db) <= 1;
+}
+
+/** One document-order event the synthesis scan walks. Label and blocker are disjoint by
+ *  construction (labels are non-interactive roles); claimants are also blockers, so a
+ *  pairing can never read ACROSS a control to text on its far side. */
+interface SynthEvent {
+	/** Ancestor ids, root-down, excluding the node itself. */
+	chain: number[];
+	/** A control-shaped row (interactive role or clickably-styled). */
+	blocker: boolean;
+	/** Pre-cleaned candidate label text; "" on non-label events. */
+	text: string;
+	/** An anonymous form control that wants a name. */
+	claimant?: SnapshotRow;
+}
+
+/**
+ * Nearest qualifying label for the claimant at `ci`, scanning one direction. Disqualified
+ * texts (wrong row, or an echo of the control's own value — a custom dropdown renders its
+ * current value as adjacent text) are skipped NEUTRALLY, so the scan can reach the real
+ * label behind them; any control-shaped row ends the scan cold.
+ */
+function nearestLabel(events: SynthEvent[], ci: number, dir: -1 | 1): number | undefined {
+	const c = events[ci];
+	const value = (c.claimant?.value ?? "").trim().toLowerCase();
+	for (let j = ci + dir; j >= 0 && j < events.length; j += dir) {
+		const e = events[j];
+		if (e.text && sameRow(e.chain, c.chain) && e.text.trim().toLowerCase() !== value) return j;
+		if (e.blocker) return undefined;
+	}
+
+	return undefined;
+}
+
+/**
+ * Assign synthesized names. Preceding text wins over following (label-left is the
+ * diagnosed pattern; the trailing-text direction exists for checkboxes and only fires
+ * when nothing precedes). A label with claimants on BOTH sides (control–text–control)
+ * names neither: naming either is a guess, and the journal's own rationale ranks a wrong
+ * pairing worse than an anonymous control.
+ */
+function synthesizeNames(events: SynthEvent[]): void {
+	const claims = new Map<number, SnapshotRow[]>();
+	for (let ci = 0; ci < events.length; ci++) {
+		const claimant = events[ci].claimant;
+		if (!claimant) continue;
+		const li = nearestLabel(events, ci, -1) ?? nearestLabel(events, ci, +1);
+		if (li === undefined) continue;
+		claims.set(li, [...(claims.get(li) ?? []), claimant]);
+	}
+	for (const [li, rows] of claims) {
+		if (rows.length !== 1) continue;
+		rows[0].name = events[li].text;
+		rows[0].nameSynthesized = true;
+	}
+}
 
 /**
  * Parse the ai-mode aria snapshot into flat rows.
@@ -163,8 +307,11 @@ export function parseAiSnapshot(snapshot: string): { rows: SnapshotRow[]; texts:
 	const texts: string[] = [];
 	// (indent, name, row) of every open ancestor; surface lookup walks the names, the
 	// [selected]-option value-lift walks the rows — ancestry is what the indentation
-	// encodes, and reverse document-order search is not ancestry.
-	const stack: Array<{ indent: number; name: string; row?: SnapshotRow }> = [];
+	// encodes, and reverse document-order search is not ancestry. The id keys the
+	// ancestor chains the name-synthesis pass compares (sameRow above).
+	const stack: Array<{ indent: number; name: string; row?: SnapshotRow; id: number }> = [];
+	let nextId = 0;
+	const events: SynthEvent[] = [];
 
 	for (const raw of snapshot.split("\n")) {
 		const m = raw.match(/^(\s*)- (.*)$/);
@@ -174,10 +321,16 @@ export function parseAiSnapshot(snapshot: string): { rows: SnapshotRow[]; texts:
 
 		while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop();
 		const surface = [...stack].reverse().find((s) => s.name)?.name ?? "";
+		// Ancestors of THIS node (text lines never push, rows are pushed after their event).
+		const chain = stack.map((s) => s.id);
 
 		if (rest.startsWith("text:")) {
 			const t = rest.slice(5).trim();
-			if (t) texts.push(unquote(t));
+			if (t) {
+				texts.push(unquote(t));
+				const label = labelText(unquote(t));
+				if (label) events.push({ chain, blocker: false, text: label });
+			}
 			continue;
 		}
 
@@ -238,9 +391,21 @@ export function parseAiSnapshot(snapshot: string): { rows: SnapshotRow[]; texts:
 					!!ref && !flags.has("disabled") && (INTERACTIVE_ROLES.has(role) || flags.has("cursor=pointer")),
 			};
 			rows.push(row);
+			// Role-based, not interactive-flag-based, for the blocker: a disabled or
+			// ref-less control is still a control, and label pairing must not read past it.
+			const blocker = INTERACTIVE_ROLES.has(role) || row.interactive;
+			const claimant = SYNTH_ROLES.has(role) && !name.trim() ? row : undefined;
+			// Named (or value-only, e.g. `- generic: Cursor Style`) static rows are label
+			// material too — the name is preferred as the label-ier of the two.
+			const label = !blocker && LABEL_ROLES.has(role) ? labelText(name || value) : "";
+			if (blocker || claimant || label) events.push({ chain, blocker, text: label, claimant });
 		}
-		stack.push({ indent, name, row });
+		stack.push({ indent, name, row, id: nextId++ });
 	}
+
+	// After the loop, so [selected]-option value-lifts have landed: the value-echo guard
+	// in nearestLabel needs each combobox's FINAL value.
+	synthesizeNames(events);
 
 	return { rows, texts };
 }
