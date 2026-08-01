@@ -1420,10 +1420,10 @@ function compileRow(a, p) {
 	// reordered the header and only the armCell-based rows followed.
 	// All 13 metric dashes share one story — NO_EXPLORE_CELLS says "task rows", the wrong
 	// explanation on a row that IS the local file transform.
-	const dash = `<td class="num" data-tip="a compile is a local file transform — no model runs, nothing to measure">–</td>`;
+	const dash = `<td class="num" data-tip="compiles run no model — nothing to measure">–</td>`;
 	return `<tr class="crow"><td class="arm" data-tip="${esc(tip)}"><span class="dn">${esc(displayName(a))}</span>${badge}</td>
 		${srcCell}${dash.repeat(8)}
-		${dash.repeat(5)}${startedCell(p)}${runsCell(p, null)}<td class="treecell" data-tip="no map — a compile never drives the app"></td><td class="treecell" data-tip="no graphs — a compile never drives the app"></td></tr>`;
+		${dash.repeat(5)}${startedCell(p)}${runsCell(p, null)}<td class="treecell" data-tip="no map — compiles don't drive the app"></td><td class="treecell" data-tip="no graphs — compiles don't drive the app"></td></tr>`;
 }
 
 /* ---- row detail: appmap + path ------------------------------------------------------- */
@@ -1474,26 +1474,26 @@ function fetchDetail(job) {
 // Term explainers for the dropdown stat keys (statsStrip + liveStrip), same delegated
 // tooltip as the board cells — "Ambig", "Tok In" and "Judge" are opaque without one.
 const STAT_TIPS = {
-	Actions: "actions the pass took — an explore's step count",
+	Actions: "actions the pass took",
 	Time: "wall-clock for this run",
-	Seen: "every control the pass observed",
+	Seen: "controls the pass observed",
 	Actuated: "controls the pass operated",
-	Dismissed: "controls swept off the frontier without operating — a legitimate way to empty it",
-	Surfaces: "distinct screens/panels/tabs/dialogs controls were seen on",
+	Dismissed: "controls dropped without operating",
+	Surfaces: "distinct screens/panels/dialogs seen",
 	Nodes: "distilled appmap graph nodes",
-	Ambig: "settings editable at two scopes under one identity — the wrong-scope trap",
+	Ambig: "same setting editable at two scopes",
 	Steps: "actions the run took",
-	Verified: "steps whose effect was verified",
-	"Tok In": "input tokens the run sent to the model",
-	Out: "output tokens the model generated",
-	"Cache-Read": "prompt tokens served from the provider's cache (cheaper than fresh input)",
-	"Cache-Write": "prompt tokens written to the provider's cache",
-	"Est Cost": "published-rate estimate off this run's tokens — not an invoice",
-	Judge: "the judge's trajectory verdict — and its visual verdict after the slash",
-	Frontier: "controls left un-operated — the pass ends when this empties",
-	Stopped: "whether the pass has declared itself finished",
+	Verified: "steps with verified effects",
+	"Tok In": "input tokens sent to the model",
+	Out: "output tokens generated",
+	"Cache-Read": "prompt tokens read from cache",
+	"Cache-Write": "prompt tokens written to cache",
+	"Est Cost": "published-rate estimate — not an invoice",
+	Judge: "judge verdicts: trajectory / visual",
+	Frontier: "un-operated controls — the pass ends when this empties",
+	Stopped: "has the pass declared itself done",
 	Last: "the run's latest step",
-	Claimed: "the run's own done() claim — self-reported, pre-judge",
+	Claimed: "the run's own claim — pre-judge",
 	Cleanup: "the run's cleanup status",
 	Fatal: "the error that killed the run",
 };
