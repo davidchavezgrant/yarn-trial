@@ -367,7 +367,7 @@ const REFUSED = "var(--refused)";
 const AMB_TIP = "this setting exists at TWO scopes under one identity (same settingKey — e.g. a brand-wide default in Brand Kit AND a per-document override in the editor). The wrong-scope trap: an agent asked to change the default can silently change only the document's copy and still pass every check. Both routes are always shown to the agent; the numbered path shows which one this run took.";
 // Vision-only (--no-ax) passes have no element list to count against, so their tallies are
 // self-reported. One explainer, two homes: the row's ⚠ and the rank dot's tooltip.
-const DECLARED_TIP = "DECLARED — the vision-only pass has no element list to count against, so these tallies are the model's own report; not comparable like-for-like with mechanically counted passes.";
+const DECLARED_TIP = "DECLARED — the Vision-only pass has no element list to count against, so these tallies are the model's own report; not comparable like-for-like with mechanically counted passes.";
 // Live cells: an uncollected run's metric cells read the run's OWN event-log counters
 // (EntryView.live) instead of rendering "–" until collect. ~tilde + --running tint + this
 // tip keep a provisional number from ever reading as a collected one; the moment collect
@@ -1074,7 +1074,7 @@ const RUNS_TIP = "the run's status — click to open/collapse its dropdown; the 
 const NCOLS = 18;
 const TASK_HEAD = "<tr>" + th("Variant", VARIANT_TIP) +
 	th("Task", "the goal-only prompt the run was given") +
-	th("Sees", "what the agent SEES: AX tree or DOM elements, plus vision — or pixels only") +
+	th("Sees", "what the agent SEES: AX or DOM elements, plus Vision — or Vision only") +
 	th("Acts With", "what injects the input: AX (cua driver) or CDP") +
 	th("Model", "what actually ran, off the run logs") +
 	th("Success", "self-reported, per run: ✓ succeeded · ✗ failed · ~ = the running run's own claim off its event log (the judge's verdict lives in the Judge card)", "num-h") +
@@ -1092,8 +1092,8 @@ const TASK_HEAD = "<tr>" + th("Variant", VARIANT_TIP) +
 // Friendly names are DERIVED from the arm's structure (kind + flags + phase), not
 // hand-mapped per id, so new matrix cells name themselves. The id stays in the hover —
 // it is the key the report and the manifest speak. Perception and actuation are NOT in
-// the name: they are their own columns ("vision-only explore (AX)" folded two axes into
-// one confusing label — it meant sees-pixels-only, acts-via-AX).
+// the name: they are their own columns ("Vision-only explore (AX)" folded two axes into
+// one confusing label — it meant sees-Vision-only, acts-via-AX).
 // The server derives this from the dispatch object (matrix.ts armTitle). It used to be
 // derived HERE by string-matching the rendered flags — flags.includes("USE_RECIPE") — which
 // is a parse of a display artifact: it breaks silently the moment flagsLine rewords, falling
@@ -1307,7 +1307,7 @@ function exploreCellsFor(a, e) {
 	const num = (value, tip) => `<td class="num"${tip ? ` data-tip="${esc(tip)}"` : ""}>${value}</td>`;
 	const st = e.exploreStamp;
 	if (st) {
-		// A vision-only pass (--no-ax) has no element list to count against, so its tallies
+		// A Vision-only pass (--no-ax) has no element list to count against, so its tallies
 		// are self-reported — flagged so they never read as mechanically counted. Flag
 		// sniffing is display-only here; the arm's dispatch stays the authority.
 		const declared = a.flags && a.flags.includes("--no-ax")
@@ -2005,13 +2005,13 @@ function renderExplore() {
 	if (!arms.length) { $("chart-explore").innerHTML = `<div class="empty">waiting for a collected explore…</div>`; return; }
 	// Funnel order (seen ≥ actuated+dismissed); colors follow the series, not the position.
 	// Group labels mirror the board's "perceives" column; web arms append "(web)" so the
-	// two DOM+vision explores (Yarn app vs the web target) stay distinguishable — the exact
+	// two DOM+Vision explores (Yarn app vs the web target) stay distinguishable — the exact
 	// host adds nothing a chart label needs. HORIZONTAL on purpose: these labels are long,
 	// per-model passes multiply the groups, and vBars' centered x-labels stepped on each
 	// other until the axis was unreadable. The gutter fits the full words (the old "+vis"
 	// compaction hack is gone) and the model rides its own muted sub-line.
 	// The ⚠ declared marker rides the LABEL here (SVG text can't carry a tooltip): a
-	// vision-only arm's tallies are self-reported, and the board flags the same numbers.
+	// Vision-only arm's tallies are self-reported, and the board flags the same numbers.
 	const exploreLabel = (a) => (!a.perception ? a.id.replace("p1-explore-", "") : a.url ? `${a.perception} (web)` : a.perception)
 		+ (a.flags && a.flags.includes("--no-ax") ? " ⚠ declared" : "");
 	const groups = arms.flatMap((a) => a.passes.filter((p) => p.explore && p.explore.controlsSeen != null).map((p) => ({

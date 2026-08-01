@@ -64,11 +64,11 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// second, larger app — on a target that needs a login rather than an install.
 	// Phase 2: core 12 plus 8 slices x 3. The two web arms went with the web explore — they
 	// grounded on its map and had nothing to ground on without it.
-	// Phase 2: core 12, 8 slices x 3, plus the minimum-context PAIR x 3 — a bare AX tree with
+	// Phase 2: core 12, 8 slices x 3, plus the minimum-context PAIR x 3 — bare AX with
 	// no DOM attrs and no screenshots, grounded on an equally minimal map and ungrounded. The
 	// ungrounded half is the floor of the whole matrix; every other arm should beat it.
 	// core 12 (2 backends x grounded/ungrounded x 3), slices 27, procedures-tier comparators 6.
-	// Slices went 24 -> 27 on 2026-08-01: the native-equivalent grid (AXDOM=0, i.e. an AX tree
+	// Slices went 24 -> 27 on 2026-08-01: the native-equivalent grid (AXDOM=0, i.e. AX
 	// with no DOM behind it) was missing its cold+screenshots cell.
 	assert.equal(phaseRunCount(2), 12 + 27 + 6);
 	// Phase 3: 2 local compiles + replay ×3 per backend + no-rescue ×3.
@@ -986,16 +986,16 @@ test("perceptionLine__SaysWhatTheModelSees__When__FlagsLookContradictory", () =>
 	// vision arm as "vision + AX" on 2026-07-31 — the opposite of what it measures — because
 	// the plan printed only the flags and left the reader to decode them.
 	const arm = (dispatch: any): any => ({ id: "x", phase: 2, kind: "task", app: "Yarn", n: 1, dispatch });
-	assert.equal(perceptionLine(arm({ backend: "ax", noAx: true })), "screenshots only");
+	assert.equal(perceptionLine(arm({ backend: "ax", noAx: true })), "Vision only");
 	// The element channel is named PER BACKEND, because they are different things: ax gives
-	// the accessibility tree plus the DOM attributes the axdom sidecar joins on, cdp gives the
+	// the AX elements plus the DOM attributes the axdom sidecar joins on, cdp gives the
 	// DOM itself and no AX at all. Calling both "elements" hid a real distinction.
-	assert.equal(perceptionLine(arm({ backend: "ax", noVision: true })), "AX tree + DOM attrs");
-	assert.equal(perceptionLine(arm({ backend: "ax" })), "AX tree + DOM attrs + screenshots");
-	assert.equal(perceptionLine(arm({ backend: "cdp" })), "DOM + screenshots");
+	assert.equal(perceptionLine(arm({ backend: "ax", noVision: true })), "AX + DOM attrs");
+	assert.equal(perceptionLine(arm({ backend: "ax" })), "AX + DOM attrs + Vision");
+	assert.equal(perceptionLine(arm({ backend: "cdp" })), "DOM + Vision");
 	// AXDOM=0 removes the second half of the ax element channel, and the label must show it —
 	// that arm exists to measure whether the sidecar is worth shipping.
-	assert.equal(perceptionLine(arm({ backend: "ax", axdomOff: true })), "AX tree (no DOM attrs) + screenshots");
+	assert.equal(perceptionLine(arm({ backend: "ax", axdomOff: true })), "AX (no DOM attrs) + Vision");
 	// With NO element channel the actuator cannot change the answer — that conflation was the
 	// original bug, and it is the one case where ax and cdp must read identically.
 	assert.equal(perceptionLine(arm({ backend: "cdp", noAx: true })), perceptionLine(arm({ backend: "ax", noAx: true })));
@@ -1064,7 +1064,7 @@ test("armAppmapSlug__IsWhatTaskArmsWillRead__When__TheyGroundOnAPass", () => {
 
 test("armTitle__NamesTheArmWithoutRepeatingPerception__When__ShownBesideIt", () => {
 	// Title and perception appear in adjacent columns, so the title stays silent about
-	// channels — "grounded task | screenshots only" reads once, not twice.
+	// channels — "grounded task | Vision only" reads once, not twice.
 	const arm = (kind: string, dispatch: any, env?: any): any => ({ id: "x", phase: 2, kind, app: "Yarn", n: 1, dispatch, ...(env ? { env } : {}) });
 	assert.equal(armTitle(arm("explore", { backend: "ax" })), "grounding pass");
 	assert.equal(armTitle(arm("explore", { backend: "cdp", url: "https://app.notion.com" })), "grounding pass (web)");
@@ -1153,7 +1153,7 @@ test("MATRIX__PairsEveryPerceptionFloorWithAnUngroundedArm__When__AConditionIsMe
 	// And the floor of the whole matrix exists: least perception AND no map.
 	const min = task.find((a) => a.dispatch.noGrounding && a.dispatch.axdomOff && a.dispatch.noVision);
 	assert.ok(min, "no minimum-context ungrounded arm — nothing establishes the matrix floor");
-	assert.equal(perceptionLine(min), "AX tree (no DOM attrs)");
+	assert.equal(perceptionLine(min), "AX (no DOM attrs)");
 });
 
 test("MATRIX__FilmsEveryMeasuredConfig__When__PhaseFiveIsDerived", () => {
@@ -1262,7 +1262,7 @@ test("MATRIX__JustifiesEveryAxArm__When__CdpIsTheDefault", () => {
 	// Three reasons are legitimate, and they are checked structurally rather than by trusting a
 	// comment:
 	//   1. the arm IS the ax-vs-cdp comparison — a cdp twin of the same shape exists
-	//   2. the variable cannot exist on cdp — axdomOff, since the sidecar enriches the AX tree
+	//   2. the variable cannot exist on cdp — axdomOff, since the sidecar enriches the AX elements
 	//      and cdp already has the real DOM (this is also the native-equivalent tier)
 	//   3. an explicit written axRationale
 	const shape = (a: Arm) => JSON.stringify({ ...a.dispatch, backend: null }) + `|${a.phase}|${a.kind}|${a.task ?? ""}`;
