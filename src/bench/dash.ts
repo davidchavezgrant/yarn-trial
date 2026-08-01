@@ -2241,6 +2241,20 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	// relaunch poll (LAUNCH_TIMEOUT_MS = 20s in electron-attach), so the fleet's 4s default
 	// would kill every repair mid-flight and report nothing.
 	const PEEK_PREP_TIMEOUT_MS = 30_000;
+	// The per-session sentinel (primary upgrade · tunnel health · vnc offer) shares the
+	// re-probe cadence; SILENCE is measured from the last frame OR engine event, so a static
+	// page with a healthy tunnel is probed occasionally and left alone, while a wedged ssh
+	// forward (accepts TCP, drops HTTP) is caught in ~12-15s instead of ServerAlive's ~45s.
+	const SENTINEL_MS = WAIT_REPROBE_MS;
+	const ENGINE_SILENCE_PROBE_MS = 12_000;
+	// vnc:// fallback offer: long enough that every normal attach (8s budget + first frames)
+	// beats it, short enough that an ax-arm run — which will NEVER open a debug port — hands
+	// the operator a screen share while the run is still worth watching.
+	const VNC_OFFER_AFTER_MS = 20_000;
+	// Consecutive respawns of one tunnel slot with no successful probe since = one loud event
+	// line. Churn stays off the feed below this (three always-on sessions would drown it);
+	// an ssh that dies instantly forever (revoked key, changed host key) crosses it in ~20s.
+	const TUNNEL_STORM_RESPAWNS = 5;
 
 	type PeekState = "probing" | "waiting" | "streaming";
 	interface Peek {
@@ -2258,15 +2272,42 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		gotFrame: boolean;
 		/** First successful attach already hit the event feed — later re-attaches stay quiet. */
 		streamLogged: boolean;
+		/** Which tunnel slot the CURRENT engine attached through (0 app / 1 web) — the sentinel's
+		 *  primary-upgrade check only applies while it is 1. */
+		primarySlot?: number;
+		/** The engine's last word was a refusal (idle-parked / stream-stopped): alive, showing
+		 *  nothing, and — unlike a static page — safe to upgrade away from. Cleared by frames. */
+		refusing: boolean;
+		/** Last frame OR engine event, ms epoch — the sentinel's silence clock. Also bumped by a
+		 *  passed health probe, so a static-but-healthy target is probed once per silence window,
+		 *  not once per tick. */
+		lastActivityAt: number;
+		/** Session build time — the vnc-offer clock starts here, reset by every frame. */
+		lastFrameAt: number;
 		state: PeekState;
 		sockets: Set<Duplex>;
 		idleTimer?: NodeJS.Timeout;
 		reprobeTimer?: NodeJS.Timeout;
 		heartbeatTimer?: NodeJS.Timeout;
+		sentinelTimer?: NodeJS.Timeout;
+		/** Sentinel work in flight — the 3s tick must not stack probes behind a slow one. */
+		sentinelBusy: boolean;
+		/** The vnc offer already went out this waiting episode; frames reset it. */
+		vncOffered: boolean;
 		/** Last status/error JSON frame, replayed to late joiners so they render state instantly. */
 		lastStatus?: Buffer;
 		/** Last {ev:"window"} frame, replayed to late joiners. */
 		lastWindow?: Buffer;
+		/** Last JPEG while state is streaming — replayed to late joiners so a reconnect repaints
+		 *  instantly instead of waiting for the next compositor commit (a static screen may not
+		 *  produce one for minutes). Cleared when the session leaves streaming. */
+		lastFrame?: Buffer;
+		/** Last {ev:"vnc"} offer, replayed to late joiners while the episode is still waiting. */
+		lastVnc?: Buffer;
+		/** Per-slot: last stderr line the tunnel child wrote — the storm line's diagnosis. */
+		tunnelErrs: Array<string | undefined>;
+		/** Per-slot: the storm already hit the event feed this session. */
+		stormLogged: boolean[];
 		/** Set by teardown so child-exit handlers no-op instead of respawning. */
 		closing: boolean;
 		/**
@@ -2307,6 +2348,9 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	};
 	const setStatus = (p: Peek, state: PeekState, message: string): void => {
 		p.state = state;
+		// A frame replayed outside "streaming" would flip a late joiner's panel to live over a
+		// stream that is not delivering — the stale-frame lie the first-frame rule exists to kill.
+		if (state !== "streaming") p.lastFrame = undefined;
 		p.lastStatus = castJson(p, { ev: "status", state, message });
 	};
 	// A REAL close frame (code uint16 BE + reason ≤120 bytes) so the client can classify
@@ -2333,6 +2377,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		clearTimeout(p.idleTimer);
 		clearTimeout(p.reprobeTimer);
 		clearTimeout(p.heartbeatTimer);
+		clearInterval(p.sentinelTimer);
 		for (const t of p.respawnTimers) clearTimeout(t);
 		p.engine?.close();
 		p.engine = undefined;
@@ -2375,8 +2420,16 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	type TunnelArgvFn = (host: any, remotePort: number, localPort: number) => string[];
 	const spawnTunnel = (p: Peek, slot: number, tunnelArgv: TunnelArgvFn): void => {
 		const { remote, local } = p.locals[slot];
-		// tunnelArgv emits its own anti-mux options ahead of the base block — no overrides needed here.
-		const child = spawn("ssh", tunnelArgv(p.hostCfg, remote, local), { stdio: "ignore" });
+		// tunnelArgv emits its own anti-mux options ahead of the base block — no overrides needed
+		// here. stderr is kept (last line only): when a tunnel dies instantly on every respawn,
+		// ssh's own words ("Host key verification failed", "Permission denied") are the diagnosis,
+		// and without them the storm line below could only say "it keeps dying".
+		const child = spawn("ssh", tunnelArgv(p.hostCfg, remote, local), { stdio: ["ignore", "ignore", "pipe"] });
+		child.stderr?.on("data", (buf: Buffer) => {
+			const line = buf.toString("utf8").trim().split("\n").filter(Boolean).at(-1);
+			if (line) p.tunnelErrs[slot] = line.slice(0, 160);
+		});
+		child.stderr?.on("error", () => {});
 		p.tunnels[slot] = child;
 		// ONE downed-tunnel path for both signals: 'exit' (the tunnel died) and 'error' (spawn
 		// itself failed — ENOENT et al. never fires 'exit', and an unlistened ChildProcess
@@ -2388,10 +2441,24 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			handled = true;
 			if (p.closing || peeks.get(p.host) !== p) return; // teardown killed it — expected
 			// Viewers learn via the status frame; the event feed does NOT — tunnel churn across
-			// three always-on sessions would drown it (attach/first-stream/teardown only).
-			p.lastStatus = castJson(p, { ev: "error", kind: "tunnel-died", message: `ssh tunnel for :${remote} on ${p.host} ${what} — respawning` });
+			// three always-on sessions would drown it (attach/first-stream/teardown only). The
+			// ONE exception: a slot that keeps dying without ever passing a probe crosses the
+			// storm threshold and gets a single feed line carrying ssh's own last words —
+			// otherwise a revoked key or changed host key is an eternal silent spinner.
+			p.lastStatus = castJson(p, { ev: "error", kind: "tunnel-died", message: `ssh tunnel for :${remote} on ${p.host} ${what} — respawning${p.tunnelErrs[slot] ? ` (${p.tunnelErrs[slot]})` : ""}` });
 			const n = Math.min(p.respawnCounts[slot], TUNNEL_RESPAWN_MS.length - 1);
 			p.respawnCounts[slot]++;
+			// The storm line means "this session cannot connect at all" (a revoked/changed host
+			// key = eternal spinner). Gate it on NEVER having streamed: a slot whose remote port
+			// is legitimately silent (an ax arm leaves :9222 dead) is the idle connection and so
+			// the likeliest idle-drop victim, and its reconnects across a multi-hour session
+			// must not read as a failure while the other leg streams fine. probeOnce only resets
+			// the ANSWERING slot's counter, so without this gate the silent slot's count is
+			// monotone and eventually cries wolf.
+			if (p.respawnCounts[slot] === TUNNEL_STORM_RESPAWNS && !p.stormLogged[slot] && !p.streamLogged) {
+				p.stormLogged[slot] = true;
+				addEvent(`view: ${p.host}'s :${remote} tunnel died ${TUNNEL_STORM_RESPAWNS}× without connecting${p.tunnelErrs[slot] ? ` — ${p.tunnelErrs[slot]}` : ""}`);
+			}
 			p.respawnTimers[slot] = setTimeout(() => {
 				void (async () => {
 					if (p.closing || peeks.get(p.host) !== p) return;
@@ -2455,8 +2522,17 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		}
 		p.gotFrame = false;
 		p.engine = engine;
+		p.primarySlot = eps.slot;
+		p.refusing = false;
+		p.lastActivityAt = Date.now();
 		engine.onFrame((jpeg) => {
 			if (peeks.get(p.host) !== p || p.engine !== engine) return;
+			p.lastFrameAt = p.lastActivityAt = Date.now();
+			p.refusing = false;
+			// Delivery ends the waiting episode: the standing vnc offer retracts (client clears
+			// on the frame) and a NEW episode may offer afresh.
+			p.vncOffered = false;
+			p.lastVnc = undefined;
 			if (!p.gotFrame) {
 				// The FIRST frame is what flips the panel to "streaming" — never the attach. An
 				// alive engine can be deliberately showing nothing (gate-refused residue), and a
@@ -2470,10 +2546,29 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 					addEvent(`view: streaming ${p.host} via ${eps.endpoint} (+${eps.browserEndpoint})`);
 				}
 			}
+			p.lastFrame = jpeg;
 			cast(p, jpeg, "binary");
 		});
 		engine.onEvent((ev: any) => {
 			if (peeks.get(p.host) !== p || p.engine !== engine) return;
+			p.lastActivityAt = Date.now();
+			// The engine's refusals (gate-refused residue, an emptied follow stack) are the
+			// sentinel's license to act: alive-but-refusing is exactly the state a web-primary
+			// wedge presents, where a static-but-delivered page must be left alone. Only a frame
+			// clears it — a window/title event mid-refusal changes nothing about delivery.
+			if (ev?.ev === "error" && (ev.kind === "idle-parked" || ev.kind === "stream-stopped")) {
+				p.refusing = true;
+				// A refusal AFTER frames were flowing: the engine emits it without dying, so
+				// nothing else leaves "streaming" — the panel would keep its last JPEG labeled
+				// live, and the late-joiner replay would hand a reconnecting viewer that frozen
+				// frame (and hide the vnc offer, which only shows in the wait state). Drop to
+				// waiting so setStatus clears lastFrame; the next real frame re-flips to
+				// streaming via gotFrame.
+				if (p.gotFrame) {
+					p.gotFrame = false;
+					setStatus(p, "waiting", `${p.host} stopped delivering — waiting for it to resume`);
+				}
+			}
 			if (ev?.ev === "window") p.lastWindow = castJson(p, ev);
 			else castJson(p, ev);
 			// Inert-handle detection: connect-time deaths resolve to an engine whose exit NEVER
@@ -2529,6 +2624,98 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			}, WAIT_REPROBE_MS);
 		} catch (err) {
 			enterWaiting(p, `attach error — retrying (${String(err).slice(0, 120)})`);
+		}
+	};
+
+	/**
+	 * The per-session sentinel: the three recovery paths a LIVE engine otherwise blocks —
+	 * reprobeTick deliberately owns nothing while `p.engine` is set, and each of these is a
+	 * state an alive engine can hold forever.
+	 *
+	 *  1. PRIMARY UPGRADE. The app leg (:9222) is the only true primary: the engine's whole
+	 *     promotion model assumes it (secondary-leg adoptions park with no promotion channel —
+	 *     browserPageDisposition), so a web-primary connect — the coin-flip loser while the app
+	 *     relaunches at run start, and the only option on an ax arm whose Chrome answers — is a
+	 *     DEGRADED state, not a peer. While the engine is web-primary AND refusing, the app
+	 *     port is re-probed; the moment it answers, the refusing engine is dropped and the
+	 *     normal attach path reconnects app-primary. Gated on `refusing`, never on frame
+	 *     silence: a web arm streaming a static page emits no frames and must not be stolen.
+	 *  2. TUNNEL HEALTH. A wedged ssh forward accepts TCP and drops HTTP, so frames stop while
+	 *     the panel stays "live" on its last blob; ssh's own ServerAlive needs ~45s to notice.
+	 *     After ENGINE_SILENCE_PROBE_MS without a frame or engine event, the primary local
+	 *     port gets one HTTP probe: alive means static-but-healthy (bump the clock, leave it
+	 *     alone — the readiness-is-HTTP lesson, never TCP); dead means drop the engine, kill
+	 *     the tunnel child (its exit handler respawns on a fresh port) and re-enter waiting.
+	 *  3. VNC OFFER. When nothing has been delivered for VNC_OFFER_AFTER_MS — no engine after
+	 *     the probe budget (an ax arm never opens a debug port; peek-prep cannot repair a busy
+	 *     host), an engine refusing everything, or an attach that never produced a frame — the
+	 *     session offers the one transport that needs nothing from the Mac's software stack:
+	 *     vnc:// Screen Sharing (the sign-in viewer's own fallback). The offer is a status
+	 *     event the panel renders as a button; nothing opens unasked. Edge-triggered per
+	 *     waiting episode; any frame retracts it.
+	 */
+	const sentinelTick = async (p: Peek): Promise<void> => {
+		if (peeks.get(p.host) !== p || p.closing || p.sentinelBusy) return;
+		p.sentinelBusy = true;
+		try {
+			const engine = p.engine;
+			if (engine && p.primarySlot === 1 && p.refusing) {
+				const appUp = await endpointUp(p.locals[0].local);
+				if (peeks.get(p.host) !== p || p.closing) return;
+				if (appUp && p.engine === engine) {
+					p.engine = undefined; // BEFORE close — the corpse's onExit must no-op
+					engine.close();
+					// enterWaiting, never a direct reprobeTick: the reprobe timer is the ONE
+					// reconnect driver, and racing a second tick against an onExit-armed one
+					// double-connects and leaks the loser.
+					enterWaiting(p, `app endpoint appeared on ${p.host} — moving the stream to it`);
+
+					return;
+				}
+			}
+			if (p.engine && p.primarySlot !== undefined && Date.now() - p.lastActivityAt > ENGINE_SILENCE_PROBE_MS) {
+				const slot = p.primarySlot;
+				const alive = await endpointUp(p.locals[slot].local);
+				if (peeks.get(p.host) !== p || p.closing) return;
+				if (alive) {
+					p.lastActivityAt = Date.now();
+				} else if (p.engine) {
+					const corpse = p.engine;
+					p.engine = undefined;
+					corpse.close();
+					p.tunnels[slot]?.kill("SIGTERM");
+					enterWaiting(p, `tunnel to ${p.host} stopped answering — rebuilding it`);
+
+					return;
+				}
+			}
+			const stale = (): boolean => !(p.engine && p.gotFrame && !p.refusing) && Date.now() - p.lastFrameAt > VNC_OFFER_AFTER_MS;
+			if (!p.vncOffered && stale()) {
+				const [{ vncUrl, hasScreenShareLogin }, { findCredentials, parseCredentials }] = await Promise.all([
+					import("../remote/control/signin.js"),
+					import("../remote/control/team.js"),
+				]);
+				const seeded = await hasScreenShareLogin(p.hostCfg).catch(() => false);
+				// Re-check delivery AND staleness after the awaits: a first frame landing during
+				// the `security` exec resets lastFrameAt and clears vncOffered, and minting the
+				// offer anyway would stamp a stale button over a live stream and consume the
+				// edge-trigger so the next real waiting episode stays silent.
+				if (peeks.get(p.host) !== p || p.closing || p.vncOffered || !stale()) return;
+				// Booleans only cross the wire — the bundle's password is read to answer
+				// "could a click seed the keychain" and goes no further.
+				let canSeed = false;
+				try {
+					const f = findCredentials();
+					if (f) canSeed = !!parseCredentials(fs.readFileSync(f, "utf8")).vncPassword;
+				} catch {}
+				p.vncOffered = true;
+				p.lastVnc = castJson(p, { ev: "vnc", host: p.host, url: vncUrl(p.hostCfg), seeded, canSeed });
+			}
+		} catch {
+			// A sentinel pass that failed (probe threw, import hiccup) tries again next tick —
+			// it is a watchdog, and a watchdog that can crash its session is worse than none.
+		} finally {
+			p.sentinelBusy = false;
 		}
 	};
 
@@ -2593,7 +2780,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		const locals: Array<{ remote: number; local: number }> = [];
 		for (const remote of PEEK_PORTS) locals.push({ remote, local: await freeLocalPort() });
 
-		const p: Peek = { host: hostName, hostCfg: host, locals, tunnels: [], respawnCounts: [0, 0], respawnTimers: [], gotFrame: false, streamLogged: false, state: "probing", sockets: new Set(), closing: false };
+		const p: Peek = { host: hostName, hostCfg: host, locals, tunnels: [], respawnCounts: [0, 0], respawnTimers: [], gotFrame: false, streamLogged: false, refusing: false, lastActivityAt: Date.now(), lastFrameAt: Date.now(), state: "probing", sockets: new Set(), closing: false, sentinelBusy: false, vncOffered: false, tunnelErrs: [], stormLogged: [false, false] };
 		peeks.set(hostName, p);
 		addEvent(`view: attach ${hostName}`);
 		// No await from here to attachLoop: the caller's socket must attach before any engine
@@ -2602,6 +2789,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		spawnTunnel(p, 0, tunnelArgv);
 		spawnTunnel(p, 1, tunnelArgv);
 		p.heartbeatTimer = setInterval(() => castJson(p, { ev: "ping" }), HEARTBEAT_MS);
+		p.sentinelTimer = setInterval(() => void sentinelTick(p), SENTINEL_MS);
 		setStatus(p, "probing", `connecting — opening ssh tunnels to ${hostName}…`);
 		void attachLoop(p); // detached — the upgrade handler must NOT wait for attach
 		// Detached repair of the browser leg: a peek is runner-less by design, so it inherits
@@ -2754,6 +2942,83 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		}
 	};
 
+	/**
+	 * POST /api/vnc?host=<name> — the peek panel's Screen Sharing fallback, operator-clicked
+	 * (the sentinel only ever OFFERS; nothing opens a window unasked).
+	 *
+	 * Passwordless is a side effect of seeding, not of the URL: the vnc:// string never
+	 * carries a credential (signin.ts's stance — argv, logs, and `open` would all see it).
+	 * Instead the click (re)seeds the login keychain from the retained team bundle — the
+	 * secrets file enroll ships — via the same (server, account, protocol `vnc `) triple
+	 * Screen Sharing reads, then reports honestly whether the connection will prompt.
+	 * Idempotent by construction (`security -U`), so every click is also the repair for a
+	 * stale item. The viewer opens on the machine running the DASH SERVER — the operator's
+	 * laptop in every normal posture; a remote --web viewer uses the offer's URL directly.
+	 *
+	 * LOOPBACK-ONLY, and that is the security boundary. This writes the login keychain (with
+	 * the fleet's VNC password in a `security` argv) and pops a GUI window — actions that only
+	 * make sense for an operator sitting AT the dash machine, and must never be driven by a
+	 * remote peer or a cross-origin page. The read endpoints stay open (a teammate watches
+	 * `--web`); this one refuses anything but 127.0.0.1/::1. A remote viewer still gets the
+	 * vnc:// link in the offer and opens Screen Sharing on THEIR own machine, client-side.
+	 */
+	const vncInflight = new Set<string>();
+	const serveVncOpen = async (res: http.ServerResponse, params: URLSearchParams, remote: string | undefined): Promise<void> => {
+		const json = (status: number, body: Record<string, unknown>): void => {
+			if (!res.headersSent) res.writeHead(status, { "content-type": "application/json" });
+			res.end(JSON.stringify(body));
+		};
+		// A credential-writing, GUI-popping action never answers a non-local caller — ngrok
+		// forwards from loopback so this does not cover a tunnel, but it stops every LAN/direct
+		// remote peer, and the offer's own vnc:// link is the remote viewer's real path anyway.
+		if (remote !== "127.0.0.1" && remote !== "::1" && remote !== "::ffff:127.0.0.1")
+			return json(403, { error: "Screen Sharing can only be opened from the dash machine" });
+		const hostName = params.get("host") ?? "";
+		// One at a time: the async seed still spawns `security`, and a looped/held click must
+		// not stack subprocesses. Same idiom as /api/logs' logsInflight.
+		if (vncInflight.has(hostName)) return json(429, { error: "a Screen Sharing request for this host is already in flight" });
+		vncInflight.add(hostName);
+		try {
+			const [{ loadHosts }, { vncUrl, hasScreenShareLogin }, { seedVncKeychain }] = await Promise.all([
+				import("../remote/control/hosts.js"),
+				import("../remote/control/signin.js"),
+				import("../remote/control/team.js"),
+			]);
+			// Same strictness as /api/logs: only a host in the pinned inventory gets anything
+			// run for it.
+			const host = loadHosts().hosts.find((h) => h.name === hostName);
+			if (!host) return json(400, { error: `unknown host ${JSON.stringify(hostName)}` });
+			let seedNote = "";
+			try {
+				const seed = await seedVncKeychain([host]);
+				if (!seed.hadBundle) seedNote = "no team bundle on this machine";
+				else if (!seed.hadPassword) seedNote = "the team bundle carries no VNC password";
+				else if (!seed.seeded.length) seedNote = "keychain seeding was refused";
+			} catch {
+				// The message would embed the bundle's local path — kept out of the response.
+				seedNote = "the team bundle could not be read";
+			}
+			const promptless = await hasScreenShareLogin(host).catch(() => false);
+			const u = vncUrl(host);
+			await new Promise<void>((resolve, reject) => {
+				execFile("open", [u], (err) => (err ? reject(err) : resolve()));
+			});
+			addEvent(`view: opened Screen Sharing for ${host.name} (peek fallback)`);
+
+			return json(200, {
+				ok: true,
+				promptless,
+				message: promptless
+					? `Screen Sharing opened for ${host.name} — connects without a password.`
+					: `Screen Sharing opened for ${host.name} — it may ask for the Mac's password${seedNote ? ` (${seedNote})` : ""}.`,
+			});
+		} catch {
+			json(500, { error: "could not open Screen Sharing" });
+		} finally {
+			vncInflight.delete(hostName);
+		}
+	};
+
 	const server = http.createServer((req, res) => {
 		const url = req.url ?? "/";
 		if (url === "/" || url === "/index.html") {
@@ -2769,6 +3034,12 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		} else if (url.startsWith("/api/logs")) {
 			// Async by necessity (ssh); serveLogs answers every path itself, including throws.
 			void serveLogs(res, new URL(url, "http://localhost").searchParams);
+		} else if (url.startsWith("/api/vnc")) {
+			// An action, not a read: POST only, so no prefetcher or crawler ever pops a viewer.
+			if (req.method !== "POST") {
+				res.writeHead(405, { "content-type": "application/json" });
+				res.end(JSON.stringify({ error: "POST only" }));
+			} else void serveVncOpen(res, new URL(url, "http://localhost").searchParams, req.socket.remoteAddress);
 		} else if (url === "/events") {
 			res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
 			res.write(`data: ${JSON.stringify(currentState())}\n\n`);
@@ -2843,6 +3114,26 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		if (session.lastWindow) {
 			try {
 				socket.write(wslib.encodeFrame(session.lastWindow, "text"));
+			} catch {
+				socket.destroy();
+			}
+		}
+		// The last JPEG, streaming sessions only (setStatus drops it on every exit from
+		// "streaming"): a reconnecting viewer — the 12s staleness watchdog's force-close, a
+		// reload — repaints instantly instead of holding a spinner until the target's next
+		// compositor commit, which a static screen may not produce for minutes.
+		if (session.lastFrame) {
+			try {
+				socket.write(wslib.encodeFrame(session.lastFrame, "binary"));
+			} catch {
+				socket.destroy();
+			}
+		}
+		// A standing vnc offer (cleared by frames) reaches late joiners too — the operator who
+		// opens the dash BECAUSE nothing is streaming is exactly who the button is for.
+		if (session.lastVnc) {
+			try {
+				socket.write(wslib.encodeFrame(session.lastVnc, "text"));
 			} catch {
 				socket.destroy();
 			}
