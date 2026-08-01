@@ -31,6 +31,7 @@ import {
 	scopeWarnings,
 	sessionEndingChord,
 	teeConsole,
+	usageEvent,
 	verificationTallies,
 } from "../harness.js";
 import type { HomeResetResult, ObservationBundle } from "../harness.js";
@@ -578,6 +579,9 @@ export async function main(): Promise<void> {
 			usage.outputTokens += response.usage?.output_tokens ?? 0;
 			usage.cacheReadTokens += response.usage?.cache_read_input_tokens ?? 0;
 			usage.cacheCreationTokens += response.usage?.cache_creation_input_tokens ?? 0;
+			// Cumulative usage line per model call — what lets the dashboard render live
+			// tokens/cost before collect banks run.json.
+			usageEvent(stamp, model, usage);
 
 			if (response.stop_reason === "refusal") throw new Error("model refused the request");
 
@@ -948,6 +952,10 @@ export async function main(): Promise<void> {
 				};
 		}
 		if (outcome) {
+			// One final usage line: done() grading (done.ts) mutates the SAME shared tally after
+			// the loop's last per-call emission, and collect reads runLog.usage — this is what
+			// makes the event log's last usage line converge exactly with the run log's numbers.
+			if (usage.modelCalls > 0) usageEvent(stamp, model, usage);
 			// Every exit funnels through here (done, step limit, interrupt, abort), so this is
 			// the one verdict event — same single-writer rule as the run log itself.
 			runEvent(stamp, "verdict", { success: outcome.success === true, summary: String(outcome.summary ?? "").slice(0, 300) });

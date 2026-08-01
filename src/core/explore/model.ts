@@ -1,6 +1,6 @@
 import type { ModelClient } from "../harness.js";
 import Anthropic from "@anthropic-ai/sdk";
-import { outputEffort, providerRouting, retryTransient } from "../harness.js";
+import { outputEffort, providerRouting, retryTransient, usageEvent } from "../harness.js";
 import { writeArtifacts } from "./artifacts.js";
 import { type FinishInput, noteProvider, type Pass, type StopReason } from "./state.js";
 
@@ -36,6 +36,9 @@ export const streamCall = async (p: Pass, client: ModelClient, model: string, ex
 	p.usage.outputTokens += msg.usage?.output_tokens ?? 0;
 	p.usage.cacheReadTokens += msg.usage?.cache_read_input_tokens ?? 0;
 	p.usage.cacheCreationTokens += msg.usage?.cache_creation_input_tokens ?? 0;
+	// Cumulative usage line per model call, for the dashboard's live tokens/cost. Emitted
+	// here for the same single-site reason as the tally above.
+	usageEvent(p.stamp, model, p.usage);
 
 	return msg;
 };

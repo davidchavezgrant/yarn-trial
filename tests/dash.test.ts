@@ -6,7 +6,8 @@ import { test } from "node:test";
 import { aggregateRunEvents, appendNarrativeEvent, buildDetail, buildState, type DashEvent, defaultDashDate, exploreSeries, type FleetView, fromStore, groundingArmId, legacyNarrativeLogPath, loadEnvFallback, localRunProgress, matchPath, narrativeLogPath, type NarrativeEvent, narratorPrompt, notedRunKeys, parseDashArgs, parseEnvLine, parseLogFrames, parseRunEvents, rankExplore, readPersistedNarrative, runEventLine, type RunProgress, storeEvents, utf8Tail, watchStoreChain } from "../src/bench/dash.js";
 // The submodule, not the core/harness.ts barrel: the barrel loads the Anthropic SDK and the
 // cua driver, which a unit test of a 30-line appender has no business paying for.
-import { runEvent } from "../src/core/harness/run-events.js";
+import { runEvent, usageEvent } from "../src/core/harness/run-events.js";
+import { estimateCost } from "../src/bench/cost.js";
 import type { Manifest, ManifestEntry } from "../src/bench/manifest.js";
 import { MATRIX, armAppmapSlug, armById } from "../src/bench/matrix.js";
 
@@ -1063,6 +1064,38 @@ test("RunEvent__SwallowsFailure__When__DataRootIsUnwritable", () => {
 	}
 });
 
+test("UsageEvent__AppendsCumulativeTotals__When__Called", () => {
+	const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "usage-events-"));
+	const saved = process.env.YARN_RUNNER_DATA;
+	process.env.YARN_RUNNER_DATA = dataRoot;
+	try {
+		// Two calls with GROWING totals — the contract is cumulative, so the consumer takes
+		// the last line it sees and never sums the stream.
+		usageEvent("2026-08-01T00-00-00-000-test", "openai/gpt-5.6-sol", {
+			modelCalls: 1, inputTokens: 100, outputTokens: 20, cacheReadTokens: 0, cacheCreationTokens: 90,
+		});
+		usageEvent("2026-08-01T00-00-00-000-test", "openai/gpt-5.6-sol", {
+			modelCalls: 2, inputTokens: 250, outputTokens: 55, cacheReadTokens: 80, cacheCreationTokens: 130,
+		});
+		const file = path.join(dataRoot, "out", "bench", "live", "2026-08-01T00-00-00-000-test", "events.jsonl");
+		const lines = fs.readFileSync(file, "utf8").trimEnd().split("\n").map((l) => JSON.parse(l));
+		assert.equal(lines.length, 2);
+		assert.ok(lines.every((l) => l.kind === "usage"));
+		// The detail shape is a frozen contract with the dashboard's cost math — exact field
+		// names (TokenCounts plus model/modelCalls), nothing extra, nothing renamed.
+		assert.deepEqual(lines[0].detail, {
+			model: "openai/gpt-5.6-sol", modelCalls: 1, inputTokens: 100, outputTokens: 20, cacheReadTokens: 0, cacheCreationTokens: 90,
+		});
+		assert.deepEqual(lines[1].detail, {
+			model: "openai/gpt-5.6-sol", modelCalls: 2, inputTokens: 250, outputTokens: 55, cacheReadTokens: 80, cacheCreationTokens: 130,
+		});
+	} finally {
+		if (saved === undefined) delete process.env.YARN_RUNNER_DATA;
+		else process.env.YARN_RUNNER_DATA = saved;
+		fs.rmSync(dataRoot, { recursive: true, force: true });
+	}
+});
+
 test("RunEventLine__RendersKindAndPairs__When__DetailVaries", () => {
 	assert.equal(runEventLine("start", { task: "change tz", step: 3, ok: true }), "start task=change tz step=3 ok=true");
 	// Empty or absent detail renders as the bare kind — no trailing space, no "{}" noise.
@@ -1413,6 +1446,94 @@ test("BuildState__OmitsLiveProgress__When__EntryCollected", () => {
 	const e = armView(s, "p2-ax-grounded")?.passes[0]?.entries[0];
 	assert.equal(e?.live, undefined);
 	assert.equal(e?.steps, 5, "the collected number stands alone");
+});
+
+test("AggregateRunEvents__KeepsLatestUsageTotals__When__MultipleUsageEvents", () => {
+	// Usage events carry CUMULATIVE totals (one per model call) — the newest one IS the run's
+	// usage so far, so the later event's numbers and model win outright.
+	const p = aggregateRunEvents(parseRunEvents([
+		JSON.stringify({ t: "2026-08-01T10:00:01.000Z", kind: "usage", detail: { model: "claude-opus-5", modelCalls: 1, inputTokens: 1000, outputTokens: 200, cacheReadTokens: 50, cacheCreationTokens: 10 } }),
+		JSON.stringify({ t: "2026-08-01T10:00:05.000Z", kind: "usage", detail: { model: "gpt-5.6-sol", modelCalls: 3, inputTokens: 4200, outputTokens: 900, cacheReadTokens: 300, cacheCreationTokens: 40 } }),
+	].join("\n")));
+	assert.equal(p?.modelCalls, 3);
+	assert.equal(p?.inputTokens, 4200);
+	assert.equal(p?.outputTokens, 900);
+	assert.equal(p?.cacheReadTokens, 300);
+	assert.equal(p?.cacheCreationTokens, 40);
+	assert.equal(p?.model, "gpt-5.6-sol");
+	// usd is the VIEW layer's field (entryView prices it) — the aggregator never fills it.
+	assert.equal(p?.usd, undefined);
+});
+
+test("AggregateRunEvents__IgnoresUsageFields__When__DetailMalformed", () => {
+	// Per-field defensive checks: a stringly-typed or missing field loses ITSELF — no NaN, no
+	// partial garbage — and never takes the good fields or the run's other counters with it.
+	const p = aggregateRunEvents(parseRunEvents([
+		JSON.stringify({ t: "2026-08-01T10:00:01.000Z", kind: "step", detail: { step: 1, action: "click", verified: true } }),
+		JSON.stringify({ t: "2026-08-01T10:00:02.000Z", kind: "usage", detail: { model: "", modelCalls: "3", inputTokens: "lots", outputTokens: 900 } }),
+	].join("\n")));
+	assert.equal(p?.outputTokens, 900, "the one well-typed field still lands");
+	assert.equal(p?.inputTokens, undefined);
+	assert.equal(p?.modelCalls, undefined);
+	assert.equal(p?.cacheReadTokens, undefined);
+	assert.equal(p?.model, undefined, "an empty model string is no model");
+	assert.equal(p?.steps, 1, "a malformed usage detail never loses the run");
+});
+
+test("BuildState__PricesLiveUsage__When__EntryUncollected", () => {
+	// Live cost is priced server-side with the SAME math as collected rows: estimateCost at
+	// the run-recorded model. claude-opus-5 (RATES: in $5, out $25, cache-read $0.5, cache-write
+	// $6.25 per MTok) → 0.5 + 0.5 + 0.5 + 0.25 = $1.75.
+	const tokens = { inputTokens: 100_000, outputTokens: 20_000, cacheReadTokens: 1_000_000, cacheCreationTokens: 40_000 };
+	const live = new Map<string, RunProgress>([
+		["job-1", { updatedAt: "2026-08-01T10:00:04.000Z", steps: 3, verified: 2, modelCalls: 3, model: "claude-opus-5", ...tokens }],
+	]);
+	const s = buildState(
+		manifest(entry({})),
+		fleet([{ name: "mac1", reachable: true, state: "busy", jobId: "job-1", elapsedSec: 42 }]),
+		[],
+		true,
+		undefined,
+		live,
+	);
+	const pass = armView(s, "p2-ax-grounded")?.passes[0];
+	const e = pass?.entries[0];
+	assert.equal(e?.live?.usd, estimateCost(tokens, "claude-opus-5"));
+	assert.equal(e?.live?.usd, 1.75);
+	assert.equal(e?.live?.outputTokens, 20_000);
+	// The invariant the RunProgress header states: live values never feed the cost totals —
+	// the pass's usd sums COLLECTED entries only, and nothing here is collected.
+	assert.equal(pass?.usd, 0);
+
+	// A collected entry gets no live field at all, priced or not (existing invariant).
+	const s2 = buildState(
+		manifest(entry({ state: "done", collected: true, metrics: { success: true, steps: 5, verifiedSteps: 5 } })),
+		fleet([]),
+		[],
+		true,
+		undefined,
+		live,
+	);
+	assert.equal(armView(s2, "p2-ax-grounded")?.passes[0]?.entries[0]?.live, undefined);
+});
+
+test("StoreEvents__OmitsUsageLines__When__TailingRunEvents", () => {
+	// Usage is a counter channel, not narrative: aggregation consumes every usage event, but
+	// the display feed skips them — one line per model call would crowd the 50-line tail.
+	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-usage-feed-"));
+	try {
+		plant(out, ["bench", "live", "run-usage", "events.jsonl"], [
+			JSON.stringify({ t: "2026-08-01T10:00:01.000Z", kind: "step", detail: { step: 1, action: "click", verified: true } }),
+			JSON.stringify({ t: "2026-08-01T10:00:02.000Z", kind: "usage", detail: { model: "claude-opus-5", modelCalls: 1, inputTokens: 1000, outputTokens: 200 } }),
+		].join("\n") + "\n");
+		const merged = storeEvents([], 200, out);
+		assert.ok(merged.some((e) => e.line.startsWith("step ")), "the step line reaches the feed");
+		assert.ok(!merged.some((e) => e.line.startsWith("usage")), "usage lines stay out of the feed");
+		// The counters still consume what the feed skips.
+		assert.equal(localRunProgress("run-usage", out)?.outputTokens, 200);
+	} finally {
+		fs.rmSync(out, { recursive: true, force: true });
+	}
 });
 
 test("StoreEvents__MergesRemoteTails__When__ExtraEventsPassed", () => {
