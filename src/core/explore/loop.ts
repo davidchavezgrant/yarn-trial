@@ -12,6 +12,9 @@ import {
 	declaredMatches,
 	declaredRemaining,
 	declaredSummary,
+	checkDismissal,
+	type DismissReason,
+	type InteractiveElement,
 	externalityTarget,
 	sessionEndingChord,
 	frontierCredit,
@@ -77,6 +80,10 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 	 * what the model SEES, never what the run can prove.
 	 */
 	const vo = p.visionOnly;
+	// Constant for the pass: the guard verb sets differ on the web (a bare "Confirm" ships
+	// state to a server there and is ordinary navigation in a desktop app), and both the
+	// dismissal check and the label gates need the same answer.
+	const web = p.target.kind === "web";
 	const summary = () => (vo ? declaredSummary(p.declared) : frontierSummary(p.ledger));
 	const remaining = () => (vo ? declaredRemaining(p.declared) : frontierRemaining(p.ledger));
 	// The mechanical ledger stays EMPTY on a vision-only pass rather than being fed silently:
@@ -351,6 +358,27 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 					});
 					continue;
 				}
+				// VERIFY THE CATEGORY BEFORE RETIRING ANYTHING. A reason the harness cannot
+				// corroborate is refused and costs a turn — otherwise the enum is just free
+				// text with a shorter vocabulary, and the model learns which word gets past
+				// the gate. Skipped on a vision-only pass: there is no element list to check a
+				// label against, so the claim is unverifiable by construction.
+				if (!vo) {
+					const check = checkDismissal(input.reason as DismissReason, matches as InteractiveElement[], obs, {
+						web,
+						cohortSize: (e) => [...p.ledger.seen.values()].filter((o) => o.role === e.role && o.surface === e.surface).length,
+					});
+					if (check.refusal) {
+						p.refusals++;
+						console.log(`  dismiss REFUSED (${input.reason}): ${check.refusal.slice(0, 90)}…`);
+						p.messages.push({
+							role: "user",
+							content: [{ type: "tool_result", tool_use_id: toolUse.id, is_error: true, content: `Nothing was dismissed. ${check.refusal}` }],
+						});
+						continue;
+					}
+				}
+
 				const gone = vo ? declaredDismiss(p.declared, input) : frontierDismiss(p.ledger, input);
 				const rest = remaining();
 				// A silent zero match reads as "done" and the model moves on leaving the
@@ -416,7 +444,6 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 		}
 
 		const input = toolUse.input as { reasoning?: string; action: any; target?: { name?: string; surface?: string } };
-		const web = p.target.kind === "web";
 
 		if (vo) {
 			// This pass never showed the model an element list, so an element_index here is a

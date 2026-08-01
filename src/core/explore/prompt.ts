@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { ACT_TOOL } from "../harness.js";
 import type { TargetVocabulary } from "../target.js";
+import { DISMISS_REASON_HELP, DISMISS_REASONS } from "../harness/dismissal.js";
 import { DISMISS_CAP } from "./config.js";
 
 /**
@@ -81,7 +82,7 @@ ${
 
 So you have two ways to shrink it, and both are legitimate:
 - Operate the control (this is the default: it is how surfaces get discovered — opening one panel adds everything inside it to the frontier).
-- Call "dismiss" for controls you have deliberately decided not to operate — content rather than navigation (list rows, transcript chunks, individual documents), or things that would touch the USER'S content or leave the machine. "It would change something" is NOT a reason: settings are reverted automatically and scratch is yours, so a control skipped on those grounds is a hole in the map. Dismiss by surface to clear a whole panel of repetitive items at once. Dismissals are recorded and published with the map, so give a real reason; they are the honest way to say "I chose not to", which silence is not.
+- Call "dismiss" for controls you have deliberately decided not to operate. It takes a CATEGORY, not a sentence, and the harness VERIFIES the category against what is on screen: calling something external when its label commits nothing, or repetitive when there are three of them, is refused and costs you a turn. There is no category for "it would change something" — settings are reverted automatically after the pass and scratch you create is yours, so that is never a reason to skip a control. Dismiss by surface to clear a whole panel of repetitive items at once. Dismissals are recorded and published with the map, so give a real reason; they are the honest way to say "I chose not to", which silence is not.
 
 Dismissal is bounded on purpose: a single call that does not name a specific surface may retire at most ${DISMISS_CAP} controls, because one sentence cannot honestly justify a hundred unrelated decisions. Scattered top-level controls must be dismissed in groups small enough to each have a real reason — or opened. A named panel of repetitive rows is exempt.
 
@@ -242,7 +243,15 @@ export const EXTRA_TOOLS: Anthropic.Tool[] = [
 			properties: {
 				names: { type: "array", items: { type: "string" }, description: "Exact control labels as printed in the frontier listing." },
 				surface: { type: "string", description: 'The containing surface as printed in the frontier listing, e.g. "Brand Kit". Omit to match any surface.' },
-				reason: { type: "string", description: "Why these are not worth operating. Published with the map." },
+				reason: {
+					type: "string",
+					enum: [...DISMISS_REASONS],
+					description:
+						"Which category applies. VERIFIED against the observation — a claim the harness cannot corroborate is refused and costs you a turn.\n" +
+						DISMISS_REASONS.map((r) => `- ${r}: ${DISMISS_REASON_HELP[r]}`).join("\n") +
+						"\nThere is deliberately NO category for \"operating this would change something\": settings are restored automatically after the pass and scratch you create is yours, so that is not a reason to skip a control.",
+				},
+				note: { type: "string", description: "Optional detail, published with the map. Not the justification — the category is." },
 			},
 			required: ["reason"],
 		},
