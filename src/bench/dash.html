@@ -133,7 +133,7 @@
 	/* Lineage groups: extra air above each group's first row. The explore row IS the group
 	   header — the board's only column labels live in the single sticky thead. */
 	tr.gsep td { padding-top: 16px; }
-	/* 18 columns: the table must overflow sideways rather than crush the prose cells —
+	/* 17 columns: the table must overflow sideways rather than crush the prose cells —
 	   wide content scrolls in its own container, the page never scrolls horizontally. */
 	#board { overflow-x: auto; }
 	/* Phase badge on task/replay rows: phases interleave inside a lineage group, so each row
@@ -1052,8 +1052,7 @@ function armOf(jobId) {
 // rows repeated the column labels down the page, which got hard to read. Explore rows'
 // discovery numbers each get their OWN column (Actions…Ambig, after the task metrics) so
 // passes compare down the page — they were one colspan-5 inline-labeled blob, unscannable.
-// Task rows show "–" there; explore rows show "–" under Success/Steps (no success field —
-// rendering one as "0/1 ok" read as a failure — and Actions IS the explore's steps).
+// Task rows show "–" there; explore rows show "–" under Steps (Actions IS the explore's steps).
 // Every metric column is PER RUN: a multi-run variant splits after the identity columns
 // into one line per run (passRows), the identity cells rowspanned across the group.
 // Flags live in the arm tooltip (the display name is derived from them) and per-run
@@ -1065,19 +1064,18 @@ const RUNS_TIP = "the run's status — click to open/collapse its dropdown; the 
 // No target column: the app scope picker above the board carries the target, and inside a
 // lineage group every row shares the group's target anyway.
 // Ordering: the two wide prose cells (Variant, Task) together at the left, then the three
-// short config tokens (Sees, Acts With, Model), the five task metrics, the five explore
+// short config tokens (Sees, Acts With, Model), the four task metrics, the five explore
 // discovery metrics, ops at the right.
-// "Success", not "Passed": PASS/FAIL is the judge's vocabulary and this column is
-// self-reported success — the distinction the judge pipeline exists to expose.
+// No Success column: per-run ✓/✗ is already on the Runs column's status chips — a second
+// cell saying the same thing read as a different signal.
 // Every full-width spanner (detail rows, phase separators) spans NCOLS — keep it in step
 // with TASK_HEAD when adding a column.
-const NCOLS = 18;
+const NCOLS = 17;
 const TASK_HEAD = "<tr>" + th("Variant", VARIANT_TIP) +
 	th("Task", "the goal-only prompt the run was given") +
 	th("Sees", "what the agent SEES: AX or DOM elements, plus Vision — or Vision only") +
 	th("Acts With", "what injects the input: AX (cua driver) or CDP") +
 	th("Model", "what actually ran, off the run logs") +
-	th("Success", "self-reported, per run: ✓ succeeded · ✗ failed · ~ = the running run's own claim off its event log (the judge's verdict lives in the Judge card)", "num-h") +
 	th("Steps", "actions the run took (hover for the verified count)", "num-h") + th("Time", "wall-clock per run — ticking while the run executes", "num-h") +
 	th("Tokens", "OUTPUT tokens the run spent", "num-h") + th("Cost", "published-rate estimate per run — not an invoice · ? = tokens recorded but no pricing", "num-h") +
 	th("Actions", "explore rows — actions the grounding pass took", "num-h") +
@@ -1233,7 +1231,7 @@ function armCell(a, p, span = "") {
 }
 
 // The five explore-discovery columns, dashed on task/replay rows so every row spans the
-// same 18 columns without colspan bookkeeping.
+// same 17 columns without colspan bookkeeping.
 const NO_EXPLORE_CELLS = `<td class="num">–</td>`.repeat(5);
 
 // A metric cell carrying a live value: ~ marks it approximate, .livecell tints it --running.
@@ -1243,18 +1241,6 @@ const liveNumCell = (label, extraTip) =>
 /* Per-run metric cells. Per cell, collected always wins: the run's own event-log counters
    (EntryView.live) stand in ONLY while the run is uncollected, marked ~/tinted per
    LIVE_CELL_TIP, so a provisional number can never blend with a banked one. */
-
-// ✓/✗ for a collected run; the running run's own done() claim as ~✓/~✗ the moment its
-// verdict event lands; "–" until either exists.
-function successCellFor(e) {
-	if (e.collected) {
-		if (e.success === true) return `<td class="num"><span class="ok-v">✓</span></td>`;
-		if (e.success === false) return `<td class="num" data-tip="${esc(e.failureKind ? "failure: " + e.failureKind : "failed")}"><span class="bad-v">✗</span></td>`;
-		return `<td class="num">–</td>`;
-	}
-	const v = e.live && e.live.verdict;
-	return v ? liveNumCell(v.success ? "~✓" : "~✗", "the run's own done() claim — self-reported, pre-collect, pre-judge") : `<td class="num">–</td>`;
-}
 
 function stepsCellFor(e) {
 	if (e.steps != null)
@@ -1332,7 +1318,7 @@ function exploreCellsFor(a, e) {
 
 // A variant with several runs SPLITS after the identity columns (David, 2026-08-01): the
 // five identity cells (Variant…Model) are identical across a pass's runs, so they render
-// once and rowspan the group; everything run-dependent (Success…Started, chip, ⤢) gets one
+// once and rowspan the group; everything run-dependent (Steps…Started, chip, ⤢) gets one
 // line per run, reading that run's OWN numbers. Line order = the chips' drain order
 // (finished → running → queued, oldest first in each band). Each line carries the chip's
 // click semantics on the whole row (data-row + data-job): click a line to open/select its
@@ -1356,14 +1342,13 @@ function passRows(a, p, first, metricCells) {
 
 function taskRow(a, p) {
 	return passRows(a, p, false, (e) =>
-		successCellFor(e) + stepsCellFor(e) + timeCellFor(e) + tokensCellFor(e) + costCellFor(e) + NO_EXPLORE_CELLS);
+		stepsCellFor(e) + timeCellFor(e) + tokensCellFor(e) + costCellFor(e) + NO_EXPLORE_CELLS);
 }
 
-// The explore GROUP-HEADER rows. Success and Steps stay "–": an explore has no success
-// field (rendering one as "0/1 ok" read as a failure) and Actions IS its step count.
+// The explore GROUP-HEADER rows. Steps stays "–": Actions IS an explore's step count.
 function exploreRow(a, p, first) {
 	return passRows(a, p, first, (e) =>
-		`<td class="num">–</td><td class="num">–</td>` + timeCellFor(e) + tokensCellFor(e) + costCellFor(e) + exploreCellsFor(a, e));
+		`<td class="num">–</td>` + timeCellFor(e) + tokensCellFor(e) + costCellFor(e) + exploreCellsFor(a, e));
 }
 
 // Compile arms (phase 3/4 recipe compiles) are local, instant file transforms recorded as
@@ -1386,7 +1371,7 @@ function compileRow(a, p) {
 	// reordered the header and only the armCell-based rows followed.
 	return `<tr class="crow"><td class="arm" data-tip="${esc(tip)}"><span class="dn">${esc(displayName(a))}</span>${badge}</td>
 		${srcCell}<td class="num">–</td><td class="num">–</td><td class="num">–</td>
-		<td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num">–</td>
+		<td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num">–</td>
 		${NO_EXPLORE_CELLS}${startedCell(p)}${runsCell(p, null)}<td class="treecell"></td></tr>`;
 }
 
@@ -1959,7 +1944,7 @@ function renderBoard(progress) {
 		html += `<tr class="phase-h"><td colspan="${NCOLS}">Compiles — local recipe compiles, no model in the loop</td></tr>`;
 		html += timelineRows(compiles).map(({ a, p }) => compileRow(a, p)).join("");
 	}
-	// The one section that had no empty state: a bare 18-column header floating over nothing
+	// The one section that had no empty state: a bare 17-column header floating over nothing
 	// was indistinguishable from a board that failed to render its rows.
 	if (!groups.length && !Object.keys(deps).length && !ungrounded.length && !compiles.length)
 		html += `<tr><td colspan="${NCOLS}"><div class="empty">nothing submitted for ${esc(targetLabel(currentTarget()))} yet — arms appear as bench phase submits</div></td></tr>`;
