@@ -1,0 +1,71 @@
+{
+  "app": "Yarn",
+  "capturedAt": "2026-08-01T00:02:45.076Z",
+  "provenance": "explore-vision",
+  "proseSha256": "dbd4b4ce8f54",
+  "elapsed": "2m",
+  "coverage": {
+    "seen": 5,
+    "actuated": 2,
+    "dismissed": 3,
+    "surfaces": 1,
+    "chapters": 1,
+    "stopped": "frontier-empty",
+    "dismissals": [
+      "Standard macOS window chrome; operating it would hide/resize/close the only onboarding window and does not reveal Yarn functionality or settings."
+    ],
+    "gatedRead": 0,
+    "gatedRefused": 0
+  },
+  "nodes": [
+    {
+      "id": "recording-setup",
+      "title": "Recording Setup",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Mandatory launch-time onboarding gate; no Continue or Skip control is visible."
+    },
+    {
+      "id": "recording-setup/open-settings",
+      "title": "Open Settings",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "macos-recording-permissions",
+      "options": [
+        "Accessibility",
+        "Screen Recording"
+      ],
+      "notes": "Two buttons with the same label, distinguished by row; intended to open corresponding macOS privacy panes."
+    },
+    {
+      "id": "recording-setup/terms-privacy",
+      "title": "Terms and Privacy Policy",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "legal-policy-link",
+      "notes": "Visible legal-policy text; clicking caused no visible navigation in this run."
+    }
+  ],
+  "edges": [
+    {
+      "from": "root",
+      "to": "recording-setup",
+      "action": "Launch Yarn"
+    },
+    {
+      "from": "recording-setup",
+      "to": "recording-setup/open-settings",
+      "action": "Click either “Open Settings” button beside the desired permission"
+    },
+    {
+      "from": "recording-setup",
+      "to": "recording-setup/open-settings",
+      "action": "Click “Open Settings” beside Accessibility or Screen Recording"
+    },
+    {
+      "from": "recording-setup",
+      "to": "recording-setup/terms-privacy",
+      "action": "Click “Terms and Privacy Policy” text; no visible result in this run"
+    }
+  ]
+}

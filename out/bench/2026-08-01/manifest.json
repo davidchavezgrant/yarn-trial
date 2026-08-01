@@ -1,0 +1,94 @@
+{
+	"date": "2026-08-01",
+	"createdAt": "2026-08-01T03:07:23.276Z",
+	"entries": [
+		{
+			"armId": "p1-explore-ax",
+			"jobId": "explore-2026-08-01T03-07-34-020-yarn",
+			"host": "mac1",
+			"submittedAt": "2026-08-01T03:07:34.093Z",
+			"state": "running",
+			"collected": false
+		},
+		{
+			"armId": "p1-explore-cdp",
+			"jobId": "explore-2026-08-01T03-07-37-789-yarn",
+			"host": "mac2",
+			"submittedAt": "2026-08-01T03:07:37.849Z",
+			"state": "running",
+			"collected": false
+		},
+		{
+			"armId": "p1-explore-no-vision",
+			"jobId": "explore-2026-08-01T03-07-41-426-yarn",
+			"host": "mac3",
+			"submittedAt": "2026-08-01T03:07:41.582Z",
+			"state": "failed",
+			"collected": true,
+			"metrics": {
+				"startedAt": "2026-08-01T03:07:41.428Z",
+				"endedAt": "2026-08-01T03:08:10.690Z",
+				"runSec": 29,
+				"exploreActions": 163,
+				"exploreElapsed": "30m",
+				"inputTokens": 1316890,
+				"outputTokens": 54149,
+				"cacheReadTokens": 11244544,
+				"cacheCreationTokens": 0,
+				"modelCalls": 328,
+				"controlsActuated": 52,
+				"controlsDismissed": 1021,
+				"controlsSeen": 1070,
+				"surfaces": 30,
+				"graphNodes": 180,
+				"graphEdges": 48,
+				"scopeAmbiguities": 18
+			}
+		},
+		{
+			"armId": "p1-explore-ax-noaxdom",
+			"jobId": "explore-2026-08-01T03-07-45-321-yarn",
+			"host": "mac1",
+			"submittedAt": "2026-08-01T03:07:45.357Z",
+			"state": "queued",
+			"collected": false
+		},
+		{
+			"armId": "p1-explore-ax-noaxdom-no-vision",
+			"jobId": "explore-2026-08-01T03-07-49-252-yarn",
+			"host": "mac2",
+			"submittedAt": "2026-08-01T03:07:49.248Z",
+			"state": "queued",
+			"collected": false
+		},
+		{
+			"armId": "p1-explore-cdp-no-vision",
+			"jobId": "explore-2026-08-01T03-07-52-979-yarn",
+			"host": "mac3",
+			"submittedAt": "2026-08-01T03:07:53.053Z",
+			"state": "failed",
+			"collected": true,
+			"metrics": {
+				"queuedAt": "2026-08-01T03:07:52.980Z",
+				"startedAt": "2026-08-01T03:08:10.691Z",
+				"endedAt": "2026-08-01T03:10:01.542Z",
+				"queueWaitSec": 18,
+				"runSec": 111,
+				"exploreActions": 163,
+				"exploreElapsed": "30m",
+				"inputTokens": 1316890,
+				"outputTokens": 54149,
+				"cacheReadTokens": 11244544,
+				"cacheCreationTokens": 0,
+				"modelCalls": 328,
+				"controlsActuated": 52,
+				"controlsDismissed": 1021,
+				"controlsSeen": 1070,
+				"surfaces": 30,
+				"graphNodes": 180,
+				"graphEdges": 48,
+				"scopeAmbiguities": 18
+			}
+		}
+	]
+}

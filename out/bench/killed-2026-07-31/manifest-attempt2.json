@@ -1,0 +1,58 @@
+{
+	"date": "2026-07-31",
+	"createdAt": "2026-07-31T21:54:15.354Z",
+	"entries": [
+		{
+			"armId": "p1-explore-ax",
+			"jobId": "explore-2026-07-31T21-54-19-371-yarn",
+			"host": "mac1",
+			"submittedAt": "2026-07-31T21:54:19.482Z",
+			"state": "done",
+			"collected": true,
+			"metrics": {
+				"startedAt": "2026-07-31T21:54:19.373Z",
+				"endedAt": "2026-07-31T21:54:41.316Z",
+				"runSec": 22,
+				"exploreActions": 96,
+				"exploreElapsed": "40m",
+				"controlsActuated": 47,
+				"controlsDismissed": 350,
+				"controlsSeen": 396,
+				"surfaces": 34,
+				"graphNodes": 150,
+				"graphEdges": 71,
+				"scopeAmbiguities": 10
+			}
+		},
+		{
+			"armId": "p1-explore-cdp",
+			"jobId": "explore-2026-07-31T21-54-23-117-yarn",
+			"host": "mac2",
+			"submittedAt": "2026-07-31T21:54:23.246Z",
+			"state": "running",
+			"collected": false
+		},
+		{
+			"armId": "p1-explore-web-cdp",
+			"jobId": "explore-2026-07-31T21-54-26-997-https-app.notion.com",
+			"host": "mac3",
+			"submittedAt": "2026-07-31T21:54:27.077Z",
+			"state": "failed",
+			"collected": true,
+			"metrics": {
+				"startedAt": "2026-07-31T21:54:26.997Z",
+				"endedAt": "2026-07-31T21:54:27.826Z",
+				"runSec": 1
+			},
+			"note": "no appmap at /Users/davidgrant/Code/work/yarn-trial/docs/appmaps/https-app.notion.com.md; no appmap graph; appmap archive failed: ENOENT: no such file or directory, copyfile '/Users/davidgrant/Code/work/yarn-trial/docs/appmaps/https-app.notion.com.md' -> '/Users/davidgrant/Code/work/yarn-trial/out/bench/2026-07-31/appmaps/default/p1-explore-web-cdp/https-app.notion.com.md'"
+		},
+		{
+			"armId": "p1-explore-vision",
+			"jobId": "explore-2026-07-31T21-54-30-599-yarn",
+			"host": "mac1",
+			"submittedAt": "2026-07-31T21:54:30.673Z",
+			"state": "running",
+			"collected": false
+		}
+	]
+}

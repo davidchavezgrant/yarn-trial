@@ -1,0 +1,5010 @@
+{
+  "app": "app.notion.com",
+  "capturedAt": "2026-07-31T23:13:17.291Z",
+  "provenance": "explore",
+  "proseSha256": "82e5335d2513",
+  "elapsed": "1h14m",
+  "coverage": {
+    "seen": 1238,
+    "actuated": 167,
+    "dismissed": 1075,
+    "surfaces": 119,
+    "chapters": 34,
+    "stopped": "frontier-empty",
+    "dismissals": [
+      "Harness explicitly refuses this potentially destructive route; leaving it untouched is required for safety.",
+      "Harness explicitly blocks the externally visible page-sharing surface; no safe inspection route is available.",
+      "Calendar day cells are repetitive date choices inside an already mapped date picker; selecting one would alter a transient filter and adds no new surface.",
+      "This settings surface and its tabs, marketplace rows, toggles, and external authorization entry points were already mapped; remaining controls are repetitive, state-changing, billing/external, or close/navigation controls.",
+      "All three Notion AI settings tabs and scope-sensitive controls were mapped; remaining connector rows and toggles would start authorization or change workspace/personal settings.",
+      "Discover and Manage were mapped; client rows are repetitive external setup links and disconnect/allowlist controls are state-changing or destructive.",
+      "Guests, Members, Groups, and Contacts were mapped; remaining invites, role controls, imports, booking, and link actions are externally visible or state-changing.",
+      "Workspace General was mapped; remaining controls immediately change workspace settings, export data, copy identifiers, or are destructive/external help links.",
+      "Account Preferences and menu options were mapped; remaining toggles and selectors apply immediately, and help/cookie links add no app surface.",
+      "Account profile/security/device settings were mapped; remaining actions alter credentials, sessions, identity, support access, or delete the account.",
+      "Import Discover was mapped; every remaining importer starts file selection, external migration, or creates workspace content.",
+      "The task Side Peek structure, properties, peek modes, actions, and database-wide layout path were mapped; remaining share/comment/icon/property/template actions mutate or are externally visible.",
+      "Home customization was mapped; remaining section visibility controls apply immediately, setup dismissal changes state, and Marketplace/section navigation is already mapped.",
+      "Notification settings and Slack/Discord dropdowns were mapped; remaining switches and Manage settings apply account notification behavior immediately.",
+      "All four public-page inventories, domain state, and live-indicator setting were mapped; remaining rows are empty tables, upgrades, or workspace-setting actions.",
+      "Teamspaces settings were mapped and the list is empty; remaining filters are redundant, while New teamspace and owner-limit toggle change workspace state.",
+      "Purchased modal tabs and empty purchase-history schemas were mapped; remaining items are static table columns.",
+      "Free-plan comparison was mapped; remaining upgrade and billing controls begin a paid plan flow, and feature rows are repetitive.",
+      "Page Updates & analytics and its settings/date menu were mapped; remaining version, history-visibility, and content-row controls are state-changing or repetitive.",
+      "Marketplace search/category result rows are repetitive catalog navigation already covered by category filters and search behavior.",
+      "The shortcut modal categories and search were mapped; remaining tabs are reference-only and do not reveal app settings or task surfaces.",
+      "Task row properties and the hidden Assignee were mapped; remaining property controls directly edit row data.",
+      "Marketplace and sidebar agent catalogs were mapped; remaining agent rows/install/create controls would create or install workspace-visible agents.",
+      "Marketplace Templates catalog and search were mapped; remaining template rows and browse actions are repetitive and may lead to duplication/purchase.",
+      "These are repetitive marketplace/content rows, page icon/property controls, load-limit choices, and relative-time cells from already-mapped surfaces; opening or selecting them would mutate content/view settings or add no new navigation.",
+      "Marketplace search profile suggestions are repetitive catalog results and opening creator profiles adds no core app navigation.",
+      "Sidebar/library page-row context actions either open an already-mapped page or mutate/delete/duplicate/nest content; one unnamed row affordance is the same context menu.",
+      "Document export dialog options were mapped; remaining controls would change dialog selections or initiate a download.",
+      "Sidebar/library page-row actions open an already-mapped page or create/duplicate/delete/nest content.",
+      "Connected email/calendar cards were mapped; remaining Get started buttons begin external account connection flows.",
+      "Global search overlay filters and display controls were mapped; remaining Date and hide/show controls are transient search-view settings.",
+      "Emoji creation form was mapped; Upload opens a native file picker and saving a name would create workspace-visible content.",
+      "Chat sidebar was mapped; New agent creates workspace-visible content and the unnamed affordance is nonessential/repetitive.",
+      "Unnamed row affordances belong to an already-mapped task page; operating them would edit/open repetitive content rather than reveal a new surface.",
+      "Emoji settings were mapped; the remaining toggle immediately changes workspace policy and Close adds no surface.",
+      "Meetings sidebar was mapped; remaining buttons connect an external calendar or create/start a meeting note.",
+      "Both search-settings toggles were mapped and apply immediately; no need to change them.",
+      "Bottom New chat and New page create workspace-visible content and were intentionally not operated.",
+      "The icon button edits the page icon and would mutate document appearance.",
+      "This customization control immediately hides the Agents sidebar section; visibility behavior is already mapped.",
+      "Unnamed checkbox belongs to the already-mapped marketplace type filter; selecting it would only alter the transient catalog filter.",
+      "This per-view settings button and the AI Meeting Notes property/group panels were already mapped; reopening adds no surface.",
+      "Book begins external consultant contact/booking and is not safe to operate.",
+      "Unnamed checkbox is the already-mapped database dependency setting and would immediately change behavior.",
+      "The unnamed setup-guide affordance routes to the already-mapped Marketplace and adds no new surface.",
+      "Unnamed setup action would enable/create meeting-note behavior; related settings and creation entry points are already mapped.",
+      "Unnamed action begins an external calendar account connection.",
+      "Side-peek preview affordances for an existing content page are duplicate navigation routes; operating them adds no new settings and page mutations are out of scope.",
+      "Existing task-row preview controls are duplicate navigation; row content and property edits would mutate the database.",
+      "Existing page preview controls duplicate already-mapped page and database navigation.",
+      "This prompt initiates an external email account connection, prohibited by safety rules.",
+      "Booking a marketplace consultant would create external contact and potentially a commercial commitment.",
+      "Personalization controls apply settings immediately and were already mapped at a higher level; changing them only to clear the frontier would violate leave-no-change.",
+      "This is an immediate app-level toggle already mapped; leave its off state unchanged.",
+      "This is an immediate document display toggle already mapped; do not change it merely to inspect.",
+      "Duplicate view-settings affordance for the already-mapped Favorites Library view; its property/filter/sort/group panels were inspected.",
+      "Setup items either start external account connections/recording, change AI personalization, duplicate already-mapped destinations, or permanently dismiss the guide; leave setup state unchanged.",
+      "Closing the persistent sidebar is a transient layout action, not a new surface; keep ordinary landing chrome intact.",
+      "Unlabeled embed control belongs to marketplace catalog content; opening/installing embeds is outside safe navigation mapping.",
+      "Immediate Library view grouping toggle; current state and behavior already mapped, so leave unchanged.",
+      "Immediate database lock toggle; already mapped and must remain off.",
+      "Immediate document lock toggle; already mapped and must remain unchanged.",
+      "Immediate personal sidebar visibility change; Meeting section customization is already mapped and should remain unchanged.",
+      "Immediate personal sidebar visibility change; sidebar section customization is already mapped and should remain unchanged.",
+      "Marketplace consultant booking creates external contact and potentially a commercial commitment.",
+      "These controls create workspace-visible content/configuration, send invitations/import contacts, save new objects, or perform destructive actions; they were mapped without execution.",
+      "Billing, commercial contact, external authorization/account connection, account/workspace lifecycle, logout, deletion, and external portal actions are unsafe or off-site.",
+      "These are immediate app/workspace/document/view toggles whose states and scopes were mapped; do not change them solely to clear the frontier.",
+      "These mutate pages/databases/views, initiate import/export/AI transformations, or change current filters/sorts/schema; their menus and behaviors were already mapped safely.",
+      "These are duplicate page navigation/copy affordances or immediate sharing/favorite/notification mode changes already mapped; no additional safe surface is expected.",
+      "Learn more may leave the app; Import workflows and supported formats were already mapped without creating content.",
+      "The Discover import tab was already explored; this is a duplicate tab affordance.",
+      "Show all results is a duplicate Marketplace search route; grouped suggestions and catalog pages were already mapped.",
+      "Agents section overflow menu has already been explored, including counts, move/hide, and Customize sidebar; leave organization unchanged.",
+      "This is a catalog creator filter option; Marketplace filtering behavior was already mapped and applying it would only alter transient catalog criteria.",
+      "Marketplace catalog/publisher content is repetitive and opening/installing products adds no new safe settings surface.",
+      "These are selectable values in already-mapped appearance, locale/time, search-date, inbox-filter, or startup controls; choosing them would change settings or transient criteria.",
+      "Repetitive Library/database property selectors and headers were already mapped through Settings and column menus; selecting them would alter filters/sorts/groups or schema values.",
+      "These are duplicate view-configuration entry points or immediate filter/sort/group/visibility actions whose panels, options, and defaults were already mapped; leave current view states unchanged.",
+      "Document/database export and import formats were already inspected. Executing them would download files, open a native picker, or create/modify workspace content.",
+      "Integration and connector rows initiate external authorization or add database/page connections; catalogs and scopes were already mapped.",
+      "Integration/MCP rows start external connections or authorization. Available providers and manage surfaces were already recorded.",
+      "These are existing content rows, user/property values, timestamps, progress/icon affordances, editor fields, or search inputs already exercised. Editing/opening them again risks content/schema changes and adds no navigation breadth.",
+      "These are immediate sidebar-count, catalog-sort, view-sort, analytics-range, load-limit, or page-opening mode choices. Menus and current defaults were already mapped; leave configuration unchanged.",
+      "These top-level tabs and settings sections were already visited and mapped; dismiss duplicate accumulated frontier entries rather than revisiting.",
+      "These settings/Marketplace tabs and account/workspace sections were already visited and recorded; remaining occurrences are duplicate navigation entries.",
+      "The Updates tab was already inspected alongside Analytics; remaining occurrence is duplicate tab navigation.",
+      "Immediate Search app setting already mapped; leave off.",
+      "Immediate personal sidebar visibility control; leave section shown.",
+      "Immediate database page-layout option already mapped; leave current state unchanged.",
+      "Immediate database-view layout toggle already mapped; leave off.",
+      "Marketplace connection type filter option; catalog filtering already mapped and applying it adds no new surface.",
+      "Completed setup tile routes to already-mapped Notion AI/chat functionality; creating a chat or agent would add workspace-visible content.",
+      "Immediate document display toggle already mapped; leave unchanged.",
+      "Immediate document/page display toggle already mapped; leave unchanged.",
+      "Marketplace creator filter option already mapped; applying it only changes transient catalog criteria.",
+      "Remove is destructive: it disables task-database behavior used by My tasks/Sprints. Confirmation flow was mapped; do not execute.",
+      "These are already-mapped overflow/account routes, database/page-layout/schema editors, font choices, sample/catalog content, and transient filters; operating them would duplicate mapped surfaces or mutate configuration/content.",
+      "Marketplace categories and product/catalog cards are repetitive content; opening, purchasing, duplicating, or exploring them can create content or commercial actions and adds no new app-control surface.",
+      "These are immediate notification/view-history/page-layout/dependency choices, mapped feature panels, or translation target languages. Selecting them would change settings/configuration or mutate page content.",
+      "Translation targets and immediate notification/dependency/subtask/sprint/layout choices were already mapped; execution would mutate content/configuration or enable features.",
+      "Marketplace category, collection, template/agent, and browse cards are repetitive catalog content; deeper use can install, duplicate, purchase, or contact providers and adds no new settings surface.",
+      "Starts marketplace creator onboarding, an account/commercial change not needed for navigation mapping.",
+      "Database/Library layout, page-structure, comment/status display, grouping/date, and sort choices were already mapped. Selecting them would immediately reconfigure document views or schema.",
+      "Marketplace category/type chips and product cards are catalog filters/content already mapped; applying/opening them adds no new app control surface and may lead to installs.",
+      "Marketplace template/agent/embed cards and categories are repetitive catalog content; opening or installing them can create content/connect services and adds no new settings surface.",
+      "Marketplace consultant/provider card is external commercial content; booking/contact actions are unsafe.",
+      "Database view opening and page-layout controls were comprehensively mapped. Selecting/editing them would change database-wide layout or immediate display settings.",
+      "Existing Getting Started page blocks and editor affordances are content, not navigation; editing them would mutate the page.",
+      "Marketplace categories and template cards are repetitive catalog content; opening/purchasing/duplicating them can create content or commercial actions.",
+      "Clear removes current transient filters/dates and Clear page cache alters local app state; both are unnecessary and their roles were already mapped.",
+      "Name, accessory, and instruction controls alter workspace AI personalization; modal was mapped and closed without making changes.",
+      "Already-mapped setup guide trigger; opening checklist destinations can mark them complete even without applying changes, so avoid further setup-state mutation.",
+      "These are previously seen transient tooltips, Marketplace category/catalog content, ordinary copy actions, or content-creation actions; they do not expose unmapped app navigation and operating them would be repetitive or mutate workspace content.",
+      "Marketplace catalog cards/profiles and create/book actions may install, duplicate, contact, or create accounts; sidebar customization mutates preferences; Date by Relative and workspace controls were already mapped. Skipping these repetitive or state-changing controls.",
+      "Marketplace creator/search/category controls and external developer/docs/support links are content or off-site/contact paths; delete/duplicate/reorder/property actions mutate views or schema; Done controls belong to already-mapped transient editors. Skip safely.",
+      "These are marketplace/catalog content, externally routed feedback/install actions, account-personalization controls, plan-comparison details, or duplicate Library view/filter controls already mapped; operating them would add no safe navigation knowledge or could mutate/install/connect.",
+      "Repetitive marketplace/catalog/install rows, external support, duplicate connection pickers, a static onboarding hint, and already-characterized date navigation/open-page choices; installs/connections/support would be externally visible or persistent, while the rest adds no new route knowledge.",
+      "These are repetitive marketplace/template/connection catalog items, help/how-to content, already-mapped database status/analytics choices, and invite/import actions that change workspace or external accounts; deliberately skipped for safety or redundancy.",
+      "These are repetitive Marketplace categories/cards, consultant/service listings, template collections, embed/install entries, and an already-mapped Library grouping chip; marketplace exploration is already broad and operating cards could install, duplicate, purchase, or contact externally.",
+      "These are already-mapped help/sidebar/customization controls, repetitive Marketplace categories/agents/templates/services, a search suggestion container, and an already-mapped inline-comments setting. Some would purchase/install or immediately change personal/document configuration.",
+      "These are duplicate database/view settings already mapped, repetitive marketplace connections/catalog navigation, help links, and immediate schema/locking/export dialog controls. Operating them adds no new safe surface and some would change the database or initiate connection management.",
+      "Repetitive Marketplace consultants/templates/agents/categories and documentation links, plus already-mapped database help links. Booking/purchasing/installing can be externally visible; help links add no in-app operational surface.",
+      "These are external integration/import/connection actions, destructive session actions, immediate page/database settings, and duplicate settings tabs already mapped. They risk persistent account/workspace/document changes or repeat known surfaces.",
+      "Repetitive Marketplace catalog/categories/agents/templates/embeds/consultants, legal/external content, a personal sidebar toggle, and a database schema action already mapped. These would install/purchase/book/link or mutate layout, or add no distinct navigation.",
+      "These are repetitive marketplace/integration rows and content/teamspace/template creation or move/sidebar-order actions. They create, install/connect, or immediately reorganize persistent state and their containing surfaces are already mapped.",
+      "These are repetitive Marketplace consultants/categories/integrations/agents/release items, duplicate page-move entries, an immediate appearance setting, and schema creation. They would book/install/move/create/change persistent state or add no distinct navigational knowledge.",
+      "These are duplicate app/marketplace/catalog entries, already-mapped row/page controls and preferences, external desktop action, and notification/status settings. Operating them would change subscription/data state, open external apps, install/duplicate content, or repeat mapped navigation.",
+      "Repetitive Marketplace templates/consultants/agents/connectors/public API entries and already-mapped status/notification controls. They install/connect/purchase/book or immediately alter data/subscriptions, and no new in-app surface is expected.",
+      "Unnamed control is the tutorial-card completion checkbox; it would change onboarding progress and the Learn section is already characterized.",
+      "Unnamed control is the tutorial-card completion checkbox; checking it would mutate onboarding progress, so it is deliberately skipped.",
+      "Unnamed control is a tutorial completion checkbox; it changes onboarding progress and is not needed to map the tutorial card.",
+      "Unnamed control is a completion checkbox that changes onboarding progress; skipped to leave state unchanged.",
+      "Unnamed control marks onboarding/tutorial completion and would change user state; not operated.",
+      "Unnamed control is a tutorial completion checkbox; skipped because it changes onboarding progress.",
+      "Unnamed control is a completion checkbox that changes onboarding progress; the card itself is already identified.",
+      "Unnamed control marks the tutorial complete and would alter onboarding state; skipped.",
+      "Home content cards and tutorials are repetitive content rather than new navigation; calendar connection is an external account change, and starter templates would create/duplicate workspace content.",
+      "These are repetitive Marketplace connectors, agents, templates, consultants, and content cards already covered by catalog/detail mapping. Installing/purchasing/booking would change state or contact externally.",
+      "These are already-mapped Home start choices/page-opening shortcuts or repetitive Marketplace catalog cards/categories/external actions; operating them would mutate startup state, duplicate known page/catalog surfaces, or begin installation/contact.",
+      "Repetitive Marketplace category/profile/template/connection catalog entries already mapped at catalog and detail-pattern level; opening could install, duplicate, purchase, authorize, or lead to creator/external terms pages.",
+      "Accumulated Marketplace catalog/profile/contact items and already-mapped database/library editor controls. Operating them would duplicate known panels, rename/reset configuration, reserve/contact externally, or leave the app for documentation.",
+      "Home recent-page content and repetitive Marketplace catalog/profile/category entries. Underlying pages/catalog patterns are mapped; opening would duplicate surfaces or may install/purchase/book/contact.",
+      "Previously inspected search fields/view settings and repetitive Marketplace/category/template content, plus Home tutorial/My tasks controls. Operating would duplicate mapped panels, purchase/duplicate content, complete tutorials, or alter Home configuration.",
+      "These are immediate personal Home widget visibility toggles; operating them only to clear coverage would change saved UI configuration.",
+      "Home recent/tutorial/template cards are content or launch setup/creation/import flows; tutorial checklists and calendar/database selectors can change progress or connections, and template cards can create content. Skip-to-content is accessibility navigation, not an app surface.",
+      "These Home actions create private pages from templates, start calendar/account connection, select a task database, or invoke AI; using them for coverage would alter account/content state.",
+      "Marketplace catalog cards and consultant Book listings are repetitive content; opening them can lead to installation, duplication, purchase, booking, or external contact. Representative template, consultant, agent, and connection detail surfaces were already mapped.",
+      "These are presentation/configuration controls already inspected: Show less collapses content, Sort by changes a catalog/library view, and Side peek is the already-mapped immediate database open-mode choice. No need to alter saved view state.",
+      "These are Marketplace template, agent, consultant, category, and connection catalog cards. They are repetitive content; deeper interaction risks purchase, installation, duplication, booking, or authorization, while representative detail surfaces are already mapped.",
+      "Sort Newest first is an immediate saved view sort already documented through the same view settings; Talk to a Notion expert begins external contact and is unsafe for exploratory operation.",
+      "Marketplace category/template/agent/consultant result cards are repetitive content. Operating them can lead to install, duplicate, buy, or book actions; representative catalog and detail routes are already documented.",
+      "Terms & privacy leaves app.notion.com. The other entries are database/view property or content controls already mapped; operating row/title/data-source actions would change or reopen content rather than discover a new surface.",
+      "These are Marketplace creator/category content, calendar/date choices, editor prompts, or value inputs from already-mapped menus/forms. Operating them would create/edit/filter content or duplicate covered catalog surfaces.",
+      "Top page in sidebar changes the personal startup setting; Undo could mutate document history; Version history is disabled/unavailable here; View all releases is repetitive/help content; View name edits a database view. These are unsafe or already mapped.",
+      "This is the accidentally created blank private page row. Opening is content navigation with no new control surface, and deletion is destructive/refused; leave it unchanged.",
+      "Remaining named items are Marketplace template/agent/category/consultant cards, an external social link, form metadata, or an Add integration action. They are repetitive, leave the app, or would purchase/book/install/modify a database.",
+      "The seven remaining controls are unnamed accessibility/presentation artifacts from previously inspected surfaces. They cannot be honestly targeted by name, and operating arbitrary unlabeled controls risks mutating saved settings or content without adding navigational knowledge."
+    ],
+    "gatedRead": 0,
+    "gatedRefused": 5
+  },
+  "home": {
+    "surface": "home",
+    "control": "Home",
+    "description": "Sidebar Home landing overview with Recently visited, Learn, Upcoming events, My tasks, and starter templates."
+  },
+  "nodes": [
+    {
+      "id": "page/getting-started",
+      "title": "Getting Started",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Default private onboarding document; editable body."
+    },
+    {
+      "id": "sidebar",
+      "title": "Sidebar",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Persistent primary navigation and workspace content tree."
+    },
+    {
+      "id": "sidebar/home",
+      "title": "Home",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "nav-home"
+    },
+    {
+      "id": "sidebar/chat",
+      "title": "Chat",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "nav-chat"
+    },
+    {
+      "id": "sidebar/meetings",
+      "title": "Meetings",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "nav-meetings"
+    },
+    {
+      "id": "sidebar/inbox",
+      "title": "Inbox",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "nav-inbox"
+    },
+    {
+      "id": "sidebar/search",
+      "title": "Search",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "open-search"
+    },
+    {
+      "id": "sidebar/library",
+      "title": "Library",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "nav-library"
+    },
+    {
+      "id": "sidebar/help",
+      "title": "What’s new, help, contact, more…",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "open-help-menu"
+    },
+    {
+      "id": "sidebar/trash",
+      "title": "Trash",
+      "kind": "control",
+      "scope": "workspace",
+      "notes": "Top-level sidebar route; harness refused entry because it is guarded as destructive."
+    },
+    {
+      "id": "sidebar/new-chat",
+      "title": "New chat",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "new-chat"
+    },
+    {
+      "id": "sidebar/new-page",
+      "title": "New page",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "new-page"
+    },
+    {
+      "id": "sidebar/home-settings",
+      "title": "Home settings",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Popover from clicking active Home tab."
+    },
+    {
+      "id": "sidebar/customize-sections",
+      "title": "Customize sections",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Inline sidebar visibility editor; finish with Done."
+    },
+    {
+      "id": "sidebar/customize-sections/section-visibility",
+      "title": "Section visibility",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "sidebar-section-visibility",
+      "options": [
+        "Hide section",
+        "Show section"
+      ]
+    },
+    {
+      "id": "sidebar/home-settings/hide-tab-name",
+      "title": "Hide tab name",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "home-tab-label-visibility",
+      "options": [
+        "Hide tab name"
+      ]
+    },
+    {
+      "id": "sidebar/chat-surface",
+      "title": "Chat",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Sidebar-only AI/chat list; current page remains open."
+    },
+    {
+      "id": "sidebar/chat/new-agent",
+      "title": "New agent",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "create-agent",
+      "notes": "Creates a new agent; not operated for safety."
+    },
+    {
+      "id": "sidebar/meetings-surface",
+      "title": "Meetings",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Sidebar agenda and meeting-note launcher."
+    },
+    {
+      "id": "sidebar/meetings/connect-calendar",
+      "title": "Connect your calendar",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "calendar-connection",
+      "notes": "Starts external account/sync connection; unsafe to operate during mapping."
+    },
+    {
+      "id": "sidebar/meetings/new-ai-note",
+      "title": "New AI meeting note",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "create-ai-meeting-note",
+      "notes": "Creates a meeting note; not operated."
+    },
+    {
+      "id": "sidebar/meetings/upcoming",
+      "title": "Upcoming",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "meetings-upcoming"
+    },
+    {
+      "id": "sidebar/inbox-surface",
+      "title": "Inbox",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Notifications/inbox list in left sidebar."
+    },
+    {
+      "id": "sidebar/inbox/edit-filter",
+      "title": "Edit filter",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "inbox-filter"
+    },
+    {
+      "id": "sidebar/inbox/filter-menu",
+      "title": "Inbox filter menu",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "sidebar/inbox/filter-choice",
+      "title": "Inbox filter",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "inbox-filter",
+      "options": [
+        "Unread & read",
+        "Unread",
+        "Archived",
+        "All workspace updates"
+      ]
+    },
+    {
+      "id": "sidebar/search-overlay",
+      "title": "Search Notion",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Modal overlay over current page; opened from sidebar Search."
+    },
+    {
+      "id": "sidebar/search-overlay/search-field",
+      "title": "Search or ask a question in David Chavez-Grant’s Space…",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "search-query"
+    },
+    {
+      "id": "sidebar/search-overlay/title-only",
+      "title": "Title only",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "search-title-only"
+    },
+    {
+      "id": "sidebar/search-overlay/created-by",
+      "title": "Created by",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "search-created-by-filter"
+    },
+    {
+      "id": "sidebar/search-overlay/in",
+      "title": "In",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "search-location-filter"
+    },
+    {
+      "id": "sidebar/search-overlay/filter",
+      "title": "Filter",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "search-filter"
+    },
+    {
+      "id": "sidebar/search-overlay/display",
+      "title": "Hide filters / Hide highlight pane",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "search-overlay-layout"
+    },
+    {
+      "id": "sidebar/search-overlay/settings",
+      "title": "Search settings",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Gear at bottom right."
+    },
+    {
+      "id": "sidebar/search-overlay/settings/persist-filters",
+      "title": "Persist filters across sessions",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "persist-search-filters",
+      "options": [
+        "On",
+        "Off"
+      ]
+    },
+    {
+      "id": "sidebar/search-overlay/settings/hide-ai-sources",
+      "title": "Hide “Search all sources with AI”",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "hide-search-all-sources-ai",
+      "options": [
+        "On",
+        "Off"
+      ]
+    },
+    {
+      "id": "sidebar/search-overlay/date-filter",
+      "title": "Date filter",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "search-date-filter",
+      "options": [
+        "Created",
+        "Last edited",
+        "Today",
+        "Last 7 days",
+        "Last 30 days",
+        "Custom date"
+      ],
+      "notes": "Ephemeral search criterion; opens calendar and date-property selector."
+    },
+    {
+      "id": "sidebar/search-overlay/created-by-picker",
+      "title": "Created by picker",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "search-created-by",
+      "notes": "Click Created by; searchable people picker."
+    },
+    {
+      "id": "sidebar/search-overlay/in-picker",
+      "title": "In page picker",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "search-location",
+      "notes": "Click In; searchable page picker."
+    },
+    {
+      "id": "sidebar/workspace-menu",
+      "title": "Workspace/account switcher",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "sidebar/workspace-menu/settings",
+      "title": "Settings",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "open-settings"
+    },
+    {
+      "id": "sidebar/workspace-menu/upgrade",
+      "title": "Upgrade",
+      "kind": "control",
+      "scope": "workspace"
+    },
+    {
+      "id": "sidebar/workspace-menu/invite-members",
+      "title": "Invite members",
+      "kind": "control",
+      "scope": "workspace"
+    },
+    {
+      "id": "sidebar/workspace-menu/account-options",
+      "title": "Account options",
+      "kind": "control",
+      "scope": "app"
+    },
+    {
+      "id": "sidebar/workspace-menu/add-account",
+      "title": "Add account",
+      "kind": "control",
+      "scope": "app"
+    },
+    {
+      "id": "sidebar/workspace-menu/new-workspace",
+      "title": "New workspace",
+      "kind": "control",
+      "scope": "app"
+    },
+    {
+      "id": "sidebar/workspace-menu/logout",
+      "title": "Log out",
+      "kind": "control",
+      "scope": "app"
+    },
+    {
+      "id": "settings",
+      "title": "Settings & members",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/preferences",
+      "title": "Preferences",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "settings/profile",
+      "title": "David Chavez-Grant profile",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "settings/notifications",
+      "title": "Notifications",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "settings/mail-calendar",
+      "title": "Mail & Calendar",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "settings/general",
+      "title": "General",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/people",
+      "title": "People",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/import",
+      "title": "Import",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/notion-ai",
+      "title": "Notion AI",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/connections",
+      "title": "Connections",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/notion-mcp",
+      "title": "Notion MCP",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "settings/public-pages",
+      "title": "Public pages",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/emoji",
+      "title": "Emoji",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/teamspaces",
+      "title": "Teamspaces",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/upgrade",
+      "title": "Upgrade plan",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/preferences/theme",
+      "title": "Theme",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "theme",
+      "options": [
+        "Use system setting",
+        "Light",
+        "Dark"
+      ]
+    },
+    {
+      "id": "settings/preferences/high-contrast",
+      "title": "High contrast",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "high-contrast",
+      "options": [
+        "Use system setting",
+        "Standard contrast",
+        "High contrast"
+      ]
+    },
+    {
+      "id": "settings/preferences/enter-new-line",
+      "title": "Use Enter to add a new line",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "enter-new-line",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/preferences/language",
+      "title": "Language",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "language",
+      "options": [
+        "English (US)"
+      ]
+    },
+    {
+      "id": "settings/preferences/number-format",
+      "title": "Number format",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "number-format",
+      "options": [
+        "Default"
+      ]
+    },
+    {
+      "id": "settings/preferences/text-direction",
+      "title": "Always show text direction controls",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "text-direction-controls",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/preferences/week-start",
+      "title": "Start week on Monday",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "week-start",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/preferences/time-format",
+      "title": "Time format",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "time-format",
+      "options": [
+        "Relative"
+      ]
+    },
+    {
+      "id": "settings/preferences/auto-time-zone",
+      "title": "Set time zone automatically using your location",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "auto-time-zone",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/preferences/open-desktop",
+      "title": "Open links in desktop app",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "open-links-desktop",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/preferences/startup-page",
+      "title": "Startup page",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "startup-page",
+      "options": [
+        "Last visited page"
+      ]
+    },
+    {
+      "id": "settings/preferences/cookies",
+      "title": "Customize cookies",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "cookie-preferences"
+    },
+    {
+      "id": "settings/preferences/view-history",
+      "title": "Show my view history",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "view-history",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/preferences/profile-discoverability",
+      "title": "Profile discoverability",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "profile-discoverability",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/profile/preferred-name",
+      "title": "Preferred name",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "preferred-name"
+    },
+    {
+      "id": "settings/profile/avatar",
+      "title": "Profile avatar",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "profile-avatar"
+    },
+    {
+      "id": "settings/profile/manage-emails",
+      "title": "Manage emails",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "account-emails"
+    },
+    {
+      "id": "settings/profile/add-password",
+      "title": "Add password",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "account-password"
+    },
+    {
+      "id": "settings/profile/add-passkey",
+      "title": "Add passkey",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "passkeys"
+    },
+    {
+      "id": "settings/profile/support-access",
+      "title": "Support access",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "support-access",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/profile/delete-account",
+      "title": "Delete my account",
+      "kind": "control",
+      "scope": "app"
+    },
+    {
+      "id": "settings/profile/logout-all",
+      "title": "Log out of all devices",
+      "kind": "control",
+      "scope": "app"
+    },
+    {
+      "id": "settings/profile/devices",
+      "title": "Device sessions",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "settings/profile/copy-id",
+      "title": "Click to copy ID",
+      "kind": "control",
+      "scope": "app"
+    },
+    {
+      "id": "settings/notifications/live-meeting-transcribing",
+      "title": "Meeting is being transcribed",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "meeting-transcription-notification",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/notifications/slack",
+      "title": "Slack notifications",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "slack-notifications",
+      "options": [
+        "Off"
+      ]
+    },
+    {
+      "id": "settings/notifications/discord",
+      "title": "Discord notifications",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "discord-notifications",
+      "options": [
+        "Off"
+      ]
+    },
+    {
+      "id": "settings/notifications/activity-workspace",
+      "title": "Activity in my workspace",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "workspace-activity-notifications",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/notifications/always-email",
+      "title": "Always send email notifications",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "always-email-notifications",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/notifications/page-updates",
+      "title": "Page updates",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "page-update-notifications",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/notifications/workspace-digest",
+      "title": "Workspace digest",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "workspace-digest",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/notifications/manage-settings",
+      "title": "Manage settings",
+      "kind": "control",
+      "scope": "app"
+    },
+    {
+      "id": "settings/mail-calendar/connect-email",
+      "title": "Connect your email to Notion",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "connected-email"
+    },
+    {
+      "id": "settings/mail-calendar/connect-calendar",
+      "title": "Connect your calendar to Notion",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "connected-calendar"
+    },
+    {
+      "id": "settings/general/workspace-name",
+      "title": "Workspace name",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "workspace-name"
+    },
+    {
+      "id": "settings/general/workspace-icon",
+      "title": "Workspace icon",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "workspace-icon"
+    },
+    {
+      "id": "settings/general/custom-landing-page",
+      "title": "Custom landing page",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "custom-landing-page"
+    },
+    {
+      "id": "settings/general/show-notion-apps",
+      "title": "Show other Notion apps in sidebar",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "show-other-notion-apps-sidebar",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/general/email-domains",
+      "title": "Allowed email domains",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "allowed-email-domains"
+    },
+    {
+      "id": "settings/general/export",
+      "title": "Export",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "workspace-export"
+    },
+    {
+      "id": "settings/general/page-view-analytics",
+      "title": "Save and display page view analytics",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "page-view-analytics",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/general/people-directory",
+      "title": "People directory",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "people-directory",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/general/profile-recent-activity",
+      "title": "Show recent activity on people profiles",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "profile-recent-activity",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/general/hover-cards",
+      "title": "Hover cards",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "hover-cards",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/general/delete-workspace",
+      "title": "Delete workspace",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "delete-workspace"
+    },
+    {
+      "id": "settings/general/copy-workspace-id",
+      "title": "Click to copy ID",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "workspace-id"
+    },
+    {
+      "id": "settings/people/invite-link",
+      "title": "Add members via link",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "workspace-invite-link",
+      "options": [
+        "Disabled",
+        "Enabled"
+      ]
+    },
+    {
+      "id": "settings/people/copy-invite-link",
+      "title": "Copy link",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "workspace-invite-link-copy"
+    },
+    {
+      "id": "settings/people/guests",
+      "title": "Guests",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/people/members",
+      "title": "Members",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/people/groups",
+      "title": "Groups",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/people/contacts",
+      "title": "Contacts",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/people/search",
+      "title": "Type to search...",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "people-search"
+    },
+    {
+      "id": "settings/people/add-members",
+      "title": "Add members",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "add-members"
+    },
+    {
+      "id": "settings/people/more-invite-options",
+      "title": "More invite options",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "invite-options"
+    },
+    {
+      "id": "settings/people/import-contacts",
+      "title": "Import contacts",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "import-contacts"
+    },
+    {
+      "id": "settings/people/directory",
+      "title": "View People Directory",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "people-directory-view"
+    },
+    {
+      "id": "settings/people/members/role",
+      "title": "Role",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "workspace-member-role"
+    },
+    {
+      "id": "settings/people/groups/create",
+      "title": "Create a group",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "create-group"
+    },
+    {
+      "id": "settings/people/groups/type-filter",
+      "title": "Group Type",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "group-type-filter"
+    },
+    {
+      "id": "settings/people/groups/sort",
+      "title": "Sort",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "groups-sort"
+    },
+    {
+      "id": "settings/people/groups/search",
+      "title": "Search by name",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "groups-search"
+    },
+    {
+      "id": "settings/import/discover",
+      "title": "Discover",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/import/completed",
+      "title": "Completed",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/import/file",
+      "title": "choose a file",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "content-import-file"
+    },
+    {
+      "id": "settings/import/csv",
+      "title": "CSV",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "content-import-csv"
+    },
+    {
+      "id": "settings/import/pdf",
+      "title": "PDF",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "content-import-pdf"
+    },
+    {
+      "id": "settings/import/text-markdown",
+      "title": "Text & Markdown",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "content-import-text-markdown"
+    },
+    {
+      "id": "settings/import/html",
+      "title": "HTML",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "content-import-html"
+    },
+    {
+      "id": "settings/import/word",
+      "title": "Word",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "content-import-word"
+    },
+    {
+      "id": "settings/import/app-migration",
+      "title": "App migrations",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "content-import-app",
+      "options": [
+        "Asana",
+        "Confluence",
+        "Trello",
+        "Workflowy",
+        "Evernote",
+        "Jira",
+        "Monday.com",
+        "Quip",
+        "Google Docs"
+      ]
+    },
+    {
+      "id": "settings/notion-ai/general",
+      "title": "General",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/notion-ai/connectors",
+      "title": "AI connectors",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/notion-ai/meeting-notes",
+      "title": "Meeting notes",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/notion-ai/share-data",
+      "title": "Share data to improve Notion AI",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "notion-ai-share-data",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/notion-ai/personalize",
+      "title": "Personalize",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "notion-ai-personalization"
+    },
+    {
+      "id": "settings/notion-ai/instructions",
+      "title": "Add instructions",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "notion-ai-instructions"
+    },
+    {
+      "id": "settings/notion-ai/add-skill",
+      "title": "Add a skill",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "notion-ai-skills"
+    },
+    {
+      "id": "settings/notion-ai/skill-editor-menu",
+      "title": "Remove from text editor menu",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "notion-ai-skill-text-menu"
+    },
+    {
+      "id": "settings/notion-ai/fable-5",
+      "title": "Fable 5",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "notion-ai-fable-5",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/notion-ai/connectors/apps",
+      "title": "Workspace AI connectors",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "notion-ai-connectors",
+      "options": [
+        "Asana",
+        "Box Beta",
+        "GitHub",
+        "Gmail",
+        "Google Calendar Beta",
+        "Google Drive",
+        "Jira Beta",
+        "Linear",
+        "Microsoft Teams",
+        "Outlook",
+        "Salesforce Beta",
+        "SharePoint",
+        "Slack"
+      ]
+    },
+    {
+      "id": "settings/notion-ai/connectors/web-search",
+      "title": "Enable web search for workspace",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "notion-ai-web-search",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/notion-ai/connectors/confirm-web",
+      "title": "Require confirmation for web requests",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "notion-ai-web-request-confirmation",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/notion-ai/meeting-notes/enable",
+      "title": "Enable Meeting notes for workspace",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "meeting-notes-enabled",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/notion-ai/meeting-notes/local-audio",
+      "title": "Store audio locally",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "meeting-notes-store-audio-local",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/notion-ai/meeting-notes/transcript-deletion",
+      "title": "Automatic transcript deletion",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "meeting-notes-transcript-deletion",
+      "options": [
+        "Never",
+        "Upgrade required for timing"
+      ]
+    },
+    {
+      "id": "settings/notion-ai/meeting-notes/enforce-consent",
+      "title": "Enforce consent for all workspace members",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "meeting-notes-enforce-consent",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/notion-ai/meeting-notes/hide-tab",
+      "title": "Hide Meeting notes tab",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "meeting-notes-tab-visibility"
+    },
+    {
+      "id": "settings/notion-ai/meeting-notes/auto-share",
+      "title": "Auto-share with internal calendar event participants",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "meeting-notes-auto-share",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/notion-ai/meeting-notes/default-database",
+      "title": "Search for a database…",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "meeting-notes-default-database"
+    },
+    {
+      "id": "settings/notion-ai/meeting-notes/auto-consent-message",
+      "title": "Auto play consent message on start",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "meeting-notes-auto-consent-message",
+      "options": [
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "settings/connections/discover",
+      "title": "Discover",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/connections/installed",
+      "title": "Installed",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/connections/manage",
+      "title": "Manage",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/connections/search",
+      "title": "Search connections",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "connections-search"
+    },
+    {
+      "id": "settings/connections/type-filter",
+      "title": "Connection type",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "connections-type-filter",
+      "options": [
+        "AI connector",
+        "MCP",
+        "Preview",
+        "Public",
+        "Database sync",
+        "Automation action",
+        "3 more…"
+      ]
+    },
+    {
+      "id": "settings/connections/catalog",
+      "title": "Connection catalog",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "workspace-connections",
+      "options": [
+        "Google Calendar",
+        "Microsoft Teams",
+        "Outlook",
+        "Salesforce",
+        "Asana",
+        "Box",
+        "GitHub",
+        "Gmail",
+        "Google Drive",
+        "Jira",
+        "Linear",
+        "SharePoint & OneDrive",
+        "Slack"
+      ]
+    },
+    {
+      "id": "settings/connections/developer-portal",
+      "title": "Go to developer portal",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "integrations-developer-portal"
+    },
+    {
+      "id": "settings/connections/manage/all-connections",
+      "title": "View & manage all connections",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "workspace-connections"
+    },
+    {
+      "id": "settings/connections/manage/access-tokens",
+      "title": "All personal access tokens",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "personal-access-tokens"
+    },
+    {
+      "id": "settings/connections/manage/install-restrictions",
+      "title": "Connection install restrictions",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "connection-install-restrictions",
+      "options": [
+        "No restrictions",
+        "Restricted"
+      ]
+    },
+    {
+      "id": "settings/connections/manage/custom-mcp",
+      "title": "Enable custom MCP servers",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "custom-mcp-servers",
+      "options": [
+        "On",
+        "Off"
+      ]
+    },
+    {
+      "id": "settings/connections/manage/internal-connection-restrictions",
+      "title": "Who can create internal connections",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "internal-connection-creation"
+    },
+    {
+      "id": "settings/connections/manage/token-restrictions",
+      "title": "Who can create personal access tokens",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "personal-access-token-creation"
+    },
+    {
+      "id": "settings/connections/manage/webhooks",
+      "title": "Allow webhook actions in automations",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "automation-webhooks"
+    },
+    {
+      "id": "settings/notion-mcp/discover",
+      "title": "Notion MCP Discover",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/notion-mcp/manage",
+      "title": "Notion MCP Manage",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/notion-mcp/discover/client",
+      "title": "MCP client setup",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "notion-mcp-client",
+      "options": [
+        "ChatGPT",
+        "Claude",
+        "Composio",
+        "Cursor",
+        "Devin",
+        "Figma",
+        "GitHub",
+        "HubSpot",
+        "Make",
+        "Mistral",
+        "Poke",
+        "VS Code",
+        "Zapier",
+        "Other AI tools"
+      ]
+    },
+    {
+      "id": "settings/notion-mcp/manage/all-clients",
+      "title": "See all MCP clients",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "notion-mcp-clients"
+    },
+    {
+      "id": "settings/notion-mcp/manage/allowed-clients",
+      "title": "Which clients members can connect",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "notion-mcp-client-policy",
+      "options": [
+        "All MCP clients",
+        "Restricted"
+      ]
+    },
+    {
+      "id": "settings/notion-mcp/manage/disconnect-all",
+      "title": "Disconnect all users",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "notion-mcp-connections",
+      "notes": "Destructive: disconnects MCP clients for everyone and forces reauthentication."
+    },
+    {
+      "id": "settings/public-pages/sites",
+      "title": "Published Notion Sites",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/public-pages/forms",
+      "title": "Public forms",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/public-pages/share-links",
+      "title": "Anyone with the link",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/public-pages/shared-ai",
+      "title": "Shared AI chats",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/public-pages/domain",
+      "title": "Notion Sites domain",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "notion-sites-domain"
+    },
+    {
+      "id": "settings/public-pages/live-indicator",
+      "title": "Always indicate that a page is live as a Notion Site",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "notion-site-live-indicator",
+      "options": [
+        "On",
+        "Off"
+      ]
+    },
+    {
+      "id": "settings/emoji/limit-creation",
+      "title": "Limit custom emoji creation to workspace owners",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "custom-emoji-creation-policy",
+      "options": [
+        "On",
+        "Off"
+      ]
+    },
+    {
+      "id": "settings/emoji/add-form",
+      "title": "Add custom emoji",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/emoji/add-form/upload",
+      "title": "Upload an image",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "custom-emoji-image"
+    },
+    {
+      "id": "settings/emoji/add-form/name",
+      "title": "Emoji name",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "custom-emoji-name"
+    },
+    {
+      "id": "settings/teamspaces/limit-creation",
+      "title": "Limit teamspace creation to workspace owners",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "teamspace-creation-owners-only",
+      "options": [
+        "off",
+        "on"
+      ],
+      "notes": "Currently off; applies immediately."
+    },
+    {
+      "id": "settings/teamspaces/active-filter",
+      "title": "Active",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "teamspace-status-filter"
+    },
+    {
+      "id": "settings/teamspaces/owner-filter",
+      "title": "Owner",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "teamspace-owner-filter"
+    },
+    {
+      "id": "settings/teamspaces/access-filter",
+      "title": "Access",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "teamspace-access-filter"
+    },
+    {
+      "id": "settings/teamspaces/security-filter",
+      "title": "Security",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "teamspace-security-filter"
+    },
+    {
+      "id": "settings/teamspaces/search",
+      "title": "Search teamspaces",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "teamspace-search"
+    },
+    {
+      "id": "settings/teamspaces/new",
+      "title": "New teamspace",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "create-teamspace",
+      "notes": "Creates workspace-visible teamspace; do not submit unless requested."
+    },
+    {
+      "id": "settings/upgrade/current-plan",
+      "title": "Current plan",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "workspace-plan",
+      "options": [
+        "Free",
+        "Plus",
+        "Business",
+        "Enterprise"
+      ],
+      "notes": "Current plan Free; changing plan is billing-impacting."
+    },
+    {
+      "id": "settings/upgrade/upgrade",
+      "title": "Upgrade",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "workspace-plan",
+      "notes": "Multiple buttons for AI/Plus/Business/Enterprise; billing-impacting."
+    },
+    {
+      "id": "settings/upgrade/compare",
+      "title": "Compare all features",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "plan-comparison"
+    },
+    {
+      "id": "settings/upgrade/billing-help",
+      "title": "Plans, Billing & Payment",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "billing-help"
+    },
+    {
+      "id": "library",
+      "title": "Library",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "library/new-page",
+      "title": "New page",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "create-page",
+      "notes": "Creates workspace content."
+    },
+    {
+      "id": "library/recents",
+      "title": "Recents",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "library/favorites",
+      "title": "Favorites",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "library/shared",
+      "title": "Shared",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "library/private",
+      "title": "Private",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "library/more-tabs",
+      "title": "1 more…",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "library-more-tabs"
+    },
+    {
+      "id": "library/filter",
+      "title": "Filter",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "library-filter"
+    },
+    {
+      "id": "library/search",
+      "title": "Search",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "library-search"
+    },
+    {
+      "id": "library/settings",
+      "title": "Settings",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "library-settings"
+    },
+    {
+      "id": "library/meeting-notes",
+      "title": "AI Meeting Notes",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "library/meeting-notes/new",
+      "title": "New AI meeting note",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "create-ai-meeting-note",
+      "notes": "Creates a note and may initiate recording/transcription."
+    },
+    {
+      "id": "library/meeting-notes/view-settings",
+      "title": "AI Meeting Notes view settings",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Right-side panel opened by Library Settings."
+    },
+    {
+      "id": "library/meeting-notes/property-visibility",
+      "title": "Property visibility",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-property-visibility",
+      "options": [
+        "Title",
+        "Attendees",
+        "Created time",
+        "Source",
+        "Created by",
+        "Last edited time",
+        "Last edited by",
+        "Last visited time"
+      ],
+      "notes": "Shown: Title, Attendees, Created time. Others hidden. Supports property search, Hide all, Show all, drag ordering."
+    },
+    {
+      "id": "library/meeting-notes/group",
+      "title": "Group",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-group",
+      "notes": "Current grouping is Created time."
+    },
+    {
+      "id": "library/meeting-notes/group-settings",
+      "title": "Group settings",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Current: Created time, Relative, Newest first, hide empty groups on."
+    },
+    {
+      "id": "library/meeting-notes/group-by",
+      "title": "Group by",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-group-by",
+      "options": [
+        "Created time"
+      ],
+      "notes": "Current property Created time."
+    },
+    {
+      "id": "library/meeting-notes/group-date",
+      "title": "Date by",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-group-date",
+      "options": [
+        "Relative"
+      ],
+      "notes": "Current Relative."
+    },
+    {
+      "id": "library/meeting-notes/group-sort",
+      "title": "Group sort",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-group-sort",
+      "options": [
+        "Newest first"
+      ],
+      "notes": "Current Newest first."
+    },
+    {
+      "id": "library/meeting-notes/hide-empty-groups",
+      "title": "Hide empty groups",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-hide-empty-groups",
+      "options": [
+        "On",
+        "Off"
+      ],
+      "notes": "Currently on."
+    },
+    {
+      "id": "sidebar/help-menu",
+      "title": "Help menu",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Contains docs, expert contact, support, More, recent releases, View all releases."
+    },
+    {
+      "id": "sidebar/help-menu/documentation",
+      "title": "Documentation",
+      "kind": "control",
+      "scope": "app",
+      "notes": "Likely external docs; do not follow during in-app mapping."
+    },
+    {
+      "id": "sidebar/help-menu/expert",
+      "title": "Talk to a Notion expert",
+      "kind": "control",
+      "scope": "app",
+      "notes": "May start externally visible contact flow."
+    },
+    {
+      "id": "sidebar/help-menu/support",
+      "title": "Get support",
+      "kind": "control",
+      "scope": "app"
+    },
+    {
+      "id": "sidebar/help-menu/more",
+      "title": "More",
+      "kind": "control",
+      "scope": "app"
+    },
+    {
+      "id": "sidebar/help-menu/releases",
+      "title": "View all releases",
+      "kind": "control",
+      "scope": "app",
+      "notes": "Release information link."
+    },
+    {
+      "id": "sidebar/help-menu/more-menu",
+      "title": "Help More menu",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Shows keyboard shortcuts, external links, local backups, cache clearing, app version."
+    },
+    {
+      "id": "sidebar/help-menu/keyboard-shortcuts",
+      "title": "Keyboard shortcuts",
+      "kind": "control",
+      "scope": "app"
+    },
+    {
+      "id": "sidebar/help-menu/local-backups",
+      "title": "Local backups",
+      "kind": "control",
+      "scope": "app"
+    },
+    {
+      "id": "sidebar/help-menu/clear-cache",
+      "title": "Clear page cache",
+      "kind": "control",
+      "scope": "app",
+      "notes": "Changes local cached state; avoid unless requested."
+    },
+    {
+      "id": "sidebar/help-menu/keyboard-shortcuts-modal",
+      "title": "Keyboard shortcuts",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Reference modal with categories and search."
+    },
+    {
+      "id": "sidebar/help-menu/keyboard-shortcuts/categories",
+      "title": "Shortcut categories",
+      "kind": "control",
+      "scope": "app",
+      "options": [
+        "Popular",
+        "Create & style",
+        "Edit & move",
+        "Markdown",
+        "more…"
+      ]
+    },
+    {
+      "id": "sidebar/help-menu/keyboard-shortcuts/search",
+      "title": "Search shortcuts",
+      "kind": "control",
+      "scope": "app"
+    },
+    {
+      "id": "sidebar/help-menu/local-backups-modal",
+      "title": "Local Backups",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Opened from Help > More > Local backups; empty in this account; Escape closes."
+    },
+    {
+      "id": "page/actions-menu",
+      "title": "Page Actions menu",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Open via top-right Actions."
+    },
+    {
+      "id": "page/actions/font",
+      "title": "Page font",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-font",
+      "options": [
+        "Default",
+        "Serif",
+        "Mono"
+      ]
+    },
+    {
+      "id": "page/actions/small-text",
+      "title": "Small text",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "small-text",
+      "options": [
+        "On",
+        "Off"
+      ]
+    },
+    {
+      "id": "page/actions/full-width",
+      "title": "Full width",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "full-width",
+      "options": [
+        "On",
+        "Off"
+      ]
+    },
+    {
+      "id": "page/actions/lock",
+      "title": "Lock page",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-lock",
+      "options": [
+        "On",
+        "Off"
+      ]
+    },
+    {
+      "id": "page/actions/customize",
+      "title": "Customize page",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "page/actions/export",
+      "title": "Export",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "page/actions/updates-analytics",
+      "title": "Updates & analytics",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "page/actions/connections",
+      "title": "Connections",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "page/actions/customize-panel",
+      "title": "Customize page",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "page/actions/customize/discussions",
+      "title": "Page discussions",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-discussions",
+      "options": [
+        "On",
+        "Off"
+      ]
+    },
+    {
+      "id": "page/actions/customize/toc",
+      "title": "Table of contents",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-table-of-contents",
+      "options": [
+        "On",
+        "Off"
+      ]
+    },
+    {
+      "id": "page/actions/customize/inline-comments",
+      "title": "Inline comments",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "inline-comments-style",
+      "options": [
+        "Default",
+        "Minimal"
+      ]
+    },
+    {
+      "id": "page/move-picker",
+      "title": "Move page to…",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Opened by clicking header location label “Private”; moving mutates page hierarchy."
+    },
+    {
+      "id": "page/share",
+      "title": "Share",
+      "kind": "control",
+      "scope": "document",
+      "notes": "Top-right page control; harness guarded/refused because sharing is externally visible."
+    },
+    {
+      "id": "page/copy-link",
+      "title": "Copy link",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "page/to-do-list",
+      "title": "To Do List",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Private full-page document with inline task database."
+    },
+    {
+      "id": "page/to-do-list/database",
+      "title": "To Do List task database",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Inline database with To Do and Done views."
+    },
+    {
+      "id": "page/to-do-list/database/to-do-view",
+      "title": "To Do",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view"
+    },
+    {
+      "id": "page/to-do-list/database/done-view",
+      "title": "Done",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view"
+    },
+    {
+      "id": "page/to-do-list/database/filter",
+      "title": "Filter",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-filter"
+    },
+    {
+      "id": "page/to-do-list/database/sort",
+      "title": "Sort",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-sort"
+    },
+    {
+      "id": "page/to-do-list/database/automations",
+      "title": "Automations",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "page/to-do-list/database/ai-autofill",
+      "title": "AI Autofill",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "page/to-do-list/database/search",
+      "title": "Search",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "page/to-do-list/database/open-full-page",
+      "title": "Open as full page",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "page/to-do-list/database/settings",
+      "title": "Settings",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-settings"
+    },
+    {
+      "id": "page/to-do-list/database/new",
+      "title": "New",
+      "kind": "control",
+      "scope": "document",
+      "notes": "Creates task/page; mutating."
+    },
+    {
+      "id": "page/to-do-list/database/view-settings",
+      "title": "View settings",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/layout",
+      "title": "Layout",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-layout",
+      "options": [
+        "List"
+      ]
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/property-visibility",
+      "title": "Property visibility",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-property-visibility"
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/group",
+      "title": "Group",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-group"
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/conditional-color",
+      "title": "Conditional color",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-conditional-color"
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/source",
+      "title": "Source",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-source"
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/edit-properties",
+      "title": "Edit properties",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-properties"
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/manage-data-sources",
+      "title": "Manage data sources",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/lock",
+      "title": "Lock database",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-lock"
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/calendar",
+      "title": "Manage in Calendar",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/layout-panel",
+      "title": "Layout",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/layout/type",
+      "title": "Layout type",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-layout",
+      "options": [
+        "Table",
+        "Board",
+        "Timeline",
+        "Calendar",
+        "List",
+        "Gallery",
+        "Chart",
+        "Feed",
+        "Map"
+      ]
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/layout/show-source-titles",
+      "title": "Show data source titles",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-show-source-titles"
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/layout/show-page-icon",
+      "title": "Show page icon",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-show-page-icon"
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/layout/open-pages",
+      "title": "Open pages in",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-open-pages",
+      "options": [
+        "Side peek"
+      ]
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/layout/load-limit",
+      "title": "Load limit",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-load-limit",
+      "options": [
+        "50"
+      ]
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/layout/open-pages-menu",
+      "title": "Open pages in",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/layout/load-limit-menu",
+      "title": "Load limit",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/property-visibility-panel",
+      "title": "Property visibility",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/property-visibility/status",
+      "title": "Status",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-property-visibility"
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/property-visibility/task-name",
+      "title": "Task name",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-property-visibility"
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/property-visibility/due-date",
+      "title": "Due date",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-property-visibility"
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/property-visibility/assignee",
+      "title": "Assignee",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-property-visibility"
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/sort-panel",
+      "title": "Sort picker",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Opened from View settings > Sort; no sort rules currently shown."
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/sort-property",
+      "title": "Sort by property",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-sort",
+      "options": [
+        "Task name",
+        "Assignee",
+        "Due date",
+        "Status"
+      ],
+      "notes": "Choosing adds a sort to the current database view."
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/group-panel",
+      "title": "Group by",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Current value None."
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/group-property",
+      "title": "Group by property",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-group",
+      "options": [
+        "None",
+        "Task name",
+        "Assignee",
+        "Due date",
+        "Status"
+      ],
+      "notes": "Immediate current-view configuration."
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/conditional-color-panel",
+      "title": "Conditional color",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Empty; descriptive preview and New color setting."
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/conditional-color-property",
+      "title": "Conditional color property",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-conditional-color",
+      "options": [
+        "Task name",
+        "Assignee",
+        "Due date",
+        "Status"
+      ],
+      "notes": "First step in creating a conditional color rule; changes view configuration."
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/source-picker",
+      "title": "Source picker",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Search/link existing data sources; currently offers People."
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/source-link",
+      "title": "Link to a data source",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-data-source",
+      "options": [
+        "People"
+      ],
+      "notes": "Selecting links another source to this database/view."
+    },
+    {
+      "id": "page/to-do-list/database/view-settings/edit-properties-panel",
+      "title": "Database properties",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Search existing properties Status, Task name, Due date, Assignee; New property."
+    },
+    {
+      "id": "page/to-do-list/database/property/status-editor",
+      "title": "Edit Status property",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Status groups/options: To-do > Not started (default), In progress > In progress, Complete > Done."
+    },
+    {
+      "id": "page/to-do-list/database/property/status-display",
+      "title": "Display as",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-status-display",
+      "options": [
+        "Checkbox",
+        "Select"
+      ],
+      "notes": "Current Checkbox; changing modifies database schema/display."
+    },
+    {
+      "id": "page/to-do-list/database/automations-panel",
+      "title": "Database Automations",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Free-plan gate; only Upgrade now. Describes automatic property edits, page creation, updates."
+    },
+    {
+      "id": "page/to-do-list/database/ai-autofill-panel",
+      "title": "AI Autofill",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Offers New AI Autofill; uses workspace and web context to fill properties."
+    },
+    {
+      "id": "page/to-do-list/database/ai-autofill-panel/new",
+      "title": "New AI Autofill",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-ai-autofill",
+      "notes": "Creates AI autofill behavior; not operated."
+    },
+    {
+      "id": "page/to-do-list/database/subtasks-panel",
+      "title": "Sub-tasks",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Reached from database View settings > More settings > Sub-tasks; shows example hierarchy and Turn on sub-tasks."
+    },
+    {
+      "id": "page/to-do-list/database/subtasks-panel/enable",
+      "title": "Turn on sub-tasks",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-subtasks",
+      "notes": "Immediate database schema/configuration change; not operated."
+    },
+    {
+      "id": "page/to-do-list/database/dependencies-panel",
+      "title": "Dependencies",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Pre-enable configuration for task dependency behavior."
+    },
+    {
+      "id": "page/to-do-list/database/dependencies/shift-mode",
+      "title": "Automatic date shifting",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-dependency-date-shifting",
+      "options": [
+        "Shift only when dates overlap",
+        "Shift & maintain time between tasks",
+        "Do not automatically shift"
+      ],
+      "notes": "Selection matters when dependencies are enabled; current pre-enable selection is Shift only when dates overlap."
+    },
+    {
+      "id": "page/to-do-list/database/dependencies/avoid-weekends",
+      "title": "Avoid weekends",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-dependency-avoid-weekends",
+      "options": [
+        "On",
+        "Off"
+      ],
+      "notes": "Current pre-enable value on."
+    },
+    {
+      "id": "page/to-do-list/database/dependencies/enable",
+      "title": "Turn on dependencies",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-dependencies",
+      "notes": "Creates dependency behavior/properties; not operated."
+    },
+    {
+      "id": "page/to-do-list/database/sprints-panel",
+      "title": "Set up sprints",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Explains sprint conversion and additional teamspace content."
+    },
+    {
+      "id": "page/to-do-list/database/sprints-panel/enable",
+      "title": "Turn on sprints",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-sprints",
+      "notes": "Creates a Sprint board and Sprints database; not operated."
+    },
+    {
+      "id": "page/to-do-list/database/connections-panel",
+      "title": "Database Connections picker",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "page/to-do-list/database/connections-panel/search",
+      "title": "Find or add connections",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-connections"
+    },
+    {
+      "id": "page/to-do-list/database/connections-panel/add",
+      "title": "Add database connection",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-connections",
+      "options": [
+        "Google Drive",
+        "GitHub Pull Requests",
+        "Figma",
+        "Zendesk"
+      ],
+      "notes": "Adds a database property/integration; GitHub can automate task status updates."
+    },
+    {
+      "id": "page/to-do-list/database/page-layout-editor",
+      "title": "Database page layout editor",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "page/to-do-list/database/page-layout-editor/structure",
+      "title": "Page structure",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-page-layout-structure",
+      "options": [
+        "Simple",
+        "Tabbed"
+      ]
+    },
+    {
+      "id": "page/to-do-list/database/page-layout-editor/inline-comments",
+      "title": "Inline comments",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-page-layout-inline-comments",
+      "options": [
+        "Default",
+        "Minimal"
+      ]
+    },
+    {
+      "id": "page/to-do-list/database/page-layout-editor/page-discussions",
+      "title": "Page discussions",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-page-layout-discussions"
+    },
+    {
+      "id": "page/to-do-list/database/page-layout-editor/property-icons",
+      "title": "Property icons",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-page-layout-property-icons"
+    },
+    {
+      "id": "page/to-do-list/database/page-layout-editor/full-width",
+      "title": "Full width",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-page-layout-full-width"
+    },
+    {
+      "id": "page/to-do-list/database/page-layout-editor/templates",
+      "title": "Database templates",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-page-layout-templates"
+    },
+    {
+      "id": "page/to-do-list/database/page-layout-editor/modules",
+      "title": "Add page module / Add to panel",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-page-layout-modules"
+    },
+    {
+      "id": "page/to-do-list/database/page-layout-editor/apply",
+      "title": "Apply to all pages",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-page-layout"
+    },
+    {
+      "id": "page/to-do-list/database/page-layout-editor/reset",
+      "title": "Reset to original page layout",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-page-layout"
+    },
+    {
+      "id": "page/to-do-list/database/manage-data-sources-panel",
+      "title": "Manage data sources",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "page/to-do-list/database/manage-data-sources/source-actions",
+      "title": "Data source actions",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-data-source-actions",
+      "options": [
+        "Copy data source ID",
+        "Move to"
+      ],
+      "notes": "Move to is mutating."
+    },
+    {
+      "id": "page/to-do-list/database/manage-data-sources/add",
+      "title": "Add data source",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-data-source"
+    },
+    {
+      "id": "page/to-do-list/database/manage-data-sources/link",
+      "title": "Link existing data source",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-data-source"
+    },
+    {
+      "id": "page/to-do-list/database/undo-task-database-confirm",
+      "title": "Undo Task Database?",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "page/to-do-list/database/undo-task-database",
+      "title": "Undo Task database",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "task-database-behavior",
+      "notes": "Remove disconnects tasks from My tasks or Sprints; destructive configuration change."
+    },
+    {
+      "id": "page/to-do-list/database/done-surface",
+      "title": "Done view",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "List view filtered to completed tasks; currently one row."
+    },
+    {
+      "id": "page/to-do-list/database/add-view",
+      "title": "Add view",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-views",
+      "notes": "Creates a new view."
+    },
+    {
+      "id": "page/to-do-list/database/task-side-peek",
+      "title": "Task Side Peek",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Opened by clicking a database task row; URL gains ?p=<row-id>&pm=s."
+    },
+    {
+      "id": "page/to-do-list/database/task-side-peek/open-full",
+      "title": "Open in full page",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "page/to-do-list/database/task-side-peek/due-date",
+      "title": "Due date",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "task-due-date"
+    },
+    {
+      "id": "page/to-do-list/database/task-side-peek/status",
+      "title": "Status",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "task-status"
+    },
+    {
+      "id": "page/to-do-list/database/task-side-peek/more-properties",
+      "title": "1 more property",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "task-properties"
+    },
+    {
+      "id": "page/to-do-list/database/task-side-peek/assignee",
+      "title": "Assignee",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "task-assignee"
+    },
+    {
+      "id": "page/to-do-list/database/task-side-peek/add-property",
+      "title": "Add a property",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-properties",
+      "notes": "Schema-level change."
+    },
+    {
+      "id": "page/to-do-list/database/task-side-peek/switch-mode",
+      "title": "Switch peek mode",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-page-open-mode",
+      "options": [
+        "Side peek",
+        "Center peek",
+        "Full page",
+        "New tab"
+      ],
+      "notes": "Changes how the currently open row is displayed; menu also links to Edit view default."
+    },
+    {
+      "id": "page/to-do-list/database/task-side-peek/edit-view-default",
+      "title": "Edit view default",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-page-open-mode",
+      "options": [
+        "Side peek",
+        "Center peek",
+        "Full page"
+      ],
+      "notes": "Persistent database-view default; opens Layout > Open pages in."
+    },
+    {
+      "id": "page/to-do-list/database/task-side-peek/customize-layout",
+      "title": "Customize layout",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-page-layout",
+      "notes": "Hover-only control above the row title; applies layout to all pages in the database, not only this row."
+    },
+    {
+      "id": "page/updates-analytics-panel",
+      "title": "Page updates and analytics",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Right-side panel with Updates and Analytics tabs."
+    },
+    {
+      "id": "page/updates-analytics/updates",
+      "title": "Updates",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-update-history"
+    },
+    {
+      "id": "page/updates-analytics/analytics",
+      "title": "Analytics",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-analytics"
+    },
+    {
+      "id": "page/updates-analytics/date-range",
+      "title": "Analytics date range",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-analytics-range",
+      "options": [
+        "Last 7 Days",
+        "Last 28 Days",
+        "Last 90 Days",
+        "All Time"
+      ],
+      "notes": "Transient analytics display filter; Last 28 Days was current."
+    },
+    {
+      "id": "page/updates-analytics/view-history",
+      "title": "Show your view history",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "view-history-visibility",
+      "options": [
+        "Allow"
+      ],
+      "notes": "Immediate personal visibility control displayed within page analytics."
+    },
+    {
+      "id": "page/updates-analytics/settings",
+      "title": "Analytics settings",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-analytics-settings"
+    },
+    {
+      "id": "page/updates-analytics/settings-popover",
+      "title": "Analytics settings popover",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Only repeats the personal Show your view history control."
+    },
+    {
+      "id": "page/updates-analytics/settings-popover/view-history",
+      "title": "Show your view history",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "view-history-visibility",
+      "options": [
+        "Allow"
+      ],
+      "notes": "Same underlying personal setting as shown in Analytics viewer card."
+    },
+    {
+      "id": "page/actions/translate-panel",
+      "title": "Translate page",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Source language plus searchable target language list; selecting mutates content."
+    },
+    {
+      "id": "page/actions/translate-language",
+      "title": "Translation target language",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-translation-language",
+      "options": [
+        "Arabic",
+        "Chinese (Simplified)",
+        "Chinese (Traditional)",
+        "Danish",
+        "Dutch",
+        "English",
+        "Finnish",
+        "French",
+        "German",
+        "Hebrew",
+        "Indonesian",
+        "Italian",
+        "Japanese",
+        "Korean",
+        "Norwegian",
+        "Portuguese (Brazil)",
+        "Portuguese (Portugal)",
+        "Russian",
+        "Spanish",
+        "Swedish",
+        "Thai",
+        "Vietnamese"
+      ]
+    },
+    {
+      "id": "page/actions/use-with-ai",
+      "title": "Use with AI",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-ai-usage",
+      "options": [
+        "Use as AI skill",
+        "Use as AI instruction",
+        "Use as AI meeting instruction"
+      ],
+      "notes": "Submenu from the page Actions menu; choices configure this page as AI guidance."
+    },
+    {
+      "id": "page/actions/suggest-edits",
+      "title": "Suggest edits",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "suggestion-mode",
+      "options": [
+        "On",
+        "Off"
+      ],
+      "notes": "Immediate reversible mode toggle. When active, header shows “Suggesting” / “Turn off suggesting”."
+    },
+    {
+      "id": "page/actions/import",
+      "title": "Import",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "workspace-import",
+      "notes": "Shortcut to Settings > Import, not a current-page operation."
+    },
+    {
+      "id": "page/actions/export-dialog",
+      "title": "Export",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Opened from page Actions > Export; Cancel safely closes."
+    },
+    {
+      "id": "page/actions/export-dialog/format",
+      "title": "Export format",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-export-format",
+      "options": [
+        "PDF",
+        "HTML",
+        "Markdown & CSV"
+      ]
+    },
+    {
+      "id": "page/actions/export-dialog/database-views",
+      "title": "Database views",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-export-database-view",
+      "options": [
+        "Current view",
+        "Default view"
+      ]
+    },
+    {
+      "id": "page/actions/export-dialog/page-content",
+      "title": "Page content",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-export-content",
+      "options": [
+        "Everything",
+        "Exclude files and images"
+      ]
+    },
+    {
+      "id": "page/actions/export-dialog/include-subpages",
+      "title": "Include subpages",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-export-include-subpages"
+    },
+    {
+      "id": "page/actions/export-dialog/folders",
+      "title": "Create folders for subpages",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-export-folders"
+    },
+    {
+      "id": "page/actions/notify-menu",
+      "title": "Notify me",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "page/actions/notify-menu/level",
+      "title": "Notification level",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-notification-level",
+      "options": [
+        "All updates",
+        "Important updates",
+        "Replies and @mentions"
+      ],
+      "notes": "Immediate personal subscription setting for this page."
+    },
+    {
+      "id": "page/actions/connections-picker",
+      "title": "Connections",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Per-page connection picker; None currently connected."
+    },
+    {
+      "id": "page/actions/connections-picker/search",
+      "title": "Search for connections",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-connection-search"
+    },
+    {
+      "id": "page/actions/connections-picker/apps",
+      "title": "Add a new connection",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-connections",
+      "options": [
+        "Bardeen",
+        "Census",
+        "Hightouch",
+        "IFTTT",
+        "Make",
+        "Marker.io",
+        "Pipedream",
+        "Qonto",
+        "Rootly",
+        "Slapdash",
+        "Tray.io",
+        "Typeform",
+        "Unito 2-Way Sync",
+        "Webex",
+        "Zapier"
+      ]
+    },
+    {
+      "id": "page/to-do-list/task-full-page",
+      "title": "Task full page",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Full-page row shows breadcrumbs To Do List / Todo List / task title, properties, comments, and body."
+    },
+    {
+      "id": "page/to-do-list/task-full-page/table-of-contents",
+      "title": "Table of contents",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-table-of-contents",
+      "options": [
+        "On",
+        "Off"
+      ],
+      "notes": "Immediate Actions-menu switch; currently on for the inspected task row."
+    },
+    {
+      "id": "page/to-do-list/task-full-page/customize-layout",
+      "title": "Customize layout",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-page-layout",
+      "notes": "Opens database-wide layout editor; applies to all pages in this database, despite being reachable from a row."
+    },
+    {
+      "id": "page/to-do-list/database/full-page",
+      "title": "Todo List full-page database",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Full-page data source route; active view is encoded by `?v=<view-id>`. Same Filter, Sort, Automations, AI Autofill, Search, Settings, New toolbar as inline database."
+    },
+    {
+      "id": "page/to-do-list/database/full-page/actions",
+      "title": "Full-page database Actions",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "page/to-do-list/database/full-page/lock",
+      "title": "Lock database",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-lock",
+      "options": [
+        "On",
+        "Off"
+      ],
+      "notes": "Immediate switch; currently off."
+    },
+    {
+      "id": "page/to-do-list/database/full-page/merge-csv",
+      "title": "Merge with CSV",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-merge-csv",
+      "notes": "Database-specific import that would alter rows; likely opens file flow."
+    },
+    {
+      "id": "page/to-do-list/database/full-page/customize-layout",
+      "title": "Customize layout",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-page-layout"
+    },
+    {
+      "id": "page/to-do-list/database/template-menu",
+      "title": "Database template menu",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "page/to-do-list/database/template-menu/new",
+      "title": "New template",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-template-create",
+      "notes": "Creates a reusable page template for this database."
+    },
+    {
+      "id": "page/to-do-list/database/search-field",
+      "title": "Database row search field",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-local-search",
+      "notes": "Expanded from toolbar Search; placeholder `Type to search…`; filters/searches rows locally."
+    },
+    {
+      "id": "page/to-do-list/database/full-page/title-editor",
+      "title": "Data source title editor",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-source-name",
+      "notes": "Click the `Todo List` header breadcrumb/button; compact editor has icon and title textbox. Escape cancels."
+    },
+    {
+      "id": "marketplace",
+      "title": "Marketplace",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "sidebar/marketplace",
+      "title": "Marketplace",
+      "kind": "control",
+      "scope": "app"
+    },
+    {
+      "id": "marketplace/discover",
+      "title": "Discover",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "marketplace/templates",
+      "title": "Templates",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "marketplace/agents",
+      "title": "Agents",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "marketplace/consultants",
+      "title": "Consultants",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "marketplace/connections",
+      "title": "Connections",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "marketplace/search",
+      "title": "Search",
+      "kind": "control",
+      "scope": "app"
+    },
+    {
+      "id": "marketplace/profile",
+      "title": "My profile",
+      "kind": "control",
+      "scope": "app"
+    },
+    {
+      "id": "marketplace/purchased",
+      "title": "Purchased",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Marketplace purchase history modal; Templates, Agents, Services tabs."
+    },
+    {
+      "id": "marketplace/templates/search",
+      "title": "Describe what template you need",
+      "kind": "control",
+      "scope": "app"
+    },
+    {
+      "id": "marketplace/consultants/get-matched",
+      "title": "Get matched",
+      "kind": "control",
+      "scope": "app"
+    },
+    {
+      "id": "marketplace/connections/title-filter",
+      "title": "Filter by title",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "marketplace-connection-catalog-filter"
+    },
+    {
+      "id": "marketplace/connections/type-filter",
+      "title": "Types",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "marketplace-connection-catalog-filter",
+      "options": [
+        "Public API",
+        "AI connector",
+        "Embed",
+        "SCIM/SSO"
+      ],
+      "notes": "Transient catalog multi-select."
+    },
+    {
+      "id": "marketplace/search-suggestions",
+      "title": "In-app marketplace search suggestions",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "marketplace/purchased/templates",
+      "title": "Templates",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Purchased templates history; empty here."
+    },
+    {
+      "id": "marketplace/purchased/agents",
+      "title": "Agents",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Purchased custom agents history; empty here."
+    },
+    {
+      "id": "marketplace/purchased/services",
+      "title": "Services",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Booked consultant services history; empty here."
+    },
+    {
+      "id": "marketplace/profile-menu",
+      "title": "My profile",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Small Marketplace identity menu; shows name/email and Become a creator."
+    },
+    {
+      "id": "marketplace/profile-menu/become-creator",
+      "title": "Become a creator",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "marketplace-creator-onboarding",
+      "notes": "Starts Marketplace creator onboarding; not operated."
+    },
+    {
+      "id": "marketplace/connections/detail",
+      "title": "Connection detail",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Representative Slack route; app detail with install, screenshots, permissions/features, usage, publisher."
+    },
+    {
+      "id": "marketplace/connections/detail/get",
+      "title": "Get connection",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "workspace-connection-install",
+      "notes": "Starts app authorization/installation; externally consequential."
+    },
+    {
+      "id": "marketplace/connections/detail/features",
+      "title": "Show more / Show less",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "connection-detail-feature-expansion",
+      "notes": "Read-only expansion of permissions/features."
+    },
+    {
+      "id": "marketplace/connections/category-filter",
+      "title": "Category chips",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "marketplace-connection-catalog-filter",
+      "options": [
+        "Engineering",
+        "Design",
+        "Sales",
+        "Marketing",
+        "Finance",
+        "Analytics",
+        "Automations",
+        "Productivity",
+        "Collaboration",
+        "Forms",
+        "Customer experience",
+        "File management",
+        "Communication",
+        "Security & compliance",
+        "Identity"
+      ]
+    },
+    {
+      "id": "marketplace/connections/filter-title",
+      "title": "Filter by title",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "marketplace-connections-title-filter",
+      "notes": "Click to expand an inline textbox; transient catalog filter."
+    },
+    {
+      "id": "marketplace/connections/types-menu",
+      "title": "Types",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "marketplace-connections-type-filter",
+      "options": [
+        "Public API",
+        "AI connector",
+        "Embed",
+        "SCIM/SSO"
+      ],
+      "notes": "Multi-select catalog filter."
+    },
+    {
+      "id": "marketplace/connections/creator-filter",
+      "title": "Creator filter",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "marketplace-connections-creator-filter",
+      "options": [
+        "Made by Notion",
+        "Technology Partner"
+      ],
+      "notes": "Unlabeled person icon immediately to the right of Types; transient catalog filter."
+    },
+    {
+      "id": "marketplace/connections/sort",
+      "title": "Sort",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "marketplace-connections-sort",
+      "options": [
+        "Recommended",
+        "A-Z",
+        "Newest"
+      ],
+      "notes": "Unlabeled up/down-arrow icon; Recommended currently selected. Changes only catalog ordering."
+    },
+    {
+      "id": "library/recents/view-settings",
+      "title": "Recents view settings",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Library view configuration; Settings button on Recents."
+    },
+    {
+      "id": "library/recents/property-visibility",
+      "title": "Property visibility",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-recents-property-visibility",
+      "options": [
+        "Page name",
+        "Created by",
+        "Source",
+        "Last edited time",
+        "Last visited time",
+        "Created time",
+        "Last edited by"
+      ],
+      "notes": "Shown: first five. Hidden: Created time and Last edited by. Search, Hide all/Show all, reorder."
+    },
+    {
+      "id": "library/recents/filter-settings",
+      "title": "Filter",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-recents-filter"
+    },
+    {
+      "id": "library/recents/filter-picker",
+      "title": "Recents filter picker",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Properties: Page name, Created by, Created time, Last edited by, Last edited time, Last visited time; Add advanced filter."
+    },
+    {
+      "id": "library/private/view-settings",
+      "title": "Private view settings",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "View-scoped Library Private configuration."
+    },
+    {
+      "id": "library/private/property-visibility",
+      "title": "Property visibility",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-private-property-visibility",
+      "options": [
+        "Page name",
+        "Last edited time",
+        "Last visited time",
+        "Created time",
+        "Created by",
+        "Last edited by",
+        "Source"
+      ],
+      "notes": "Shown: Page name, Last edited time. Others hidden."
+    },
+    {
+      "id": "library/private/filter-settings",
+      "title": "Filter",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-private-filter"
+    },
+    {
+      "id": "library/private/sort-settings",
+      "title": "Sort",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-private-sort",
+      "notes": "Current sort shown as Last edited time."
+    },
+    {
+      "id": "library/private/group-settings",
+      "title": "Group",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-private-group"
+    },
+    {
+      "id": "library/private/sort-panel",
+      "title": "Private Library Sort",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Current rule Last edited time, new to old."
+    },
+    {
+      "id": "library/private/sort-property",
+      "title": "Private Library sort property",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-private-sort-property",
+      "options": [
+        "Page name",
+        "Created by",
+        "Created time",
+        "Last edited by",
+        "Last edited time",
+        "Last visited time"
+      ]
+    },
+    {
+      "id": "library/private/sort-direction",
+      "title": "Private Library sort direction",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-private-sort-direction",
+      "options": [
+        "Sort old → new",
+        "Sort new → old"
+      ]
+    },
+    {
+      "id": "library/private/group-panel",
+      "title": "Private Library Group by",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Current grouping None."
+    },
+    {
+      "id": "library/private/group-property",
+      "title": "Private Library grouping property",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-private-group-property",
+      "options": [
+        "None",
+        "Page name",
+        "Created by",
+        "Created time",
+        "Last edited by",
+        "Last edited time",
+        "Last visited time"
+      ]
+    },
+    {
+      "id": "library/shared/view-settings",
+      "title": "Shared view settings",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Right-side Library view configuration panel."
+    },
+    {
+      "id": "library/shared/filter",
+      "title": "Filter",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "library-shared-filter",
+      "notes": "View-scoped; properties: Page name, Created by/time, Last edited by/time, Last visited time; Source absent."
+    },
+    {
+      "id": "library/shared/property-visibility",
+      "title": "Property visibility",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "library-shared-property-visibility",
+      "notes": "Shows 4 columns by default: Page name, Created by, Source, Last edited time."
+    },
+    {
+      "id": "library/shared/sort",
+      "title": "Sort",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "library-shared-sort",
+      "notes": "Current summary shown as Last edited time."
+    },
+    {
+      "id": "library/shared/group",
+      "title": "Group",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "library-shared-group"
+    },
+    {
+      "id": "library/favorites/view-settings",
+      "title": "Favorites view settings",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Right-side Library view configuration panel."
+    },
+    {
+      "id": "library/favorites/property-visibility",
+      "title": "Property visibility",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-favorites-property-visibility",
+      "options": [
+        "Page name",
+        "Created by",
+        "Source",
+        "Last edited time",
+        "Created time",
+        "Last edited by",
+        "Last visited time"
+      ],
+      "notes": "First four shown; last three hidden. Immediate view change."
+    },
+    {
+      "id": "library/favorites/filter",
+      "title": "Filter",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-favorites-filter",
+      "options": [
+        "Page name",
+        "Created by",
+        "Created time",
+        "Last edited by",
+        "Last edited time",
+        "Last visited time",
+        "Add advanced filter"
+      ],
+      "notes": "Source is not offered. Selecting a property changes this Library view."
+    },
+    {
+      "id": "library/favorites/sort",
+      "title": "Sort",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-favorites-sort",
+      "options": [
+        "Page name",
+        "Created by",
+        "Created time",
+        "Last edited by",
+        "Last edited time",
+        "Last visited time"
+      ],
+      "notes": "No active sort in this workspace; selecting a field would immediately add a view sort. Source unavailable."
+    },
+    {
+      "id": "library/favorites/group",
+      "title": "Group",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-favorites-group",
+      "options": [
+        "None",
+        "Page name",
+        "Created by",
+        "Created time",
+        "Last edited by",
+        "Last edited time",
+        "Last visited time"
+      ],
+      "notes": "Current None; selecting a field immediately reconfigures this view. Source unavailable."
+    },
+    {
+      "id": "library/search-field",
+      "title": "Type to search…",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-view-search",
+      "notes": "Expanded from Library toolbar Search; current-tab only."
+    },
+    {
+      "id": "library/favorites/toolbar-sort",
+      "title": "Favorites toolbar Sort",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-favorites-sort",
+      "options": [
+        "Page name",
+        "Created by",
+        "Created time",
+        "Last edited by",
+        "Last edited time",
+        "Last visited time"
+      ],
+      "notes": "Direct shortcut to Favorites view sort editor; Source excluded."
+    },
+    {
+      "id": "sidebar/agents-section-menu",
+      "title": "Agents section menu",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Overflow menu on Agents sidebar heading."
+    },
+    {
+      "id": "sidebar/agents-section-menu/show-count",
+      "title": "Show item count",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "sidebar-agents-item-count",
+      "options": [
+        "5",
+        "10",
+        "15",
+        "20",
+        "100"
+      ],
+      "notes": "10 current."
+    },
+    {
+      "id": "sidebar/agents-section-menu/order",
+      "title": "Move Agents section",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "sidebar-section-order",
+      "options": [
+        "Move up",
+        "Move down"
+      ]
+    },
+    {
+      "id": "sidebar/agents-section-menu/hide",
+      "title": "Hide Agents section",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "sidebar-section-visibility"
+    },
+    {
+      "id": "sidebar/agents-section-menu/customize",
+      "title": "Customize sidebar",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "sidebar-customization",
+      "notes": "Routes to global sidebar customization editor."
+    },
+    {
+      "id": "library/favorites/page-name-column-menu",
+      "title": "Favorites Page name column menu",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Filter, Sort, Group, Wrap content; Edit property disabled."
+    },
+    {
+      "id": "library/favorites/page-name-column-menu/filter",
+      "title": "Filter",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-favorites-filter"
+    },
+    {
+      "id": "library/favorites/page-name-column-menu/sort",
+      "title": "Sort",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-favorites-sort"
+    },
+    {
+      "id": "library/favorites/page-name-column-menu/group",
+      "title": "Group",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-favorites-group"
+    },
+    {
+      "id": "library/favorites/page-name-column-menu/wrap",
+      "title": "Wrap content",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-favorites-page-name-wrap",
+      "notes": "Immediate view display change."
+    },
+    {
+      "id": "sidebar/page-context-menu",
+      "title": "Sidebar page context menu",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Opened by right-clicking a sidebar page row."
+    },
+    {
+      "id": "sidebar/page-context-menu/favorite",
+      "title": "Add to Favorites",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-favorite"
+    },
+    {
+      "id": "sidebar/page-context-menu/copy-link",
+      "title": "Copy link",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-copy-link"
+    },
+    {
+      "id": "sidebar/page-context-menu/duplicate",
+      "title": "Duplicate",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "sidebar/page-context-menu/rename",
+      "title": "Rename",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "sidebar/page-context-menu/move",
+      "title": "Move to",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "sidebar/page-context-menu/trash",
+      "title": "Move to Trash",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "sidebar/page-context-menu/wiki",
+      "title": "Turn into wiki",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "sidebar/page-context-menu/new-tab",
+      "title": "Open in new tab",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "sidebar/page-context-menu/side-peek",
+      "title": "Open in side peek",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-open-mode"
+    },
+    {
+      "id": "library/shared/toolbar-sort",
+      "title": "Shared toolbar Sort",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-shared-sort",
+      "notes": "Directly opens current sort rules; same underlying Shared Library view sort as Settings > Sort."
+    },
+    {
+      "id": "sidebar/setup-guide",
+      "title": "Set up your workspace",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "sidebar/setup-guide/personal-home",
+      "title": "Set up your personal home base",
+      "kind": "control",
+      "scope": "app",
+      "notes": "Completed checklist item; Notion AI ask/build/chat."
+    },
+    {
+      "id": "sidebar/setup-guide/calendar",
+      "title": "Connect your calendar",
+      "kind": "control",
+      "scope": "app",
+      "notes": "Starts external calendar connection."
+    },
+    {
+      "id": "sidebar/setup-guide/capture-notes",
+      "title": "Capture notes for conversations automatically",
+      "kind": "control",
+      "scope": "app",
+      "notes": "Meeting-note/recording setup."
+    },
+    {
+      "id": "sidebar/setup-guide/email",
+      "title": "Connect your email to search everything",
+      "kind": "control",
+      "scope": "app",
+      "notes": "Starts external email connection."
+    },
+    {
+      "id": "sidebar/setup-guide/ai-personality",
+      "title": "Give Notion AI some personality",
+      "kind": "control",
+      "scope": "app",
+      "notes": "Changes AI personalization."
+    },
+    {
+      "id": "sidebar/setup-guide/marketplace",
+      "title": "Browse quick guides and templates",
+      "kind": "control",
+      "scope": "app",
+      "notes": "Completed; opens Marketplace."
+    },
+    {
+      "id": "library/filter-bar-toggle",
+      "title": "Filter",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-filter-bar-visibility",
+      "notes": "Toolbar funnel toggles whether filter/sort chips are shown; underlying view rules are preserved."
+    },
+    {
+      "id": "sidebar/setup-guide/personalize-ai",
+      "title": "Personalize your Notion AI",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Direct setup modal; opening alone marked setup checklist item complete. Name, avatar/accessory, and instruction page controls."
+    },
+    {
+      "id": "sidebar/setup-guide/personalize-ai/name",
+      "title": "Enter a name",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "notion-ai-name"
+    },
+    {
+      "id": "sidebar/setup-guide/personalize-ai/accessory",
+      "title": "Accessory choices",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "notion-ai-accessory",
+      "options": [
+        "Firefighter hat",
+        "Mustache",
+        "Scarf",
+        "Flower",
+        "Pencil",
+        "Duck",
+        "Paprika",
+        "Cat",
+        "Crown",
+        "Cherry",
+        "Leaf",
+        "Magician",
+        "Bow",
+        "Cowboy hat",
+        "Propeller"
+      ]
+    },
+    {
+      "id": "sidebar/setup-guide/personalize-ai/instructions",
+      "title": "Add instructions",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "notion-ai-instructions"
+    },
+    {
+      "id": "sidebar/home-surface",
+      "title": "Home overview",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Ordinary landing surface; recently visited, learning cards, upcoming events, tasks, templates."
+    },
+    {
+      "id": "sidebar/home/recently-visited",
+      "title": "Recently visited",
+      "kind": "control",
+      "scope": "document",
+      "notes": "Cards open existing pages; content rows, not settings."
+    },
+    {
+      "id": "sidebar/home/learn",
+      "title": "Learn tutorials",
+      "kind": "control",
+      "scope": "app",
+      "notes": "Tutorial cards; checkboxes likely mark onboarding progress."
+    },
+    {
+      "id": "sidebar/home/connect-calendar",
+      "title": "Connect Notion Calendar",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "calendar-connection",
+      "notes": "Begins external calendar connection; not operated."
+    },
+    {
+      "id": "sidebar/home/select-task-database",
+      "title": "Select database",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "home-task-database",
+      "notes": "Chooses database shown in Home My tasks; not changed."
+    },
+    {
+      "id": "sidebar/home/starter-templates",
+      "title": "Starter templates",
+      "kind": "control",
+      "scope": "workspace",
+      "notes": "Template cards can create/duplicate workspace content; not operated."
+    },
+    {
+      "id": "sidebar/home/menu",
+      "title": "Home Open menu",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "sidebar/home/menu/default-start-page",
+      "title": "Change default start page",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "startup-page",
+      "notes": "Personal start-page configuration; same underlying setting concept as Preferences > startup page."
+    },
+    {
+      "id": "sidebar/home/menu/widgets",
+      "title": "Show/hide widgets",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "home-widget-visibility",
+      "notes": "Personal Home widget configuration."
+    },
+    {
+      "id": "sidebar/home/menu/learn",
+      "title": "Learn about Home",
+      "kind": "control",
+      "scope": "app",
+      "notes": "Help/documentation route."
+    },
+    {
+      "id": "home",
+      "title": "Home",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Ordinary landing overview at workspace Home page."
+    },
+    {
+      "id": "home/open-menu",
+      "title": "Open menu",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "home/default-start-page",
+      "title": "Change default start page",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "startup-page",
+      "options": [
+        "Last visited page",
+        "Top page in sidebar",
+        "Library",
+        "Notion AI"
+      ],
+      "notes": "Last visited page currently selected; same personal startup-page setting as Preferences."
+    },
+    {
+      "id": "home/show-hide-widgets",
+      "title": "Show/hide widgets",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "home-widget-visibility"
+    },
+    {
+      "id": "home/learn-about",
+      "title": "Learn about Home",
+      "kind": "control",
+      "scope": "app",
+      "notes": "No observable in-app panel or route appeared when activated."
+    },
+    {
+      "id": "home/widgets",
+      "title": "Show/hide widgets",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "home-widget-visibility",
+      "options": [
+        "Greeting",
+        "Upcoming Events",
+        "My Tasks",
+        "Database Views",
+        "Learn",
+        "Featured Templates"
+      ],
+      "notes": "Multi-item visibility submenu; selections apply immediately."
+    }
+  ],
+  "edges": [
+    {
+      "from": "root",
+      "to": "page/getting-started",
+      "action": "opening app.notion.com lands on the last/default open page"
+    },
+    {
+      "from": "page/getting-started",
+      "to": "sidebar",
+      "action": "sidebar is visible at left"
+    },
+    {
+      "from": "sidebar",
+      "to": "sidebar/home-settings",
+      "action": "click active “Home” tab"
+    },
+    {
+      "from": "sidebar/home-settings",
+      "to": "sidebar/customize-sections",
+      "action": "click “Customize sections”"
+    },
+    {
+      "from": "sidebar",
+      "to": "sidebar/chat-surface",
+      "action": "click “Chat” tab"
+    },
+    {
+      "from": "sidebar",
+      "to": "sidebar/meetings-surface",
+      "action": "click “Meetings” tab"
+    },
+    {
+      "from": "sidebar",
+      "to": "sidebar/inbox-surface",
+      "action": "click “Inbox” tab"
+    },
+    {
+      "from": "sidebar/inbox-surface",
+      "to": "sidebar/inbox/filter-menu",
+      "action": "click “Edit filter”"
+    },
+    {
+      "from": "sidebar/search",
+      "to": "sidebar/search-overlay",
+      "action": "click “Search” in sidebar"
+    },
+    {
+      "from": "sidebar/search-overlay",
+      "to": "sidebar/search-overlay/settings",
+      "action": "click “Search settings” gear at bottom right"
+    },
+    {
+      "from": "sidebar/search-overlay",
+      "to": "sidebar/search-overlay/date-filter",
+      "action": "click \"Date\""
+    },
+    {
+      "from": "sidebar/search-overlay",
+      "to": "sidebar/search-overlay/created-by-picker",
+      "action": "click \"Created by\""
+    },
+    {
+      "from": "sidebar/search-overlay",
+      "to": "sidebar/search-overlay/in-picker",
+      "action": "click \"In\""
+    },
+    {
+      "from": "sidebar",
+      "to": "sidebar/workspace-menu",
+      "action": "click “D David Chavez-Grant’s Space Close sidebar”"
+    },
+    {
+      "from": "sidebar/workspace-menu",
+      "to": "sidebar/workspace-menu/settings",
+      "action": "click “Settings”"
+    },
+    {
+      "from": "sidebar/workspace-menu",
+      "to": "settings",
+      "action": "click “Settings”"
+    },
+    {
+      "from": "settings",
+      "to": "settings/preferences",
+      "action": "click “Preferences”"
+    },
+    {
+      "from": "settings",
+      "to": "settings/profile",
+      "action": "click “David Chavez-Grant David Chavez-Grant”"
+    },
+    {
+      "from": "settings",
+      "to": "settings/notifications",
+      "action": "click “Notifications”"
+    },
+    {
+      "from": "settings",
+      "to": "settings/mail-calendar",
+      "action": "click “Mail & Calendar”"
+    },
+    {
+      "from": "settings",
+      "to": "settings/general",
+      "action": "click “General”"
+    },
+    {
+      "from": "settings",
+      "to": "settings/people",
+      "action": "click “People”"
+    },
+    {
+      "from": "settings",
+      "to": "settings/import",
+      "action": "click “Import”"
+    },
+    {
+      "from": "settings",
+      "to": "settings/notion-ai",
+      "action": "click “Notion AI”"
+    },
+    {
+      "from": "settings",
+      "to": "settings/connections",
+      "action": "click “Connections”"
+    },
+    {
+      "from": "settings",
+      "to": "settings/notion-mcp",
+      "action": "click “Notion MCP”"
+    },
+    {
+      "from": "settings",
+      "to": "settings/public-pages",
+      "action": "click “Public pages”"
+    },
+    {
+      "from": "settings",
+      "to": "settings/emoji",
+      "action": "click “Emoji”"
+    },
+    {
+      "from": "settings",
+      "to": "settings/teamspaces",
+      "action": "click “Teamspaces”"
+    },
+    {
+      "from": "settings",
+      "to": "settings/upgrade",
+      "action": "click “Upgrade plan”"
+    },
+    {
+      "from": "settings/profile",
+      "to": "settings/profile/devices",
+      "action": "scroll down to Devices section"
+    },
+    {
+      "from": "settings/people",
+      "to": "settings/people/guests",
+      "action": "click “Guests” tab"
+    },
+    {
+      "from": "settings/people",
+      "to": "settings/people/members",
+      "action": "click “Members 1” tab"
+    },
+    {
+      "from": "settings/people",
+      "to": "settings/people/groups",
+      "action": "click “Groups” tab"
+    },
+    {
+      "from": "settings/people",
+      "to": "settings/people/contacts",
+      "action": "click “Contacts” tab"
+    },
+    {
+      "from": "settings/import",
+      "to": "settings/import/discover",
+      "action": "click “Discover” tab"
+    },
+    {
+      "from": "settings/import",
+      "to": "settings/import/completed",
+      "action": "click “Completed” tab"
+    },
+    {
+      "from": "settings/notion-ai",
+      "to": "settings/notion-ai/general",
+      "action": "click “General” tab"
+    },
+    {
+      "from": "settings/notion-ai",
+      "to": "settings/notion-ai/connectors",
+      "action": "click “AI connectors” tab (emoji-decorated accessible tab may have no label)"
+    },
+    {
+      "from": "settings/notion-ai",
+      "to": "settings/notion-ai/meeting-notes",
+      "action": "click “Meeting notes” tab"
+    },
+    {
+      "from": "settings/connections",
+      "to": "settings/connections/discover",
+      "action": "click “Discover” tab"
+    },
+    {
+      "from": "settings/connections",
+      "to": "settings/connections/installed",
+      "action": "click “Installed” tab"
+    },
+    {
+      "from": "settings/connections",
+      "to": "settings/connections/manage",
+      "action": "click “Manage” tab"
+    },
+    {
+      "from": "settings/connections/manage",
+      "to": "settings/connections/manage/all-connections",
+      "action": "click Manage tab, then View & manage"
+    },
+    {
+      "from": "settings/connections/manage",
+      "to": "settings/connections/manage/access-tokens",
+      "action": "click All personal access tokens"
+    },
+    {
+      "from": "settings/notion-mcp",
+      "to": "settings/notion-mcp/discover",
+      "action": "click Notion MCP, then Discover"
+    },
+    {
+      "from": "settings/notion-mcp",
+      "to": "settings/notion-mcp/manage",
+      "action": "click Notion MCP, then Manage"
+    },
+    {
+      "from": "settings/public-pages",
+      "to": "settings/public-pages/sites",
+      "action": "click Notion Sites card"
+    },
+    {
+      "from": "settings/public-pages",
+      "to": "settings/public-pages/forms",
+      "action": "click Public forms card"
+    },
+    {
+      "from": "settings/public-pages",
+      "to": "settings/public-pages/share-links",
+      "action": "click Anyone with the link card"
+    },
+    {
+      "from": "settings/public-pages",
+      "to": "settings/public-pages/shared-ai",
+      "action": "click Shared AI chats card"
+    },
+    {
+      "from": "settings/emoji",
+      "to": "settings/emoji/add-form",
+      "action": "click Add emoji"
+    },
+    {
+      "from": "settings",
+      "to": "settings/teamspaces",
+      "action": "click “Teamspaces” in Settings & members left navigation"
+    },
+    {
+      "from": "sidebar",
+      "to": "library",
+      "action": "click “Library”"
+    },
+    {
+      "from": "library",
+      "to": "library/recents",
+      "action": "click “Recents”"
+    },
+    {
+      "from": "library",
+      "to": "library/favorites",
+      "action": "click “Favorites”"
+    },
+    {
+      "from": "library",
+      "to": "library/shared",
+      "action": "click “Shared”"
+    },
+    {
+      "from": "library",
+      "to": "library/private",
+      "action": "click “Private”"
+    },
+    {
+      "from": "library",
+      "to": "library/meeting-notes",
+      "action": "click “1 more…” then “AI Meeting Notes”"
+    },
+    {
+      "from": "library/meeting-notes",
+      "to": "library/meeting-notes/view-settings",
+      "action": "click Settings"
+    },
+    {
+      "from": "library/meeting-notes/view-settings",
+      "to": "library/meeting-notes/property-visibility",
+      "action": "click Property visibility"
+    },
+    {
+      "from": "library/meeting-notes/view-settings",
+      "to": "library/meeting-notes/group-settings",
+      "action": "click Group"
+    },
+    {
+      "from": "sidebar",
+      "to": "sidebar/help-menu",
+      "action": "click What’s new, help, contact, more…"
+    },
+    {
+      "from": "sidebar/help-menu",
+      "to": "sidebar/help-menu/more-menu",
+      "action": "click More"
+    },
+    {
+      "from": "sidebar/help-menu/more-menu",
+      "to": "sidebar/help-menu/keyboard-shortcuts-modal",
+      "action": "click Keyboard shortcuts"
+    },
+    {
+      "from": "sidebar/help-menu/more-menu",
+      "to": "sidebar/help-menu/local-backups-modal",
+      "action": "click “Local backups”"
+    },
+    {
+      "from": "page/getting-started",
+      "to": "page/actions-menu",
+      "action": "click top-right “Actions”"
+    },
+    {
+      "from": "page/actions-menu",
+      "to": "page/actions/customize-panel",
+      "action": "click “Customize page”"
+    },
+    {
+      "from": "page/getting-started",
+      "to": "page/move-picker",
+      "action": "click header “Private” location label"
+    },
+    {
+      "from": "library/private",
+      "to": "page/to-do-list",
+      "action": "click the To Do List row"
+    },
+    {
+      "from": "page/to-do-list",
+      "to": "page/to-do-list/database",
+      "action": "inline database appears in page body"
+    },
+    {
+      "from": "page/to-do-list/database",
+      "to": "page/to-do-list/database/view-settings",
+      "action": "click Settings"
+    },
+    {
+      "from": "page/to-do-list/database/view-settings",
+      "to": "page/to-do-list/database/view-settings/layout-panel",
+      "action": "click Layout"
+    },
+    {
+      "from": "page/to-do-list/database/view-settings/layout-panel",
+      "to": "page/to-do-list/database/view-settings/layout/open-pages-menu",
+      "action": "click Open pages in"
+    },
+    {
+      "from": "page/to-do-list/database/view-settings/layout-panel",
+      "to": "page/to-do-list/database/view-settings/layout/load-limit-menu",
+      "action": "click Load limit"
+    },
+    {
+      "from": "page/to-do-list/database/view-settings",
+      "to": "page/to-do-list/database/view-settings/property-visibility-panel",
+      "action": "click Property visibility"
+    },
+    {
+      "from": "page/to-do-list/database/view-settings",
+      "to": "page/to-do-list/database/view-settings/sort-panel",
+      "action": "click “Sort”"
+    },
+    {
+      "from": "page/to-do-list/database/view-settings",
+      "to": "page/to-do-list/database/view-settings/group-panel",
+      "action": "click “Group”"
+    },
+    {
+      "from": "page/to-do-list/database/view-settings",
+      "to": "page/to-do-list/database/view-settings/conditional-color-panel",
+      "action": "click “Conditional color”"
+    },
+    {
+      "from": "page/to-do-list/database/view-settings/conditional-color-panel",
+      "to": "page/to-do-list/database/view-settings/conditional-color-property",
+      "action": "click “New color setting”"
+    },
+    {
+      "from": "page/to-do-list/database/view-settings",
+      "to": "page/to-do-list/database/view-settings/source-picker",
+      "action": "click “Source Todo List”"
+    },
+    {
+      "from": "page/to-do-list/database/view-settings",
+      "to": "page/to-do-list/database/view-settings/edit-properties-panel",
+      "action": "click “Edit properties”"
+    },
+    {
+      "from": "page/to-do-list/database/view-settings/edit-properties-panel",
+      "to": "page/to-do-list/database/property/status-editor",
+      "action": "click “Status”"
+    },
+    {
+      "from": "page/to-do-list/database/view-settings",
+      "to": "page/to-do-list/database/automations-panel",
+      "action": "click “Automations”"
+    },
+    {
+      "from": "page/to-do-list/database/view-settings",
+      "to": "page/to-do-list/database/ai-autofill-panel",
+      "action": "click “AI Autofill”"
+    },
+    {
+      "from": "page/to-do-list/database/view-settings",
+      "to": "page/to-do-list/database/subtasks-panel",
+      "action": "click More settings, then Sub-tasks"
+    },
+    {
+      "from": "page/to-do-list/database/view-settings",
+      "to": "page/to-do-list/database/dependencies-panel",
+      "action": "click More settings, then Dependencies"
+    },
+    {
+      "from": "page/to-do-list/database/view-settings",
+      "to": "page/to-do-list/database/sprints-panel",
+      "action": "click More settings, then Sprints"
+    },
+    {
+      "from": "page/to-do-list/database/view-settings",
+      "to": "page/to-do-list/database/connections-panel",
+      "action": "expand More settings, then click Connections"
+    },
+    {
+      "from": "page/to-do-list/database/view-settings",
+      "to": "page/to-do-list/database/page-layout-editor",
+      "action": "expand More settings, then click Customize page layout"
+    },
+    {
+      "from": "page/to-do-list/database/view-settings",
+      "to": "page/to-do-list/database/manage-data-sources-panel",
+      "action": "click “Manage data sources”"
+    },
+    {
+      "from": "page/to-do-list/database/manage-data-sources-panel",
+      "to": "page/to-do-list/database/manage-data-sources/source-actions",
+      "action": "click the three-dot “Data source actions” beside Todo List"
+    },
+    {
+      "from": "page/to-do-list/database/view-settings",
+      "to": "page/to-do-list/database/undo-task-database-confirm",
+      "action": "More settings > Undo Task database"
+    },
+    {
+      "from": "page/to-do-list/database",
+      "to": "page/to-do-list/database/done-surface",
+      "action": "click “Done” view tab"
+    },
+    {
+      "from": "page/to-do-list/database/done-surface",
+      "to": "page/to-do-list/database/task-side-peek",
+      "action": "click a task row"
+    },
+    {
+      "from": "page/to-do-list/database/task-side-peek",
+      "to": "page/to-do-list/database/task-side-peek/switch-mode",
+      "action": "click \"Switch peek mode\""
+    },
+    {
+      "from": "page/to-do-list/database/task-side-peek/switch-mode",
+      "to": "page/to-do-list/database/task-side-peek/edit-view-default",
+      "action": "click \"Edit view default\""
+    },
+    {
+      "from": "page/to-do-list/database/task-side-peek/edit-view-default",
+      "to": "page/to-do-list/database/view-settings/layout/open-pages-menu",
+      "action": "opens Layout panel with Open pages in chooser expanded"
+    },
+    {
+      "from": "page/to-do-list/database/task-side-peek",
+      "to": "page/to-do-list/database/task-side-peek/customize-layout",
+      "action": "hover above row title, then click \"Customize layout\""
+    },
+    {
+      "from": "page/to-do-list/database/task-side-peek/customize-layout",
+      "to": "page/to-do-list/database/page-layout-editor",
+      "action": "opens database-wide page layout editor"
+    },
+    {
+      "from": "page/actions-menu",
+      "to": "page/updates-analytics-panel",
+      "action": "click “Updates & analytics”"
+    },
+    {
+      "from": "page/updates-analytics-panel",
+      "to": "page/updates-analytics/analytics",
+      "action": "click “Analytics” tab"
+    },
+    {
+      "from": "page/updates-analytics/settings",
+      "to": "page/updates-analytics/settings-popover",
+      "action": "click “Settings”"
+    },
+    {
+      "from": "page/actions-menu",
+      "to": "page/actions/translate-panel",
+      "action": "click “Translate”"
+    },
+    {
+      "from": "page/actions-menu",
+      "to": "page/actions/use-with-ai",
+      "action": "click “Use with AI”"
+    },
+    {
+      "from": "page/actions-menu",
+      "to": "page/actions/suggest-edits",
+      "action": "click “Suggest edits”"
+    },
+    {
+      "from": "page/actions-menu",
+      "to": "settings/import",
+      "action": "click “Import”"
+    },
+    {
+      "from": "page/actions-menu",
+      "to": "page/actions/export-dialog",
+      "action": "click Export"
+    },
+    {
+      "from": "page/actions-menu",
+      "to": "page/actions/notify-menu",
+      "action": "click Notify me"
+    },
+    {
+      "from": "page/actions-menu",
+      "to": "page/actions/connections-picker",
+      "action": "click Connections"
+    },
+    {
+      "from": "page/actions/connections-picker",
+      "to": "settings/connections/manage",
+      "action": "click Manage connections"
+    },
+    {
+      "from": "page/to-do-list/database",
+      "to": "page/to-do-list/task-full-page",
+      "action": "open a row, then choose Open in full page from Side Peek or use breadcrumb/full-page route"
+    },
+    {
+      "from": "page/to-do-list/task-full-page",
+      "to": "page/to-do-list/task-full-page/customize-layout",
+      "action": "Actions > Customize layout"
+    },
+    {
+      "from": "page/to-do-list/task-full-page",
+      "to": "page/to-do-list/database/full-page",
+      "action": "click the “Todo List” data-source breadcrumb"
+    },
+    {
+      "from": "page/to-do-list/database",
+      "to": "page/to-do-list/database/full-page",
+      "action": "click Open as full page"
+    },
+    {
+      "from": "page/to-do-list/database/full-page",
+      "to": "page/to-do-list/database/full-page/actions",
+      "action": "click top-right Actions"
+    },
+    {
+      "from": "page/to-do-list/database/full-page",
+      "to": "page/to-do-list/database/template-menu",
+      "action": "click the dropdown arrow beside New"
+    },
+    {
+      "from": "sidebar",
+      "to": "marketplace",
+      "action": "click “Marketplace”"
+    },
+    {
+      "from": "sidebar/home-settings",
+      "to": "marketplace",
+      "action": "click setup guide step “Browse quick guides and templates”"
+    },
+    {
+      "from": "marketplace",
+      "to": "marketplace/discover",
+      "action": "click “Discover”"
+    },
+    {
+      "from": "marketplace",
+      "to": "marketplace/templates",
+      "action": "click “Templates”"
+    },
+    {
+      "from": "marketplace",
+      "to": "marketplace/agents",
+      "action": "click “Agents”"
+    },
+    {
+      "from": "marketplace",
+      "to": "marketplace/consultants",
+      "action": "click “Consultants”"
+    },
+    {
+      "from": "marketplace",
+      "to": "marketplace/connections",
+      "action": "click “Connections”"
+    },
+    {
+      "from": "marketplace/search",
+      "to": "marketplace/search-suggestions",
+      "action": "click Search and type a query"
+    },
+    {
+      "from": "marketplace",
+      "to": "marketplace/purchased",
+      "action": "click “Purchased” in Marketplace header"
+    },
+    {
+      "from": "marketplace/purchased",
+      "to": "marketplace/purchased/templates",
+      "action": "click “Templates 0” tab"
+    },
+    {
+      "from": "marketplace/purchased",
+      "to": "marketplace/purchased/agents",
+      "action": "click “Agents 0” tab"
+    },
+    {
+      "from": "marketplace/purchased",
+      "to": "marketplace/purchased/services",
+      "action": "click “Services 0” tab"
+    },
+    {
+      "from": "marketplace",
+      "to": "marketplace/profile-menu",
+      "action": "click “My profile” in Marketplace header"
+    },
+    {
+      "from": "marketplace/connections",
+      "to": "marketplace/connections/detail",
+      "action": "click any connection card, e.g. “Slack”"
+    },
+    {
+      "from": "marketplace/connections",
+      "to": "marketplace/connections/types-menu",
+      "action": "click \"Types\""
+    },
+    {
+      "from": "marketplace/connections",
+      "to": "marketplace/connections/creator-filter",
+      "action": "click the person icon beside \"Types\""
+    },
+    {
+      "from": "marketplace/connections",
+      "to": "marketplace/connections/sort",
+      "action": "click the up/down-arrow icon at the right of filters"
+    },
+    {
+      "from": "library/recents",
+      "to": "library/recents/view-settings",
+      "action": "click Settings"
+    },
+    {
+      "from": "library/recents/view-settings",
+      "to": "library/recents/property-visibility",
+      "action": "click Property visibility"
+    },
+    {
+      "from": "library/recents/view-settings",
+      "to": "library/recents/filter-picker",
+      "action": "click Filter"
+    },
+    {
+      "from": "library/private",
+      "to": "library/private/view-settings",
+      "action": "click Settings"
+    },
+    {
+      "from": "library/private/view-settings",
+      "to": "library/private/property-visibility",
+      "action": "click Property visibility"
+    },
+    {
+      "from": "library/private",
+      "to": "library/private/sort-panel",
+      "action": "click Sort"
+    },
+    {
+      "from": "library/private/sort-panel",
+      "to": "library/private/sort-property",
+      "action": "click current sort property"
+    },
+    {
+      "from": "library/private/sort-panel",
+      "to": "library/private/sort-direction",
+      "action": "click current direction"
+    },
+    {
+      "from": "library/private",
+      "to": "library/private/group-panel",
+      "action": "click Settings, then Group"
+    },
+    {
+      "from": "library/shared",
+      "to": "library/shared/view-settings",
+      "action": "click Settings"
+    },
+    {
+      "from": "library/shared/view-settings",
+      "to": "library/shared/filter",
+      "action": "click Filter"
+    },
+    {
+      "from": "library/favorites",
+      "to": "library/favorites/view-settings",
+      "action": "click Settings"
+    },
+    {
+      "from": "library/favorites/view-settings",
+      "to": "library/favorites/property-visibility",
+      "action": "click Property visibility"
+    },
+    {
+      "from": "library/favorites/view-settings",
+      "to": "library/favorites/filter",
+      "action": "click Filter"
+    },
+    {
+      "from": "library/favorites/view-settings",
+      "to": "library/favorites/sort",
+      "action": "click Sort"
+    },
+    {
+      "from": "library/favorites/view-settings",
+      "to": "library/favorites/group",
+      "action": "click Group"
+    },
+    {
+      "from": "library",
+      "to": "library/search-field",
+      "action": "click Search"
+    },
+    {
+      "from": "library/favorites",
+      "to": "library/favorites/toolbar-sort",
+      "action": "click \"Sort\" in toolbar"
+    },
+    {
+      "from": "sidebar",
+      "to": "sidebar/agents-section-menu",
+      "action": "click Agents heading, then its \"Open menu\" overflow"
+    },
+    {
+      "from": "sidebar/agents-section-menu",
+      "to": "sidebar/customize-sections",
+      "action": "click \"Customize sidebar\""
+    },
+    {
+      "from": "library/favorites",
+      "to": "library/favorites/page-name-column-menu",
+      "action": "click the Page name column header"
+    },
+    {
+      "from": "sidebar",
+      "to": "sidebar/page-context-menu",
+      "action": "right-click a page row such as Getting Started"
+    },
+    {
+      "from": "library/shared",
+      "to": "library/shared/toolbar-sort",
+      "action": "click toolbar \"Sort\""
+    },
+    {
+      "from": "sidebar",
+      "to": "sidebar/setup-guide",
+      "action": "click \"Set up your workspace\""
+    },
+    {
+      "from": "sidebar/setup-guide",
+      "to": "marketplace",
+      "action": "click \"Browse quick guides and templates\""
+    },
+    {
+      "from": "sidebar",
+      "to": "sidebar/setup-guide/personalize-ai",
+      "action": "Open “Set up your workspace”, then click “Give Notion AI some personality”."
+    },
+    {
+      "from": "root",
+      "to": "sidebar/home-surface",
+      "action": "click sidebar `Home`; fallback navigate to https://app.notion.com/home"
+    },
+    {
+      "from": "sidebar/home-surface",
+      "to": "page/getting-started",
+      "action": "click `Getting Started` in Recently visited or sidebar"
+    },
+    {
+      "from": "sidebar/home-surface",
+      "to": "library",
+      "action": "click `Library` in sidebar"
+    },
+    {
+      "from": "sidebar/home-surface",
+      "to": "sidebar/home/menu",
+      "action": "click top-right `Open menu`"
+    },
+    {
+      "from": "root",
+      "to": "home",
+      "action": "click sidebar tab \"Home\""
+    },
+    {
+      "from": "home",
+      "to": "home/open-menu",
+      "action": "click top-right \"Open menu\""
+    },
+    {
+      "from": "home/open-menu",
+      "to": "home/default-start-page",
+      "action": "click \"Change default start page\""
+    },
+    {
+      "from": "home/open-menu",
+      "to": "home/show-hide-widgets",
+      "action": "click \"Show/hide widgets\""
+    },
+    {
+      "from": "home/open-menu",
+      "to": "home/learn-about",
+      "action": "click \"Learn about Home\""
+    },
+    {
+      "from": "home/open-menu",
+      "to": "home/widgets",
+      "action": "hover/click \"Show/hide widgets\""
+    }
+  ],
+  "gated": [
+    {
+      "id": "home/trash",
+      "tierReached": 0,
+      "boundary": "not opened — descent off",
+      "stoppedBecause": "descent:off",
+      "scratchUsed": false
+    },
+    {
+      "id": "share",
+      "tierReached": 0,
+      "boundary": "not opened — off-machine",
+      "stoppedBecause": "externality:label",
+      "scratchUsed": false
+    },
+    {
+      "id": "reset",
+      "tierReached": 0,
+      "boundary": "not opened — descent off",
+      "stoppedBecause": "descent:off",
+      "scratchUsed": false
+    },
+    {
+      "id": "delete-filter",
+      "tierReached": 0,
+      "boundary": "not opened — descent off",
+      "stoppedBecause": "descent:off",
+      "scratchUsed": false
+    },
+    {
+      "id": "move-to-trash",
+      "tierReached": 0,
+      "boundary": "not opened — descent off",
+      "stoppedBecause": "descent:off",
+      "scratchUsed": false
+    }
+  ]
+}

@@ -1,0 +1,1890 @@
+{
+  "app": "Yarn",
+  "capturedAt": "2026-07-31T22:35:05.497Z",
+  "provenance": "explore",
+  "proseSha256": "9022a8e73e9f",
+  "elapsed": "36m",
+  "coverage": {
+    "seen": 1985,
+    "actuated": 55,
+    "dismissed": 1933,
+    "surfaces": 63,
+    "chapters": 11,
+    "stopped": "frontier-empty",
+    "dismissals": [
+      "Persistent brand-management actions; Archive is destructive, while rename/duplicate/new would alter workspace state.",
+      "Persistent brand overview text field; editing it would alter brand content. Its purpose and placeholder are already recorded.",
+      "All menu items mutate selected template state; Delete is destructive.",
+      "New Template creates persistent content; name and description textboxes directly modify the selected template. Their functions are already mapped.",
+      "Would open a native file picker or attach external content; unsafe and not driveable in this backend.",
+      "Publish is an externally visible one-way action; the harness refused opening it, so it was deliberately not operated.",
+      "Export was blocked by the safety harness as guarded/destructive; it could not be safely inspected without risking a download or external output.",
+      "All Insert menu items create or modify document elements; options were fully recorded and deliberately not activated.",
+      "All remaining controls are setting choices/sliders in the already-mapped screen-clip defaults panel; operating them would mutate brand state, and the mirrored document-scoped panel has already been mapped.",
+      "Remaining entries are project-mutating performance/canvas/copy or download commands; the menu structure and safe Brand, Version History, and settings routes were already mapped.",
+      "Remaining choices change the current template's performance mode, canvas size, or loop state; options are already documented.",
+      "Remaining image-generation model/count/default choices would change generation defaults or cost credits if used; the picker is already mapped.",
+      "Remaining video-generation model/count/default choices would change generation defaults or cost credits if used; the picker is already mapped.",
+      "Remaining track rows would alter the draft's background audio and the upload control may open a native file picker; picker contents are already documented.",
+      "These are Agent effort setting choices; selecting one would persistently change the default and the full option list is already mapped.",
+      "These are Agent model choices; selecting one would persistently change the default and the full option list is already mapped.",
+      "Remaining paint types apply immediately to the project background; Solid and Linear were safely inspected and all type names are documented.",
+      "These unnamed controls belong to a specific library draft card (open/menu affordances); representative draft opening and card menu behavior were already mapped.",
+      "These unnamed controls belong to a specific library draft card; representative card and card-menu interactions were already mapped.",
+      "Specific library card open/menu affordances; representative card behavior is already mapped, so this duplicate content row need not be operated.",
+      "Specific library card open/menu affordances; representative card behavior is already mapped.",
+      "Specific library content card open/menu affordances with an uninformative title; representative card behavior is already mapped.",
+      "Specific library draft card; opening/menu interactions duplicate the representative draft already mapped.",
+      "Specific library draft card with unread-comment metadata; card open/menu behavior is already mapped, and interacting could alter read state.",
+      "Specific library draft card; representative open and ellipsis interactions are already mapped.",
+      "Specific repetitive library draft card; representative behavior is already mapped.",
+      "These residual top-level items are already-mapped visibility/value choices, clip duration labels, palette/size values, sort/duration options, and font choices. Operating them would mutate content/settings or duplicate picker inspection.",
+      "Specific repetitive library draft card; representative open/menu behavior is already mapped.",
+      "Specific library content card; representative draft/card menu behavior is already mapped.",
+      "Specific library content card; representative draft/card behavior is already mapped.",
+      "This is the current-brand choice inside the already-mapped Project actions → Brand submenu; reselecting it is redundant and selecting a brand can alter the document.",
+      "These are font-list rows, informational text-style/font-usage affordances, and already-mapped editor insertion/gradient controls. Font selection and adding content/stops would persistently mutate brand or document state.",
+      "Add Size would persist a workspace recording-size row; all other entries are font-picker choices whose selection would change the brand font. Both surfaces are already mapped.",
+      "These are entries in the already-mapped brand font picker; selecting any would persistently change the brand font.",
+      "These are font-family choices in the Brand Kit Type font picker; selecting one would persistently change the brand font, and the picker interaction is already mapped.",
+      "Repetitive Primary Font picker choices; selecting any would persistently change the brand font.",
+      "Repetitive font choices; selecting changes the brand.",
+      "Repetitive Primary Font picker options; selecting any would persistently change the brand font.",
+      "Repetitive Primary Font choices; selecting changes the brand font.",
+      "Font picker choices; selecting changes brand font.",
+      "Font picker choices; selecting changes brand font (including current Inter, which need not be reselected).",
+      "Previously inspected controls from settings, brand, editor, and context menus; these are content fields, state-changing choices, clipboard actions, or destructive actions that were deliberately not operated for safety.",
+      "Previously seen controls: external/native-file/account actions, persistent editor/brand settings, content notes, or insert actions; all were deliberately left unchanged after their containing surfaces were mapped.",
+      "Persistent creation/settings/content controls from already mapped surfaces; operating them would create data or change brand/document/app state. Help/info controls did not reveal additional surfaces.",
+      "Previously inspected choices/actions: persistent media/paint/template/settings changes, recording or externally visible sign-in/comment actions, and destructive size removal. They were intentionally not operated.",
+      "Previously mapped content/state controls or native-file actions; audio preview is transient, and Your Library is a non-action heading/content element. No further operation is needed.",
+      "The two unnamed controls are the draft card body and card overflow affordance for a repetitive library item; representative draft opening and card-menu behavior were already mapped, and further use would duplicate coverage or mutate the item.",
+      "Already mapped controls or state-changing/external actions: creation, sorting choices, toggles, brand navigation, publishing, recording, destructive removal, and search fields. Their locations and behavior are documented.",
+      "Previously inspected insert/visibility/sort/editor controls or external, account-affecting, destructive, plan, and persistent template actions. They were intentionally not operated for safety.",
+      "The six remaining unnamed controls are unlabeled icon affordances already mapped through their surrounding surfaces (sort/menu/upload/editor toolbar variants); invoking them risks duplicate state changes or native/external actions and adds no navigational coverage."
+    ],
+    "gatedRead": 0,
+    "gatedRefused": 4
+  },
+  "home": {
+    "surface": "library",
+    "control": "Library",
+    "description": "Left-rail Library overview at /library/ag showing Your Library, Collections, search/view/sort controls, New Draft, and draft cards."
+  },
+  "nodes": [
+    {
+      "id": "library",
+      "title": "Library",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Ordinary landing view; URL /library/ag."
+    },
+    {
+      "id": "brand-kit",
+      "title": "Brand Kit",
+      "kind": "surface",
+      "scope": "brand",
+      "notes": "Default Brand brand-wide defaults, with tabs Brand Overview, Templates, Workflows, Colors, Type, Screen Clips, Motion, Layout, Misc."
+    },
+    {
+      "id": "brand-kit/screen-clips",
+      "title": "Screen Clip Settings",
+      "kind": "surface",
+      "scope": "brand"
+    },
+    {
+      "id": "brand-kit/screen-clips/auto-hide-cursor",
+      "title": "Auto-Hide Cursor",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "auto-hide-cursor",
+      "options": [
+        "Auto Hide",
+        "Off"
+      ]
+    },
+    {
+      "id": "brand-kit/screen-clips/text-cursor",
+      "title": "Text Cursor",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "text-cursor",
+      "options": [
+        "Hide",
+        "Show"
+      ]
+    },
+    {
+      "id": "brand-kit/screen-clips/cursor-style",
+      "title": "Cursor Style",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "cursor-style",
+      "options": [
+        "Arrow-first"
+      ]
+    },
+    {
+      "id": "brand-kit/screen-clips/cursor-scale",
+      "title": "Cursor Scale",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "cursor-scale"
+    },
+    {
+      "id": "brand-kit/screen-clips/screen-window-padding",
+      "title": "Screen Window Padding",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "screen-window-padding"
+    },
+    {
+      "id": "brand-kit/screen-clips/shadow-opacity",
+      "title": "Shadow Opacity",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "shadow-opacity"
+    },
+    {
+      "id": "brand-kit/screen-clips/shadow-blur",
+      "title": "Shadow Blur",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "shadow-blur"
+    },
+    {
+      "id": "brand-kit/screen-clips/shadow-spread",
+      "title": "Shadow Spread",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "shadow-spread"
+    },
+    {
+      "id": "brand-kit/screen-clips/shadow-x-offset",
+      "title": "Shadow X Offset",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "shadow-x-offset"
+    },
+    {
+      "id": "brand-kit/screen-clips/shadow-y-offset",
+      "title": "Shadow Y Offset",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "shadow-y-offset"
+    },
+    {
+      "id": "brand-kit/screen-clips/cursor-clicks",
+      "title": "Cursor Clicks",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "cursor-clicks"
+    },
+    {
+      "id": "brand-kit/screen-clips/keyboard-presses",
+      "title": "Keyboard Presses",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "keyboard-presses"
+    },
+    {
+      "id": "brand-kit/screen-clips/entrance-exit-animation",
+      "title": "Entrance/Exit Animation",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "entrance-exit-animation",
+      "options": [
+        "Fade Up"
+      ]
+    },
+    {
+      "id": "brand-kit/screen-clips/motion-blur",
+      "title": "Motion Blur",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "motion-blur",
+      "options": [
+        "Off",
+        "Low",
+        "Medium",
+        "High"
+      ]
+    },
+    {
+      "id": "brand-kit/screen-clips/cursor-motion",
+      "title": "Cursor Motion",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "cursor-motion",
+      "options": [
+        "Glide",
+        "Fixed"
+      ]
+    },
+    {
+      "id": "brand-kit/overview",
+      "title": "Brand Overview",
+      "kind": "surface",
+      "scope": "brand"
+    },
+    {
+      "id": "brand-kit/overview/notes",
+      "title": "Overview notes",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "brand-overview-notes",
+      "notes": "Free-text brand identity/tone/key messaging; editing is persistent."
+    },
+    {
+      "id": "brand-kit/overview/options",
+      "title": "Brand options",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "brand-options"
+    },
+    {
+      "id": "brand-kit/overview/options-menu",
+      "title": "Brand options menu",
+      "kind": "surface",
+      "scope": "brand",
+      "notes": "Rename Brand, Duplicate Brand, New Brand, Archive Brand."
+    },
+    {
+      "id": "brand-kit/templates",
+      "title": "Templates",
+      "kind": "surface",
+      "scope": "brand"
+    },
+    {
+      "id": "brand-kit/templates/view",
+      "title": "Template view",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "template-list-view",
+      "options": [
+        "Grid",
+        "List"
+      ]
+    },
+    {
+      "id": "brand-kit/templates/sort",
+      "title": "Sort templates",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "template-sort",
+      "options": [
+        "Sort by newest",
+        "Sort A-Z"
+      ]
+    },
+    {
+      "id": "brand-kit/templates/new",
+      "title": "New Template",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "new-template",
+      "notes": "Creates persistent brand template."
+    },
+    {
+      "id": "brand-kit/templates/details",
+      "title": "Template details",
+      "kind": "surface",
+      "scope": "brand",
+      "notes": "Selected template right pane with editable name/description, Edit Template, options."
+    },
+    {
+      "id": "brand-kit/templates/edit",
+      "title": "Edit Template…",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "edit-template"
+    },
+    {
+      "id": "brand-kit/templates/options",
+      "title": "Template options",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "template-options"
+    },
+    {
+      "id": "brand-kit/templates/options-menu",
+      "title": "Template options menu",
+      "kind": "surface",
+      "scope": "brand",
+      "notes": "Duplicate Template, Move to Brand, Delete Template."
+    },
+    {
+      "id": "template-editor",
+      "title": "Template Editor",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "URL /template-editor/978; current item Untitled Template."
+    },
+    {
+      "id": "template-editor/title",
+      "title": "Template title",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "template-title"
+    },
+    {
+      "id": "template-editor/new",
+      "title": "New template in Default Brand",
+      "kind": "control",
+      "scope": "brand"
+    },
+    {
+      "id": "template-editor/options",
+      "title": "Template options",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "template-editor/options-menu",
+      "title": "Template options menu",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "template-editor/performance-mode",
+      "title": "Performance Mode",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "template-performance-mode",
+      "options": [
+        "Efficiency",
+        "Default",
+        "Ultra"
+      ]
+    },
+    {
+      "id": "template-editor/canvas-size",
+      "title": "Canvas Size",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "template-canvas-size",
+      "options": [
+        "Widescreen 16:9",
+        "Widescreen 16:10",
+        "Portrait 9:16",
+        "Square 1:1"
+      ]
+    },
+    {
+      "id": "template-editor/loop",
+      "title": "Loop",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "template-loop",
+      "options": [
+        "On",
+        "Off"
+      ]
+    },
+    {
+      "id": "template-editor/inspector",
+      "title": "Template Inspector",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "template-editor/duration",
+      "title": "Duration",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "template-duration"
+    },
+    {
+      "id": "template-editor/opacity",
+      "title": "Opacity",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "template-opacity"
+    },
+    {
+      "id": "template-editor/description",
+      "title": "Description",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "template-description"
+    },
+    {
+      "id": "template-editor/background",
+      "title": "Background",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "template-background"
+    },
+    {
+      "id": "template-editor/motion-blur",
+      "title": "Motion Blur",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "motion-blur"
+    },
+    {
+      "id": "template-editor/webcam-preview",
+      "title": "Webcam Preview",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "webcam-preview"
+    },
+    {
+      "id": "template-editor/project-bg-preview",
+      "title": "Project BG Preview",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "project-bg-preview"
+    },
+    {
+      "id": "settings",
+      "title": "Settings",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Modal; opened from lower-left Settings; URL hash #settings/subscription."
+    },
+    {
+      "id": "settings/auto-add-screen-zooms",
+      "title": "Auto-Add Screen Zooms",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "auto-add-screen-zooms",
+      "options": [
+        "On",
+        "Off"
+      ]
+    },
+    {
+      "id": "settings/theme",
+      "title": "Theme",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "theme",
+      "options": [
+        "Dark",
+        "Light",
+        "System"
+      ]
+    },
+    {
+      "id": "settings/agent-model",
+      "title": "Agent model",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "agent-model"
+    },
+    {
+      "id": "settings/agent-effort",
+      "title": "Agent effort",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "agent-effort"
+    },
+    {
+      "id": "settings/agent-fast-mode-default",
+      "title": "Agent Fast Mode default",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "agent-fast-mode-default"
+    },
+    {
+      "id": "settings/plan",
+      "title": "Your Plan",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "settings/workspace",
+      "title": "Workspace settings",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/workspace/name",
+      "title": "Workspace name",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "workspace-name"
+    },
+    {
+      "id": "settings/workspace/recording-sizes",
+      "title": "Recording sizes",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "recording-sizes"
+    },
+    {
+      "id": "settings/integrations",
+      "title": "Integrations",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/import",
+      "title": "Import",
+      "kind": "control",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/members",
+      "title": "Members",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/agent-model-picker",
+      "title": "Agent model picker",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "settings/agent-effort-picker",
+      "title": "Agent effort picker",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "settings/workspace/icon",
+      "title": "Workspace Icon",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "workspace-icon"
+    },
+    {
+      "id": "settings/workspace/add-size",
+      "title": "Add Size",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "recording-sizes"
+    },
+    {
+      "id": "settings/integrations/figma",
+      "title": "Figma",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "figma-integration"
+    },
+    {
+      "id": "settings/integrations/google-slides",
+      "title": "Google Slides",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "google-slides-integration"
+    },
+    {
+      "id": "settings/integrations/notion",
+      "title": "Notion MCP",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "notion-integration"
+    },
+    {
+      "id": "settings/integrations/team-youtube",
+      "title": "Team YouTube",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "team-youtube-integration"
+    },
+    {
+      "id": "settings/integrations/personal-youtube",
+      "title": "Personal YouTube",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "personal-youtube-integration"
+    },
+    {
+      "id": "settings/screen-studio-import",
+      "title": "Screen Studio Import",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "screen-studio-import"
+    },
+    {
+      "id": "settings/members/invite",
+      "title": "Invite Members",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "workspace-members"
+    },
+    {
+      "id": "settings/members/member-options",
+      "title": "Member options",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "workspace-members"
+    },
+    {
+      "id": "settings/members/member-options-menu",
+      "title": "Member options menu",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "library/search",
+      "title": "Search",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "library-search"
+    },
+    {
+      "id": "library/view",
+      "title": "Grid/List",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "library-view",
+      "options": [
+        "Grid",
+        "List"
+      ]
+    },
+    {
+      "id": "library/sort",
+      "title": "Sort",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "library-sort",
+      "options": [
+        "Newest first",
+        "Oldest first",
+        "A - Z",
+        "Z - A"
+      ]
+    },
+    {
+      "id": "library/new-draft",
+      "title": "New Draft",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "new-draft"
+    },
+    {
+      "id": "library/new-collection",
+      "title": "New Collection",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "new-collection"
+    },
+    {
+      "id": "library/draft-menu",
+      "title": "Draft item menu",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "library/draft-menu/move",
+      "title": "Move to David's…",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "draft-location"
+    },
+    {
+      "id": "library/draft-menu/rename",
+      "title": "Rename",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "draft-title"
+    },
+    {
+      "id": "library/draft-menu/copy",
+      "title": "Make a copy",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "duplicate-draft"
+    },
+    {
+      "id": "library/draft-menu/delete",
+      "title": "Delete",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "delete-draft"
+    },
+    {
+      "id": "library/sort-menu",
+      "title": "Library sort menu",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "your-drafts",
+      "title": "Your Drafts",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Filtered draft-only overview; /library/drafts."
+    },
+    {
+      "id": "your-drafts/search",
+      "title": "Search",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "draft-search"
+    },
+    {
+      "id": "your-drafts/view",
+      "title": "Grid/List",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "draft-view",
+      "options": [
+        "Grid",
+        "List"
+      ]
+    },
+    {
+      "id": "your-drafts/sort",
+      "title": "Sort",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "draft-sort",
+      "options": [
+        "Newest first",
+        "Oldest first",
+        "A - Z",
+        "Z - A"
+      ]
+    },
+    {
+      "id": "your-drafts/new",
+      "title": "New Draft",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "new-draft"
+    },
+    {
+      "id": "workspace-menu",
+      "title": "Workspace menu",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "workspace-menu/current",
+      "title": "David's Workspace",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "current-workspace"
+    },
+    {
+      "id": "workspace-menu/new",
+      "title": "New workspace",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "new-workspace"
+    },
+    {
+      "id": "workspace-menu/sign-out",
+      "title": "Sign out",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "sign-out"
+    },
+    {
+      "id": "draft-editor",
+      "title": "Draft editor",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/title",
+      "title": "Draft title",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "draft-title"
+    },
+    {
+      "id": "draft-editor/project-actions",
+      "title": "Project actions",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "project-actions"
+    },
+    {
+      "id": "draft-editor/composer-actions",
+      "title": "Composer actions",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "composer-actions"
+    },
+    {
+      "id": "draft-editor/music",
+      "title": "Add Music",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "project-music"
+    },
+    {
+      "id": "draft-editor/publish",
+      "title": "Publish",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "publish-project"
+    },
+    {
+      "id": "draft-editor/export",
+      "title": "Export",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "export-project"
+    },
+    {
+      "id": "draft-editor/insert",
+      "title": "Insert",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "insert-content"
+    },
+    {
+      "id": "draft-editor/add-scene",
+      "title": "Add scene",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "add-scene"
+    },
+    {
+      "id": "draft-editor/timeline-zoom",
+      "title": "Timeline Zoom",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "timeline-zoom"
+    },
+    {
+      "id": "draft-editor/screen-clip-settings",
+      "title": "Screen Recording Settings",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Open via Project actions → Screen Clip Settings…; close with Done."
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/auto-hide-cursor",
+      "title": "Auto-Hide Cursor",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "auto-hide-cursor",
+      "options": [
+        "Auto Hide",
+        "Off"
+      ]
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/text-cursor",
+      "title": "Text Cursor",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "text-cursor",
+      "options": [
+        "Hide",
+        "Show"
+      ]
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/cursor-style",
+      "title": "Cursor Style",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "cursor-style"
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/cursor-scale",
+      "title": "Cursor Scale",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "cursor-scale"
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/screen-window-padding",
+      "title": "Screen Window Padding",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "screen-window-padding"
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/shadow-opacity",
+      "title": "Shadow Opacity",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "shadow-opacity"
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/shadow-blur",
+      "title": "Shadow Blur",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "shadow-blur"
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/shadow-spread",
+      "title": "Shadow Spread",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "shadow-spread"
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/shadow-x-offset",
+      "title": "Shadow X Offset",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "shadow-x-offset"
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/shadow-y-offset",
+      "title": "Shadow Y Offset",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "shadow-y-offset"
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/cursor-clicks",
+      "title": "Cursor Clicks",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "cursor-clicks"
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/keyboard-presses",
+      "title": "Keyboard Presses",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "keyboard-presses"
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/entrance-exit-animation",
+      "title": "Entrance/Exit Animation",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "entrance-exit-animation"
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/motion-blur",
+      "title": "Motion Blur",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "motion-blur",
+      "options": [
+        "Off",
+        "Low",
+        "Medium",
+        "High"
+      ]
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/default-zoom-type",
+      "title": "Default Zoom Type",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "cursor-motion",
+      "options": [
+        "Glide",
+        "Fixed"
+      ]
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/default-zoom-level",
+      "title": "Default Zoom Level",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "default-zoom-level"
+    },
+    {
+      "id": "draft-editor/composer-menu",
+      "title": "Composer actions",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/composer-menu/add-reference",
+      "title": "Add Reference…",
+      "kind": "control",
+      "scope": "document",
+      "notes": "Likely native file picker/external attachment; not opened."
+    },
+    {
+      "id": "draft-editor/composer-menu/media-gen",
+      "title": "Switch to Media Gen",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/media-gen",
+      "title": "Media Gen composer",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/media-gen/type",
+      "title": "Media type",
+      "kind": "control",
+      "scope": "document",
+      "options": [
+        "Image",
+        "Video"
+      ]
+    },
+    {
+      "id": "draft-editor/media-gen/model",
+      "title": "Media generation model",
+      "kind": "control",
+      "scope": "document",
+      "notes": "Current compact label: Multi 21 cr."
+    },
+    {
+      "id": "draft-editor/media-gen/image-picker",
+      "title": "Generate Image picker",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/media-gen/image-model",
+      "title": "Image model",
+      "kind": "control",
+      "scope": "document",
+      "options": [
+        "Gemini",
+        "GPT Image 1.5",
+        "Seedream-4"
+      ]
+    },
+    {
+      "id": "draft-editor/media-gen/preferred-layout",
+      "title": "Preferred Layout",
+      "kind": "control",
+      "scope": "document",
+      "options": [
+        "Auto",
+        "Landscape",
+        "Portrait"
+      ]
+    },
+    {
+      "id": "draft-editor/media-gen/save-default",
+      "title": "Save as default",
+      "kind": "control",
+      "scope": "app",
+      "notes": "Persists Media Gen defaults; not invoked."
+    },
+    {
+      "id": "draft-editor/media-gen/video-picker",
+      "title": "Video generation picker",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/media-gen/video-model",
+      "title": "Video model / generation count",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "media-gen-video-model",
+      "options": [
+        "Kling-2.5",
+        "Sora-2 Pro",
+        "Veo-3.1"
+      ]
+    },
+    {
+      "id": "draft-editor/media-gen/video-duration",
+      "title": "Preferred Duration",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "media-gen-video-duration",
+      "options": [
+        "5 sec",
+        "10 sec"
+      ]
+    },
+    {
+      "id": "draft-editor/media-gen/video-layout",
+      "title": "Preferred Layout",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "media-gen-video-layout",
+      "options": [
+        "Auto",
+        "Landscape",
+        "Portrait"
+      ]
+    },
+    {
+      "id": "draft-editor/media-gen/video-save-default",
+      "title": "Save as default",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "media-gen-video-defaults",
+      "notes": "Persists current video generation choices as the default; not invoked."
+    },
+    {
+      "id": "draft-editor/music-picker",
+      "title": "Add Music",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/music-picker/track",
+      "title": "Background track",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "background-music",
+      "options": [
+        "No background track",
+        "Vintage Groove",
+        "[No Copyright Music] Chill LoFi Hip Hop Beat FREE…",
+        "ES_A Winter to Remember - Trevor Kowalski"
+      ]
+    },
+    {
+      "id": "draft-editor/music-picker/upload",
+      "title": "Upload music",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "background-music-upload",
+      "notes": "Bottom upload icon; likely invokes native file picker and was not used."
+    },
+    {
+      "id": "draft-editor/text-toolbar",
+      "title": "Selected text/caption formatting toolbar",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/text-toolbar/presets",
+      "title": "Presets",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "text-preset"
+    },
+    {
+      "id": "draft-editor/text-toolbar/font",
+      "title": "Font family",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "text-font"
+    },
+    {
+      "id": "draft-editor/text-toolbar/weight",
+      "title": "Font weight",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "text-weight"
+    },
+    {
+      "id": "draft-editor/text-toolbar/size",
+      "title": "Font size",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "text-size"
+    },
+    {
+      "id": "draft-editor/text-toolbar/color",
+      "title": "Text color",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "text-color"
+    },
+    {
+      "id": "draft-editor/text-toolbar/effects",
+      "title": "Effects",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "text-effects"
+    },
+    {
+      "id": "draft-editor/text-toolbar/visibility",
+      "title": "Caption visibility/status",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "caption-visibility",
+      "notes": "Current label “!? Hidden”."
+    },
+    {
+      "id": "draft-editor/insert-menu",
+      "title": "Insert",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/insert-menu/type",
+      "title": "Insert element type",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "insert-element",
+      "options": [
+        "Text",
+        "Image",
+        "Video",
+        "Icon",
+        "Rectangle",
+        "Ellipse",
+        "Polygon",
+        "Line",
+        "Arrow",
+        "Pen",
+        "Group"
+      ]
+    },
+    {
+      "id": "draft-editor/layers",
+      "title": "Layers panel",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/layers-toggle",
+      "title": "Layers",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "layers-panel-visibility"
+    },
+    {
+      "id": "draft-editor/agent-view",
+      "title": "Agent view",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Top-left Agent tab; shows agent identity/chat composer."
+    },
+    {
+      "id": "draft-editor/script-view",
+      "title": "Script view",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Top-left Script tab; shows scene script and durations."
+    },
+    {
+      "id": "draft-editor/version-history",
+      "title": "Version History",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Right-side list of timestamped versions/authors; selecting a version reverts document state."
+    },
+    {
+      "id": "draft-editor/version-history/close",
+      "title": "Close",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "version-history-panel"
+    },
+    {
+      "id": "draft-editor/script-view/scene-menu",
+      "title": "Scene menu",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Per-scene ellipsis menu."
+    },
+    {
+      "id": "draft-editor/script-view/scene-menu/copy-scene",
+      "title": "Copy Scene",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "scene-copy"
+    },
+    {
+      "id": "draft-editor/script-view/scene-menu/copy-transcript",
+      "title": "Copy Transcript",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "scene-transcript-copy"
+    },
+    {
+      "id": "draft-editor/script-view/scene-menu/delete",
+      "title": "Delete Scene",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "scene-delete",
+      "notes": "Destructive."
+    },
+    {
+      "id": "draft-editor/captions-toggle",
+      "title": "Turn on Captions",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "captions-enabled",
+      "notes": "Top toolbar icon; hover tooltip identifies it. Current state is off ('Turn on Captions')."
+    },
+    {
+      "id": "draft-editor/project-background-picker",
+      "title": "Project background paint picker",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Opened from top toolbar color swatch."
+    },
+    {
+      "id": "draft-editor/project-background-picker/type",
+      "title": "Paint type",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "project-background-paint-type",
+      "options": [
+        "Solid",
+        "Linear",
+        "Radial",
+        "Multi",
+        "Image",
+        "Shader"
+      ]
+    },
+    {
+      "id": "draft-editor/project-background-picker/hue",
+      "title": "Hue",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "project-background-hue"
+    },
+    {
+      "id": "draft-editor/project-background-picker/opacity",
+      "title": "Opacity",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "project-background-opacity"
+    },
+    {
+      "id": "draft-editor/project-background-picker/eyedropper",
+      "title": "Eyedropper",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "project-background-color"
+    },
+    {
+      "id": "draft-editor/project-background-picker/hex",
+      "title": "HEX color",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "project-background-color",
+      "notes": "Current value #6985FF."
+    },
+    {
+      "id": "draft-editor/media-picker",
+      "title": "Add Image or Video asset picker",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Grid of existing image/video assets; bottom-center upload control."
+    },
+    {
+      "id": "draft-editor/media-picker/asset",
+      "title": "Asset thumbnail",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "insert-media-asset",
+      "notes": "Selecting inserts the asset into the current draft."
+    },
+    {
+      "id": "draft-editor/media-picker/upload",
+      "title": "Upload media",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "upload-media",
+      "notes": "Likely opens native file picker; not invoked."
+    },
+    {
+      "id": "draft-editor/timeline-zoom-popover",
+      "title": "Timeline Zoom",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "View-only popover with horizontal slider and minus/plus endpoints."
+    },
+    {
+      "id": "draft-editor/timeline-zoom-slider",
+      "title": "Timeline Zoom slider",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "timeline-view-zoom",
+      "notes": "Changes timeline display scale, not document content."
+    },
+    {
+      "id": "draft-editor/record-camera-screen",
+      "title": "Record Camera / Screen",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "record-camera-screen",
+      "notes": "May invoke capture permissions/start recording; not opened."
+    },
+    {
+      "id": "draft-editor/record-talk-track",
+      "title": "Record Talk Track",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "record-talk-track",
+      "notes": "Shortcut T; may access microphone/start recording; not opened."
+    },
+    {
+      "id": "draft-editor/new-comment",
+      "title": "New Comment",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "new-comment",
+      "notes": "Shortcut C; opens playhead-anchored composer."
+    },
+    {
+      "id": "draft-editor/comment-composer",
+      "title": "New Comment composer",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Anchored at current playhead; @Agent prefilled; emoji and send controls."
+    },
+    {
+      "id": "draft-editor/comment-composer/send",
+      "title": "Send comment",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "send-comment",
+      "notes": "Externally visible; do not invoke during inspection."
+    },
+    {
+      "id": "draft-editor/project-actions/brand",
+      "title": "Brand",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "document-brand",
+      "options": [
+        "Default Brand"
+      ],
+      "notes": "Hover to open submenu; current brand is Default Brand. Edit Brands… navigates to brand management."
+    },
+    {
+      "id": "brand-kit/workflows",
+      "title": "Workflows",
+      "kind": "surface",
+      "scope": "brand"
+    },
+    {
+      "id": "brand-kit/workflows/new",
+      "title": "New Workflow",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "workflows",
+      "notes": "Creates persistent workflow; not invoked."
+    },
+    {
+      "id": "brand-kit/colors",
+      "title": "Colors",
+      "kind": "surface",
+      "scope": "brand"
+    },
+    {
+      "id": "brand-kit/colors/background-palette",
+      "title": "Background colors",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "brand-background-colors",
+      "notes": "Current #6985FF, #26272A, #EDEEF8, #000000; actions Make Default/Duplicate/Remove."
+    },
+    {
+      "id": "brand-kit/colors/text-palette",
+      "title": "Text Colors",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "brand-text-colors",
+      "notes": "Current #6985FF, #FFFFFF, #505155, #14181E; actions Make Default/Duplicate/Remove."
+    },
+    {
+      "id": "brand-kit/colors/notes",
+      "title": "Color notes",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "brand-color-notes"
+    },
+    {
+      "id": "brand-kit/type",
+      "title": "Type",
+      "kind": "surface",
+      "scope": "brand"
+    },
+    {
+      "id": "brand-kit/type/primary-font",
+      "title": "Primary Font",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "brand-primary-font",
+      "notes": "Current Inter; click field to open searchable font list."
+    },
+    {
+      "id": "brand-kit/type/secondary-font",
+      "title": "Secondary Font",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "brand-secondary-font",
+      "notes": "Current None; click field to open searchable font list."
+    },
+    {
+      "id": "brand-kit/type/new-text-style",
+      "title": "New Text Style",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "brand-text-styles",
+      "notes": "Creates persistent brand text style."
+    },
+    {
+      "id": "brand-kit/type/font-usage-notes",
+      "title": "Font usage notes",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "brand-font-usage-notes"
+    },
+    {
+      "id": "brand-kit/motion",
+      "title": "Motion Principles",
+      "kind": "surface",
+      "scope": "brand"
+    },
+    {
+      "id": "brand-kit/motion/notes",
+      "title": "Motion notes",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "brand-motion-notes"
+    },
+    {
+      "id": "brand-kit/layout",
+      "title": "Layout Principles",
+      "kind": "surface",
+      "scope": "brand"
+    },
+    {
+      "id": "brand-kit/layout/notes",
+      "title": "Layout notes",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "layout-notes",
+      "notes": "Editable guidance textbox; placeholder describes layout grid, spacing system, and alignment rules."
+    },
+    {
+      "id": "brand-kit/misc",
+      "title": "Misc Context",
+      "kind": "surface",
+      "scope": "brand"
+    },
+    {
+      "id": "brand-kit/misc/notes",
+      "title": "Misc notes",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "misc-brand-notes",
+      "notes": "Editable catch-all brand guidance textbox."
+    },
+    {
+      "id": "brand-kit/type/font-picker",
+      "title": "Font family picker",
+      "kind": "surface",
+      "scope": "brand",
+      "notes": "Opened by clicking Primary Font or Secondary Font; searchable list of many font families. Selecting applies immediately."
+    },
+    {
+      "id": "brand-kit/type/font-search",
+      "title": "Search fonts",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "brand-font-family",
+      "notes": "Filters the open Primary/Secondary Font family picker; choosing a result changes that respective brand font."
+    },
+    {
+      "id": "brand-kit/type/about-text-styles",
+      "title": "About text styles",
+      "kind": "control",
+      "scope": "brand",
+      "notes": "Info icon; no visible additional help surface appeared when clicked."
+    },
+    {
+      "id": "brand-kit/type/about-font-usage-notes",
+      "title": "About font usage notes",
+      "kind": "control",
+      "scope": "brand",
+      "notes": "Info icon; no visible additional help surface appeared when clicked."
+    }
+  ],
+  "edges": [
+    {
+      "from": "root",
+      "to": "library",
+      "action": "click \"Library\" in the far-left sidebar"
+    },
+    {
+      "from": "root",
+      "to": "brand-kit",
+      "action": "click \"Brand Kit\" in the far-left sidebar"
+    },
+    {
+      "from": "brand-kit",
+      "to": "brand-kit/screen-clips",
+      "action": "click \"Screen Clips\" in the Brand Kit tab list"
+    },
+    {
+      "from": "brand-kit",
+      "to": "brand-kit/overview",
+      "action": "click \"Brand Overview\""
+    },
+    {
+      "from": "brand-kit/overview",
+      "to": "brand-kit/overview/options-menu",
+      "action": "click \"Brand options\" (ellipsis)"
+    },
+    {
+      "from": "brand-kit",
+      "to": "brand-kit/templates",
+      "action": "click \"Templates\""
+    },
+    {
+      "from": "brand-kit/templates",
+      "to": "brand-kit/templates/details",
+      "action": "select a template card or row"
+    },
+    {
+      "from": "brand-kit/templates/details",
+      "to": "brand-kit/templates/options-menu",
+      "action": "click \"Template options\" (ellipsis)"
+    },
+    {
+      "from": "brand-kit/templates/details",
+      "to": "template-editor",
+      "action": "click \"Edit Template…\""
+    },
+    {
+      "from": "template-editor",
+      "to": "template-editor/options-menu",
+      "action": "click \"Template options\""
+    },
+    {
+      "from": "template-editor",
+      "to": "template-editor/inspector",
+      "action": "open template; inspector is on right"
+    },
+    {
+      "from": "root",
+      "to": "settings",
+      "action": "click \"Settings\" in lower-left navigation"
+    },
+    {
+      "from": "settings",
+      "to": "settings/workspace",
+      "action": "scroll down in Settings modal"
+    },
+    {
+      "from": "settings",
+      "to": "settings/integrations",
+      "action": "scroll down in Settings modal"
+    },
+    {
+      "from": "settings",
+      "to": "settings/agent-model-picker",
+      "action": "click current Agent model button (e.g. \"Opus 5\")"
+    },
+    {
+      "from": "settings",
+      "to": "settings/agent-effort-picker",
+      "action": "click current Agent effort button (e.g. \"High\")"
+    },
+    {
+      "from": "settings/members",
+      "to": "settings/members/member-options-menu",
+      "action": "click ellipsis on a member row"
+    },
+    {
+      "from": "root",
+      "to": "library",
+      "action": "click \"Library\" in the left sidebar"
+    },
+    {
+      "from": "library",
+      "to": "library/new-draft",
+      "action": "click \"New Draft\""
+    },
+    {
+      "from": "library",
+      "to": "library/new-collection",
+      "action": "click \"New Collection\""
+    },
+    {
+      "from": "library",
+      "to": "library/draft-menu",
+      "action": "click the ellipsis on a draft card"
+    },
+    {
+      "from": "library",
+      "to": "library/sort-menu",
+      "action": "click the unlabeled up/down sort icon beside List"
+    },
+    {
+      "from": "library",
+      "to": "your-drafts",
+      "action": "click \"Your Drafts\" in the left sidebar"
+    },
+    {
+      "from": "library",
+      "to": "workspace-menu",
+      "action": "click \"David's Workspace\" at top left"
+    },
+    {
+      "from": "library",
+      "to": "draft-editor",
+      "action": "click a draft card"
+    },
+    {
+      "from": "your-drafts",
+      "to": "draft-editor",
+      "action": "click a draft card"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/screen-clip-settings",
+      "action": "click Project actions, then Screen Clip Settings…"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/composer-menu",
+      "action": "click Composer actions"
+    },
+    {
+      "from": "draft-editor/composer-menu",
+      "to": "draft-editor/media-gen",
+      "action": "click Switch to Media Gen"
+    },
+    {
+      "from": "draft-editor/media-gen",
+      "to": "draft-editor/media-gen/image-picker",
+      "action": "in Image mode click Multi 21 cr"
+    },
+    {
+      "from": "draft-editor/media-gen",
+      "to": "draft-editor/media-gen/video-picker",
+      "action": "select Video, then click “Multi 630 cr”"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/music-picker",
+      "action": "click “Add Music” (music-note button)"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/text-toolbar",
+      "action": "select a text/caption overlay in the preview (top-bar unlabeled control selected the existing caption in this draft)"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/insert-menu",
+      "action": "click “Insert”"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/layers",
+      "action": "click the far-right rectangle/Layers icon in the top toolbar"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/agent-view",
+      "action": "click the top-left Agent tab"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/script-view",
+      "action": "click the top-left Script tab"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/version-history",
+      "action": "Project actions → Show Version History…"
+    },
+    {
+      "from": "draft-editor/version-history",
+      "to": "draft-editor",
+      "action": "click Close"
+    },
+    {
+      "from": "draft-editor/script-view",
+      "to": "draft-editor/script-view/scene-menu",
+      "action": "hover a scene row if needed, then click its ellipsis"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/project-background-picker",
+      "action": "click the top toolbar color swatch (“Open paint picker”)"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/media-picker",
+      "action": "click “Add Image or Video” over the canvas"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/timeline-zoom-popover",
+      "action": "click “Timeline Zoom”"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/comment-composer",
+      "action": "click “New Comment” (C)"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/project-actions/brand",
+      "action": "click Project actions, then hover Brand Default Brand"
+    },
+    {
+      "from": "brand-kit",
+      "to": "brand-kit/workflows",
+      "action": "click Workflows"
+    },
+    {
+      "from": "brand-kit",
+      "to": "brand-kit/colors",
+      "action": "click Colors"
+    },
+    {
+      "from": "brand-kit",
+      "to": "brand-kit/type",
+      "action": "click Type"
+    },
+    {
+      "from": "brand-kit",
+      "to": "brand-kit/motion",
+      "action": "click Motion"
+    },
+    {
+      "from": "brand-kit",
+      "to": "brand-kit/layout",
+      "action": "click “Layout”"
+    },
+    {
+      "from": "brand-kit",
+      "to": "brand-kit/misc",
+      "action": "click “Misc”"
+    },
+    {
+      "from": "brand-kit/type",
+      "to": "brand-kit/type/font-picker",
+      "action": "click the Primary Font or Secondary Font card/search field"
+    },
+    {
+      "from": "library",
+      "to": "brand-kit",
+      "action": "click \"Brand Kit\" in the left sidebar"
+    },
+    {
+      "from": "brand-kit",
+      "to": "library",
+      "action": "click \"Library\" in the left sidebar"
+    }
+  ],
+  "gated": [
+    {
+      "id": "publish",
+      "tierReached": 0,
+      "boundary": "not opened — off-machine",
+      "stoppedBecause": "externality:label",
+      "scratchUsed": false
+    },
+    {
+      "id": "export",
+      "tierReached": 0,
+      "boundary": "not opened — descent off",
+      "stoppedBecause": "descent:off",
+      "scratchUsed": false
+    },
+    {
+      "id": "export",
+      "tierReached": 0,
+      "boundary": "not opened — descent off",
+      "stoppedBecause": "descent:off",
+      "scratchUsed": false
+    },
+    {
+      "id": "export",
+      "tierReached": 0,
+      "boundary": "not opened — descent off",
+      "stoppedBecause": "descent:off",
+      "scratchUsed": false
+    }
+  ]
+}
