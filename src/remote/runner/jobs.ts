@@ -118,8 +118,10 @@ export interface JobRecord {
 	noGrounding?: boolean;
 	/** `USE_RECIPE=1`: the child loads the curated docs/recipes/<app>.md notes tier. */
 	useRecipe?: boolean;
-	/** `USE_PROCEDURES=1`: the child loads docs/procedures/<app>.<task-hash>.procedure.md. */
+	/** `USE_PROCEDURES=1`: the child loads docs/procedures/<app>.<backend>.<task-hash>[.ungrounded].procedure.md. */
 	useProcedures?: boolean;
+	/** `PROCEDURE_LINEAGE=ungrounded`: load the write-up by an agent that had NO map. */
+	procedureLineage?: "grounded" | "ungrounded";
 	/** Replay only: the recipe file, relative to the data root — the same key on both machines. */
 	recipe?: string;
 	/** Replay only: `--no-rescue` — a broken step fails the replay, the unattended fleet posture. */
@@ -154,6 +156,7 @@ export interface JobInit {
 	noGrounding?: boolean;
 	useRecipe?: boolean;
 	useProcedures?: boolean;
+	procedureLineage?: "grounded" | "ungrounded";
 	recipe?: string;
 	noRescue?: boolean;
 	url?: string;
@@ -270,6 +273,7 @@ export function createJob(init: JobInit, root = jobsDir()): JobRecord {
 		...(init.noGrounding ? { noGrounding: true } : {}),
 		...(init.useRecipe ? { useRecipe: true } : {}),
 		...(init.useProcedures ? { useProcedures: true } : {}),
+		...(init.procedureLineage ? { procedureLineage: init.procedureLineage } : {}),
 		...(init.recipe ? { recipe: init.recipe } : {}),
 		...(init.noRescue ? { noRescue: true } : {}),
 		...(init.url ? { url: init.url } : {}),

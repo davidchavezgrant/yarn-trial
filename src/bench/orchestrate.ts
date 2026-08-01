@@ -133,6 +133,7 @@ export function dispatchOptionsFor(arm: Arm, recipe?: string, model?: string): D
 		...(d.noGrounding ? { noGrounding: true } : {}),
 		...(d.useRecipe ? { useRecipe: true } : {}),
 		...(d.useProcedures ? { useProcedures: true } : {}),
+		...(d.procedureLineage ? { procedureLineage: d.procedureLineage } : {}),
 		// `record` is the DELIVERABLE flag: without it phase 5 is not "unfilmed", it is a
 		// bit-identical re-run of its phase-2 sibling under a different arm id — 16 runs of
 		// plausible, wrong-labelled data producing no footage. `filmed()` derives those arms by
@@ -419,11 +420,13 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 		const { proceduresDir } = await import("../paths.js");
 		const { procedureFileFor } = await import("../core/procedure.js");
 		const fs6 = await import("node:fs");
-		const ungrounded = phaseArms(6).filter((a) => !fs6.existsSync(procedureFileFor(proceduresDir(), appSlug(a.app), a.task ?? "", a.dispatch.backend)));
+		const wanted = (a: (typeof MATRIX)[number]): string =>
+			procedureFileFor(proceduresDir(), appSlug(a.app), a.task ?? "", a.dispatch.backend, a.dispatch.procedureLineage ?? "grounded");
+		const ungrounded = phaseArms(6).filter((a) => !fs6.existsSync(wanted(a)));
 		if (ungrounded.length) {
 			log(`REFUSED: phase 6 grounds on promoted procedures, and none exists for: ${ungrounded.map((a) => a.id).join(", ")}`);
 			log(`Workflow: runs land → \`./run bench judge\` → \`./run bench harvest\` → \`./run procedures promote <stamp>\` → phase 6.`);
-			log(`Expected at: ${ungrounded.map((a) => relToData(procedureFileFor(proceduresDir(), appSlug(a.app), a.task ?? "", a.dispatch.backend))).join(", ")}`);
+			log(`Expected at: ${ungrounded.map((a) => relToData(wanted(a))).join(", ")}`);
 
 			return EXIT_REFUSED;
 		}

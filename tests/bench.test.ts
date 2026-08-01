@@ -93,7 +93,12 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// Phase 5 (filmed): one take per phase-2 task config (14, including the minimum-context
 	// pair — derived from the phase-2 arms, so adding a config there adds a filmed take here)
 	// plus one filmed replay per backend.
-	assert.equal(phaseRunCount(5), 14 + 2);
+	// Phase 5 films EVERY task and replay arm in the matrix at n=1 (David, 2026-08-01: the
+	// deliverable is a corpus showing how each lever moves outcomes, not one good video), so it
+	// is derived rather than counted — a hardcoded number here would just be a second place to
+	// update whenever an arm is added anywhere upstream.
+	const filmable = MATRIX.filter((a) => a.phase !== 5 && (a.kind === "task" || a.kind === "replay"));
+	assert.equal(phaseRunCount(5), filmable.length);
 });
 
 test("MATRIX__UsesOnlyAxAndCdp__When__DomIsDeleted", () => {
@@ -144,9 +149,11 @@ test("MATRIX__ConfinesRecordingToTheFilmedPhase__When__ArmsAreDeclared", () => {
 	for (const arm of MATRIX.filter((a) => a.phase === 5)) assert.equal(arm.n, 1, `${arm.id} must be a single take`);
 	// And each one mirrors a real measured config rather than inventing flags, so a config
 	// cannot be measured under one set of flags and filmed under another.
-	const measured = new Set(MATRIX.filter((a) => a.phase === 2).map((a) => JSON.stringify({ ...a.dispatch, record: true })));
-	for (const arm of MATRIX.filter((a) => a.phase === 5 && a.kind === "task")) {
-		assert.ok(measured.has(JSON.stringify(arm.dispatch)), `${arm.id} does not mirror any phase-2 config`);
+	const measured = new Set(
+		MATRIX.filter((a) => a.phase !== 5 && (a.kind === "task" || a.kind === "replay")).map((a) => JSON.stringify({ ...a.dispatch, record: true })),
+	);
+	for (const arm of MATRIX.filter((a) => a.phase === 5)) {
+		assert.ok(measured.has(JSON.stringify(arm.dispatch)), `${arm.id} does not mirror any measured config`);
 	}
 	// Explores are not filmed: a 40-minute video of the agent operating every control it can
 	// find is not a demo, and nothing downstream consumes it.
@@ -1090,8 +1097,9 @@ test("MATRIX__FilmsEveryMeasuredConfig__When__PhaseFiveIsDerived", () => {
 	// habit. Phase 5 derives from the phase-2 arms, so the guarantee holds automatically —
 	// but only while nothing is added to phase 2 outside the derived set, which is exactly
 	// the mistake a future edit would make.
-	const measured = MATRIX.filter((a) => a.phase === 2 && a.kind === "task");
-	const filmed = MATRIX.filter((a) => a.phase === 5 && a.kind === "task");
+	// Every arm that PERFORMS something gets a filmed twin — phases 2, 3, 4 and 6, not just 2.
+	const measured = MATRIX.filter((a) => a.phase !== 5 && (a.kind === "task" || a.kind === "replay"));
+	const filmed = MATRIX.filter((a) => a.phase === 5);
 	const shape = (a: Arm) => JSON.stringify({ ...a.dispatch, record: undefined, env: a.env ?? null });
 
 	assert.equal(filmed.length, measured.length, "every measured config needs a filmed twin");

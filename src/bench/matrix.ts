@@ -48,6 +48,8 @@ export interface ArmDispatch {
 	useRecipe?: boolean;
 	/** `USE_PROCEDURES=1`: ground on a procedure harvested from a judged-PASS run of THIS task. */
 	useProcedures?: boolean;
+	/** Which procedure lineage to load: one distilled from a grounded run, or from an ungrounded one. */
+	procedureLineage?: "grounded" | "ungrounded";
 	noRescue?: boolean;
 	/**
 	 * Film this take. Phase 5 only — a measurement arm must never set it, because recording
@@ -144,13 +146,21 @@ export const WEB_EXPLORE_URL = "https://app.notion.com";
 export const WEB_TASK = "Create a new document with a table view and populate its first five columns";
 
 /**
- * Phase 4's second task. The plan doc calls it "the Auto Time sync example" but records no
- * task string anywhere in the repo — this is a goal-only stand-in against a real control
- * (Settings → Preferences → "Auto-Add Screen Zooms", app scope, per the stamped Yarn map).
- * TODO(David): confirm or replace before dispatching phase 4. Phase 4 is optional and
- * gated behind an explicit `bench phase 4 --go`, so the placeholder cannot fire on its own.
+ * Phase 4's second task (chosen by David, 2026-08-01): motion blur.
+ *
+ * The point of a second task is to ask whether phase 2's findings are cursor-task-specific, and
+ * the previous stand-in ("auto-add screen zooms") could only answer half of it. That control is
+ * SINGLE-SCOPE — it appears in no committed map's ambiguity list — so it could generalise the
+ * actions/tokens half and none of the correctness half, which is the half CLAUDE.md calls the
+ * more important result.
+ *
+ * `motion-blur` is dual-scope in all three committed maps (brand-wide default vs per-document
+ * override), so the wrong-scope failure class is reachable on it, and phase 4 can generalise
+ * both halves. `shadow-blur` and `entrance-exit-animation` were the other qualifying options.
+ *
+ * Goal-only, per the measurement rule: it names the outcome, never the route.
  */
-export const PHASE4_TASK = "show me how to turn on auto-add screen zooms";
+export const PHASE4_TASK = "show me how to change the motion blur";
 
 export const BACKENDS: readonly BenchBackend[] = ["ax", "cdp"];
 
@@ -496,6 +506,71 @@ const PHASE4: Arm[] = [
 ];
 
 /**
+ * Phase 6 — procedures: can an agent's own written-up success replace the exploration pass?
+ *
+ * The question Yarn actually has to answer to ship this. Jasper's budget is ~24h to onboard a
+ * new app, and the current answer to "how" is a 40-minute frontier sweep producing a topological
+ * map. A procedure is the other possibility: run the task once however you can, have the agent
+ * write down the route that worked, and ground every later run on that. If it holds, onboarding
+ * cost collapses from a sweep to a handful of successful runs.
+ *
+ * PREREQUISITE, and it is not optional: procedures are harvested from judged-PASS phase-2 runs
+ * by `./run bench harvest`, which needs `bench judge` to have run first. There is no arm here
+ * that produces them — harvesting is an operator step, deliberately, because promoting a
+ * procedure makes it an INPUT to future runs and that should never happen as a side effect of
+ * dispatching a phase.
+ *
+ * The comparison is three-way against arms that already exist at n=3 on the same task and
+ * backend: p2-<backend>-ungrounded (nothing), p2-<backend>-grounded (the appmap), and these
+ * (a previous run's write-up). USE_PROCEDURES REPLACES the appmap rather than adding to it —
+ * stacking them would measure neither.
+ */
+const PHASE6: Arm[] = [
+	/**
+	 * The honest replacement claim (added by David, 2026-08-01). Its procedure is harvested from
+	 * an UNGROUNDED run — an agent that worked the app out from nothing, succeeded, was judged
+	 * correct, and wrote down what worked. Every later run reads that instead of a map.
+	 *
+	 * This is the only arm in the matrix that can speak to "does the 40-minute exploration pass
+	 * need to exist", because it is the only procedure that does not presuppose one. If it holds,
+	 * per-app onboarding collapses from a sweep to a handful of successful runs, which is the
+	 * question Yarn's ~24h budget actually turns on.
+	 *
+	 * It may not be runnable: the wrong-scope class makes a judged-PASS ungrounded run rare, and
+	 * `harvestRefusal` will decline every one that failed. That refusal IS a finding — "an agent
+	 * with no map could not produce trustworthy knowledge" answers the question too — and the
+	 * phase-6 gate refuses dispatch rather than silently running it as an appmap arm.
+	 */
+	...BACKENDS.map((backend): Arm => ({
+		id: `p6-${backend}-procedure-from-ungrounded`,
+		phase: 6,
+		kind: "task",
+		app: BENCH_APP,
+		task: CANONICAL_TASK,
+		n: 3,
+		dispatch: { backend, useProcedures: true, procedureLineage: "ungrounded" as const },
+		sourceArm: `p2-${backend}-ungrounded`,
+		informs:
+			"THE replacement question: can a write-up by an agent that had no map stand in for the exploration pass? " +
+			"vs p2-<backend>-ungrounded (what its author knew) and p2-<backend>-grounded (the sweep it would replace).",
+	})),
+	...BACKENDS.map((backend): Arm => ({
+	id: `p6-${backend}-procedure`,
+	phase: 6,
+	kind: "task",
+	app: BENCH_APP,
+	task: CANONICAL_TASK,
+	n: 3,
+	dispatch: { backend, useProcedures: true },
+	sourceArm: `p2-${backend}-grounded`,
+	informs:
+		"does a frozen, judge-passed route beat live appmap grounding ON THE TASK IT WAS HARVESTED FROM? " +
+		"NOT a replacement claim — its procedure presupposes the sweep; the -from-ungrounded arm above is that claim. " +
+		"NOT a transfer claim: a procedure is per-task where a map is per-app, and no arm tests it on a second task.",
+	})),
+];
+
+/**
  * Phase 5 — filmed takes. Every measured configuration, once, with `--record`.
  *
  * This is FOOTAGE, and it is also the matrix's own validity check. `--record` is not a
@@ -520,8 +595,14 @@ const PHASE4: Arm[] = [
  * back; and filmed runs write per-run step frames, so `bench judge` can return real VISUAL
  * verdicts on them instead of frames-stale.
  *
- * Explores are deliberately NOT filmed — a 40-minute video of the agent operating every
- * control it can find is not a demo, and nothing downstream consumes it.
+ * FILM EVERY TASK AND REPLAY ARM (David, 2026-08-01). The deliverable is not one good video —
+ * it is a CORPUS showing how each lever moves outcomes and approaches, so a config that is
+ * measured but never seen is a gap. Resource cost is explicitly not a constraint here.
+ *
+ * Explores remain unfilmed, and that is not a resource decision. `--record` swaps in demo rules
+ * and a demo act tool with no `set_value`, which CHANGES WHAT THE PASS DOES — a filmed explore
+ * would produce a different map from the one every downstream arm is grounded on, corrupting the
+ * input rather than documenting it. Nothing downstream consumes explore footage either.
  *
  * Remaining manual step: the composited cursor. `npm run humanize -- <stamp>` per filmed run,
  * after `bench collect` pulls it. It reads the run's own trajectory (click points, target
@@ -537,58 +618,17 @@ const filmed = (arm: Arm): Arm => ({
 	informs: `filmed take — does this config survive demo conduct (mouse-first, no set_value)? ${arm.informs ?? ""}`.trim(),
 });
 
-const PHASE5: Arm[] = [
-	...PHASE2_CORE.map(filmed),
-	...PHASE2_SLICES.map(filmed),
-	// Replays are the best filming candidates in the whole matrix: zero model calls on the
-	// happy path means no thinking gaps to speed up in post. Source the recipes phase 3
-	// already compiled rather than compiling again.
-	...BACKENDS.map((backend): Arm => ({
-		id: `p5-replay-${backend}-filmed`,
-		phase: 5,
-		kind: "replay",
-		app: BENCH_APP,
-		n: 1,
-		dispatch: { backend, record: true },
-		sourceArm: `p3-compile-${backend}`,
-		informs: "filmed take of a deterministic replay — the cleanest possible demo footage, no model latency to hide",
-	})),
-];
-
 /**
- * Phase 6 — procedures: can an agent's own written-up success replace the exploration pass?
+ * Every arm that PERFORMS something, filmed. Derived from the arms themselves rather than
+ * re-declared, so a config can never be measured and filmed under different flags — and so a
+ * new arm anywhere upstream is filmed automatically instead of being remembered.
  *
- * The question Yarn actually has to answer to ship this. Jasper's budget is ~24h to onboard a
- * new app, and the current answer to "how" is a 40-minute frontier sweep producing a topological
- * map. A procedure is the other possibility: run the task once however you can, have the agent
- * write down the route that worked, and ground every later run on that. If it holds, onboarding
- * cost collapses from a sweep to a handful of successful runs.
- *
- * PREREQUISITE, and it is not optional: procedures are harvested from judged-PASS phase-2 runs
- * by `./run bench harvest`, which needs `bench judge` to have run first. There is no arm here
- * that produces them — harvesting is an operator step, deliberately, because promoting a
- * procedure makes it an INPUT to future runs and that should never happen as a side effect of
- * dispatching a phase.
- *
- * The comparison is three-way against arms that already exist at n=3 on the same task and
- * backend: p2-<backend>-ungrounded (nothing), p2-<backend>-grounded (the appmap), and these
- * (a previous run's write-up). USE_PROCEDURES REPLACES the appmap rather than adding to it —
- * stacking them would measure neither.
+ * Compiles are excluded because they are a local file transform with nothing to see; explores
+ * for the reason above.
  */
-const PHASE6: Arm[] = BACKENDS.map((backend): Arm => ({
-	id: `p6-${backend}-procedure`,
-	phase: 6,
-	kind: "task",
-	app: BENCH_APP,
-	task: CANONICAL_TASK,
-	n: 3,
-	dispatch: { backend, useProcedures: true },
-	sourceArm: `p2-${backend}-grounded`,
-	informs:
-		"does a frozen, judge-passed route beat live appmap grounding ON THE TASK IT WAS HARVESTED FROM? " +
-		"NOT a replacement claim: the procedure is distilled from an appmap-grounded run, so it presupposes the sweep. " +
-		"NOT a transfer claim: a procedure is per-task where a map is per-app, and no arm tests it on a second task.",
-}));
+const FILMABLE: Arm[] = [...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE3, ...PHASE4, ...PHASE6].filter((a) => a.kind === "task" || a.kind === "replay");
+
+const PHASE5: Arm[] = FILMABLE.map(filmed);
 
 export const MATRIX: readonly Arm[] = [...PHASE1, ...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE3, ...PHASE4, ...PHASE5, ...PHASE6];
 
@@ -685,6 +725,7 @@ export function flagsLine(arm: Arm): string {
 	if (d.noGrounding) parts.push("NO_GROUNDING=1");
 	if (d.useRecipe) parts.push("USE_RECIPE=1");
 	if (d.useProcedures) parts.push("USE_PROCEDURES=1");
+	if (d.procedureLineage === "ungrounded") parts.push("PROCEDURE_LINEAGE=ungrounded");
 	if (d.noRescue) parts.push("--no-rescue");
 	for (const [k, v] of Object.entries(arm.env ?? {})) parts.push(`${k}=${v}`);
 

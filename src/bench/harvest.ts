@@ -9,10 +9,17 @@
  *
  * Workflow: runs land → `bench judge` → `bench harvest` → `bench phase 6 --go`.
  *
- * SOURCE ARMS ARE RESTRICTED. Only the arms a phase-6 arm names as its `sourceArm` are
- * harvested, so a procedure is never grown from a run of a different tier. Harvesting an
- * ungrounded run's procedure and then grounding on it would fold the ungrounded arm's discovered
- * route into the "procedure" tier's numbers and quietly make the tier look better than it is.
+ * SOURCE ARMS ARE RESTRICTED to the arms phase 6 names as `sourceArm` — currently the grounded
+ * AND ungrounded phase-2 arms, which are two different experiments:
+ *
+ *   grounded source   → "does a frozen route beat the map it came from, on that task"
+ *   ungrounded source → "can a write-up by an agent that had no map REPLACE the map"
+ *
+ * They must not merge. `lineageOf` keys the promoted file on the source run's own recorded
+ * provenance, so a procedure cannot be filed under a tier its author did not have.
+ *
+ * Harvesting from anything ELSE — a curated-tier run, say — would fold that tier's knowledge into
+ * a procedure and make it look better than it is, which is why this is a whitelist.
  */
 import fs from "node:fs";
 import path from "node:path";

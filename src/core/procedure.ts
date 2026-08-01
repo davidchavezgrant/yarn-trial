@@ -72,8 +72,26 @@ export interface JudgeVerdict {
  * second promote overwrites the first, and one arm silently grounds on the other backend's
  * write-up. Nothing downstream would catch it: provenance reads "procedure" either way.
  */
-export const procedureFileFor = (dir: string, slug: string, task: string, backend?: string): string =>
-	path.join(dir, `${slug}${backend ? `.${backend}` : ""}.${taskHash(task)}.procedure.md`);
+export type ProcedureLineage = "grounded" | "ungrounded";
+
+/**
+ * `lineage` records WHAT THE HARVESTED RUN ITSELF KNEW, and it is a third key component because
+ * the two lineages are different experiments that would otherwise share a filename.
+ *
+ * A procedure distilled from an appmap-grounded run presupposes the 40-minute sweep — you cannot
+ * conclude the sweep is replaceable from an artifact that requires it to exist. A procedure
+ * distilled from an UNGROUNDED run is the honest replacement claim: an agent worked the app out
+ * from nothing, wrote down what worked, and every later run reads that instead of a map. Both are
+ * worth measuring and they are not interchangeable, so they cannot be one file.
+ *
+ * Derived from the source run's own `grounding.provenance` at promote time rather than declared
+ * by an operator — a label a human types is a label that can be wrong.
+ */
+export const procedureFileFor = (dir: string, slug: string, task: string, backend?: string, lineage: ProcedureLineage = "grounded"): string =>
+	path.join(dir, `${slug}${backend ? `.${backend}` : ""}.${taskHash(task)}${lineage === "ungrounded" ? ".ungrounded" : ""}.procedure.md`);
+
+/** What a run knew, from its own log. "none" provenance is the ungrounded lineage. */
+export const lineageOf = (run: HarvestSource): ProcedureLineage => (!run.grounding?.provenance || run.grounding.provenance === "none" ? "ungrounded" : "grounded");
 
 /**
  * Why this run may not become a procedure, or undefined if it may.
@@ -184,7 +202,7 @@ export const harvestPrompt = (run: HarvestSource): string =>
  * A procedure with no stamp is treated as curated, exactly as an unstamped appmap is.
  */
 export const procedureHeader = (run: HarvestSource, stamp: string, judge: JudgeVerdict): string =>
-	`<!-- provenance: procedure | app: ${run.app ?? "unknown"} | task: ${run.task ?? ""} | from: ${stamp} | judge: ${judge.trajectory ?? "?"} | backend: ${run.backend ?? "?"} -->\n\n`;
+	`<!-- provenance: procedure | app: ${run.app ?? "unknown"} | task: ${run.task ?? ""} | from: ${stamp} | judge: ${judge.trajectory ?? "?"} | backend: ${run.backend ?? "?"} | lineage: ${lineageOf(run)} -->\n\n`;
 
 /** Write a harvested procedure to a path, creating the directory. Returns the path. */
 export function writeProcedure(file: string, body: string): string {
@@ -195,4 +213,4 @@ export function writeProcedure(file: string, body: string): string {
 }
 
 /** Where this run's procedure would be promoted to, once harvested. */
-export const promotedPath = (run: HarvestSource, slug: string): string => procedureFileFor(proceduresDir(), slug, run.task ?? "", run.backend);
+export const promotedPath = (run: HarvestSource, slug: string): string => procedureFileFor(proceduresDir(), slug, run.task ?? "", run.backend, lineageOf(run));

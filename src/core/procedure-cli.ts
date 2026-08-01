@@ -27,6 +27,7 @@ import {
 	harvestRefusal,
 	type HarvestSource,
 	type JudgeVerdict,
+	lineageOf,
 	procedureFileFor,
 	procedureHeader,
 	ProcedureError,
@@ -151,11 +152,13 @@ function promote(stamp: string, run: HarvestSource): void {
 	const src = runFile(stamp, RUN_FILES.procedure);
 	// run.backend is what actually DROVE (the run log records the post-fallback backend), which
 	// is the right axis: a procedure written from an ax run names ax's surface labels.
-	const dest = procedureFileFor(proceduresDir(), slugOf(run as Record<string, unknown>, stamp), run.task ?? "", run.backend);
+	const dest = procedureFileFor(proceduresDir(), slugOf(run as Record<string, unknown>, stamp), run.task ?? "", run.backend, lineageOf(run));
 	fs.mkdirSync(path.dirname(dest), { recursive: true });
 	fs.copyFileSync(src, dest);
 	console.log(`promoted: ${dest}`);
-	console.log(`future runs ground on it with USE_PROCEDURES=1 (run log will record provenance "procedure")`);
+	console.log(
+		`future runs ground on it with USE_PROCEDURES=1${lineageOf(run) === "ungrounded" ? " PROCEDURE_LINEAGE=ungrounded" : ""} (run log will record provenance "procedure")`,
+	);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)

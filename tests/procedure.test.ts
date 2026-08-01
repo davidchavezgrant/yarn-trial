@@ -10,7 +10,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { harvestPrompt, harvestRefusal, procedureFileFor, procedureHeader, routeOf, type HarvestSource } from "../src/core/procedure.js";
+import { harvestPrompt, harvestRefusal, lineageOf, procedureFileFor, procedureHeader, routeOf, type HarvestSource } from "../src/core/procedure.js";
 import { harvestSourceArms } from "../src/bench/harvest.js";
 import { expectedProvenance } from "../src/bench/collect.js";
 import { armById, phaseArms } from "../src/bench/matrix.js";
@@ -136,15 +136,35 @@ test("expectedProvenance__ExpectsProcedure__When__TheArmAsksForOne", () => {
 	assert.equal(expectedProvenance(armById("p2-ax-curated")!), "curated");
 });
 
-test("harvestSourceArms__NamesOnlyGroundedArms__When__Phase6IsRead", () => {
-	// Harvesting an UNGROUNDED run's route and then grounding on it would fold that arm's
-	// discovery into the procedure tier's numbers and make the tier look better than it is.
+test("harvestSourceArms__CoversBothLineages__When__Phase6IsRead", () => {
+	// Two experiments, and both must be harvestable: from a GROUNDED run ("does a frozen route
+	// beat the map it came from") and from an UNGROUNDED one ("can a write-up replace the map").
+	// Only the second can speak to whether the exploration pass needs to exist at all.
+	//
+	// Note the trap this replaced: the old check asserted /grounded$/, which "p2-ax-ungrounded"
+	// also matches — so it would have passed while proving nothing.
 	const sources = harvestSourceArms();
-	assert.ok(sources.length > 0);
+	for (const id of sources) assert.ok(armById(id), `${id} is not a real arm`);
+	assert.ok(sources.some((id) => /-ungrounded$/.test(id)), "no ungrounded source — the replacement question is unanswerable");
+	assert.ok(sources.some((id) => /(?<!un)grounded$/.test(id)), "no grounded source");
+	// And no OTHER tier may be a source: a curated-tier run's route would carry that tier's
+	// knowledge into a procedure and make the procedure look better than it is.
 	for (const id of sources) {
-		assert.ok(armById(id), `${id} is not a real arm`);
-		assert.match(id, /grounded$/, `${id} is not a grounded arm — procedures must not be grown from another tier`);
+		const arm = armById(id)!;
+		assert.equal(arm.dispatch.useRecipe, undefined, `${id} is the curated tier`);
+		assert.equal(arm.dispatch.useProcedures, undefined, `${id} is itself procedure-grounded`);
 	}
+});
+
+test("procedureFileFor__SeparatesLineages__When__BothAreHarvestedForOneTask", () => {
+	// Same app, same backend, same task, different experiments — they cannot share a filename or
+	// the second promote silently overwrites the first and one arm reads the other's write-up.
+	const task = "show me how to change the cursor type";
+	assert.notEqual(procedureFileFor("/d", "yarn", task, "ax", "grounded"), procedureFileFor("/d", "yarn", task, "ax", "ungrounded"));
+	// Lineage is DERIVED from the source run's own provenance, never typed by an operator.
+	assert.equal(lineageOf({ ...PASSING, grounding: { provenance: "explore" } }), "grounded");
+	assert.equal(lineageOf({ ...PASSING, grounding: { provenance: "none" } }), "ungrounded");
+	assert.equal(lineageOf({ ...PASSING }), "ungrounded", "a run log with no grounding block had none");
 });
 
 test("Phase6Arms__ReplaceTheAppmapRatherThanStack__When__Declared", () => {
@@ -155,6 +175,10 @@ test("Phase6Arms__ReplaceTheAppmapRatherThanStack__When__Declared", () => {
 	assert.ok(arms.length > 0);
 	for (const a of arms) {
 		assert.equal(a.dispatch.useProcedures, true, a.id);
+		// Lineage must match the source arm's tier, or the arm reads a procedure whose author
+		// knew something different from what the arm's label claims.
+		const src = armById(a.sourceArm!)!;
+		assert.equal(a.dispatch.procedureLineage === "ungrounded", Boolean(src.dispatch.noGrounding), `${a.id} lineage disagrees with ${src.id}`);
 		assert.equal(a.dispatch.useRecipe, undefined, `${a.id} stacks the curated tier`);
 		assert.equal(a.dispatch.noGrounding, undefined, `${a.id} stacks the ungrounded flag`);
 		// Comparable to the arms it is measured against: same task, same n.

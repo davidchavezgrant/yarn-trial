@@ -94,6 +94,7 @@ export interface DispatchOptions {
 	/** `USE_RECIPE=1`: ground from the curated docs/recipes/<app>.md notes instead. */
 	/** `USE_PROCEDURES=1`: ground on a harvested procedure for this exact task. */
 	useProcedures?: boolean;
+	procedureLineage?: "grounded" | "ungrounded";
 	/** Injected in tests, like `sync`/`syncRecipes`. */
 	syncProcedures?: (opts: { inventory?: Inventory }) => Promise<string | undefined>;
 	useRecipe?: boolean;
@@ -241,6 +242,7 @@ export async function dispatch(opts: DispatchOptions): Promise<DispatchResult> {
 		noGrounding: Boolean(opts.noGrounding),
 		useRecipe: Boolean(opts.useRecipe),
 		useProcedures: Boolean(opts.useProcedures),
+		...(opts.procedureLineage ? { procedureLineage: opts.procedureLineage } : {}),
 		noRescue: Boolean(opts.noRescue),
 		...(opts.backend ? { backend: opts.backend } : {}),
 		// The path is data-root-relative — the one key both machines share. The runner owns

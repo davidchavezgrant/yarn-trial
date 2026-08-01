@@ -21,8 +21,9 @@ import { startOverlay } from "./overlay.js";
 import { compileRecipe, readRecipe, type Recipe, RecipeCompileError, recipeFileFor } from "./recipe.js";
 import { modelRescue, replayRecipe } from "./replay.js";
 import { runTeardown } from "./teardown.js";
-import { LIVE_DIR, RUN_FILES, archiveRun, recipesDir, runDir, runFile, runPath } from "../paths.js";
+import { LIVE_DIR, RUN_FILES, archiveRun, recipesDir, relToData, runDir, runFile, runPath } from "../paths.js";
 import { parseTarget } from "./target.js";
+import { type DriverSync, finishRecording, newRecording, startRecording } from "./agent/recording.js";
 
 /**
  * Recipe compilation and replay, as a CLI.
@@ -50,7 +51,7 @@ import { parseTarget } from "./target.js";
 function usage(): never {
 	console.error("usage:");
 	console.error("  npm run recipe -- compile <stamp>");
-	console.error("  npm run recipe -- replay <file|stamp> [--url <https://…>] [--no-rescue] [--no-cleanup]");
+	console.error("  npm run recipe -- replay <file|stamp> [--url <https://…>] [--record] [--no-rescue] [--no-cleanup]");
 	process.exit(1);
 }
 
@@ -116,6 +117,13 @@ async function main(): Promise<void> {
 	const url = urlIdx >= 0 ? argv[urlIdx + 1] : undefined;
 	const noRescue = argv.includes("--no-rescue");
 	const noCleanup = argv.includes("--no-cleanup");
+	/**
+	 * A replay is the best filming candidate in the matrix: zero model calls on the happy path
+	 * means no thinking gaps to hide in post. It could not be filmed at all before — this CLI
+	 * had no --record and the runner's replay argv never passed one — so the two filmed-replay
+	 * arms were declared and impossible.
+	 */
+	const record = argv.includes("--record");
 	const recipe = recipeFor(argv[1]);
 
 	// A cdp recipe against a website needs the URL back — the run log's `app` is only the
@@ -133,6 +141,13 @@ async function main(): Promise<void> {
 	// The tee stands down under the runner, which already redirects stdio into this file.
 	teeConsole(stamp);
 	const journalPath = runPath(stamp, RUN_FILES.journal);
+	const recordingDir = runPath(stamp, RUN_FILES.recording);
+	const framesDir = `${recordingDir}/frames`;
+	const videoPath = `${recordingDir}/window.mp4`;
+	const rec = newRecording();
+	// The frame poller and the replay's own acts share the driver, so they share a mutex — the
+	// same contract a live run's step loop honours.
+	const sync: DriverSync = { busy: false, lastActionAt: 0 };
 
 	console.log(`=== replay: ${recipe.task} (${recipe.app}, ${recipe.steps.length} steps, from ${recipe.compiledFrom}) ===`);
 	runEvent(stamp, "start", { mode: "replay", task: recipe.task, app: recipe.app, backend: wantCdp ? "cdp" : "ax", recipeSteps: recipe.steps.length });
@@ -161,6 +176,9 @@ async function main(): Promise<void> {
 		}
 		await overlay.countdown();
 		overlay.setDriving(true);
+		// After acquisition and BEFORE the home reset, matching a live run: the video opens on
+		// the app being put into a known state rather than on whatever the last job left.
+		if (record) await startRecording({ cdp, driver, win, app: recipe.app, overlay, recordingDir, framesDir, rec, sync });
 
 		// Same normalisation as a live run: a recipe records a route FROM HOME, so replaying
 		// from wherever the last run ended measures the app's drift, not the recipe's.
@@ -215,6 +233,7 @@ async function main(): Promise<void> {
 					success: result.ok,
 					...(result.finalCheck ? { finalCheck: result.finalCheck } : {}),
 					steps: result.records,
+					...(record ? { video: relToData(videoPath) } : {}),
 				},
 				null,
 				"\t",

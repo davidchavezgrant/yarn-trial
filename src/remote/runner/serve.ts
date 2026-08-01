@@ -150,7 +150,16 @@ export function childRunArgs(kind: JobKind, rec: { url?: string; backend?: strin
 	if (kind === "explore") return [...(rec.url ? [] : [app]), ...urlArgs, ...perception, ...backendArgs];
 	// The recipe path was validated relative at submit time; the child resolves paths against
 	// its cwd (the resources root), so hand it the data-root form.
-	if (kind === "replay") return ["replay", path.join(dataRoot(), rec.recipe ?? ""), ...(rec.noRescue ? ["--no-rescue"] : []), ...(rec.url ? ["--url", rec.url] : [])];
+	// --record included: a replay is filmable now (recipe-cli.ts), and the two filmed-replay
+	// arms were declared-but-impossible until this argument existed on both sides.
+	if (kind === "replay")
+		return [
+			"replay",
+			path.join(dataRoot(), rec.recipe ?? ""),
+			...(rec.record ? ["--record"] : []),
+			...(rec.noRescue ? ["--no-rescue"] : []),
+			...(rec.url ? ["--url", rec.url] : []),
+		];
 
 	return [task, ...(rec.url ? [] : [app]), ...urlArgs, ...(rec.record ? ["--record"] : []), ...perception, ...backendArgs];
 }
@@ -592,6 +601,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 						...(rec.noGrounding ? { NO_GROUNDING: "1" } : {}),
 						...(rec.useRecipe ? { USE_RECIPE: "1" } : {}),
 						...(rec.useProcedures ? { USE_PROCEDURES: "1" } : {}),
+						...(rec.procedureLineage ? { PROCEDURE_LINEAGE: rec.procedureLineage } : {}),
 						...(rec.appmapVariant ? { APPMAP_VARIANT: rec.appmapVariant } : {}),
 						...(rec.model ? { AGENT_MODEL: rec.model } : {}),
 						...(rec.steps ? { AGENT_STEPS: String(rec.steps) } : {}),
