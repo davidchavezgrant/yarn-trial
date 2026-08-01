@@ -1,0 +1,109 @@
+{
+  "app": "Yarn",
+  "capturedAt": "2026-07-31T23:58:11.402Z",
+  "provenance": "explore",
+  "proseSha256": "464f9c3dcda2",
+  "elapsed": "4m",
+  "coverage": {
+    "seen": 90,
+    "actuated": 4,
+    "dismissed": 86,
+    "surfaces": 10,
+    "chapters": 2,
+    "stopped": "frontier-empty",
+    "dismissals": [
+      "Recent applications, documents, Finder reveals, and Clear Menu are unrelated OS content; opening them would launch external apps/files or destructively clear history.",
+      "Standard macOS system commands are outside Yarn; several are destructive or session-changing (restart, shut down, log out, force quit).",
+      "These are standard macOS window-tiling actions, not Yarn surfaces; operating them would only alter window geometry.",
+      "Standard macOS window arrangement commands are not Yarn functionality and would only alter window layout.",
+      "Standard macOS text/input utilities have no applicable editable field on the setup screen; Dictation/Emoji/AutoFill are OS surfaces unrelated to Yarn.",
+      "Close/Close All could terminate the only setup window; New Window is disabled while the permission gate is active, so none can safely reveal an app surface.",
+      "Hide Others only changes other apps' visibility and Quit Yarn ends the session; neither reveals Yarn functionality.",
+      "This opens macOS Services configuration outside Yarn and does not expose Yarn-specific functionality.",
+      "The remaining unnamed top-level item is unlabeled window chrome; operating it risks closing the sole setup window and has no navigational value."
+    ],
+    "gatedRead": 0,
+    "gatedRefused": 0
+  },
+  "nodes": [
+    {
+      "id": "recording-setup",
+      "title": "Recording Setup",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Ordinary launch surface in an Untitled window; blocks access to recorder/editor until Accessibility and Screen Recording permissions are granted."
+    },
+    {
+      "id": "recording-setup/accessibility",
+      "title": "Accessibility Open Settings",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "macos-accessibility-permission",
+      "notes": "Upper Open Settings button; navigates externally to macOS Privacy & Security Accessibility Access and does not itself toggle permission."
+    },
+    {
+      "id": "recording-setup/screen-recording",
+      "title": "Screen Recording Open Settings",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "macos-screen-recording-permission",
+      "notes": "Lower Open Settings button; navigates externally to macOS Screen Recording permission settings and does not itself toggle permission."
+    },
+    {
+      "id": "about-yarn",
+      "title": "About Yarn",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Separate window titled Yarn; contents not exposed in target accessibility observation."
+    },
+    {
+      "id": "yarn-help",
+      "title": "Yarn Help",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "External or non-exposed help surface; Yarn becomes inactive/dim and no target-visible content appeared after waiting."
+    }
+  ],
+  "edges": [
+    {
+      "from": "root",
+      "to": "recording-setup",
+      "action": "Launch Yarn / open its ordinary window."
+    },
+    {
+      "from": "recording-setup",
+      "to": "recording-setup/accessibility",
+      "action": "Click the upper “Open Settings” button beside Accessibility."
+    },
+    {
+      "from": "recording-setup",
+      "to": "recording-setup/screen-recording",
+      "action": "Click the lower “Open Settings” button beside Screen Recording."
+    },
+    {
+      "from": "recording-setup",
+      "to": "about-yarn",
+      "action": "Choose Yarn > About Yarn."
+    },
+    {
+      "from": "recording-setup",
+      "to": "yarn-help",
+      "action": "Choose Help > Yarn Help."
+    },
+    {
+      "from": "root",
+      "to": "recording-setup",
+      "action": "Launch Yarn; the Untitled Recording Setup window appears."
+    },
+    {
+      "from": "recording-setup",
+      "to": "recording-setup/accessibility",
+      "action": "Click the upper “Open Settings” beside Accessibility."
+    },
+    {
+      "from": "recording-setup",
+      "to": "recording-setup/screen-recording",
+      "action": "Click the lower “Open Settings” beside Screen Recording."
+    }
+  ]
+}

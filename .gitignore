@@ -1,5 +1,13 @@
 node_modules/
 out/
+# ...except the benchmark RESULTS. out/ is ignored because it holds build output, recordings
+# and frames — regenerable bulk. out/bench is the opposite: manifests, per-arm archived
+# appmaps and the measured token/cost figures, none of which can be recreated without
+# re-running the passes that produced them (~$45 for phase 1 alone, hours of fleet time).
+# 472K as of 2026-08-01. Recordings and step frames stay ignored — those live under
+# out/recording and out/runs.
+!out/bench/
+!out/bench/**
 .env
 .playwright-mcp/
 .DS_Store
