@@ -407,13 +407,19 @@ function armOf(jobId) {
 // a column.
 const th = (label, tip) => `<th${tip ? ` data-tip="${esc(tip)}"` : ""}>${label}</th>`;
 const NAME_TIP = "hover for the arm id, flags and the decision this cell informs · click to expand the appmap and the run's path · click a run chip to view that run";
-const TASK_HEAD = "<tr>" + th("name", NAME_TIP) + th("target", "app or site the run drives") +
+const TASK_HEAD = "<tr>" + th("name", NAME_TIP) +
+	th("perceives", "what the agent SEES: AX tree or DOM elements, plus screenshots (vision) — or pixels only") +
+	th("acts", "what injects the input: AX (cua driver) or CDP") +
+	th("target", "app or site the run drives") +
 	th("task", "the goal-only prompt the run was given") + th("model", "what actually ran, off the run logs") +
 	th("ok", "succeeded / collected") +
 	th("steps", "mean actions per run") + th("time", "mean wall-clock per run") +
 	th("out-tok", "mean output tokens per run") + th("est $", "published-rate estimate across collected runs — not an invoice") +
 	th("map", "the appmap as a full node-link tree — edge thickness = traversal heat, blue = the run's path") + "</tr>";
-const EXPLORE_HEAD = "<tr>" + th("name", NAME_TIP) + th("target", "app or site the pass explored") +
+const EXPLORE_HEAD = "<tr>" + th("name", NAME_TIP) +
+	th("perceives", "what the pass SEES while exploring: AX tree or DOM elements, plus screenshots — or pixels only") +
+	th("acts", "what injects the input: AX (cua driver) or CDP") +
+	th("target", "app or site the pass explored") +
 	th("task") + th("model", "what actually ran, off the run logs") +
 	th("actions", "actions the pass took (elapsed on hover)") +
 	th("controls seen / act / dism", "of every control the pass observed (seen), how many it operated (actuated) vs swept off the frontier without operating (dismissed) — the pass ends when the frontier empties, and dismissing is a legitimate way to empty it") +

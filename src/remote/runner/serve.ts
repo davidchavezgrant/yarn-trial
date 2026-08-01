@@ -1258,6 +1258,14 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 
 	function status(): RunnerResponse {
 		const perms = opts.permissions?.();
+		// When this PROCESS started, so a caller can tell whether the runner predates the code
+		// currently on disk. It matters because syncOnly deliberately does not restart the
+		// runner (restarting orphans in-flight jobs), which means a runner-side fix sits on
+		// disk unexecuted until someone bounces it. CHILD-side fixes take effect on the next
+		// job because children are spawned fresh; runner-side ones do not, and the difference
+		// is invisible — on 2026-07-31 a --no-ax fix in this file was synced twice and the
+		// vision arm ran without it both times, reporting success each time.
+		const startedAt = new Date(Date.now() - Math.round(process.uptime() * 1000)).toISOString();
 		const stale = staleGrants(bootPermissions, perms);
 		// tccOk stays false while a grant is stale: the point of the flag is "can this host run
 		// a demo", and a process that cannot capture cannot, whatever the database says.
@@ -1276,13 +1284,14 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		}));
 		const queue = queued.length ? { queue: queued } : {};
 		const { holder } = inspect(runnerDir);
-		if (!holder) return { ok: true, state: "idle", ...tcc, ...queue };
+		if (!holder) return { ok: true, state: "idle", startedAt, ...tcc, ...queue };
 
 		const silence = logSilenceSec(holder.lease.jobId);
 
 		return {
 			ok: true,
 			state: "busy",
+			startedAt,
 			jobId: holder.lease.jobId,
 			operator: holder.lease.operator,
 			app: holder.lease.app,

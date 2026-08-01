@@ -287,6 +287,48 @@ export async function runChallenger(
  * failure: a Mac that cannot be reached will refuse its dispatch a moment later with a
  * clearer message than a provisioning stack trace.
  */
+/**
+ * Warn when a runner is older than the runner-side code just shipped to it.
+ *
+ * syncOnly ships source without restarting the runner, which is correct — restarting orphans
+ * whatever is in flight. The cost is that a fix in serve.ts or jobs.ts sits on disk
+ * unexecuted: children are spawned fresh and pick up child-side changes immediately, but the
+ * runner itself keeps running the modules it loaded at boot.
+ *
+ * That difference is invisible and expensive. On 2026-07-31 a fix making the explore argv
+ * carry --no-ax was synced twice; both times the vision arm ran without it and reported
+ * success, because the fix lived in serve.ts. Two wasted passes and an arm that measured the
+ * wrong thing while looking healthy.
+ *
+ * A warning rather than a refusal: the operator may be mid-phase and unwilling to bounce a
+ * busy Mac, and only they know whether the pending change matters to the arms about to run.
+ */
+async function warnStaleRunners(log: (s: string) => void): Promise<void> {
+	try {
+		const [{ fleetStatus }, fs, path] = [await import("../remote/control/fleet.js"), await import("node:fs"), await import("node:path")];
+		// Newest mtime across the files whose changes only a restart can apply.
+		const runnerSide = ["src/remote/runner/serve.ts", "src/remote/runner/jobs.ts"]
+			.map((f) => {
+				try {
+					return fs.statSync(path.join(process.cwd(), f)).mtimeMs;
+				} catch {
+					return 0;
+				}
+			})
+			.reduce((a, b) => Math.max(a, b), 0);
+		if (!runnerSide) return;
+
+		for (const row of await fleetStatus()) {
+			const started = row.startedAt ? Date.parse(row.startedAt) : NaN;
+			if (!Number.isFinite(started) || started >= runnerSide) continue;
+			log(`⚠ ${row.name}'s runner started before the runner-side code it now has on disk — serve.ts/jobs.ts changes are NOT live there.`);
+			log(`  Restart when that Mac is idle: ./run provision --restart --all   (a busy runner is skipped rather than orphaned)`);
+		}
+	} catch {
+		// Advisory only; never block a dispatch on the warning machinery.
+	}
+}
+
 async function syncFleet(opts: PhaseOptions, log: (s: string) => void): Promise<void> {
 	if (opts.dispatchFn) return;
 	try {
@@ -305,6 +347,7 @@ async function syncFleet(opts: PhaseOptions, log: (s: string) => void): Promise<
 		// `adopted` is the direction that matters here: a map this laptop replaced with a newer
 		// one FROM the fleet is a phase-1 result arriving, and it is worth naming rather than
 		// counting — that is the artifact phase 2 will ground on.
+		await warnStaleRunners(log);
 		if (maps.transfers.length) log(`appmaps converged: ${maps.transfers.length} transfer(s)${maps.adopted.length ? `; adopted from fleet: ${maps.adopted.join(", ")}` : ""}`);
 		const bad = rows.filter((r) => !r.ok);
 		log(`fleet code synced (no runner restart): ${rows.length - bad.length}/${rows.length} host(s)${bad.length ? ` — ${bad.map((r) => r.host).join(", ")} FAILED` : ""}`);

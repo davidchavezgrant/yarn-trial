@@ -121,6 +121,13 @@ export interface ArmView {
 	n: number;
 	flags: string;
 	app: string;
+	/**
+	 * The two axes an arm's cryptic name used to fold together ("vision-only explore (AX)"
+	 * = sees pixels only, acts via AX). Same semantics as matrix.ts's perceptionLine, with
+	 * the element channel named per backend (AX tree vs DOM).
+	 */
+	perception: string;
+	actuation: string;
 	/** Task arms: the goal-only prompt the run was given. */
 	task?: string;
 	/** Web arms: the URL the run pointed at (off the dispatch flags). */
@@ -151,6 +158,8 @@ export interface DashState {
 		visual: { pass: number; fail: number; unproven: number };
 		disagreements: Array<{ armId: string; jobId: string; success?: boolean; judgeTrajectory?: string; judgeScope?: string }>;
 	};
+	/** The narrator's latest plain-English read of the data. Model-written; verify before quoting. */
+	narrative?: { updatedAt: string; text: string; model: string };
 	events: DashEvent[];
 }
 
@@ -255,7 +264,68 @@ function passView(arm: Arm, model: string | undefined, entries: ManifestEntry[],
 	};
 }
 
+export interface Narrative {
+	updatedAt: string;
+	text: string;
+	model: string;
+}
+
+/**
+ * The digest the narrator model reads: the same per-arm rollups the report tabulates,
+ * minus per-run noise. Small on purpose — the narrator runs on every landing batch.
+ */
+export function narratorDigest(state: DashState): Record<string, unknown> {
+	return {
+		progress: state.progress,
+		estCostUsd: state.cost.totalUsd,
+		judge: state.judge,
+		arms: state.arms
+			.filter((a) => a.passes.length)
+			.map((a) => ({
+				id: a.id,
+				kind: a.kind,
+				phase: a.phase,
+				flags: a.flags,
+				...(a.task ? { task: a.task } : {}),
+				...(a.informs ? { informs: a.informs } : {}),
+				passes: a.passes.map(({ entries, ...p }) => ({ ...p, statuses: entries.map((e) => e.status) })),
+			})),
+	};
+}
+
+export function narratorPrompt(digest: Record<string, unknown>, previous?: string): string {
+	return [
+		"You are the running commentator on a live benchmark matrix for a self-driving UI agent",
+		"(backends: ax = macOS accessibility, cdp = Chrome DevTools Protocol; grounded = the agent",
+		"gets an app map from a prior explore pass; explore passes measure discovery). The data",
+		"below is per-arm rollups collected so far. Sample sizes are small — say so where it matters.",
+		"",
+		"Questions the matrix exists to answer (from the plan): which backend to build on;",
+		"what grounding buys (actions, tokens, wrong-scope mutations); whether cdp's leaner",
+		"observations are denser or blinder (compare explore discovery: controls seen/actuated,",
+		"surfaces, graph nodes, scope ambiguities); what vision costs/buys; whether recipe replay",
+		"is fleet-ready; judge disagreements with self-reports.",
+		"",
+		"Write 2-5 short paragraphs of plain-English findings the CURRENT data actually supports.",
+		"Lead with whatever is newest or most decision-relevant. Use concrete numbers and ratios.",
+		"Never speculate past the data; an empty cell is 'not in yet', not a finding. Plain prose,",
+		"no headers, no bullet lists, no markdown emphasis.",
+		...(previous ? ["", "Your previous note (readers have seen it — lead with what CHANGED):", previous] : []),
+		"",
+		"Data:",
+		JSON.stringify(digest, null, 1),
+	].join("\n");
+}
+
 export function buildState(manifest: Manifest, fleet: FleetView, events: DashEvent[], autoCollect: boolean, defaultModel?: string): DashState {
+	const perceptionOf = (arm: Arm): string => {
+		const els = arm.dispatch.backend === "cdp" ? "DOM" : "AX";
+		const { noAx, noVision, axdomOff } = arm.dispatch;
+		const base = noAx && noVision ? "nothing" : noAx ? "vision only" : noVision ? `${els} only` : `${els} + vision`;
+
+		return axdomOff ? `${base}, axdom off` : base;
+	};
+
 	const arms: ArmView[] = MATRIX.map((arm) => ({
 		id: arm.id,
 		phase: arm.phase,
@@ -263,6 +333,8 @@ export function buildState(manifest: Manifest, fleet: FleetView, events: DashEve
 		n: arm.n,
 		flags: flagsLine(arm),
 		app: arm.app,
+		perception: perceptionOf(arm),
+		actuation: (arm.dispatch.backend ?? "ax").toUpperCase(),
 		...(arm.task ? { task: arm.task } : {}),
 		...(arm.dispatch.url ? { url: arm.dispatch.url } : {}),
 		...(arm.informs ? { informs: arm.informs } : {}),
@@ -620,9 +692,54 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		if (events.length > 200) events.shift();
 	};
 
+	let narrative: Narrative | undefined;
+
 	const push = (): void => {
-		const data = `data: ${JSON.stringify(buildState(manifest, fleet, events, autoCollect, defaultModel))}\n\n`;
+		const state = buildState(manifest, fleet, events, autoCollect, defaultModel);
+		if (narrative) state.narrative = narrative;
+		const data = `data: ${JSON.stringify(state)}\n\n`;
 		for (const res of clients) res.write(data);
+	};
+
+	// The narrator: when a landing batch changes what is known, ask the default model for a
+	// plain-English read of the rollups. A commentator, not an authority — its note renders
+	// with a "verify before quoting" sub and appends to narrative.md beside the manifest.
+	// DASH_NARRATE=0 disables; a keyless environment just logs and moves on.
+	let narratedCount = -1;
+	let narrating = false;
+	const narrate = async (): Promise<void> => {
+		if (process.env.DASH_NARRATE === "0" || narrating) return;
+		const collectedCount = manifest.entries.filter((e) => e.collected).length;
+		if (collectedCount === 0 || collectedCount === narratedCount) return;
+		narrating = true;
+		try {
+			const { makeClient } = await import("../core/harness/model.js");
+			const { client, model } = makeClient();
+			const digest = narratorDigest(buildState(manifest, fleet, [], autoCollect, defaultModel));
+			const res = await client.messages.create({
+				model,
+				max_tokens: 1000,
+				messages: [{ role: "user", content: narratorPrompt(digest, narrative?.text) }],
+			});
+			const text = (res.content ?? [])
+				.filter((b: any) => b.type === "text")
+				.map((b: any) => b.text)
+				.join("\n")
+				.trim();
+			if (!text) throw new Error("model returned no text");
+			narratedCount = collectedCount;
+			narrative = { updatedAt: new Date().toISOString(), text, model };
+			fs.appendFileSync(
+				path.join(benchDir(date), "narrative.md"),
+				`\n## ${narrative.updatedAt} — ${collectedCount} collected (${model})\n\n${text}\n`,
+			);
+			addEvent(`narrator: note updated (${collectedCount} collected)`);
+			push();
+		} catch (e) {
+			addEvent(`narrator failed: ${(e as Error).message}`);
+		} finally {
+			narrating = false;
+		}
 	};
 
 	// The manifest is replaced atomically (temp + rename), so watch the DIRECTORY — a rename
@@ -929,6 +1046,10 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		setInterval(runCollect, COLLECT_SEC * 1000);
 		void runCollect();
 	}
+	// Piggybacks the collect cadence: a tick only calls the model when the collected count
+	// moved, so a quiet hour costs nothing.
+	setInterval(() => void narrate(), COLLECT_SEC * 1000);
+	void narrate();
 
 	return server;
 }

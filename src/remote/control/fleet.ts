@@ -48,6 +48,13 @@ export interface FleetRow {
 	queue?: FleetQueueEntry[];
 	/** Seconds since the running job's log last grew — the live-but-wedged signal. */
 	logSilenceSec?: number;
+	/**
+	 * When the runner PROCESS started. Compared against the mtime of runner-side sources to
+	 * tell whether a synced fix is actually live: syncOnly ships code without restarting the
+	 * runner, so serve.ts/jobs.ts changes sit unexecuted until someone bounces it, while
+	 * child-side changes apply on the next job. That asymmetry is invisible without this.
+	 */
+	startedAt?: string;
 	/** The runner's own verdict that the silence passed its stall threshold. Advisory. */
 	stalled?: boolean;
 	/**
@@ -134,6 +141,7 @@ async function hostStatus(host: HostEntry, run: SshRunner, timeoutMs: number): P
 		...(typeof parsed?.elapsedSec === "number" ? { elapsedSec: parsed.elapsedSec } : {}),
 		...(typeof parsed?.jobId === "string" ? { jobId: parsed.jobId } : {}),
 		...(typeof parsed?.logSilenceSec === "number" ? { logSilenceSec: parsed.logSilenceSec } : {}),
+		...(typeof parsed?.startedAt === "string" ? { startedAt: parsed.startedAt } : {}),
 		...(parsed?.stalled === true ? { stalled: true } : {}),
 		...(queue.length ? { queue } : {}),
 		...(typeof parsed?.tccOk === "boolean" ? { tccOk: parsed.tccOk } : {}),
