@@ -1216,7 +1216,11 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	// narrative.md, and narratedCount still starts at -1, so a keyed process replaces this
 	// with a fresh note on its first tick — the seed only covers the window (or the keyless
 	// environment) where it cannot.
-	let narrative: Narrative | undefined = readPersistedNarrative(date);
+	// Seed the persisted note ONLY when this pass actually has collected data. The read
+	// chain deliberately walks historical homes, so an empty fresh store would otherwise
+	// resurrect a previous pass's conclusions into a board showing zero collected runs —
+	// exactly what happened the night of the store move. Mid-drain restarts still seed.
+	let narrative: Narrative | undefined = manifest.entries.some((e) => e.collected) ? readPersistedNarrative(date) : undefined;
 
 	// The ONE state builder for anything a client can receive. `narrative` used to be attached
 	// only inside push(), so GET /api/state and the initial /events frame omitted it — a page
