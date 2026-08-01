@@ -1303,6 +1303,13 @@ const costCellFor = (e) => e.usd != null ? `<td class="num">${fmtMoney(e.usd)}</
 // The five explore-discovery cells for ONE pass (EntryView.exploreStamp); an in-flight
 // pass serves its heartbeat counters (actions/frontier/seen/nodes — surfaces and ambig are
 // stamped only at finish).
+// The actuated/dismissed/seen triple in the SAME hues the controls chart plots them
+// (renderExplore: Actuated=SERIES[0], Dismissed=SERIES[1], Seen=SERIES[2]) — the cell
+// doubles as the chart's legend. Spans set their own color, so inside a livecell the
+// numbers keep their series hue while the ~/slashes keep the running tint.
+const controlsTriple = (actuated, dismissed, seen) =>
+	`<span style="color:${SERIES[0]}">${fmtNum(actuated)}</span>/<span style="color:${SERIES[1]}">${fmtNum(dismissed)}</span>/<span style="color:${SERIES[2]}">${fmtNum(seen)}</span>`;
+
 function exploreCellsFor(a, e) {
 	const num = (value, tip) => `<td class="num"${tip ? ` data-tip="${esc(tip)}"` : ""}>${value}</td>`;
 	const st = e.exploreStamp;
@@ -1315,16 +1322,25 @@ function exploreCellsFor(a, e) {
 			: "";
 		return num(fmtNum(st.actions))
 			+ (st.controlsSeen != null
-				? num(`${st.controlsActuated}/${st.controlsDismissed}/${st.controlsSeen}${declared}`,
+				? num(`${controlsTriple(st.controlsActuated, st.controlsDismissed, st.controlsSeen)}${declared}`,
 					`actuated ${st.controlsActuated} · dismissed ${st.controlsDismissed} · seen ${st.controlsSeen}`)
 				: num("–"))
 			+ num(fmtNum(st.surfaces)) + num(fmtNum(st.graphNodes)) + num(fmtNum(st.scopeAmbiguities));
 	}
 	const lp = !e.collected && e.live;
+	// The heartbeat carries the full discovery counters (2026-08-01), so the live cell shows
+	// the same colored triple its collected successor will; a runner predating that emits
+	// seen only, and the cell degrades to it. Built inline because liveNumCell escapes its
+	// label — same class/tip, so the live signals (~, italic, tint) are identical.
+	const controlsLive = lp && lp.seen != null
+		? (lp.actuated != null && lp.dismissed != null
+			? `<td class="num livecell" data-tip="${esc(LIVE_CELL_TIP + `\nactuated ${fmtNum(lp.actuated)} · dismissed ${fmtNum(lp.dismissed)} · seen ${fmtNum(lp.seen)}`)}">~${controlsTriple(lp.actuated, lp.dismissed, lp.seen)}</td>`
+			: liveNumCell(`~${fmtNum(lp.seen)} seen`))
+		: num("–");
 	return (lp && lp.actions != null
 			? liveNumCell(`~${fmtNum(lp.actions)}`, lp.frontier != null ? `frontier: ${fmtNum(lp.frontier)} controls left un-operated (the pass ends when this empties)` : "")
 			: num("–"))
-		+ (lp && lp.seen != null ? liveNumCell(`~${fmtNum(lp.seen)} seen`) : num("–"))
+		+ controlsLive
 		+ num("–")
 		+ (lp && lp.nodes != null ? liveNumCell(`~${fmtNum(lp.nodes)}`) : num("–"))
 		+ num("–");
@@ -1462,7 +1478,7 @@ function liveStrip(a, e) {
 	const lp = e.live;
 	if (!lp || e.collected) return "";
 	const pairs = a.kind === "explore"
-		? [["Actions", lp.actions], ["Frontier", lp.frontier], ["Seen", lp.seen], ["Nodes", lp.nodes], ["Stopped", lp.finished]]
+		? [["Actions", lp.actions], ["Frontier", lp.frontier], ["Actuated", lp.actuated], ["Dismissed", lp.dismissed], ["Seen", lp.seen], ["Nodes", lp.nodes], ["Stopped", lp.finished]]
 		: [["Steps", lp.steps], ["Verified", lp.verified], ["Last", lp.lastStep]];
 	// Usage is common to both kinds (one event per model call, cumulative). Same ~ prefix as
 	// the live cells; the strip's LIVE tag + caveat already mark the whole row provisional.
