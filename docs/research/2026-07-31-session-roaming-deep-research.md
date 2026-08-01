@@ -320,7 +320,8 @@ avoids the bare-metal HDMI-dummy-plug problem. Orchard's controller/worker split
 one-to-one onto `src/remote/control/`.
 
 Rejected with reasons: Anka (paid, now dominated by free Tart), Orka (demands Kubernetes for
-3 Macs), UTM (`utmctl` doesn't work over SSH). **AWS EC2 Mac is disqualified specifically** —
+3 Macs — **but this rejection reverses on MacStadium, where Orka is managed; see §5.5**), UTM
+(`utmctl` doesn't work over SSH). **AWS EC2 Mac is disqualified specifically** —
 *"SIP configurations do not transfer to snapshots or AMIs,"* so a TCC-pre-granted AMI cannot
 be baked at all. Its instance scrub also takes up to 4.5 hours.
 
@@ -552,13 +553,20 @@ Linux-viable. Worth driving once to confirm.
    the plumbing, and it sidesteps OSCrypt entirely. Page-scoped `Network.getAllCookies` /
    `Network.setCookie`, not the browser-scoped API. If we do it, **lease *and* write back** —
    the machine that ran must return the mutated snapshot or the next starts stale — and egress
-   the fleet through one IP.
+   the fleet through one IP. **Scope note (§3b′):** this is for web/web-storage targets only.
+   Yarn itself has no auth cookies — its session is the `config.json` JWT — so for the Yarn app
+   the primitive is copy-the-file or the machine clone, not CDP.
 
-3. **Spike the VM route** (~half a day). Build a Sonoma guest under Tart, script SIP off, write
-   TCC grants, sign Yarn in, snapshot, clone, and run. Test the compositor question directly
-   (§5e) and whether RecordKit tolerates `tart clone`'s MAC regeneration. This is the option
-   with the best ratio of payoff to novelty, and it is the only one that makes *both* TCC and
-   sign-in per-image rather than per-machine.
+3. **Investigate the VM route on MacStadium's Orka first, Tart-on-bare-metal as fallback**
+   (§5.5). The fleet is already on MacStadium, whose Orka product is the managed version of the
+   golden-image clone route — so start by settling the OPEN items: does Orka image capture
+   preserve SIP-off + `TCC.db` (the make-or-break, and what killed EC2 Mac AMIs); are the current
+   three Macs Orka VMs or bare metal; will the Orka API drive a warm pool (afternoon test:
+   `capture → deploy → SSH → delete`). Only if Orka disappoints, spike it self-hosted: a **Sonoma
+   (not Tahoe)** guest under Tart — the app's `LSMinimumSystemVersion` is 12.0, and 14 sidesteps
+   both the compositor bug (§5e) and the screen-capture consent dialog. Either way this is the
+   only route that makes *both* TCC and sign-in per-image rather than per-machine, and cold start
+   behind the async queue is a utilization tax, not user latency (§5.6).
 
 4. **If sticking with bare metal, make per-box sign-in cheap rather than avoiding it.** TOTP
    codes are single-use *and regenerate every 30 s*, so three **sequential** scripted logins via
@@ -592,6 +600,11 @@ cannot run there).
 - Whether Yarn's backend flags N identical devices — **ask Jasper, don't reverse-engineer.**
 - Agent E could not verify Figma, Postman, WhatsApp, or ChatGPT Desktop session storage within
   budget; those are "not found," not "proven absent."
+- **MacStadium/Orka (§5.5), all open:** whether Orka image capture preserves SIP-off + `TCC.db`;
+  whether the current three Macs are Orka VMs or bare metal; whether the Orka API (as opposed to
+  the thin `api.macstadium.com` account API) can drive a warm pool; and whether Orka or Tart
+  exposes macOS-guest suspend/resume (§5.6). None were web-verifiable — the search budget was
+  exhausted by the seven agents — so §5.5/§5.6 are an investigation plan, not findings.
 
 ---
 
