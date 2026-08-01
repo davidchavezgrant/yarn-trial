@@ -39,7 +39,7 @@ export function loadGrounding(slug: string, backend?: string, task?: string): Gr
 	// A REPLACEMENT for the appmap, not an addition, matching USE_RECIPE. That is what makes the
 	// arm answer the question worth asking: can an agent's own written-up success stand in for
 	// the 40-minute exploration pass? Stacking both would measure neither.
-	const procedurePath = task ? procedureFileFor(proceduresDir(), slug, task) : undefined;
+	const procedurePath = task ? procedureFileFor(proceduresDir(), slug, task, backend) : undefined;
 	const useProcedure = process.env.USE_PROCEDURES && procedurePath ? fs.existsSync(procedurePath) : false;
 	// A tier that was ASKED for and is not on disk must be loud. The silent fallback to the
 	// appmap is how a fleet Mac that never received the file runs a differently-grounded arm

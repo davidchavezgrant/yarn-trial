@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url";
 import { auditTaskPrompt } from "../core/harness.js";
-import { liveDir, outDir, relToData } from "../paths.js";
+import { appSlug, liveDir, outDir, relToData } from "../paths.js";
 import { AUTO_HOST, type DispatchOptions, dispatchNotes, type DispatchResult } from "../remote/control/dispatch.js";
 import { CHALLENGER_N, challengerNeedsExplore, planChallenger } from "./challenger.js";
 import { collect } from "./collect.js";
@@ -132,6 +132,12 @@ export function dispatchOptionsFor(arm: Arm, recipe?: string, model?: string): D
 		...(d.axdomOff ? { axdomOff: true } : {}),
 		...(d.noGrounding ? { noGrounding: true } : {}),
 		...(d.useRecipe ? { useRecipe: true } : {}),
+		...(d.useProcedures ? { useProcedures: true } : {}),
+		// `record` is the DELIVERABLE flag: without it phase 5 is not "unfilmed", it is a
+		// bit-identical re-run of its phase-2 sibling under a different arm id — 16 runs of
+		// plausible, wrong-labelled data producing no footage. `filmed()` derives those arms by
+		// adding only `record: true` and `n: 1`, so dropping it erases the entire difference.
+		...(d.record ? { record: true } : {}),
 		...(d.noRescue ? { noRescue: true } : {}),
 		...(d.url ? { url: d.url } : {}),
 		...(recipe ? { recipe } : {}),
@@ -400,6 +406,27 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 		log(`Run \`./run bench phase 1${opts.model ? ` --model ${opts.model}` : ""} --go\`, wait, \`./run bench collect\` — or \`--force\` to use maps from an earlier pass.`);
 
 		return EXIT_REFUSED;
+	}
+
+	/**
+	 * Phase 6 needs a PROMOTED procedure per arm, which no phase produces — harvesting and
+	 * promoting are deliberate operator steps (see harvest.ts for why). Without this gate a
+	 * missing procedure only warns on the child's console and the run proceeds as an ordinary
+	 * appmap-grounded one: six runs of data labelled "procedure" that measured the appmap tier.
+	 * groundingChecked catches it, but only at collect, after the runs are paid for.
+	 */
+	if (phase === 6 && opts.go && !opts.force) {
+		const { proceduresDir } = await import("../paths.js");
+		const { procedureFileFor } = await import("../core/procedure.js");
+		const fs6 = await import("node:fs");
+		const ungrounded = phaseArms(6).filter((a) => !fs6.existsSync(procedureFileFor(proceduresDir(), appSlug(a.app), a.task ?? "", a.dispatch.backend)));
+		if (ungrounded.length) {
+			log(`REFUSED: phase 6 grounds on promoted procedures, and none exists for: ${ungrounded.map((a) => a.id).join(", ")}`);
+			log(`Workflow: runs land → \`./run bench judge\` → \`./run bench harvest\` → \`./run procedures promote <stamp>\` → phase 6.`);
+			log(`Expected at: ${ungrounded.map((a) => relToData(procedureFileFor(proceduresDir(), appSlug(a.app), a.task ?? "", a.dispatch.backend))).join(", ")}`);
+
+			return EXIT_REFUSED;
+		}
 	}
 
 	// Compiles are local and cheap, but they are still phase work — gated like everything else.

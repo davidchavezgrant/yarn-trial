@@ -26,18 +26,9 @@ import {
 	updateEntry,
 	writeManifest,
 } from "../src/bench/manifest.js";
-import { type Arm, armTitle, armAppmapSlug, armById, BACKENDS, MATRIX, phaseArms, phaseRunCount, perceptionLine } from "../src/bench/matrix.js";
+import { BACKENDS, MATRIX, armAppmapSlug, armById, armTitle, perceptionLine, phaseArms, phaseRunCount, type Arm } from "../src/bench/matrix.js";
 import type { DispatchOptions } from "../src/remote/control/dispatch.js";
-import { dateArg,
-	auditPhase,
-	dispatchOptionsFor,
-	EXIT_NEEDS_GO,
-	EXIT_OK,
-	EXIT_REFUSED,
-	findCompileSource,
-	plannedRuns,
-	runPhase,
-} from "../src/bench/orchestrate.js";
+import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, auditPhase, dateArg, dispatchOptionsFor, findCompileSource, plannedRuns, runPhase } from "../src/bench/orchestrate.js";
 import { renderReport, reportFileName, writeReport } from "../src/bench/report.js";
 import { host, withTemp, withTempAsync } from "./fixtures.js";
 import { liveDir } from "../src/paths.js";
@@ -1114,3 +1105,27 @@ test("MATRIX__FilmsEveryMeasuredConfig__When__PhaseFiveIsDerived", () => {
 	}
 });
 
+
+test("dispatchOptionsFor__ForwardsEveryDeclaredFlag__When__AnyArmDeclaresIt", () => {
+	// THE structural guard, and it is the third time this class of bug has shipped here.
+	//
+	// dispatchOptionsFor spells out every field by hand, so a flag added to ArmDispatch and set
+	// on an arm reaches the child only if someone also remembered this function. Twice it was
+	// not remembered: APPMAP_VARIANT=novision never crossed the wire (two grounding passes had
+	// no consumer, and `bench plan` printed a claim that was false), and today `record` and
+	// `useProcedures` were both missing — which would have made all 16 phase-5 runs unfilmed
+	// duplicates of their phase-2 siblings and all 6 phase-6 runs measure the appmap tier.
+	//
+	// Checking the MATRIX declares the flags — which the tests already did — catches none of
+	// this. Only walking every arm's actual dispatch object does.
+	const missed: string[] = [];
+	for (const arm of MATRIX) {
+		const opts = dispatchOptionsFor(arm) as unknown as Record<string, unknown>;
+		for (const [key, value] of Object.entries(arm.dispatch)) {
+			if (value === undefined || value === false) continue;
+			if (opts[key] === undefined) missed.push(`${arm.id}: dispatch.${key}=${JSON.stringify(value)} never reaches DispatchOptions`);
+			else if (opts[key] !== value) missed.push(`${arm.id}: dispatch.${key}=${JSON.stringify(value)} arrives as ${JSON.stringify(opts[key])}`);
+		}
+	}
+	assert.deepEqual(missed, [], `flags declared on an arm but not forwarded:\n  ${missed.join("\n  ")}`);
+});

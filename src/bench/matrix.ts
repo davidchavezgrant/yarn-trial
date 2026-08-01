@@ -339,7 +339,16 @@ const PHASE2_SLICES: Arm[] = [
 		env: { APPMAP_VARIANT: "novision" },
 	}),
 	task("p2-min-context-ungrounded", { backend: "ax", axdomOff: true, noVision: true, noGrounding: true }, "the floor of the matrix: least perception, no map — can it work it out on the fly"),
-	task("p2-ax-curated", { backend: "ax", useRecipe: true }, "explore pass vs 10 minutes of human notes"),
+		task(
+		"p2-ax-curated",
+		{ backend: "ax", useRecipe: true },
+		// TASK-CONTAMINATED, and the numbers must be reported as such. docs/recipes/yarn.md names
+		// the canonical task's control, its surface, its exact options AND the brand-vs-document
+		// split — so this arm receives the route and the wrong-scope defence. Its own header also
+		// says it was "assembled from an exploration pass on 2026-07-29", so it is not 10 minutes
+		// of human notes either. auditTaskPrompt gates the TASK string; nothing gates grounding text.
+		"explore pass vs a curated tier that CONTAINS THIS TASK'S ANSWER — an upper bound on grounding, not a human-notes comparison",
+	),
 	// Vision-only is ax-backend-only by construction: cdp observations ARE ref lists.
 	task("p2-vision-only-ungrounded", { backend: "ax", noAx: true, noGrounding: true }, "the floor: screenshots alone, cold"),
 	/**
@@ -575,7 +584,10 @@ const PHASE6: Arm[] = BACKENDS.map((backend): Arm => ({
 	n: 3,
 	dispatch: { backend, useProcedures: true },
 	sourceArm: `p2-${backend}-grounded`,
-	informs: "can a harvested procedure replace the appmap? actions/tokens vs grounded and ungrounded on the same task",
+	informs:
+		"does a frozen, judge-passed route beat live appmap grounding ON THE TASK IT WAS HARVESTED FROM? " +
+		"NOT a replacement claim: the procedure is distilled from an appmap-grounded run, so it presupposes the sweep. " +
+		"NOT a transfer claim: a procedure is per-task where a map is per-app, and no arm tests it on a second task.",
 }));
 
 export const MATRIX: readonly Arm[] = [...PHASE1, ...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE3, ...PHASE4, ...PHASE5, ...PHASE6];

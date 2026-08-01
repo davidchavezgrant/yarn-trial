@@ -170,6 +170,15 @@ export const RUN_FILES = {
 	 * before this file its restore outcome lived only in whichever terminal ran it.
 	 */
 	cleanup: "cleanup.json",
+	/**
+	 * The run's structured event log: one JSON line per lifecycle moment ({t, kind, detail}),
+	 * appended by `runEvent` (src/core/harness/run-events.ts) the instant it happens. log.txt
+	 * already holds every console line, but it is prose for humans; this is the same story at
+	 * coarse grain in a shape the dashboard's Events feed can tail and merge across runs
+	 * without parsing free text. Append-only, never rewritten — same philosophy as the
+	 * narrator log, so a reader racing an append sees at worst one torn tail line.
+	 */
+	events: "events.jsonl",
 	console: "log.txt",
 	steps: "steps",
 	recording: "recording",

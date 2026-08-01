@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { findScopeAmbiguities } from "../core/harness.js";
 import { readJournal } from "../core/journal.js";
-import { RUN_FILES, appSlug, dataRoot as dataRootDir, liveDir, outDir, runFile } from "../paths.js";
+import { RUN_FILES, appSlug, dataRoot as dataRootDir, liveDir, outDir, resourcesRoot, runFile } from "../paths.js";
 import { appmapSlug } from "../core/target.js";
 import type { JobRecord } from "../remote/runner/jobs.js";
 import { type Arm, armAppmapSlug, armById } from "./matrix.js";
@@ -353,7 +353,7 @@ async function humanizePulled(entry: ManifestEntry, job: Record<string, any> | u
 	try {
 		const { execFile } = await import("node:child_process");
 		const { promisify } = await import("node:util");
-		await promisify(execFile)("npx", ["tsx", "src/cursor/humanize.ts", entry.jobId], { cwd: process.cwd(), timeout: 10 * 60_000 });
+		await promisify(execFile)("npx", ["tsx", "src/cursor/humanize.ts", entry.jobId], { cwd: resourcesRoot(), timeout: 10 * 60_000 });
 		log(`  ↳ cursor composited for ${entry.jobId}`);
 	} catch (e) {
 		log(`  ↳ cursor render failed for ${entry.jobId}: ${(e as Error).message.slice(0, 120)}`);

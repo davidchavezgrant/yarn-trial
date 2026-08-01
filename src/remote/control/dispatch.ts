@@ -7,7 +7,7 @@ import { compileRecipe, readRecipe, recipeFileFor } from "../../core/recipe.js";
 import { LIVE_DIR, RUN_FILES, dataRoot, recipesDir, runFile, runRel } from "../../paths.js";
 import { EXIT_REFUSED as CTL_REFUSED, EXIT_UNREACHABLE as CTL_UNREACHABLE } from "../runner/ctl.js";
 import type { JobArtifacts, JobKind, JobRecord } from "../runner/jobs.js";
-import { autoSync, autoSyncRecipes, type SyncOptions } from "./appmaps.js";
+import { autoSync, autoSyncProcedures, autoSyncRecipes, type SyncOptions } from "./appmaps.js";
 import { type FleetRow, type FleetState, fleetStatus, pickIdleHost, pickShortestQueue } from "./fleet.js";
 import { defaultOperator, type HostEntry, type Inventory, loadHosts, resolveHost } from "./hosts.js";
 import { assertSafeRemotePath, DEFAULT_SSH_TIMEOUT_MS, firstLine, lastFrame, remoteDataRoot, runnerArgv, runnerHome, runSsh, runTransport, rsyncShell, SPAWN_FAILED_EXIT, type SshResult, type SshRunner, sshArgv, TIMEOUT_EXIT } from "./ssh.js";
@@ -94,6 +94,8 @@ export interface DispatchOptions {
 	/** `USE_RECIPE=1`: ground from the curated docs/recipes/<app>.md notes instead. */
 	/** `USE_PROCEDURES=1`: ground on a harvested procedure for this exact task. */
 	useProcedures?: boolean;
+	/** Injected in tests, like `sync`/`syncRecipes`. */
+	syncProcedures?: (opts: { inventory?: Inventory }) => Promise<string | undefined>;
 	useRecipe?: boolean;
 	/** Step budget override for the child run (AGENT_STEPS on the runner). */
 	steps?: number;
@@ -287,8 +289,13 @@ export async function dispatch(opts: DispatchOptions): Promise<DispatchResult> {
 	// runs first because the runner REFUSES a replay whose recipe file is absent — this is the
 	// step that makes the submit below admissible.
 	const recipeNote = kind === "replay" ? await (opts.syncRecipes ?? autoSyncRecipes)({ inventory: inv }) : undefined;
+	// A USE_PROCEDURES run needs its procedure on the target Mac for the same reason a replay
+	// needs its recipe. Unlike the replay the runner does NOT refuse when it is missing — the
+	// child just falls back to the appmap tier and reports the wrong label — so this sync is the
+	// only thing standing between phase 6 and six runs of mislabelled data.
+	const procedureNote = opts.useProcedures ? await (opts.syncProcedures ?? autoSyncProcedures)({ inventory: inv }) : undefined;
 	const appmapNote = await (opts.sync ?? autoSync)({ inventory: inv });
-	const syncNote = [recipeNote, appmapNote].filter(Boolean).join("\n") || undefined;
+	const syncNote = [recipeNote, procedureNote, appmapNote].filter(Boolean).join("\n") || undefined;
 
 	for (const { host, queue } of targets) {
 		const res = await run(host, runnerArgv("submit", queue ? { ...spec, queue: true } : spec), { timeoutMs: opts.timeoutMs ?? SUBMIT_TIMEOUT_MS });

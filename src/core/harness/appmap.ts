@@ -518,14 +518,20 @@ export const appmapAxdom = (): string => (process.env.AXDOM === "0" ? ".noaxdom"
  * absent: that would leak the element-grounded map's knowledge into a vision-grounded arm.
  * A missing graph merely switches the graph features off, same as ever.
  */
-export function loadAppMapGraph(slug: string, backend?: string): AppMap | undefined {
+export function loadAppMapGraph(slug: string, backend?: string, opts: { plainVariant?: boolean } = {}): AppMap | undefined {
 	// Backend-specific first, plain second — the same order and the same reason as
 	// loadGrounding: a map is not backend-portable (ax and cdp name the same surface `editor`
 	// and `draft-editor`), while curated and pre-split maps live under the plain slug.
 	//
 	// The variant still has NO fallback: a vision-grounded run taking the element-grounded
 	// graph would leak knowledge the model never read into its scope warnings.
-	const variant = `${appmapAxdom()}${appmapVariant()}`;
+	// `plainVariant` asks for the FULL-PERCEPTION map for this backend, ignoring the arm's own
+	// variant. Exactly one caller wants that: start-state normalisation (run.ts homeGraph). Home
+	// is a property of the app, and the reduced-perception passes declare none — so without this
+	// the vision-only and no-vision arms silently skipped the reset that every arm they are
+	// compared against performed. It must never be used to pick GROUNDING: that would hand a
+	// vision-grounded run the element-grounded map's knowledge.
+	const variant = opts.plainVariant ? appmapAxdom() : `${appmapAxdom()}${appmapVariant()}`;
 	const path = [...(backend ? [`${appmapsDir()}/${slug}.${backend}${variant}.json`] : []), `${appmapsDir()}/${slug}${variant}.json`].find((c) => fs.existsSync(c));
 	if (!path) return undefined;
 

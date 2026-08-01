@@ -7,6 +7,7 @@ import {
 	DRIVER_RULES,
 	makeClient,
 	onInterrupt,
+	runEvent,
 	teeConsole,
 	VISION_ONLY_RULES,
 } from "./harness.js";
@@ -127,6 +128,9 @@ async function main(): Promise<void> {
 				: `exploring ${app} pid=${ax!.win.pid} window=${ax!.win.windowId} backend=${backendKind}`,
 		);
 		console.log(`ends when the frontier empties; no time cap, action backstop ${MAX_ACTIONS}\n`);
+		// Same opening line the task agent writes, marked as an explore so the dash's merged
+		// feed can tell a grounding pass from a task run at a glance.
+		runEvent(p.stamp, "start", { mode: "explore", app, backend: backendKind });
 
 		await runExploreLoop({ p, client, model, overlay, interrupted, driver, cdp, win: ax?.win, doObserve });
 	} catch (err) {
@@ -149,6 +153,7 @@ async function main(): Promise<void> {
 		if (p.findings.length === 0 && p.graphNodes.size === 0) throw err;
 		console.error(`\nexploration threw after ${p.actions} actions: ${err instanceof Error ? err.message : String(err)}`);
 		console.log(`salvaging ${p.findings.length} findings and ${p.graphNodes.size} graph nodes — no driver needed for this`);
+		runEvent(p.stamp, "fatal", { error: (err instanceof Error ? err.message : String(err)).slice(0, 300), actions: p.actions, salvaging: true });
 		checkpoint(p);
 
 		// The throw may have left an assistant tool_use unanswered; the API rejects that.
@@ -246,9 +251,11 @@ async function main(): Promise<void> {
 					overlay.setDriving(false);
 					const dirty = Array.isArray(report.dirty) ? report.dirty.length : 0;
 					console.log(`cleanup: ${report.restored ?? 0} restored, ${report.failed ?? 0} failed, ${dirty} still dirty` + (p.claimed.length ? `; ${p.claimed.length} scratch resource(s) reported, not deleted` : ""));
+					runEvent(p.stamp, "cleanup", { restored: report.restored ?? 0, failed: report.failed ?? 0, dirty });
 				}
 			} catch (err) {
 				console.error(`descent cleanup failed (map already written): ${err instanceof Error ? err.message : String(err)}`);
+				runEvent(p.stamp, "cleanup", { error: (err instanceof Error ? err.message : String(err)).slice(0, 200) });
 			}
 		}
 		await driver?.close();

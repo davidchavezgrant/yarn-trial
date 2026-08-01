@@ -62,6 +62,8 @@ export interface RunLogShape {
 	success: boolean;
 	hintedPrompt?: boolean;
 	grounding?: { provenance?: string };
+	/** What actually DROVE — the map the rubric must be keyed on is backend-specific. */
+	backend?: string;
 	finalCheck?: { verified?: boolean; note?: string };
 	steps: StepRecord[];
 }
@@ -155,8 +157,22 @@ export function sampleFrames<T>(frames: T[], cap: number): T[] {
  * judge has no way to know that "Cursor Style" under a draft's dialog and under Brand Kit are
  * different stores — which is how four text-verified runs passed at the wrong scope.
  */
-export function buildRubric(slug: string): string {
-	const map = loadAppMapGraph(slug);
+export function buildRubric(slug: string, backend?: string): string {
+	/**
+	 * The rubric comes from the map the RUN was grounded on, not from the plain app slug.
+	 *
+	 * The plain slug is written by no explore pass any more — the writer emits the variant slug
+	 * (`yarn.ax`, `yarn.cdp.novision`, …) — so `docs/appmaps/yarn.json` is whatever legacy copy
+	 * happens to survive, and its settingKeys differ from the maps arms are actually grounded on
+	 * (`zoom-type` vs `default-zoom-type`, `window-padding` vs `screen-window-padding`). Grading
+	 * against a different vocabulary than the run used is grading against the wrong answer key.
+	 *
+	 * The `""` return below is the more dangerous half: with the legacy file deleted — which
+	 * every hygiene rule here says to do — every wrong-scope run gets a rubric-free prompt and
+	 * silently passes. That verdict then gates procedure harvesting, so a wrong-scope run could
+	 * become promoted grounding that teaches phase 6 the mistake.
+	 */
+	const map = loadAppMapGraph(slug, backend);
 	if (!map) return "";
 	const ambiguities = findScopeAmbiguities(map);
 	if (ambiguities.length === 0) return "";
@@ -346,7 +362,13 @@ export async function judgeRun(stamp: string, opts?: { noFrames?: boolean; model
 	const { key, log } = resolveRunLog(stamp);
 	const gathered = opts?.noFrames ? { frames: [], stale: false } : trustedFrames(log);
 	const frames = sampleFrames(gathered.frames, envNum("JUDGE_MAX_FRAMES", 12));
-	const rubric = buildRubric(appSlug(log.app));
+	// The run log records the backend that actually DROVE, which is the axis the map is keyed on.
+	const rubric = buildRubric(appSlug(log.app), typeof log.backend === "string" ? log.backend : undefined);
+	// A run whose scope-collision rubric is EMPTY is not "a run with no collisions" — on every
+	// committed Yarn map except the vision-only one there are 10-17. It means the answer key was
+	// not found, and the judge is about to grade the failure class it exists to catch with no
+	// key at all. Say so in the artifact rather than returning a confident PASS.
+	if (!rubric) console.error(`WARNING: no scope rubric for ${log.app} (backend ${log.backend ?? "?"}) — SCOPE findings in this verdict are unbacked.`);
 	const prompt = buildJudgePrompt(log, rubric, frames.length > 0);
 
 	const content: Array<Anthropic.TextBlockParam | Anthropic.ImageBlockParam> = [{ type: "text", text: prompt }];

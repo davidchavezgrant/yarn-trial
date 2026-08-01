@@ -13,7 +13,7 @@ import { ARCHIVE_DIR, LIVE_DIR, OLD_ARCHIVE_DIR, OLD_LIVE_DIR, RUN_FILES, appSlu
 import { appmapSlug } from "../core/target.js";
 import { archiveDirFor } from "./collect.js";
 import { estimateCost } from "./cost.js";
-import { type Arm, armAppmapSlug, armById, armTitle, flagsLine, MATRIX, perceptionLine, type Phase } from "./matrix.js";
+import { MATRIX, armAppmapSlug, armById, armTitle, flagsLine, perceptionLine, phaseArms, type Arm, type Phase } from "./matrix.js";
 import { benchDir, type Manifest, type ManifestEntry, readManifest, utcDate } from "./manifest.js";
 import { judgeDisagreements, modelPasses, passLabel, rollup } from "./report.js";
 
@@ -901,17 +901,19 @@ function heatFor(
  * own backend's map.
  */
 export function groundingArmId(arm: Arm): string {
-	if (arm.dispatch.url || arm.id.startsWith("p2-web")) return "p1-explore-web-cdp";
-	if (arm.env?.APPMAP_VARIANT === "vision") return "p1-explore-vision";
-	// The variant alone doesn't name the map — the backend does too: the cdp no-vision arm
-	// consumes the map the CDP no-vision pass wrote, not the ax one. Same for axdom-off,
-	// which reads the noaxdom pass's map. Wrong nesting here pollutes lineage groups AND
-	// the tree view's heat (runs would aggregate against a map they never read).
-	if (arm.env?.APPMAP_VARIANT === "novision") return arm.dispatch.backend === "cdp" ? "p1-explore-cdp-no-vision" : "p1-explore-no-vision";
-	if (arm.dispatch.axdomOff) return "p1-explore-ax-noaxdom";
-	if (arm.dispatch.backend === "cdp") return "p1-explore-cdp";
+	// ONE derivation, not a parallel decision tree. The hand-written version tested
+	// APPMAP_VARIANT before axdomOff and short-circuited, so p2-min-context-grounded — which
+	// reads yarn.ax.noaxdom.novision — was attributed to p1-explore-no-vision, which writes
+	// yarn.ax.novision. The run itself was fine; the dash counted its path against a graph it
+	// never read, which is exactly what the traversal-heat comment forbids. It also still named
+	// p1-explore-web-cdp, an arm deleted from the matrix.
+	//
+	// armAppmapSlug already answers "which map file does this arm touch" for BOTH kinds: for an
+	// explore arm the one it writes, for a task arm the one it reads. Matching on it cannot
+	// disagree with what the run actually loaded.
+	const want = armAppmapSlug(arm);
 
-	return "p1-explore-ax";
+	return phaseArms(1).find((e) => armAppmapSlug(e) === want)?.id ?? "";
 }
 
 const stepLabel = (a: Record<string, any>, s: Record<string, any>): { label: string; kind: string } => {

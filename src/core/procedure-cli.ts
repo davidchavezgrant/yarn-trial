@@ -149,7 +149,9 @@ async function main(): Promise<void> {
 
 function promote(stamp: string, run: HarvestSource): void {
 	const src = runFile(stamp, RUN_FILES.procedure);
-	const dest = procedureFileFor(proceduresDir(), slugOf(run as Record<string, unknown>, stamp), run.task ?? "");
+	// run.backend is what actually DROVE (the run log records the post-fallback backend), which
+	// is the right axis: a procedure written from an ax run names ax's surface labels.
+	const dest = procedureFileFor(proceduresDir(), slugOf(run as Record<string, unknown>, stamp), run.task ?? "", run.backend);
 	fs.mkdirSync(path.dirname(dest), { recursive: true });
 	fs.copyFileSync(src, dest);
 	console.log(`promoted: ${dest}`);

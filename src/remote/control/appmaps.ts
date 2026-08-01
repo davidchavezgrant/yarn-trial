@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { appmapsDir, outDir, recipesDir } from "../../paths.js";
+import { appmapsDir, outDir, proceduresDir, recipesDir } from "../../paths.js";
 
 import { readJsonOr } from "../../fsutil.js";
 import { readCapturedAt } from "../../core/apps.js";
@@ -45,6 +45,11 @@ export function stagingDir(): string {
  */
 export function recipeStagingDir(): string {
 	return `${outDir()}/recipe-sync`;
+}
+
+/** And procedures apart from both, for the same `--delete` reason. */
+export function procedureStagingDir(): string {
+	return `${outDir()}/procedure-sync`;
 }
 
 export interface MapVersion {
@@ -132,6 +137,38 @@ export function readRecipes(dir: string): Map<string, MapVersion> {
 		const slug = file.slice(0, -".json".length);
 		const parsed = readJsonOr<{ compiledAt?: unknown } | undefined>(path.join(dir, file), undefined);
 		const stamp = typeof parsed?.compiledAt === "string" && parsed.compiledAt ? parsed.compiledAt : undefined;
+		out.set(slug, { slug, hasGraph: false, ...(stamp ? { capturedAt: stamp } : {}), files: [file] });
+	}
+
+	return out;
+}
+
+/**
+ * Harvested procedures. Same shape as recipes — one file per (app, backend, task) — but the
+ * version stamp lives in a markdown provenance header rather than in JSON, so it is read out of
+ * the first line: `<!-- provenance: procedure | app: … | from: <run stamp> | … -->`.
+ *
+ * The run stamp IS the version: stamps are ISO-derived and sort chronologically, so "newest
+ * promoted procedure wins" falls out of the same `beats` comparison every other tree uses. An
+ * unstamped file (a hand-written one wearing the filename) never overwrites a stamped one, which
+ * is the same protection appmaps have and for the same reason.
+ */
+export function readProcedures(dir: string): Map<string, MapVersion> {
+	const out = new Map<string, MapVersion>();
+	let entries: string[];
+	try {
+		entries = fs.readdirSync(dir);
+	} catch {
+		return out; // No procedures yet is the normal state before phase 6, not an error.
+	}
+
+	for (const file of entries.sort()) {
+		if (!file.endsWith(".procedure.md")) continue;
+		const slug = file.slice(0, -".md".length);
+		let stamp: string | undefined;
+		try {
+			stamp = /<!--\s*provenance: procedure\b[^>]*\bfrom: ([^|>\s]+)/.exec(fs.readFileSync(path.join(dir, file), "utf8").slice(0, 500))?.[1];
+		} catch {}
 		out.set(slug, { slug, hasGraph: false, ...(stamp ? { capturedAt: stamp } : {}), files: [file] });
 	}
 
@@ -239,6 +276,7 @@ export interface SyncOptions {
 const SYNC_TIMEOUT_MS = 60_000;
 const REMOTE_REL = "docs/appmaps";
 const RECIPES_REMOTE_REL = "docs/recipes";
+const PROCEDURES_REMOTE_REL = "docs/procedures";
 
 /**
  * Bring the fleet to one view of every app's map.
@@ -268,6 +306,22 @@ export function syncRecipes(opts: SyncOptions = {}): Promise<SyncResult> {
 		stageDir: opts.stageDir ?? recipeStagingDir(),
 		remoteRel: RECIPES_REMOTE_REL,
 		read: readRecipes,
+	});
+}
+
+/**
+ * The same convergence for harvested procedures, which a USE_PROCEDURES run needs on its target
+ * Mac before it starts. Without this, phase 6 dispatches to a Mac with an empty
+ * docs/procedures/, `loadGrounding` silently falls back to the appmap tier, and the arm reports
+ * clean numbers under the wrong label — caught by groundingChecked, but only at collect time
+ * after six runs have been paid for.
+ */
+export function syncProcedures(opts: SyncOptions = {}): Promise<SyncResult> {
+	return syncTree(opts, {
+		localDir: opts.localDir ?? proceduresDir(),
+		stageDir: opts.stageDir ?? procedureStagingDir(),
+		remoteRel: PROCEDURES_REMOTE_REL,
+		read: readProcedures,
 	});
 }
 
@@ -404,6 +458,10 @@ export async function autoSync(opts: SyncOptions = {}): Promise<string | undefin
  */
 export async function autoSyncRecipes(opts: SyncOptions = {}): Promise<string | undefined> {
 	return autoNote("recipes", "recipe", syncRecipes, opts);
+}
+
+export async function autoSyncProcedures(opts: SyncOptions = {}): Promise<string | undefined> {
+	return autoNote("procedures", "procedure", syncProcedures, opts);
 }
 
 async function autoNote(

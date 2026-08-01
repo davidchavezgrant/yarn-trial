@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { appendNarrativeEvent, buildDetail, buildState, defaultDashDate, type FleetView, fromStore, groundingArmId, legacyNarrativeLogPath, loadEnvFallback, matchPath, narrativeLogPath, type NarrativeEvent, narratorPrompt, notedRunKeys, parseDashArgs, parseEnvLine, parseLogFrames, rankExplore, readPersistedNarrative, utf8Tail } from "../src/bench/dash.js";
 import type { Manifest, ManifestEntry } from "../src/bench/manifest.js";
-import { armById } from "../src/bench/matrix.js";
+import { MATRIX, armAppmapSlug, armById } from "../src/bench/matrix.js";
 
 /**
  * The dashboard's state assembly, pure by construction: manifest + fleet snapshot in,
@@ -851,4 +851,24 @@ test("ParseDashArgs__DefaultsToPureReader__When__NoCollectFlagGiven", () => {
 	assert.equal(parseDashArgs(["--date", "2026-08-01", "--collect"]).autoCollect, true);
 	// The old opt-out stays accepted as a harmless no-op — it already means "pure reader".
 	assert.equal(parseDashArgs(["--date", "2026-08-01", "--no-collect"]).autoCollect, false);
+});
+
+test("groundingArmId__AttributesTheMapTheArmActuallyReads__When__VariantsCombine", () => {
+	// The bug this replaced tested APPMAP_VARIANT before axdomOff and short-circuited, so
+	// p2-min-context-grounded — which reads yarn.ax.noaxdom.novision — was attributed to
+	// p1-explore-no-vision, which writes yarn.ax.novision. Runs counted against a graph they
+	// never read is precisely what the traversal-heat aggregation must not do.
+	const min = armById("p2-min-context-grounded")!;
+	const attributed = groundingArmId(min);
+	assert.equal(armAppmapSlug(armById(attributed)!), armAppmapSlug(min), `attributed to ${attributed}, whose map is a different file`);
+
+	// Every task/replay arm that grounds at all must resolve to a REAL phase-1 arm — the old
+	// version still named p1-explore-web-cdp, deleted from the matrix.
+	for (const arm of MATRIX) {
+		if (arm.kind === "explore" || arm.kind === "compile") continue;
+		if (arm.dispatch.noGrounding || arm.dispatch.useRecipe || arm.dispatch.useProcedures) continue;
+		const id = groundingArmId(arm);
+		assert.ok(armById(id), `${arm.id} attributed to "${id}", which is not an arm`);
+		assert.equal(armAppmapSlug(armById(id)!), armAppmapSlug(arm), `${arm.id} attributed to ${id}, a different map`);
+	}
 });

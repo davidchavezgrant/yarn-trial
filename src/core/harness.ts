@@ -25,6 +25,7 @@ export { appSlug };
 
 export * from "./harness/run.js";
 export * from "./harness/console-tee.js";
+export * from "./harness/run-events.js";
 export * from "./harness/observation.js";
 export * from "./harness/frontier.js";
 export * from "./harness/declared-frontier.js";

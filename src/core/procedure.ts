@@ -60,12 +60,20 @@ export interface JudgeVerdict {
 }
 
 /**
- * Where a promoted procedure lives: keyed by (app, task), the same identity a compiled recipe
- * uses and for the same reason — a procedure for "change the cursor type" must not be found by a
- * run doing "create a two-scene script". `taskHash` is shared with recipe.ts rather than
- * reimplemented, so the two artifacts derived from one run always agree on which task it was.
+ * Where a promoted procedure lives: keyed by (app, BACKEND, task).
+ *
+ * Task, because a procedure for "change the cursor type" must not be found by a run doing
+ * "create a two-scene script" — `taskHash` is shared with recipe.ts rather than reimplemented,
+ * so the two artifacts derived from one run always agree on which task it was.
+ *
+ * Backend, for the reason appmaps already carry it (matrix.ts): a map is not backend-portable —
+ * the ax and cdp passes name the same surfaces and controls differently, and a procedure names
+ * both. Without this axis `p6-ax-procedure` and `p6-cdp-procedure` resolve to ONE file, the
+ * second promote overwrites the first, and one arm silently grounds on the other backend's
+ * write-up. Nothing downstream would catch it: provenance reads "procedure" either way.
  */
-export const procedureFileFor = (dir: string, slug: string, task: string): string => path.join(dir, `${slug}.${taskHash(task)}.procedure.md`);
+export const procedureFileFor = (dir: string, slug: string, task: string, backend?: string): string =>
+	path.join(dir, `${slug}${backend ? `.${backend}` : ""}.${taskHash(task)}.procedure.md`);
 
 /**
  * Why this run may not become a procedure, or undefined if it may.
@@ -187,4 +195,4 @@ export function writeProcedure(file: string, body: string): string {
 }
 
 /** Where this run's procedure would be promoted to, once harvested. */
-export const promotedPath = (run: HarvestSource, slug: string): string => procedureFileFor(proceduresDir(), slug, run.task ?? "");
+export const promotedPath = (run: HarvestSource, slug: string): string => procedureFileFor(proceduresDir(), slug, run.task ?? "", run.backend);

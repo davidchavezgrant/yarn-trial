@@ -12,6 +12,7 @@ import {
 	onInterrupt,
 	OUT,
 	resetToHome,
+	runEvent,
 	runKey,
 	teeConsole,
 } from "./harness.js";
@@ -134,6 +135,7 @@ async function main(): Promise<void> {
 	const journalPath = runPath(stamp, RUN_FILES.journal);
 
 	console.log(`=== replay: ${recipe.task} (${recipe.app}, ${recipe.steps.length} steps, from ${recipe.compiledFrom}) ===`);
+	runEvent(stamp, "start", { mode: "replay", task: recipe.task, app: recipe.app, backend: wantCdp ? "cdp" : "ax", recipeSteps: recipe.steps.length });
 	// wantCdp is the replay's actual delivery, whatever the recipe says: a cdp replay keeps
 	// its hands off the operator's input, so it shows no banner (backendSeizesInput).
 	const overlay = startOverlay("drive", `Agent replaying on ${recipe.app} — do not touch`, wantCdp ? "cdp" : "ax");
@@ -178,6 +180,8 @@ async function main(): Promise<void> {
 			...(noRescue ? {} : { client, model, rescue: modelRescue }),
 			graph,
 			journalPath,
+			// The engine has no stamp — this is where its structured events gain one.
+			event: (kind, detail) => runEvent(stamp, kind, detail),
 		});
 
 		const rescued = result.steps.filter((s) => s.outcome === "rescued").length;
@@ -186,6 +190,10 @@ async function main(): Promise<void> {
 				`${result.steps.filter((s) => s.outcome !== "failed").length}/${recipe.steps.length} steps` +
 				`${rescued ? ` (${rescued} rescued)` : ""}, ${result.modelCalls} model call(s)`,
 		);
+		runEvent(stamp, "verdict", {
+			success: result.ok,
+			summary: `${result.steps.filter((s) => s.outcome !== "failed").length}/${recipe.steps.length} steps${rescued ? `, ${rescued} rescued` : ""}, ${result.modelCalls} model call(s)`,
+		});
 
 		// The replay writes a run log of the same shape as a live run — one writer, in this
 		// function, fields derived in one place (the a86cafc lesson).

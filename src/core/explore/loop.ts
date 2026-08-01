@@ -29,6 +29,7 @@ import {
 	type ObservationBundle,
 	recoverLeakedGraph,
 	reversibleTarget,
+	runEvent,
 	settleMsFor,
 	TargetNotObservableError,
 	toActionRequest,
@@ -177,6 +178,7 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 		const nodeList = [...p.graphNodes.values()].slice(0, 300).map((n) => `${n.id} (${n.kind})`).join(", ");
 		const noteList = p.findings.slice(-120).map((f) => `- ${f}`).join("\n");
 		console.log(`  --- chapter ${p.chapters}: context reset (${p.findings.length} findings, ${p.graphNodes.size} nodes carried forward) ---`);
+		runEvent(p.stamp, "chapter", { chapter: p.chapters, findings: p.findings.length, nodes: p.graphNodes.size });
 		p.messages.length = 0;
 		p.messages.push({
 			role: "user",
@@ -205,6 +207,7 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 		// because forty minutes of exploration are worth more written down than discarded.
 		if (interrupted()) {
 			console.log(`\nstopped after ${p.actions} actions — asking for the map now`);
+			runEvent(p.stamp, "finish", { stopped: "interrupted", actions: p.actions });
 			await requestFinish(p, client, model, "The run was stopped. Call finish NOW with the map you have.", "interrupted", true);
 
 			return;
@@ -212,6 +215,7 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 
 		if (p.actions >= MAX_ACTIONS) {
 			console.log(`\naction ceiling (${MAX_ACTIONS}) reached — asking for the map now`);
+			runEvent(p.stamp, "finish", { stopped: "action-ceiling", actions: p.actions });
 			await requestFinish(p, client, model, `The action ceiling of ${MAX_ACTIONS} has been reached. Call finish NOW with the map you have.`, "action-ceiling", false);
 
 			return;
@@ -291,6 +295,12 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 				});
 				continue;
 			}
+			runEvent(p.stamp, "finish", {
+				stopped: unfinished ? "frontier-conceded" : "frontier-empty",
+				actions: p.actions,
+				findings: p.findings.length,
+				nodes: p.graphNodes.size,
+			});
 			writeArtifacts(p, toolUse.input as FinishInput, unfinished ? "frontier-conceded" : "frontier-empty");
 
 			return;
@@ -818,6 +828,15 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 		console.log(
 			`    -> ${credited.length} credited, ${discovered > 0 ? `+${discovered} new, ` : ""}${rest.length} on frontier, ${hm(Date.now() - p.startedAt)} elapsed`,
 		);
+		// COARSE by design: an explore pass runs 40-160 actions, so per-action events would
+		// swamp the merged feed. Every tenth action is a progress heartbeat, not a step log.
+		if (p.actions % 10 === 0)
+			runEvent(p.stamp, "progress", {
+				actions: p.actions,
+				frontier: rest.length,
+				seen: vo ? p.declared.seen.size : p.ledger.seen.size,
+				elapsed: hm(Date.now() - p.startedAt),
+			});
 
 		const frontierNote =
 			rest.length === 0

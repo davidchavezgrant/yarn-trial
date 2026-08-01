@@ -7,29 +7,31 @@ import { Driver } from "../driver.js";
 import { envNum } from "../../env.js";
 import {
 	ACT_TOOL,
-	checkableCount,
-	sessionEndingChord,
 	DEMO_ACT_TOOL,
 	DEMO_DRIVER_RULES,
 	DEMO_VISION_ONLY_RULES,
 	DRIVER_RULES,
+	OUT,
+	UNREADY_EXIT,
+	VISION_ONLY_RULES,
+	checkableCount,
 	failedProvider,
 	findScopeAmbiguities,
+	homeLabels,
 	homeVisible,
 	loadAppMapGraph,
 	makeClient,
 	observationBlocks,
 	onInterrupt,
-	OUT,
 	outputEffort,
 	providerRouting,
 	resetToHome,
+	runEvent,
 	runKey,
 	scopeWarnings,
+	sessionEndingChord,
 	teeConsole,
-	UNREADY_EXIT,
 	verificationTallies,
-	VISION_ONLY_RULES,
 } from "../harness.js";
 import type { HomeResetResult, ObservationBundle } from "../harness.js";
 import { readJournal } from "../journal.js";
@@ -253,7 +255,37 @@ export async function main(): Promise<void> {
 	// per-draft override instead of the brand default, because both satisfy a
 	// substring check. Naming each collision explicitly gives the model something
 	// specific to act on. NO_GROUNDING drops it too, so the A/B stays honest.
-	const graph = grounding.notes ? loadAppMapGraph(slug, backendKind) : undefined;
+	/**
+	 * Loaded UNCONDITIONALLY, including for NO_GROUNDING arms, because it never reaches the model
+	 * — it is read by `detectMutation` to label a change's settingKey and scope, and by teardown
+	 * to plan restores. Both are on our side of the boundary.
+	 *
+	 * Gating it on `grounding.notes` inverted the sign of the matrix's most important claim.
+	 * With no graph, `graphFields` returns {} and every mutation journals `scope: unset`, so an
+	 * ungrounded arm can never record a document-scope change — the report's wrong-scope column
+	 * would read 0 for exactly the arms that make the mistake and non-zero for the grounded arms
+	 * that avoid it, i.e. grounding appearing to CAUSE wrong-scope mutations.
+	 */
+	const graph = loadAppMapGraph(slug, backendKind);
+	/**
+	 * The graph used to NORMALISE START STATE, which is not the same choice as the graph used to
+	 * ground. Home is a property of the app, not of the channel that mapped it: the reduced-
+	 * perception passes (vision-only, no-vision) declare no home at all — measured on the
+	 * committed maps, yarn.ax and yarn.cdp give ["Library"], yarn.ax.novision and yarn.ax.vision
+	 * give [] — so `resetToHome` returned "none" and those arms began wherever the previous job
+	 * on that Mac left the app.
+	 *
+	 * That is non-comparability perfectly correlated with the treatment: "dropping screenshots
+	 * costs N extra steps" would have included "started from an arbitrary state". Falling back to
+	 * the full-perception map for the same backend fixes it without giving the arm any grounding
+	 * it did not ask for — nothing here enters the prompt.
+	 */
+	const homeGraph = (): ReturnType<typeof loadAppMapGraph> => {
+		if (graph && homeLabels(app, graph).length) return graph;
+		const canonical = loadAppMapGraph(slug, backendKind, { plainVariant: true });
+
+		return canonical && homeLabels(app, canonical).length ? canonical : graph;
+	};
 	/**
 	 * The scope-warning PROMPT SECTION is gated on the tier, not merely on the graph existing.
 	 *
@@ -269,7 +301,7 @@ export async function main(): Promise<void> {
 	 * change's settingKey and scope, and teardown reads it to plan restores. Both are analysis
 	 * and cleanup on OUR side of the boundary — neither puts anything in front of the model.
 	 */
-	const fromExplore = grounding.provenance === "explore" || grounding.provenance === "explore-vision";
+	const fromExplore = Boolean(grounding.notes) && (grounding.provenance === "explore" || grounding.provenance === "explore-vision");
 	const warnings = graph && fromExplore ? scopeWarnings(graph) : "";
 	const ambiguities = graph ? findScopeAmbiguities(graph) : [];
 
@@ -365,6 +397,9 @@ export async function main(): Promise<void> {
 				? `target: ${app} url=${target.kind === "web" ? target.url : "(attached)"} backend=cdp`
 				: `target: ${app} pid=${ax!.win.pid} window=${ax!.win.windowId} backend=${effectiveBackend}`,
 		);
+		// The event log's opening line — after acquisition, because that is what settles which
+		// backend actually drives (the cdp→ax fallback above reassigns effectiveBackend).
+		runEvent(stamp, "start", { task, app, backend: effectiveBackend, ...(backendFallback ? { fallbackFrom: backendFallback.from } : {}) });
 
 		// Start from a declared home state, so a run never inherits the previous run's
 		// navigation. --no-reset opts out (e.g. deliberately resuming mid-flow).
@@ -400,7 +435,7 @@ export async function main(): Promise<void> {
 						let probe = { ready: undefined as boolean | undefined, detail: "" };
 						for (let attempt = 0; attempt < 8; attempt++) {
 							const obs = await doObserve(`${stepsDir}/home-probe`);
-							probe = homeVisible(app, obs, loadAppMapGraph(slug, backendKind));
+							probe = homeVisible(app, obs, homeGraph());
 							if (obs.appContent > 0 || probe.ready) break;
 							await new Promise((r) => setTimeout(r, 2000));
 						}
@@ -408,7 +443,7 @@ export async function main(): Promise<void> {
 
 						return probe.ready ? { result: "root-visible", detail: probe.detail } : { result: "failed", detail: probe.detail };
 					})()
-				: await resetToHome(driver!, ax!.win, app, loadAppMapGraph(slug, backendKind));
+				: await resetToHome(driver!, ax!.win, app, homeGraph());
 			overlay.setDriving(false);
 			homeReset = reset.result;
 			console.log(`home reset: ${reset.result} — ${reset.detail}`);
@@ -767,6 +802,17 @@ export async function main(): Promise<void> {
 				toolUse,
 				input,
 			);
+			// Event-log the step off the record executeAction just pushed — it already carries
+			// the verdict and channel, so the event cannot disagree with the run log.
+			const stepRec = records[records.length - 1];
+			if (stepRec?.index === step)
+				runEvent(stamp, "step", {
+					step,
+					action: input.action.name,
+					...(stepRec.targetName ? { target: stepRec.targetName } : {}),
+					verified: stepRec.verified,
+					...(stepRec.verificationChannel ? { channel: stepRec.verificationChannel } : {}),
+				});
 		}
 
 		console.log(`\n=== step limit (${MAX_STEPS}) reached without done ===`);
@@ -819,6 +865,12 @@ export async function main(): Promise<void> {
 				cleanupReport = { mode: cleanupMode, error: err instanceof Error ? err.message : String(err) };
 				console.error(`cleanup failed: ${cleanupReport.error}`);
 			}
+			// One event whatever teardown did — restored/failed counts on the normal path, the
+			// error on the crashed one. No report means nothing needed restoring: no event.
+			if (cleanupReport)
+				runEvent(stamp, "cleanup", cleanupReport.error !== undefined
+					? { error: String(cleanupReport.error).slice(0, 200) }
+					: { restored: cleanupReport.restored ?? 0, failed: cleanupReport.failed ?? 0 });
 		}
 
 		// Each cleanup step is isolated so no step can prevent the ones after it: a close()
@@ -847,12 +899,17 @@ export async function main(): Promise<void> {
 		 * log names is really on disk, so writing the log first meant a finished run sat out
 		 * a poll before appearing.
 		 */
-		if (aborted !== undefined)
+		if (aborted !== undefined) {
 			outcome = {
 				success: false,
 				summary: `aborted: ${aborted instanceof Error ? aborted.message : String(aborted)}`,
 				aborted: true,
 			};
+			// A fatal gets its own event BEFORE the verdict one below: the verdict says the run
+			// failed, this says why — and a reader tailing the file sees the cause named even if
+			// the process dies between the two appends.
+			runEvent(stamp, "fatal", { error: (aborted instanceof Error ? aborted.message : String(aborted)).slice(0, 300) });
+		}
 		// CLEANUP=block makes a dirty exit a failed run. Opt-in, mirroring VISUAL_JUDGE: the
 		// default keeps "did the task succeed" and "was the app left tidy" as separate
 		// questions, because a demo that achieved its goal achieved it either way.
@@ -876,7 +933,12 @@ export async function main(): Promise<void> {
 					summary: `${outcome.summary} — but cleanup failed to run, so the app may be left modified (CLEANUP=block): ${cleanupReport!.error}`,
 				};
 		}
-		if (outcome) writeRunLog(outcome);
+		if (outcome) {
+			// Every exit funnels through here (done, step limit, interrupt, abort), so this is
+			// the one verdict event — same single-writer rule as the run log itself.
+			runEvent(stamp, "verdict", { success: outcome.success === true, summary: String(outcome.summary ?? "").slice(0, 300) });
+			writeRunLog(outcome);
+		}
 		// Back the whole run directory up, last, so the backup includes the log just written and
 		// the assembled mp4 above it. Hard-linked, so it costs nothing and survives the live copy
 		// being removed — which is the point: a failed run gets dropped from out/bench/live and re-run,

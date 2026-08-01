@@ -16,7 +16,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { dataRoot as dataRootDir, liveDir, outDir, RUN_FILES, runFile, runPath } from "../paths.js";
+import { archiveRun, dataRoot as dataRootDir, liveDir, outDir, RUN_FILES, runFile, runPath } from "../paths.js";
 import { harvest as harvestOne } from "../core/procedure-cli.js";
 import { writeProcedure } from "../core/procedure.js";
 import { armById, phaseArms } from "./matrix.js";
@@ -70,6 +70,12 @@ export async function harvestBench(opts?: {
 		try {
 			const { body } = await run(entry.jobId);
 			writeProcedure(runPath(entry.jobId, RUN_FILES.procedure, dataOut), body);
+			// Post-terminal write: the run's backup was taken when it ended, so without this the
+			// procedure lives only in live and a `runs purge` drops it — and harvest's own
+			// idempotence check searches the archive, so it would then re-spend a model call.
+			try {
+				archiveRun(entry.jobId, dataOut);
+			} catch {}
 			outcome.harvested.push(entry.jobId);
 			log(`✓ ${entry.armId} ${entry.jobId}: harvested`);
 		} catch (e) {

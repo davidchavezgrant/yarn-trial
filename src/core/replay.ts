@@ -73,6 +73,12 @@ export interface ReplayDeps {
 	graph?: AppMap;
 	journalPath?: string;
 	log?: (line: string) => void;
+	/**
+	 * Structured-event sink, the `log` callback's sibling: the engine has no run stamp (that
+	 * is the CLI's business), so the caller decides where events land — recipe-cli.ts wires
+	 * this to runEvent(stamp, …). Optional like log; absent means no event log, never an error.
+	 */
+	event?: (kind: string, detail: Record<string, unknown>) => void;
 }
 
 export interface RescueArgs {
@@ -141,6 +147,7 @@ export async function replayRecipe(recipe: Recipe, deps: ReplayDeps): Promise<Re
 
 		if (problem && deps.rescue && deps.client) {
 			log(`  step ${index} broke (${problem}) — invoking rescue`);
+			deps.event?.("rescue", { step: index, problem: problem.slice(0, 200) });
 			// Rescue sees the CURRENT observation (post-failed-action, where applicable):
 			// that is the state it must repair from, not the state the step started in.
 			obs = await deps.observe(`replay-${index}-pre-rescue`);
@@ -167,6 +174,12 @@ export async function replayRecipe(recipe: Recipe, deps: ReplayDeps): Promise<Re
 		});
 		const mark = outcome === "verified" ? "✓" : outcome === "rescued" ? "✓ (rescued)" : "✗";
 		log(`  ${mark} [${index}/${recipe.steps.length}] ${step.action.name}${step.target ? ` "${step.target.name}"` : ""}${outcome === "failed" ? ` — ${note}` : ""}`);
+		deps.event?.("step", {
+			step: index,
+			action: step.action.name,
+			...(step.target?.name ? { target: step.target.name } : {}),
+			outcome,
+		});
 
 		// Journal exactly as the live loop does: mechanical value diff, appended on detection,
 		// so a replay that dies mid-task is recoverable by the same cleanup CLI.
@@ -188,6 +201,7 @@ export async function replayRecipe(recipe: Recipe, deps: ReplayDeps): Promise<Re
 		const v = verify(recipe.finalEvidence, last.haystack);
 		finalCheck = { verified: v.verified, note: v.note };
 		log(`  final goal check: ${v.verified ? "PASSED" : `failed — ${v.note}`}`);
+		deps.event?.("goal-check", { verified: v.verified });
 	}
 
 	return { ok: finalCheck ? finalCheck.verified : true, steps: results, finalCheck, modelCalls, records };

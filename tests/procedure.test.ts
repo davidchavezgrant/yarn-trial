@@ -106,10 +106,15 @@ test("procedureFileFor__KeysOnAppAndTask__When__NamingTheFile", () => {
 	// A procedure for one task must never be found by a run doing a different task on the same
 	// app — that is the whole difference between this and an appmap. Same identity function as
 	// compiled recipes, shared rather than reimplemented so the two cannot disagree.
-	const a = procedureFileFor("/d", "yarn", "show me how to change the cursor type");
-	const b = procedureFileFor("/d", "yarn", "create a two-scene script");
-	assert.notEqual(a, b);
-	assert.ok(a.endsWith(`yarn.${taskHash("show me how to change the cursor type")}.procedure.md`), a);
+	const task = "show me how to change the cursor type";
+	assert.notEqual(procedureFileFor("/d", "yarn", task), procedureFileFor("/d", "yarn", "create a two-scene script"));
+	assert.ok(procedureFileFor("/d", "yarn", task).endsWith(`yarn.${taskHash(task)}.procedure.md`));
+
+	// And by BACKEND, for the reason appmaps already carry that axis: ax and cdp name the same
+	// surfaces differently, so a procedure is no more backend-portable than a map. Without it
+	// p6-ax-procedure and p6-cdp-procedure resolve to one file, the second promote overwrites
+	// the first, and one arm grounds on the other backend's write-up with nothing to catch it.
+	assert.notEqual(procedureFileFor("/d", "yarn", task, "ax"), procedureFileFor("/d", "yarn", task, "cdp"));
 });
 
 test("procedureHeader__StampsProvenance__When__Written", () => {
@@ -169,7 +174,7 @@ test("LoadGrounding__ReadsAProcedure__When__UseProceduresIsSetAndOneExists", asy
 		const task = "show me how to change the cursor type";
 		const dir = path.join(root, "docs", "procedures");
 		fs.mkdirSync(dir, { recursive: true });
-		fs.writeFileSync(procedureFileFor(dir, "yarn", task), `${procedureHeader(PASSING, "s", PASS_VERDICT)}1. Open Brand Kit.\n`);
+		fs.writeFileSync(procedureFileFor(dir, "yarn", task, "cdp"), `${procedureHeader(PASSING, "s", PASS_VERDICT)}1. Open Brand Kit.\n`);
 
 		const { loadGrounding } = await import("../src/core/agent/grounding.js");
 		const g = loadGrounding("yarn", "cdp", task);
@@ -179,6 +184,9 @@ test("LoadGrounding__ReadsAProcedure__When__UseProceduresIsSetAndOneExists", asy
 		// A DIFFERENT task on the same app must not find it — the appmap tier takes over, and
 		// with no appmap on disk that is "none", never the other task's procedure.
 		assert.equal(loadGrounding("yarn", "cdp", "create a two-scene script").provenance, "none");
+		// Nor may the OTHER backend find it: ax and cdp name surfaces differently, so an
+		// ax-derived write-up is not a cdp arm's grounding.
+		assert.equal(loadGrounding("yarn", "ax", task).provenance, "none");
 	} finally {
 		if (prev.data === undefined) delete process.env.YARN_RUNNER_DATA;
 		else process.env.YARN_RUNNER_DATA = prev.data;
@@ -201,11 +209,13 @@ test("ScopeWarnings__AreWithheldFromNonExploreTiers__When__TheGraphIsOnDisk", ()
 	// A source-level check, because the alternative is a full agent run: the gate is one
 	// expression, and what matters is that it names the provenance rather than the graph.
 	const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "core", "agent", "run.ts"), "utf8");
-	assert.match(src, /const fromExplore = grounding\.provenance === "explore" \|\| grounding\.provenance === "explore-vision"/);
+	assert.match(src, /const fromExplore = Boolean\(grounding\.notes\) && \(grounding\.provenance === "explore" \|\| grounding\.provenance === "explore-vision"\)/);
 	assert.match(src, /const warnings = graph && fromExplore \? scopeWarnings\(graph\) : ""/);
-	// The graph itself must STAY loaded for every tier — the mutation journal reads it to label
-	// a change's scope and teardown reads it to plan restores. Both are on our side of the
-	// boundary; neither puts anything in front of the model.
-	assert.match(src, /const graph = grounding\.notes \? loadAppMapGraph\(/);
-	assert.match(src, /const ambiguities = graph \? findScopeAmbiguities\(graph\) : \[\]/);
+	// The graph itself must load UNCONDITIONALLY — including for NO_GROUNDING arms. It never
+	// reaches the model: detectMutation reads it to label a change's settingKey and scope, and
+	// teardown reads it to plan restores. Gating it on grounding.notes inverted the sign of the
+	// matrix's most important claim, because an ungrounded arm could then never journal a
+	// document-scope mutation and the report would show grounding CAUSING wrong-scope changes.
+	assert.match(src, /const graph = loadAppMapGraph\(slug, backendKind\);/);
+	assert.equal(/const graph = grounding\.notes \? loadAppMapGraph/.test(src), false, "the analysis graph must not be gated on the tier");
 });
