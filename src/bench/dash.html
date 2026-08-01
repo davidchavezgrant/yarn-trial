@@ -56,13 +56,16 @@
 	.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; }
 	.empty { color: var(--muted); font-size: 12px; padding: 18px 0; }
 
-	/* fleet */
-	#fleet { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+	/* fleet — viewing windows at ~one-third width on wide viewports (three cards abreast),
+	   fluid below that. Each card's video panel is 100% of ITS card (16:10 box); the ⛶
+	   overlay is the big-viewing affordance, never a full-width panel. */
+	#fleet { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+	@media (min-width: 1100px) { #fleet { grid-template-columns: repeat(3, 1fr); } }
 	.host { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
 	.host .name { color: var(--ink); font-weight: 600; }
 	.host .row { display: flex; gap: 8px; align-items: center; margin-top: 4px; font-size: 12px; }
-	/* The Peek/Stop control anchors to every card's right edge — same spot on all three
-	   cards, the primary affordance. The ⚠ (last fatal peek failure) huddles just left of it. */
+	/* The View/Stop control anchors to every card's right edge — same spot on all three
+	   cards, the primary affordance. The ⚠ (last fatal view failure) huddles just left of it. */
 	.host .row .btnv { margin-left: auto; }
 	.pk-err { color: var(--warning); cursor: help; }
 	.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
@@ -71,7 +74,7 @@
 
 	/* peek panel: one per card, fixed 16:10 — idle, waiting and live all occupy the SAME box,
 	   so a stream starting or dying never shifts the layout. */
-	.peekbox { position: relative; margin-top: 8px; aspect-ratio: 16 / 10; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+	.peekbox { position: relative; margin-top: 8px; width: 100%; aspect-ratio: 16 / 10; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
 	.peekbox .pk-idle, .peekbox .pk-wait { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; color: var(--muted); font-size: 11px; }
 	.peekbox[data-state="idle"] .pk-idle { display: flex; }
 	.peekbox[data-state="wait"] .pk-wait { display: flex; flex-direction: column; gap: 8px; }
@@ -137,7 +140,11 @@
 	   Subtler than the hover wash, which outranks it (specificity), so hover still reads. */
 	tr.exp-row td { background: rgba(25, 158, 112, 0.05); }
 	td.arm .dn { color: var(--ink); }
-	td.arm .chips { margin-top: 3px; }
+	/* Rank dot on explore group headers: comprehensiveness rank within the target. Color
+	   never alone — the tooltip carries the rank text. */
+	td.arm .rankdot { margin-right: 6px; cursor: help; }
+	/* The Runs column: the run-selector chips, one per run (statusChip keeps them minimal). */
+	td.runs { max-width: 260px; }
 	td.treecell { text-align: center; white-space: nowrap; }
 	td.task { color: var(--muted); max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -172,6 +179,10 @@
 		display: inline-block; min-width: 13px; text-align: center; background: var(--s1);
 		color: #fff; border-radius: 8px; font-size: 10px; padding: 0 4px; margin-left: 5px; vertical-align: 1px;
 	}
+	/* per-run stats strip: the selected run's own numbers atop the dropdown — muted labels,
+	   tabular numbers, wraps to a second line on narrow viewports. */
+	.d-stats { display: flex; gap: 4px 16px; flex-wrap: wrap; margin: 8px 0 0; font-size: 12px; color: var(--ink); font-variant-numeric: tabular-nums; }
+	.d-stats .k { color: var(--muted); font-size: 10px; margin-right: 6px; text-transform: uppercase; letter-spacing: .05em; }
 	/* run log pane — one component, two mounts (matrix row dropdown + fleet under-peek) */
 	.d-prompt { color: var(--ink); font-size: 12px; white-space: pre-wrap; max-width: 110ch; margin: 8px 0 2px; }
 	.d-prompt .k { color: var(--muted); font-size: 10px; margin-right: 8px; text-transform: uppercase; letter-spacing: .05em; }
@@ -283,6 +294,11 @@ const RED = "#e66767";
 // trap is the single most decision-relevant marker on the map, so the full story travels
 // with every ⚠ rather than living in one place.
 const AMB_TIP = "this setting exists at TWO scopes under one identity (same settingKey — e.g. a brand-wide default in Brand Kit AND a per-document override in the editor). The wrong-scope trap: an agent asked to change the default can silently change only the document's copy and still pass every check. Both routes are always shown to the agent; the numbered path shows which one this run took.";
+// Vision-only (--no-ax) passes have no element list to count against, so their tallies are
+// self-reported. One explainer, two homes: the row's ⚠ and the rank dot's tooltip.
+const DECLARED_TIP = "DECLARED — the vision-only pass has no element list to count against, so these tallies are the model's own report; not comparable like-for-like with mechanically counted passes.";
+// The multi-pass matrix runs n>1 explores per arm; the explore columns aggregate as medians.
+const MED_TIP = "median across N passes — medians resist a degenerate pass (an 8-node husk map happened)";
 const STATUS = { good: "#0ca30c", warning: "#fab219", serious: "#ec835a", critical: "#d03b3b" };
 const OUTCOME_COLORS = {
 	succeeded: STATUS.good, "gave-up": STATUS.critical, unready: STATUS.warning,
@@ -613,7 +629,7 @@ function hostInfoHtml(r) {
 	const err = !peeking && peekErrors[r.name] ? `<span class="pk-err" data-tip="${esc(peekErrors[r.name])}">⚠</span>` : "";
 	// A peeked host that flips unreachable must keep its stop button.
 	const peekBtn = (r.reachable || peeking)
-		? `${err}<button class="btnv" data-peek="${esc(r.name)}" data-tip="view-only live stream of this Mac's Chromium target (CDP screencast over the ssh tunnel) — one host at a time">${peeking ? "⏹ Stop" : "▶ Peek"}</button>`
+		? `${err}<button class="btnv" data-peek="${esc(r.name)}" data-tip="view-only live stream of this Mac's Chromium target (CDP screencast over the ssh tunnel) — one host at a time">${peeking ? "⏹ Stop" : "▶ View"}</button>`
 		: err;
 	return `<div class="row"><span class="dot" style="background:${color}"></span><span class="name">${esc(r.name)}</span>
 		<span class="meta">${esc(statusLabel(r.reachable ? r.state : "unreachable"))}${r.operator ? " · " + esc(r.operator) : ""}</span>${peekBtn}</div>
@@ -632,7 +648,8 @@ function armOf(jobId) {
 // name is derived from them) and per-run completion lives on the chips, so neither needs
 // a column.
 const th = (label, tip) => `<th${tip ? ` data-tip="${esc(tip)}"` : ""}>${label}</th>`;
-const NAME_TIP = "hover for the arm id, flags and the decision this cell informs · click to expand the appmap and the run's path · click a run chip to view that run";
+const NAME_TIP = "hover for the arm id, flags and the decision this cell informs · click to expand the selected run's dropdown (stats · prompt · live log) · pick the run via its chip in the Runs column";
+const RUNS_TIP = "one chip per run — click a chip to select that run: the row's dropdown and ⤢ map follow the selected chip";
 // No target column: the app scope picker above the board carries the target, and inside a
 // lineage group every row shares the group's target anyway.
 const TASK_HEAD = "<tr>" + th("Name", NAME_TIP) +
@@ -642,16 +659,20 @@ const TASK_HEAD = "<tr>" + th("Name", NAME_TIP) +
 	th("OK", "succeeded / collected") +
 	th("Steps", "mean actions per run") + th("Time", "mean wall-clock per run") +
 	th("Out-Tok", "mean output tokens per run") + th("Est $", "published-rate estimate across collected runs — not an invoice") +
+	th("Runs", RUNS_TIP) +
 	th("Map", "the appmap as a full node-link tree — edge thickness = traversal heat, blue = the run's path") + "</tr>";
+// Explore data columns are MEDIANS (x̃) across the arm's collected passes; task columns
+// above stay means (x̄) for report parity via the shared rollup().
 const EXPLORE_HEAD = "<tr>" + th("Name", NAME_TIP) +
 	th("Perceives", "what the pass SEES while exploring: AX tree or DOM elements, plus vision — or pixels only") +
 	th("Acts", "what injects the input: AX (cua driver) or CDP") +
 	th("Task") + th("Model", "what actually ran, off the run logs") +
-	th("Actions", "actions the pass took (elapsed on hover)") +
-	th("Controls Seen / Act / Dism", "of every control the pass observed (seen), how many it operated (actuated) vs swept off the frontier without operating (dismissed) — the pass ends when the frontier empties, and dismissing is a legitimate way to empty it") +
-	th("Surfaces", "stamp coverage: distinct screens/panels/tabs/dialogs controls were SEEN on during the pass — what you navigate BETWEEN; controls live ON them. The distilled appmap graph (the map column) typically keeps fewer surface nodes than this") +
-	th("Nodes", "appmap graph nodes (edges on hover)") +
-	th("Ambig", "settings editable at two scopes under one identity (same settingKey, different scope) — the wrong-scope trap; each gets a prompt warning") +
+	th("Actions x̃", "actions the pass took (elapsed on hover)\n" + MED_TIP) +
+	th("Controls Seen / Act / Dism x̃", "of every control the pass observed (seen), how many it operated (actuated) vs swept off the frontier without operating (dismissed) — the pass ends when the frontier empties, and dismissing is a legitimate way to empty it\n" + MED_TIP) +
+	th("Surfaces x̃", "stamp coverage: distinct screens/panels/tabs/dialogs controls were SEEN on during the pass — what you navigate BETWEEN; controls live ON them. The distilled appmap graph (the map column) typically keeps fewer surface nodes than this\n" + MED_TIP) +
+	th("Nodes x̃", "appmap graph nodes (edges on hover)\n" + MED_TIP) +
+	th("Ambig x̃", "settings editable at two scopes under one identity (same settingKey, different scope) — the wrong-scope trap; each gets a prompt warning\n" + MED_TIP) +
+	th("Runs", RUNS_TIP + " — each pass's own numbers sit in its dropdown") +
 	th("Map", "the appmap this pass produced, as a full node-link tree — edge thickness = traversal heat across collected runs") + "</tr>";
 
 // Friendly names are DERIVED from the arm's structure (kind + flags + phase), not
@@ -690,9 +711,29 @@ function treeCell(p, key) {
 	return `<td class="treecell">${job ? `<button class="btnv" data-viewtree="${esc(job)}">⤢</button>` : ""}</td>`;
 }
 
-function armCell(a, p, key) {
-	const tip = [a.id, a.informs || "", `flags: ${a.flags || "(none)"}`].filter(Boolean).join("\n");
+const ordinal = (n) => { const s = ["th", "st", "nd", "rd"], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };
+
+// Rank dot on explore group headers: green = the target's most comprehensive map, red =
+// least, yellow = between (1 pass ranked = no dot; 2 = green+red). Rank comes off the wire
+// (rankExplore in dash.ts) so the page never re-derives an ordering the server already owns.
+function rankDot(a, p) {
+	if (a.kind !== "explore" || !p.exploreRank || p.exploreRank.of < 2) return "";
+	const { rank, of } = p.exploreRank;
+	const color = rank === 1 ? "#0ca30c" : rank === of ? "#d03b3b" : "#fab219";
+	const tip = `Comprehensiveness rank within ${targetLabel(a.targetKey)} — by distilled map size (graph nodes; 'seen' deliberately unused, it inflates on repetitive content)\n${ordinal(rank)} of ${of}`
+		+ (a.flags && a.flags.includes("--no-ax") ? "\n" + DECLARED_TIP : "");
+	return `<span class="dot rankdot" style="background:${color}" data-tip="${esc(tip)}"></span>`;
+}
+
+// The run selector: minimal chips (dot + Status + ticking elapsed while Running) in their
+// own trailing column — clicking one selects that run for the row's dropdown (selJob/openRows).
+function runsCell(p, key) {
 	const sel = openRows[key] ? selJob(p, key) : undefined;
+	return `<td class="runs">${p.entries.map((e) => statusChip(e, key, e.jobId === sel)).join("")}</td>`;
+}
+
+function armCell(a, p) {
+	const tip = [a.id, a.informs || "", `flags: ${a.flags || "(none)"}`].filter(Boolean).join("\n");
 	const taskCell = a.task
 		? `<td class="task" data-tip="${esc(a.task)}">${esc(a.task)}</td>`
 		: a.kind === "explore"
@@ -703,7 +744,7 @@ function armCell(a, p, key) {
 	const badge = a.kind !== "explore"
 		? `<span class="pbadge" data-tip="phase ${a.phase} arm — lineage groups interleave phases">P${a.phase}</span>`
 		: "";
-	return `<td class="arm" data-tip="${esc(tip)}"><span class="dn">${esc(displayName(a))}</span>${badge}<div class="chips">${p.entries.map((e) => statusChip(e, key, e.jobId === sel)).join("")}</div></td>
+	return `<td class="arm" data-tip="${esc(tip)}">${rankDot(a, p)}<span class="dn">${esc(displayName(a))}</span>${badge}</td>
 		<td class="num">${esc(a.perception || "–")}</td>
 		<td class="num">${esc(a.actuation || "–")}</td>
 		${taskCell}
@@ -712,12 +753,12 @@ function armCell(a, p, key) {
 
 function taskRow(a, p) {
 	const key = rowId(a, p);
-	return `<tr class="mrow" data-toggle="${esc(key)}">${armCell(a, p, key)}
+	return `<tr class="mrow" data-toggle="${esc(key)}">${armCell(a, p)}
 		<td class="num">${p.collected ? p.successes + "/" + p.collected : "–"}</td>
 		<td class="num">${fmtNum(p.meanSteps)}</td>
 		<td class="num">${p.meanElapsedSec != null ? fmtDur(p.meanElapsedSec) : "–"}</td>
 		<td class="num">${fmtK(p.meanOutputTokens)}</td>
-		<td class="num">${p.usd ? fmtMoney(p.usd) : p.unpriced ? "?×" + p.unpriced : "–"}</td>${treeCell(p, key)}</tr>` + (openRows[key] ? detailRowHtml(a, p, key) : "");
+		<td class="num">${p.usd ? fmtMoney(p.usd) : p.unpriced ? "?×" + p.unpriced : "–"}</td>${runsCell(p, key)}${treeCell(p, key)}</tr>` + (openRows[key] ? detailRowHtml(a, p, key) : "");
 }
 
 function exploreRow(a, p) {
@@ -727,17 +768,17 @@ function exploreRow(a, p) {
 	// self-reported — flagged so they never read as mechanically counted. Flag sniffing is
 	// display-only here; the arm's dispatch stays the authority for what actually ran.
 	const declared = a.flags && a.flags.includes("--no-ax")
-		? ` <span data-tip="DECLARED — the vision-only pass has no element list to count against, so these tallies are the model's own report; not comparable like-for-like with mechanically counted passes.">⚠</span>`
+		? ` <span data-tip="${esc(DECLARED_TIP)}">⚠</span>`
 		: "";
 	const controls = ex.controlsSeen != null
 		? `<span data-tip="seen ${ex.controlsSeen} · actuated ${ex.controlsActuated} · dismissed ${ex.controlsDismissed}">${ex.controlsSeen} / ${ex.controlsActuated} / ${ex.controlsDismissed}</span>${declared}`
 		: "–";
-	return `<tr class="mrow exp-row" data-toggle="${esc(key)}">${armCell(a, p, key)}
+	return `<tr class="mrow exp-row" data-toggle="${esc(key)}">${armCell(a, p)}
 		<td class="num"><span data-tip="${esc(ex.elapsed ? "elapsed " + ex.elapsed : "")}">${fmtNum(ex.actions)}</span></td>
 		<td class="num">${controls}</td>
 		<td class="num">${fmtNum(ex.surfaces)}</td>
 		<td class="num"><span data-tip="${ex.graphEdges != null ? ex.graphEdges + " edges" : ""}">${fmtNum(ex.graphNodes)}</span></td>
-		<td class="num">${fmtNum(ex.scopeAmbiguities)}</td>${treeCell(p, key)}</tr>` + (openRows[key] ? detailRowHtml(a, p, key) : "");
+		<td class="num">${fmtNum(ex.scopeAmbiguities)}</td>${runsCell(p, key)}${treeCell(p, key)}</tr>` + (openRows[key] ? detailRowHtml(a, p, key) : "");
 }
 
 /* ---- row detail: appmap + path ------------------------------------------------------- */
@@ -761,14 +802,36 @@ function fetchDetail(job) {
 		});
 }
 
-// No run-selector tabs here: the chips under the arm's name are the selector, and the
+// Per-run stats header: the SELECTED run's own numbers atop the dropdown. Explore runs show
+// their pass's exploreStamp (the row shows medians across passes); task/replay runs show the
+// run's economics. Missing values simply don't render — a running entry may show only Time.
+function statsStrip(a, e) {
+	const st = e.exploreStamp;
+	const pairs = a.kind === "explore" && st
+		? [["Actions", fmtNum(st.actions)], ["Seen", fmtNum(st.controlsSeen)], ["Actuated", fmtNum(st.controlsActuated)],
+			["Dismissed", fmtNum(st.controlsDismissed)], ["Surfaces", fmtNum(st.surfaces)], ["Nodes", fmtNum(st.graphNodes)],
+			["Ambig", fmtNum(st.scopeAmbiguities)]]
+		: [["Steps", e.steps], ["Verified", e.verifiedSteps],
+			["Time", e.elapsedSec != null ? fmtDur(e.elapsedSec) : null],
+			["Tok In", e.inputTokens != null ? fmtK(e.inputTokens) : null],
+			["Out", e.outputTokens != null ? fmtK(e.outputTokens) : null],
+			["Cache-Read", e.cacheReadTokens != null ? fmtK(e.cacheReadTokens) : null],
+			["Cache-Write", e.cacheCreationTokens != null ? fmtK(e.cacheCreationTokens) : null],
+			["Est Cost", e.usd != null ? fmtMoney(e.usd) : null],
+			["Judge", e.judgeTrajectory ? e.judgeTrajectory + (e.judgeVisual ? " / " + e.judgeVisual : "") : null]];
+	const cells = pairs.filter(([, v]) => v != null && v !== "–")
+		.map(([k, v]) => `<span><span class="k">${k}</span>${esc(String(v))}</span>`).join("");
+	return cells ? `<div class="d-stats">${cells}</div>` : "";
+}
+
+// No run-selector tabs here: the chips in the row's Runs column are the selector, and the
 // displayed run's chip is the highlighted one.
-// The dropdown is the run's live console: the prompt it was given in plaintext, then the
-// log pane as bytes land. The map tree lives wholly behind the row's ⤢ button (openTree);
-// detailBody/mapTree remain below as code for other views.
+// The dropdown is the run's live console: its stats strip, the prompt it was given in
+// plaintext, then the log pane as bytes land. The map tree lives wholly behind the row's ⤢
+// button (openTree); detailBody/mapTree remain below as code for other views.
 function detailRowHtml(a, p, key) {
 	const sel = selJob(p, key);
-	if (!sel) return `<tr class="detail-row"><td colspan="11"><div class="empty">nothing submitted yet</div></td></tr>`;
+	if (!sel) return `<tr class="detail-row"><td colspan="12"><div class="empty">nothing submitted yet</div></td></tr>`;
 	const e = p.entries.find((x) => x.jobId === sel) || {};
 	// The detail is still fetched: the ⤢ modal reads its graph, and its payload carries the
 	// run log's own task — the prompt fallback for arms that carry none (replays).
@@ -780,7 +843,7 @@ function detailRowHtml(a, p, key) {
 		: a.kind === "replay" ? (d && d.task ? `<span class="k">Replay — recipe task</span>${esc(d.task)}` : `<span class="meta">Replay — recipe task not collected yet</span>`)
 		: d && d.task ? `<span class="k">Prompt</span>${esc(d.task)}`
 		: `<span class="meta">no task prompt recorded</span>`;
-	return `<tr class="detail-row"><td colspan="11"><div class="d-prompt">${prompt}</div>
+	return `<tr class="detail-row"><td colspan="12">${statsStrip(a, e)}<div class="d-prompt">${prompt}</div>
 		<div class="logwrap" data-logjob="${esc(sel)}" data-loghost="${esc(e.host || "")}"></div></td></tr>`;
 }
 
@@ -1158,11 +1221,11 @@ function renderBoard(progress) {
 	for (const gid of Object.keys(deps)) {
 		if (seen.has(gid)) continue;
 		const ex = state.arms.find((x) => x.id === gid);
-		html += `<tr class="phase-h"><td colspan="11">${esc(gid)} — ${ex ? "grounding pass not yet submitted" : "not in the matrix"}</td></tr>`;
+		html += `<tr class="phase-h"><td colspan="12">${esc(gid)} — ${ex ? "grounding pass not yet submitted" : "not in the matrix"}</td></tr>`;
 		html += TASK_HEAD + timelineRows(deps[gid]).map(({ a, p }) => taskRow(a, p)).join("");
 	}
 	if (ungrounded.length) {
-		html += `<tr class="phase-h"><td colspan="11">No Explore Pass</td></tr>`;
+		html += `<tr class="phase-h"><td colspan="12">No Explore Pass</td></tr>`;
 		html += TASK_HEAD + timelineRows(ungrounded).map(({ a, p }) => taskRow(a, p)).join("");
 	}
 	$("board").innerHTML = html + "</table>";
@@ -1505,7 +1568,7 @@ function handlePeekClose(ev) {
 	if (ev.code === 4400 || ev.code === 4409) {
 		// Fatal: disarm quietly. The panel returns to Idle; the reason lives in the ⚠ beside
 		// the host's Peek button, never as an error dump in the panel.
-		peekErrors[peekState.host] = ev.reason || (ev.code === 4409 ? "preempted by another peek" : "peek rejected");
+		peekErrors[peekState.host] = ev.reason || (ev.code === 4409 ? "preempted by another view" : "view rejected");
 		disarmPeek();
 		render();
 		return;

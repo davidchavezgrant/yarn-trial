@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { buildDetail, buildState, type FleetView, groundingArmId, loadEnvFallback, matchPath, parseEnvLine, parseLogFrames } from "../src/bench/dash.js";
+import { buildDetail, buildState, type FleetView, groundingArmId, loadEnvFallback, matchPath, parseEnvLine, parseLogFrames, rankExplore } from "../src/bench/dash.js";
 import type { Manifest, ManifestEntry } from "../src/bench/manifest.js";
 import { armById } from "../src/bench/matrix.js";
 
@@ -189,6 +189,98 @@ test("BuildState__CarriesExploreStamp__When__ArmIsExplore", () => {
 	assert.equal(p?.explore?.controlsActuated, 47);
 	assert.equal(p?.explore?.controlsSeen, 396);
 	assert.equal(p?.explore?.scopeAmbiguities, 10);
+});
+
+// Three explore passes for one arm, the middle one a degenerate husk (the 8-node map class
+// the multi-pass matrix exists to catch): medians must ignore it where a mean would not.
+const explorePasses = () =>
+	manifest(
+		entry({
+			armId: "p1-explore-ax",
+			jobId: "explore-a",
+			state: "done",
+			collected: true,
+			metrics: { exploreActions: 96, exploreElapsed: "40m12s", controlsSeen: 396, controlsActuated: 47, controlsDismissed: 350, surfaces: 34, graphNodes: 150, graphEdges: 60, scopeAmbiguities: 10 },
+		}),
+		entry({
+			armId: "p1-explore-ax",
+			jobId: "explore-husk",
+			state: "done",
+			collected: true,
+			metrics: { exploreActions: 5, exploreElapsed: "3m01s", controlsSeen: 12, controlsActuated: 3, controlsDismissed: 2, surfaces: 3, graphNodes: 8, graphEdges: 2, scopeAmbiguities: 0 },
+		}),
+		entry({
+			armId: "p1-explore-ax",
+			jobId: "explore-c",
+			state: "done",
+			collected: true,
+			metrics: { exploreActions: 90, exploreElapsed: "38m40s", controlsSeen: 380, controlsActuated: 41, controlsDismissed: 300, surfaces: 30, graphNodes: 142, graphEdges: 55, scopeAmbiguities: 8 },
+		}),
+	);
+
+test("BuildState__MediansExploreAggregates__When__ADegeneratePassLands", () => {
+	const s = buildState(explorePasses(), fleet([]), [], true);
+	const ex = armView(s, "p1-explore-ax")?.passes[0]?.explore;
+	// Median of {96,5,90} = 90 — the husk cannot drag the arm's numbers the way a mean would.
+	assert.equal(ex?.actions, 90);
+	assert.equal(ex?.controlsSeen, 380);
+	assert.equal(ex?.controlsActuated, 41);
+	assert.equal(ex?.controlsDismissed, 300);
+	assert.equal(ex?.surfaces, 30);
+	assert.equal(ex?.graphNodes, 142);
+	assert.equal(ex?.graphEdges, 55);
+	assert.equal(ex?.scopeAmbiguities, 8);
+	// elapsed is a display string, not a number — the first collected pass's stamp rides verbatim.
+	assert.equal(ex?.elapsed, "40m12s");
+});
+
+test("BuildState__CarriesPerEntryExploreStamp__When__PassesDiffer", () => {
+	const s = buildState(explorePasses(), fleet([]), [], true);
+	const entries = armView(s, "p1-explore-ax")?.passes[0]?.entries;
+	const a = entries?.find((e) => e.jobId === "explore-a");
+	const husk = entries?.find((e) => e.jobId === "explore-husk");
+	// Each entry keeps ITS pass's own numbers — the dropdown shows these, the row the medians.
+	assert.equal(a?.exploreStamp?.actions, 96);
+	assert.equal(a?.exploreStamp?.graphNodes, 150);
+	assert.equal(husk?.exploreStamp?.graphNodes, 8);
+	assert.equal(husk?.exploreStamp?.controlsSeen, 12);
+});
+
+test("BuildState__OmitsExploreStamp__When__EntryIsATaskRun", () => {
+	const s = buildState(
+		manifest(entry({ jobId: "job-task", state: "done", collected: true, metrics: { success: true, steps: 5 } })),
+		fleet([]),
+		[],
+		true,
+	);
+	assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.entries[0]?.exploreStamp, undefined);
+});
+
+test("RankExplore__OrdersByNodesThenTiebreaks__When__PassesCompete", () => {
+	const ranks = rankExplore([
+		{ graphNodes: 150, surfaces: 20, controlsActuated: 47 },
+		{ graphNodes: 8, surfaces: 3, controlsActuated: 5 },
+		{ graphNodes: 150, surfaces: 34, controlsActuated: 41 }, // node tie → surfaces break it
+		{ surfaces: 99, controlsActuated: 99 }, // no graphNodes — sorts below any recorded map
+	]);
+	assert.deepEqual(ranks, [2, 3, 1, 4]);
+});
+
+test("BuildState__RanksExplorePassesPerTarget__When__MultipleArmsCollected", () => {
+	const s = buildState(
+		manifest(
+			entry({ armId: "p1-explore-ax", jobId: "e-ax", state: "done", collected: true, metrics: { graphNodes: 150, surfaces: 30, controlsActuated: 40 } }),
+			entry({ armId: "p1-explore-cdp", jobId: "e-cdp", state: "done", collected: true, metrics: { graphNodes: 90, surfaces: 28, controlsActuated: 44 } }),
+			entry({ jobId: "job-task", state: "done", collected: true, metrics: { success: true, steps: 5 } }),
+		),
+		fleet([]),
+		[],
+		true,
+	);
+	assert.deepEqual(armView(s, "p1-explore-ax")?.passes[0]?.exploreRank, { rank: 1, of: 2 });
+	assert.deepEqual(armView(s, "p1-explore-cdp")?.passes[0]?.exploreRank, { rank: 2, of: 2 });
+	// Task arms never rank.
+	assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.exploreRank, undefined);
 });
 
 test("BuildState__ExposesLineageAndTargetKey__When__ArmsRideTheWire", () => {

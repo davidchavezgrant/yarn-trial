@@ -88,6 +88,19 @@ export interface EntryView {
 	runSec?: number;
 	endedAt?: string;
 	note?: string;
+	/**
+	 * Explore runs: THIS pass's own stamp numbers. The row aggregates medians across the
+	 * arm's passes (multi-pass matrix), so the dropdown needs the per-pass figures here.
+	 */
+	exploreStamp?: {
+		actions?: number;
+		controlsSeen?: number;
+		controlsActuated?: number;
+		controlsDismissed?: number;
+		surfaces?: number;
+		graphNodes?: number;
+		scopeAmbiguities?: number;
+	};
 }
 
 export interface PassView {
@@ -110,7 +123,11 @@ export interface PassView {
 	rejections: number;
 	documentScopeMutations: number;
 	failureBreakdown: string;
-	/** Explore arms: the stamp + graph numbers, off the one collected entry. */
+	/**
+	 * Explore arms: stamp + graph numbers as MEDIANS across the arm's collected passes (the
+	 * multi-pass matrix runs n>1 explores per arm; see exploreMedians for why not means).
+	 * `elapsed` is the first collected pass's display string, not an aggregate.
+	 */
 	explore?: {
 		actions?: number;
 		elapsed?: string;
@@ -122,6 +139,12 @@ export interface PassView {
 		graphEdges?: number;
 		scopeAmbiguities?: number;
 	};
+	/**
+	 * Comprehensiveness rank among the SAME target's collected explore passes (1 = biggest
+	 * distilled map; rankExplore's ordering). `of` = passes ranked; the page draws no dot at
+	 * of 1. Computed server-side so the wire, the page and the tests share one ordering.
+	 */
+	exploreRank?: { rank: number; of: number };
 	/** Replay arms. */
 	replay?: { meanRecipeSteps?: number; meanRescuedSteps?: number };
 	entries: EntryView[];
@@ -200,6 +223,15 @@ export interface DashState {
 
 const mean = (xs: number[]): number | undefined => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : undefined);
 
+/** Middle value (even n: mean of the two middles) — resists a degenerate outlier where a mean cannot. */
+const median = (xs: number[]): number | undefined => {
+	if (!xs.length) return undefined;
+	const s = [...xs].sort((a, b) => a - b);
+	const mid = Math.floor(s.length / 2);
+
+	return s.length % 2 ? s[mid] : ((s[mid - 1] as number) + (s[mid] as number)) / 2;
+};
+
 function liveFor(e: ManifestEntry, fleet: FleetView): Pick<EntryView, "status" | "elapsedSec" | "queuePosition" | "stalled"> {
 	const host = fleet.rows.find((r) => r.name === e.host);
 	if (host?.jobId === e.jobId)
@@ -217,6 +249,17 @@ function entryView(e: ManifestEntry, fleet: FleetView): EntryView {
 	const m = e.metrics;
 	if (e.collected) {
 		const cost = m ? estimateCost(m, m.model ?? e.model) : undefined;
+		// Field presence is the signal: only explore stamps record these, so task runs never
+		// grow a stamp and the page can key "explore run" off exploreStamp existing.
+		const stamp = {
+			...(m?.exploreActions !== undefined ? { actions: m.exploreActions } : {}),
+			...(m?.controlsSeen !== undefined ? { controlsSeen: m.controlsSeen } : {}),
+			...(m?.controlsActuated !== undefined ? { controlsActuated: m.controlsActuated } : {}),
+			...(m?.controlsDismissed !== undefined ? { controlsDismissed: m.controlsDismissed } : {}),
+			...(m?.surfaces !== undefined ? { surfaces: m.surfaces } : {}),
+			...(m?.graphNodes !== undefined ? { graphNodes: m.graphNodes } : {}),
+			...(m?.scopeAmbiguities !== undefined ? { scopeAmbiguities: m.scopeAmbiguities } : {}),
+		};
 
 		return {
 			jobId: e.jobId,
@@ -242,6 +285,7 @@ function entryView(e: ManifestEntry, fleet: FleetView): EntryView {
 			...(m?.runSec !== undefined ? { runSec: m.runSec } : {}),
 			...(m?.endedAt ? { endedAt: m.endedAt } : {}),
 			...(e.note ? { note: e.note } : {}),
+			...(Object.keys(stamp).length ? { exploreStamp: stamp } : {}),
 		};
 	}
 
@@ -270,9 +314,67 @@ export function priceWithFallback(e: ManifestEntry, defaultModel?: string): { us
 	return assumed !== undefined ? { usd: assumed, assumed: true } : { assumed: false };
 }
 
+/**
+ * Explore aggregates are MEDIANS across the arm's collected passes: the multi-pass matrix
+ * runs n>1 explores per arm, and a mean lets one degenerate pass (an 8-node husk map has
+ * happened) drag every column toward it — the median ignores it. Task columns stay MEANS
+ * via the report's shared rollup(): parity with the report outranks symmetry here.
+ * `elapsed` keeps the first collected pass's stamp verbatim — it is a display string.
+ */
+function exploreMedians(ms: Array<NonNullable<ManifestEntry["metrics"]>>): NonNullable<PassView["explore"]> {
+	const med = (pick: (m: NonNullable<ManifestEntry["metrics"]>) => number | undefined): number | undefined =>
+		median(ms.map(pick).filter((n): n is number => n !== undefined));
+	const elapsed = ms.find((m) => m.exploreElapsed)?.exploreElapsed;
+	const out = {
+		actions: med((m) => m.exploreActions),
+		controlsActuated: med((m) => m.controlsActuated),
+		controlsDismissed: med((m) => m.controlsDismissed),
+		controlsSeen: med((m) => m.controlsSeen),
+		surfaces: med((m) => m.surfaces),
+		graphNodes: med((m) => m.graphNodes),
+		graphEdges: med((m) => m.graphEdges),
+		scopeAmbiguities: med((m) => m.scopeAmbiguities),
+	};
+
+	return {
+		...(out.actions !== undefined ? { actions: out.actions } : {}),
+		...(elapsed ? { elapsed } : {}),
+		...(out.controlsActuated !== undefined ? { controlsActuated: out.controlsActuated } : {}),
+		...(out.controlsDismissed !== undefined ? { controlsDismissed: out.controlsDismissed } : {}),
+		...(out.controlsSeen !== undefined ? { controlsSeen: out.controlsSeen } : {}),
+		...(out.surfaces !== undefined ? { surfaces: out.surfaces } : {}),
+		...(out.graphNodes !== undefined ? { graphNodes: out.graphNodes } : {}),
+		...(out.graphEdges !== undefined ? { graphEdges: out.graphEdges } : {}),
+		...(out.scopeAmbiguities !== undefined ? { scopeAmbiguities: out.scopeAmbiguities } : {}),
+	};
+}
+
+/**
+ * Rank explore passes by distilled-map comprehensiveness: median graphNodes first,
+ * tiebreaks surfaces then controlsActuated. `controlsSeen` is deliberately NOT a key — it
+ * inflates on repetitive content (one sweep counted 262 seen for 25 actuated). Returns
+ * 1-based ranks aligned with input order (1 = most comprehensive); a missing metric sorts
+ * below any recorded value.
+ */
+export function rankExplore(passes: Array<{ graphNodes?: number; surfaces?: number; controlsActuated?: number }>): number[] {
+	const v = (n: number | undefined): number => n ?? -1;
+	const order = passes
+		.map((_, i) => i)
+		.sort((a, b) =>
+			v(passes[b]!.graphNodes) - v(passes[a]!.graphNodes)
+			|| v(passes[b]!.surfaces) - v(passes[a]!.surfaces)
+			|| v(passes[b]!.controlsActuated) - v(passes[a]!.controlsActuated));
+	const ranks = new Array<number>(passes.length);
+	order.forEach((idx, pos) => {
+		ranks[idx] = pos + 1;
+	});
+
+	return ranks;
+}
+
 function passView(arm: Arm, model: string | undefined, entries: ManifestEntry[], fleet: FleetView, defaultModel?: string): PassView {
 	const r = rollup(arm, entries);
-	const first = r.collected[0]?.metrics;
+	const collectedMetrics = r.collected.map((e) => e.metrics).filter((m): m is NonNullable<ManifestEntry["metrics"]> => m !== undefined);
 
 	const ranModels = [...new Set(r.collected.map((e) => e.metrics?.model).filter((m): m is string => typeof m === "string"))];
 
@@ -299,21 +401,7 @@ function passView(arm: Arm, model: string | undefined, entries: ManifestEntry[],
 		rejections: r.rejections,
 		documentScopeMutations: r.documentScopeMutations,
 		failureBreakdown: r.failureBreakdown,
-		...(arm.kind === "explore" && first
-			? {
-					explore: {
-						...(first.exploreActions !== undefined ? { actions: first.exploreActions } : {}),
-						...(first.exploreElapsed ? { elapsed: first.exploreElapsed } : {}),
-						...(first.controlsActuated !== undefined ? { controlsActuated: first.controlsActuated } : {}),
-						...(first.controlsDismissed !== undefined ? { controlsDismissed: first.controlsDismissed } : {}),
-						...(first.controlsSeen !== undefined ? { controlsSeen: first.controlsSeen } : {}),
-						...(first.surfaces !== undefined ? { surfaces: first.surfaces } : {}),
-						...(first.graphNodes !== undefined ? { graphNodes: first.graphNodes } : {}),
-						...(first.graphEdges !== undefined ? { graphEdges: first.graphEdges } : {}),
-						...(first.scopeAmbiguities !== undefined ? { scopeAmbiguities: first.scopeAmbiguities } : {}),
-					},
-				}
-			: {}),
+		...(arm.kind === "explore" && collectedMetrics.length ? { explore: exploreMedians(collectedMetrics) } : {}),
 		...(arm.kind === "replay"
 			? {
 					replay: {
@@ -459,6 +547,21 @@ export function buildState(manifest: Manifest, fleet: FleetView, events: DashEve
 			.map((model) => passView(arm, model, manifest.entries.filter((e) => e.armId === arm.id && e.model === model), fleet, defaultModel))
 			.filter((p) => p.submitted > 0),
 	}));
+
+	// Rank each target's collected explore passes by map comprehensiveness (rankExplore).
+	// Per targetKey, never globally: comparing a web map's node count against the Yarn app's
+	// says nothing. The page only colors dots from these ranks.
+	const rankGroups = new Map<string, PassView[]>();
+	for (const a of arms) {
+		if (a.kind !== "explore") continue;
+		for (const p of a.passes) if (p.explore) rankGroups.set(a.targetKey, [...(rankGroups.get(a.targetKey) ?? []), p]);
+	}
+	for (const group of rankGroups.values()) {
+		const ranks = rankExplore(group.map((p) => p.explore ?? {}));
+		group.forEach((p, i) => {
+			p.exploreRank = { rank: ranks[i] as number, of: group.length };
+		});
+	}
 
 	const allEntries = arms.flatMap((a) => a.passes.flatMap((p) => p.entries));
 	const collectedEntries = manifest.entries.filter((e) => e.collected);
@@ -1270,7 +1373,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		setTimeout(() => s.destroy(), 1000).unref?.();
 	};
 
-	const teardownPeek = (code = 1001, reason = "peek closed"): void => {
+	const teardownPeek = (code = 1001, reason = "view closed"): void => {
 		if (!peek) return;
 		const p = peek;
 		peek = undefined;
@@ -1285,7 +1388,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		// closes the forwards (a mux client's kill() leaves the master's forward standing).
 		for (const t of p.tunnels) t?.kill("SIGTERM");
 		for (const s of p.sockets) closeSocket(s, code, reason);
-		addEvent(`peek: closed (${p.host}) — ${reason}`);
+		addEvent(`view: closed (${p.host}) — ${reason}`);
 	};
 
 	const endpointUp = async (port: number): Promise<boolean> => {
@@ -1319,7 +1422,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		p.tunnels[slot] = child;
 		child.once("exit", (codeOrNull) => {
 			if (p.closing || peek !== p) return; // teardown killed it — expected
-			addEvent(`peek: tunnel :${remote} on ${p.host} exited (${codeOrNull ?? "signal"})`);
+			addEvent(`view: tunnel :${remote} on ${p.host} exited (${codeOrNull ?? "signal"})`);
 			p.lastStatus = castJson(p, { ev: "error", kind: "tunnel-died", message: `ssh tunnel for :${remote} on ${p.host} dropped — respawning` });
 			const n = Math.min(p.respawnCounts[slot], TUNNEL_RESPAWN_MS.length - 1);
 			p.respawnCounts[slot]++;
@@ -1395,7 +1498,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			enterWaiting(p, `waiting for a debuggable target on ${p.host}`);
 		});
 		setStatus(p, "streaming", `streaming ${p.host}`);
-		addEvent(`peek: streaming ${p.host} via ${eps.endpoint} (+${eps.browserEndpoint})`);
+		addEvent(`view: streaming ${p.host} via ${eps.endpoint} (+${eps.browserEndpoint})`);
 
 		return true;
 	};
@@ -1467,8 +1570,8 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		// learns the current state from the late-joiner replay.
 		if (peek && peek.host === hostName) return { ok: true, session: peek };
 		if (peek) {
-			castJson(peek, { ev: "error", kind: "superseded", message: `preempted by a peek of ${hostName}` });
-			teardownPeek(4409, `preempted by a peek of ${hostName}`);
+			castJson(peek, { ev: "error", kind: "superseded", message: `preempted by a view of ${hostName}` });
+			teardownPeek(4409, `preempted by a view of ${hostName}`);
 		}
 		const [{ loadHosts }, { tunnelArgv }] = await Promise.all([import("../remote/control/hosts.js"), import("../remote/control/ssh.js")]);
 		const host = loadHosts().hosts.find((h) => h.name === hostName);
@@ -1658,7 +1761,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		// Resolves fast — no probe inside. A thrown setup error (unreadable hosts file, import
 		// failure) must become a close-frame rejection, not an unhandled rejection that kills
 		// the dash: the contract is handshake-then-attach-or-reject, always.
-		const r = await ensurePeek(url.searchParams.get("host") ?? "").catch((err): EnsureResult => ({ ok: false, error: `peek setup failed — ${String(err).slice(0, 200)}` }));
+		const r = await ensurePeek(url.searchParams.get("host") ?? "").catch((err): EnsureResult => ({ ok: false, error: `view setup failed — ${String(err).slice(0, 200)}` }));
 		if (!r.ok) {
 			say({ ev: "error", message: r.error });
 			closeSocket(socket, 4400, r.error);
@@ -1670,8 +1773,8 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		// not attach to the winner.
 		const session = r.session;
 		if (peek !== session) {
-			say({ ev: "error", kind: "superseded", message: "superseded by a newer peek" });
-			closeSocket(socket, 4409, "superseded by a newer peek");
+			say({ ev: "error", kind: "superseded", message: "superseded by a newer view" });
+			closeSocket(socket, 4409, "superseded by a newer view");
 
 			return;
 		}
@@ -1711,7 +1814,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			// tunnels — an idle capture stream against a colo Mac serves nobody.
 			if (session.sockets.size === 0 && peek === session)
 				session.idleTimer = setTimeout(() => {
-					if (peek === session && session.sockets.size === 0) teardownPeek(1001, "peek idle — no viewers");
+					if (peek === session && session.sockets.size === 0) teardownPeek(1001, "view idle — no viewers");
 				}, IDLE_TEARDOWN_MS);
 		};
 		socket.on("close", gone);
