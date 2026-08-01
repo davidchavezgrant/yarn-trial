@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { buildDetail, buildState, type FleetView, groundingArmId, loadEnvFallback, matchPath, parseEnvLine, parseLogFrames, rankExplore } from "../src/bench/dash.js";
+import { buildDetail, buildState, defaultDashDate, type FleetView, fromStore, groundingArmId, loadEnvFallback, matchPath, parseDashArgs, parseEnvLine, parseLogFrames, rankExplore } from "../src/bench/dash.js";
 import type { Manifest, ManifestEntry } from "../src/bench/manifest.js";
 import { armById } from "../src/bench/matrix.js";
 
@@ -534,4 +534,98 @@ test("LoadEnvFallback__DoesNothing__When__EnvironmentAlreadyHoldsAKey", () => {
 		if (saved === undefined) delete process.env.OPENROUTER_API_KEY;
 		else process.env.OPENROUTER_API_KEY = saved;
 	}
+});
+
+/*
+ * The store adapter. The runner saves all live data under out/live (canonical, read-only to
+ * the dash) with out/archive as a hard-linked backup; anything older sits at its legacy path
+ * (out/bench, out/jobs, out/runs). Every dash read resolves live → archive → legacy, so
+ * these pin the precedence with real directories the way the buildDetail fixtures do.
+ */
+
+const REL = ["bench", "2026-08-01", "manifest.json"];
+
+const plant = (root: string, parts: string[], body = "{}"): void => {
+	fs.mkdirSync(path.join(root, ...parts.slice(0, -1)), { recursive: true });
+	fs.writeFileSync(path.join(root, ...parts), body);
+};
+
+test("FromStore__PrefersLive__When__LiveAndLegacyBothExist", () => {
+	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-store-"));
+	try {
+		plant(out, ["live", ...REL]);
+		plant(out, REL);
+		assert.equal(fromStore(REL, out), path.join(out, "live", ...REL));
+	} finally {
+		fs.rmSync(out, { recursive: true, force: true });
+	}
+});
+
+test("FromStore__FallsBackToArchiveThenLegacy__When__LiveIsAbsent", () => {
+	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-store-"));
+	try {
+		plant(out, ["archive", ...REL]);
+		plant(out, REL);
+		assert.equal(fromStore(REL, out), path.join(out, "archive", ...REL));
+		fs.rmSync(path.join(out, "archive"), { recursive: true });
+		assert.equal(fromStore(REL, out), path.join(out, ...REL));
+	} finally {
+		fs.rmSync(out, { recursive: true, force: true });
+	}
+});
+
+test("FromStore__NamesTheLegacyPath__When__ArtifactExistsNowhere", () => {
+	// The last candidate comes back so error messages and the manifest watcher name where
+	// the data is expected to appear — same contract as paths.ts's runFile.
+	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-store-"));
+	try {
+		assert.equal(fromStore(REL, out), path.join(out, ...REL));
+	} finally {
+		fs.rmSync(out, { recursive: true, force: true });
+	}
+});
+
+test("DefaultDashDate__FindsTheDrainUnderLive__When__LegacyTreeHoldsAnOlderDay", () => {
+	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-store-"));
+	try {
+		const full = JSON.stringify({ date: "x", createdAt: "x", entries: [{ jobId: "j" }] });
+		plant(out, ["bench", "2026-07-31", "manifest.json"], full);
+		plant(out, ["live", "bench", "2026-08-01", "manifest.json"], full);
+		// An empty next-day husk (any post-midnight collect mints one) must not outrank either.
+		plant(out, ["bench", "2026-08-02", "manifest.json"], JSON.stringify({ date: "x", createdAt: "x", entries: [] }));
+		assert.equal(defaultDashDate(out), "2026-08-01");
+	} finally {
+		fs.rmSync(out, { recursive: true, force: true });
+	}
+});
+
+test("BuildDetail__ReadsRunLog__When__RunLandedInTheLiveStore", () => {
+	// The consolidated layout: one directory per run, out/live/<job>/run.json — no legacy
+	// out/runs fallback involved. The walk must come out identical to the legacy fixture's.
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dash-detail-live-"));
+	try {
+		fs.mkdirSync(path.join(dir, "docs", "appmaps"), { recursive: true });
+		fs.writeFileSync(path.join(dir, "docs", "appmaps", "yarn.json"), JSON.stringify(GRAPH));
+		fs.mkdirSync(path.join(dir, "out", "live", "job-l"), { recursive: true });
+		fs.writeFileSync(
+			path.join(dir, "out", "live", "job-l", "run.json"),
+			JSON.stringify({ task: "show me how to change the cursor type", steps: [rawStep(0, "Brand Kit"), rawStep(1, "Screen Clips"), rawStep(2, "Cursor Style")] }),
+		);
+		const m = manifest(entry({ jobId: "job-l", state: "done", collected: true }));
+		const d = buildDetail("job-l", m, { dataDir: dir, benchRoot: path.join(dir, "bench") });
+		assert.equal(d.steps.length, 3);
+		assert.equal(d.steps[2]?.nodeId, "brand-kit/screen-clips/cursor-style");
+		assert.equal(d.task, "show me how to change the cursor type");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("ParseDashArgs__DefaultsToPureReader__When__NoCollectFlagGiven", () => {
+	// READ-ONLY posture: out/live is the runner's store; collecting is opt-in. --date keeps
+	// the parse off the real repo's bench tree.
+	assert.equal(parseDashArgs(["--date", "2026-08-01"]).autoCollect, false);
+	assert.equal(parseDashArgs(["--date", "2026-08-01", "--collect"]).autoCollect, true);
+	// The old opt-out stays accepted as a harmless no-op — it already means "pure reader".
+	assert.equal(parseDashArgs(["--date", "2026-08-01", "--no-collect"]).autoCollect, false);
 });

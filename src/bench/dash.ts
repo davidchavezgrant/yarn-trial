@@ -8,8 +8,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { readJournal } from "../core/journal.js";
 import type { FleetRow } from "../remote/control/fleet.js";
 import type { EngineHandle } from "../remote/liveview.js";
-import { logPath as jobLogPath, readJob as readLocalJob, readLog } from "../remote/runner/jobs.js";
-import { LIVE_DIR, RUN_FILES, appSlug, dataRoot, runFile } from "../paths.js";
+import { readJob as readLocalJob, readLog } from "../remote/runner/jobs.js";
+import { ARCHIVE_DIR, LIVE_DIR, RUN_FILES, appSlug, dataRoot, outDir, runFile } from "../paths.js";
 import { appmapSlug } from "../core/target.js";
 import { archiveDirFor } from "./collect.js";
 import { estimateCost } from "./cost.js";
@@ -26,12 +26,19 @@ import { judgeDisagreements, modelPasses, passLabel, rollup } from "./report.js"
  * the fleet drains for hours with nothing watching, and `bench collect` is a manual step.
  *
  * Three inputs, three cadences:
- *  - the manifest (fs-watched — an external `bench collect` shows up instantly),
+ *  - the manifest (fs-watched once its directory exists — an external `bench collect`
+ *    shows up instantly),
  *  - the fleet (the same `fleetStatus()` ssh fan-out the fleet panel uses, polled),
- *  - `collect()` itself, run on a loop so results land without a human typing collect.
- *    Collect is idempotent and its writes are atomic BY DESIGN (see collect.ts) — a manual
- *    collect racing this loop converges on the same bytes. `--no-collect` makes the
- *    dashboard a pure reader.
+ *  - `collect()`, OPT-IN via `--collect`. The default posture is a PURE READER (David,
+ *    2026-08-01): the runner owns ./out/live — the canonical store, with ./out/archive as
+ *    its hard-linked backup — and the dash writes nothing except the narrator's note (see
+ *    narrate()). When armed, collect is idempotent and its writes are atomic BY DESIGN
+ *    (collect.ts) — a manual collect racing this loop converges on the same bytes.
+ *    `--no-collect`, the old opt-out, is still accepted as a harmless no-op.
+ *
+ * Every dash read of generated data resolves out/live → out/archive → the legacy location
+ * (fromStore below; paths.ts's runFile is the same rule specialised to per-run artifacts),
+ * so the dash follows the data wherever the writer currently puts it.
  *
  * Everything derived (rollups, cost, judge tallies) reuses the report's own exported math —
  * the dashboard must never disagree with the report over the same manifest.
@@ -451,6 +458,37 @@ export function narratorDigest(state: DashState): Record<string, unknown> {
 }
 
 /**
+ * STORE ADAPTER — every dash read of generated data that is not a per-run artifact routes
+ * through here. (Per-run artifacts — run logs, journals, console logs — go through paths.ts's
+ * runFile, which applies the identical rule with the pre-consolidation filename mapping.)
+ *
+ * The runner saves all live data under ./out/live — the dash's canonical READ-ONLY store —
+ * with ./out/archive as a hard-linked backup. Bench manifests have NOT moved yet (manifest.ts
+ * still writes out/bench/<date>/), so today the third candidate is where they actually are;
+ * the live-first order is what lets the dash follow the data the day the writer moves it,
+ * and what keeps `--date` working against old backups meanwhile.
+ *
+ * Returns the LAST candidate when the artifact exists nowhere, so error messages and the
+ * watcher name where the data is expected to appear rather than where it last wasn't.
+ */
+export function storeRoot(relParts: string[], outRoot = outDir()): string {
+	const roots = [path.join(outRoot, LIVE_DIR), path.join(outRoot, ARCHIVE_DIR), outRoot];
+
+	return roots.find((r) => fs.existsSync(path.join(r, ...relParts))) ?? (roots[roots.length - 1] as string);
+}
+
+export function fromStore(relParts: string[], outRoot = outDir()): string {
+	return path.join(storeRoot(relParts, outRoot), ...relParts);
+}
+
+/**
+ * The day's manifest from wherever the store holds it. readManifest builds
+ * `<root>/bench/<date>/manifest.json`, so it is handed the out-root variant (out/live,
+ * out/archive, or plain out) under which that file currently exists.
+ */
+const readStoredManifest = (date: string): Manifest => readManifest(date, storeRoot(["bench", date, "manifest.json"]));
+
+/**
  * The newest note narrate() has persisted to narrative.md, if any. The live copy used to be
  * in-memory only, so a restarted dash served nothing while every note it had ever minted sat
  * on disk beside the manifest — and a restart into a keyless environment could never re-mint.
@@ -460,7 +498,7 @@ export function narratorDigest(state: DashState): Record<string, unknown> {
 function readPersistedNarrative(date: string): Narrative | undefined {
 	let raw: string;
 	try {
-		raw = fs.readFileSync(path.join(benchDir(date), "narrative.md"), "utf8");
+		raw = fs.readFileSync(fromStore(["bench", date, "narrative.md"]), "utf8");
 	} catch {
 		return undefined; // No file — nothing narrated for this date yet.
 	}
@@ -851,7 +889,9 @@ function shapeGraph(g: Record<string, any>): NonNullable<DashDetail["graph"]> {
 /** Everything the board's dropdown needs for one run: the map, the walk, the mutations. */
 export function buildDetail(jobId: string, manifest: Manifest, opts: { dataDir?: string; benchRoot?: string } = {}): DashDetail {
 	const dataDir = opts.dataDir ?? dataRoot();
-	const benchRoot = opts.benchRoot ?? benchDir(manifest.date);
+	// Store-resolved (live → archive → out/bench), off dataDir so tests stay hermetic —
+	// this is where archiveDirFor finds the pass-archived appmap graphs.
+	const benchRoot = opts.benchRoot ?? fromStore(["bench", manifest.date], path.join(dataDir, "out"));
 	const entry = manifest.entries.find((e) => e.jobId === jobId);
 	if (!entry) return { jobId, armId: "?", steps: [], mutatedKeys: [], note: "no manifest entry for this job" };
 	const arm = armById(entry.armId);
@@ -973,27 +1013,32 @@ export interface DashOptions {
  * is exactly what happened the first night this ran.
  */
 export function defaultDashDate(root?: string): string {
-	try {
-		const base = path.dirname(benchDir(utcDate(), root));
-		// Non-empty manifests only: the rollover itself can mint an empty next-day manifest
-		// (any collect run after midnight does), and that husk must not outrank the drain.
-		const dates = fs
-			.readdirSync(base)
-			.filter((d) => {
-				if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
-				try {
-					return (JSON.parse(fs.readFileSync(path.join(base, d, "manifest.json"), "utf8")).entries?.length ?? 0) > 0;
-				} catch {
-					return false;
-				}
-			})
-			.sort();
-		if (dates.length) return dates[dates.length - 1] as string;
-	} catch {
-		// No bench dir yet — today is as good as anything.
+	const outRoot = root ?? outDir();
+	// Date-dir discovery sweeps every store location (out/live, out/archive, and the legacy
+	// out/bench where manifests still land today); each candidate date is then judged on the
+	// SAME manifest the dash would actually read — fromStore's live-first resolution — so
+	// discovery and the later reads can never disagree about which copy counts.
+	const dates = new Set<string>();
+	for (const r of [path.join(outRoot, LIVE_DIR), path.join(outRoot, ARCHIVE_DIR), outRoot]) {
+		try {
+			for (const d of fs.readdirSync(path.join(r, "bench"))) if (/^\d{4}-\d{2}-\d{2}$/.test(d)) dates.add(d);
+		} catch {
+			// This store location has no bench tree (out/live's may not exist yet) — fine.
+		}
 	}
+	// Non-empty manifests only: the rollover itself can mint an empty next-day manifest
+	// (any collect run after midnight does), and that husk must not outrank the drain.
+	const drained = [...dates]
+		.filter((d) => {
+			try {
+				return (JSON.parse(fs.readFileSync(fromStore(["bench", d, "manifest.json"], outRoot), "utf8")).entries?.length ?? 0) > 0;
+			} catch {
+				return false;
+			}
+		})
+		.sort();
 
-	return utcDate();
+	return drained.length ? (drained[drained.length - 1] as string) : utcDate();
 }
 
 /** CLI flags shared by the web entry (main below) and the Electron shell (electron/dash.ts). */
@@ -1007,7 +1052,11 @@ export function parseDashArgs(args: string[]): DashOptions {
 	return {
 		port: Number(flag("--port") ?? process.env.DASH_PORT ?? 4642),
 		date: flag("--date") ?? defaultDashDate(),
-		autoCollect: !args.includes("--no-collect"),
+		// READ-ONLY by default (David, 2026-08-01): out/live is the runner's store and the
+		// dash is a reader over it — `--collect` arms the collect loop explicitly. The old
+		// opt-out `--no-collect` is deliberately still accepted (as a no-op): launchers and
+		// muscle memory that pass it must keep meaning what they always meant, a pure reader.
+		autoCollect: args.includes("--collect"),
 	};
 }
 
@@ -1085,7 +1134,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	loadEnvFallback();
 	const { port, date, autoCollect } = opts;
 
-	let manifest = readManifest(date);
+	let manifest = readStoredManifest(date);
 	let fleet: FleetView = { rows: [] };
 	const events: DashEvent[] = [];
 	const clients = new Set<http.ServerResponse>();
@@ -1162,6 +1211,14 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			}
 			narratedCount = collectedCount;
 			narrative = { updatedAt: new Date().toISOString(), text, model };
+			// THE ONE SANCTIONED WRITE (per David, 2026-08-01): the dash is otherwise a pure
+			// reader — out/live is the runner's store and nothing here may touch it. The
+			// narrator's "Findings So Far" note is the dash's OWN artifact, so it lives OUTSIDE
+			// the store, at the dash-owned out/bench/<date>/narrative.md (benchDir writes there,
+			// never through fromStore). The mkdir is part of this same write: the reader no
+			// longer creates the bench dir at startup, and the manifest may have been read from
+			// out/live or out/archive while this date's out/bench dir does not exist yet.
+			fs.mkdirSync(benchDir(date), { recursive: true });
 			fs.appendFileSync(
 				path.join(benchDir(date), "narrative.md"),
 				`\n## ${narrative.updatedAt} — ${collectedCount} collected (${model})\n\n${text}\n`,
@@ -1178,15 +1235,33 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	// The manifest is replaced atomically (temp + rename), so watch the DIRECTORY — a rename
 	// never fires a change event on the watched file itself. Debounced because one collect
 	// pass rewrites the manifest once per entry.
-	fs.mkdirSync(benchDir(date), { recursive: true });
+	//
+	// READ-ONLY POSTURE: the dash no longer mkdirs the bench dir at startup — creating store
+	// directories is the writer's job. The watcher arms only once the manifest's directory
+	// exists (the dir CONTAINING the store-resolved manifest, so watch and read agree on
+	// which copy counts); until then armManifestWatch() is retried on the fleet cadence — a
+	// cheap existence probe, and pollFleet re-reads the manifest every tick anyway, so an
+	// unwatched gap degrades to poll latency, never to missing data.
 	let watchTimer: NodeJS.Timeout | undefined;
-	fs.watch(benchDir(date), () => {
-		clearTimeout(watchTimer);
-		watchTimer = setTimeout(() => {
-			manifest = readManifest(date);
-			push();
-		}, 300);
-	});
+	let watchingManifest = false;
+	const armManifestWatch = (): void => {
+		if (watchingManifest) return;
+		const dir = path.dirname(fromStore(["bench", date, "manifest.json"]));
+		if (!fs.existsSync(dir)) return;
+		try {
+			fs.watch(dir, () => {
+				clearTimeout(watchTimer);
+				watchTimer = setTimeout(() => {
+					manifest = readStoredManifest(date);
+					push();
+				}, 300);
+			});
+			watchingManifest = true;
+		} catch {
+			// The dir vanished between the probe and the watch — the next fleet tick re-arms.
+		}
+	};
+	armManifestWatch();
 
 	// Fleet poll — lazy import so `buildState` stays importable without the ssh machinery.
 	const { fleetStatus } = await import("../remote/control/fleet.js");
@@ -1253,28 +1328,34 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		} finally {
 			polling = false;
 		}
-		manifest = readManifest(date);
+		armManifestWatch(); // no-op once armed — the cheap poll that replaces the startup mkdir
+		manifest = readStoredManifest(date);
 		push();
 	};
 
-	// Collect loop — the "results come in" mechanism. Idempotent by design (collect.ts), so
-	// racing a manual `bench collect` converges. Skipped while nothing is uncollected.
+	// Collect loop — the "results come in" mechanism, OPT-IN via --collect. In the default
+	// reader posture the loop is not constructed at all: collect() writes manifests, and the
+	// dash's only permitted write is the narrator's note. When armed it is idempotent by
+	// design (collect.ts), so racing a manual `bench collect` converges. Skipped while
+	// nothing is uncollected.
 	let collecting = false;
-	const runCollect = async (): Promise<void> => {
-		if (collecting || !manifest.entries.some((e) => !e.collected && e.host !== "local")) return;
-		collecting = true;
-		try {
-			const { collect } = await import("./collect.js");
-			const outcome = await collect({ date, log: (line) => addEvent(`collect: ${line}`) });
-			if (outcome.collected.length) addEvent(`collect: ${outcome.collected.length} run(s) landed`);
-		} catch (e) {
-			addEvent(`collect failed: ${(e as Error).message}`);
-		} finally {
-			collecting = false;
-		}
-		manifest = readManifest(date);
-		push();
-	};
+	const runCollect = !autoCollect
+		? undefined
+		: async (): Promise<void> => {
+				if (collecting || !manifest.entries.some((e) => !e.collected && e.host !== "local")) return;
+				collecting = true;
+				try {
+					const { collect } = await import("./collect.js");
+					const outcome = await collect({ date, log: (line) => addEvent(`collect: ${line}`) });
+					if (outcome.collected.length) addEvent(`collect: ${outcome.collected.length} run(s) landed`);
+				} catch (e) {
+					addEvent(`collect failed: ${(e as Error).message}`);
+				} finally {
+					collecting = false;
+				}
+				manifest = readStoredManifest(date);
+				push();
+			};
 
 	/**
 	 * Fleet peek: a view-only live stream of a colo Mac's Chromium target, embedded in its
@@ -1629,8 +1710,9 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	/**
 	 * GET /api/logs?job=<id>&host=<name>&offset=<n>[&meta=1] — the run-log pane's feed.
 	 *
-	 * Local first: a pulled/collected run's log already sits at <dataRoot>/out/live/<job>/
-	 * log.txt and needs no ssh (job.json beside it answers what meta=1 would have asked the
+	 * Local first: a pulled/collected run's log already sits on disk — out/live/<job>/log.txt
+	 * canonically, out/archive or the legacy out/jobs tree for older runs (runFile resolves) —
+	 * and needs no ssh (job.json beside it answers what meta=1 would have asked the
 	 * runner for). Otherwise ONE single-shot `runnerctl logs` — no follow key, the client's
 	 * 2.5s poll IS the follow — parsed by parseLogFrames because lastFrame() would keep only
 	 * the terminal frame and drop every chunk.
@@ -1666,11 +1748,17 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			// The local fast path answers BEFORE host validation: it shells nothing, and the
 			// synthetic "local" fleet row (plus pulled runs queried with a stale host) would
 			// otherwise 400 on inventory lookup while the log sits right here on disk.
-			if (fs.existsSync(jobLogPath(job))) {
-				// Local fast path — plain fs, covers pulled/collected runs and a runner on this
-				// machine. readLog's default root is the same <dataRoot>/out/live tree.
-				const local = readLog(job, offset);
-				const rec = readLocalJob(job);
+			//
+			// runFile resolves the console log live → archive → legacy out/jobs/<id>/log.txt
+			// (runs pulled before the 2026-08-01 consolidation must stay readable), and all
+			// three locations share the `<root>/<id>/log.txt` shape — so the resolved file's
+			// grandparent IS the root the jobs.ts readers need, and job.json sits beside the
+			// log in every layout.
+			const localLog = runFile(job, RUN_FILES.console);
+			if (fs.existsSync(localLog)) {
+				const localRoot = path.dirname(path.dirname(localLog));
+				const local = readLog(job, offset, localRoot);
+				const rec = readLocalJob(job, localRoot);
 
 				return json(200, {
 					jobId: job,
@@ -1857,7 +1945,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	}, 25_000);
 	setInterval(pollFleet, FLEET_POLL_SEC * 1000);
 	void pollFleet();
-	if (autoCollect) {
+	if (runCollect) {
 		setInterval(runCollect, COLLECT_SEC * 1000);
 		void runCollect();
 	}
