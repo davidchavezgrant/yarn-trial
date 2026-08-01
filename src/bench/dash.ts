@@ -1919,7 +1919,10 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 
 	const tryConnect = async (p: Peek, eps: { endpoint: string; browserEndpoint: string }): Promise<boolean> => {
 		const { connectCdpEngine } = await import("../remote/liveview-cdp.js");
-		const engine = await connectCdpEngine({ endpoint: eps.endpoint, browserEndpoint: eps.browserEndpoint, quality: 80, maxWidth: 1600, app: p.host });
+		// idleNeverStreams: the wall is VIEW-ONLY, so a parked New Tab becoming the last page
+		// standing (profile swap bounces the app between jobs) must show a spinner, not stream
+		// Chrome's Google-lookalike New Tab as if the run had wandered off (2026-08-01).
+		const engine = await connectCdpEngine({ endpoint: eps.endpoint, browserEndpoint: eps.browserEndpoint, quality: 80, maxWidth: 1600, app: p.host, idleNeverStreams: true });
 		if (peeks.get(p.host) !== p || p.closing) {
 			engine.close();
 

@@ -83,6 +83,16 @@ export interface CdpEngineOptions {
 	maxWidth?: number;
 	/** Accepted for EngineOptions parity, ignored — screencast has no time-based rate. */
 	fps?: number;
+	/**
+	 * Never stream an idle page (Chrome's New Tab, about:blank), even when it is the only
+	 * page left. For the dash's VIEW-ONLY preview wall: between jobs the profile swap kills
+	 * the app endpoint, the followed page drops, and the parked New Tab becomes the last
+	 * entry standing — the panel then shows what reads as "the agent went to google.com"
+	 * (Chrome's New Tab renders as a Google search page; reported 2026-08-01). A spinner is
+	 * honest there; the impersonation is not. The sign-in liveview leaves this OFF — its
+	 * operator can cmd+] to parked pages, and a flow can legitimately sit on about:blank.
+	 */
+	idleNeverStreams?: boolean;
 }
 
 /** Map a viewer fraction onto the current viewport. Clamped first — the authority clamp,
@@ -656,7 +666,12 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 	const sync = () => {
 		hopQueue = hopQueue
 			.then(async () => {
-				const want = closed ? undefined : stack.active;
+				// idleNeverStreams: an idle-page active streams NOTHING (checked at sync time,
+				// not push time — a parked page becomes active precisely when everything above
+				// it drops, and its idleness can only be judged by its URL now). The next real
+				// page's push re-syncs and takes the stream as usual.
+				const active = closed ? undefined : stack.active;
+				const want = active && opts.idleNeverStreams && isIdlePage(active.page.url()) ? undefined : active;
 				if (want?.page === streamed?.page) return;
 				if (streamed) {
 					const old = streamed.session;
@@ -675,8 +690,14 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 					// The stack emptied with the primary endpoint still up. NOT a death, so unlike
 					// the connect-time dead() paths exit does NOT fire: the error stands, and a
 					// page opening later revives the stream — only primary-endpoint death (or a
-					// first hop that never streamed) ends the session.
-					if (!closed) emit({ ev: "error", kind: "stream-stopped", detail: "every followed page closed" });
+					// first hop that never streamed) ends the session. Both kinds render as a calm
+					// spinner + status line client-side; only close codes are fatal there.
+					if (!closed)
+						emit(
+							active
+								? { ev: "error", kind: "idle-parked", detail: "only an idle page (New Tab) is open — waiting for a live page" }
+								: { ev: "error", kind: "stream-stopped", detail: "every followed page closed" },
+						);
 
 					return;
 				}
