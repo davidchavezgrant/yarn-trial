@@ -39,6 +39,36 @@ const LAUNCH_TIMEOUT_MS = 20_000;
 const LAUNCH_POLL_MS = 250;
 
 /**
+ * The launch budget when acquisition itself watched the previous instance quit or die.
+ * That relaunch is the SLOW path — first boot after a quit re-opens caches, re-registers
+ * the single-instance lock, may run updaters — and on the bench fleet a run that dies here
+ * costs a whole arm while a longer poll costs seconds (latency is explicitly not the
+ * concern; reliability is). The takeover/handoff failure below stops the wait early, so
+ * the full budget is only ever spent on an app that is genuinely still booting.
+ */
+const COLD_LAUNCH_TIMEOUT_MS = 60_000;
+
+/**
+ * How long a quit app's unix processes get to actually exit before a relaunch is safe.
+ * quitApp's "gone" is System Events' view — NSApp terminated — but the processes tear
+ * down for seconds after (Yarn's flushes and RecordKit teardown, observed 2026-07-31),
+ * still holding Chromium's single-instance lock. A launch inside that window is a silent
+ * no-op: the new process hands its command line to the DYING instance and exits, so the
+ * debug flag never applies and the endpoint poll burns its whole budget on nothing.
+ */
+const EXIT_WAIT_MS = 15_000;
+const EXIT_POLL_MS = 250;
+
+/**
+ * After the spawned launch process EXITS, how much longer the endpoint may still appear.
+ * A wrapper binary can hand off to an inner main and a stale updater can re-exec, so exit
+ * alone is not fatal — but once the child is gone past this grace AND no main process of
+ * the app exists, nothing is left that could ever open the port, and polling on is just
+ * delaying the diagnosis.
+ */
+const LAUNCH_EXIT_GRACE_MS = 5_000;
+
+/**
  * The two endpoint failures where falling back to the AX backend is sound, marked so the
  * runner can check them by TYPE — the repo rule is to never regex-match error prose (it
  * broke twice against cua's messages). Everything else in this module stays a plain Error
@@ -327,6 +357,122 @@ function portOwnerPath(port: number): string | undefined {
 const PORT_SCAN_SPAN = 20;
 
 /**
+ * Poll the scanner until it reports no main processes, or the budget ends. Returns
+ * whatever is still alive at the end — empty means the app is really gone and a relaunch
+ * cannot be swallowed by its single-instance lock. Scanner injectable so the wait is
+ * testable without quitting anything real.
+ */
+export async function awaitMainsGone(scan: () => ChromeMain[], budgetMs = EXIT_WAIT_MS, pollMs = EXIT_POLL_MS): Promise<ChromeMain[]> {
+	const deadline = Date.now() + budgetMs;
+	let alive = scan();
+	while (alive.length > 0 && Date.now() < deadline) {
+		await new Promise((r) => setTimeout(r, pollMs));
+		alive = scan();
+	}
+
+	return alive;
+}
+
+/**
+ * What a flag-bearing main whose endpoint is not answering turns out to BE. Three states
+ * fit that observation, and only watching both the endpoint and process truth separates
+ * them:
+ *
+ * - "up":    the app was still BOOTING — the debug server arrived. Attach.
+ * - "died":  the app was DYING (a caller's cold-start quit returned on System Events'
+ *            word while the process lived on) and has now finished. Relaunch is safe.
+ * - "alive": the budget ended with the process still running and no server — the
+ *            argv-sanitizing signature; no amount of waiting produces an endpoint.
+ *
+ * The old fixed 2s probe called all three "port-stripped", which sent the dying-instance
+ * case — the normal aftermath of every bench cold start — to a hard failure.
+ */
+export async function settleFlaggedInstance(
+	probe: () => Promise<boolean>,
+	scan: () => ChromeMain[],
+	budgetMs = EXIT_WAIT_MS,
+	pollMs = EXIT_POLL_MS,
+): Promise<"up" | "died" | "alive"> {
+	const deadline = Date.now() + budgetMs;
+	for (;;) {
+		if (await probe()) return "up";
+		if (scan().length === 0) return "died";
+		if (Date.now() >= deadline) return "alive";
+		await new Promise((r) => setTimeout(r, pollMs));
+	}
+}
+
+/** What the launch wait OBSERVED, success or not — the failure message is built from this,
+ *  because the next failed unattended run has only that string to diagnose itself with. */
+export interface LaunchOutcome {
+	up: boolean;
+	probes: number;
+	waitedMs: number;
+	/** Set when the spawned process exited during the wait: code/signal as node reported
+	 *  them, and how long after spawn. An exited child with no endpoint and no surviving
+	 *  main is the singleton-handoff signature. */
+	childExit?: { code: number | null; signal: NodeJS.Signals | null; afterMs: number };
+	/** Main processes alive when the wait ended. Meaningful on failure only. */
+	mains: ChromeMain[];
+}
+
+/**
+ * Wait for a just-spawned launch to open its endpoint. Unlike a plain endpoint poll this
+ * watches the child too: a child that exits is not by itself fatal (a wrapper binary may
+ * hand off to an inner main), but once it is gone past the grace AND no main process of
+ * the app remains, the poll stops early — nothing left alive could ever open the port,
+ * and the exit IS the diagnosis. All collaborators injectable for tests.
+ */
+export async function awaitLaunchedEndpoint(
+	probe: () => Promise<boolean>,
+	scan: () => ChromeMain[],
+	childExit: () => LaunchOutcome["childExit"],
+	budgetMs: number,
+	pollMs = LAUNCH_POLL_MS,
+	exitGraceMs = LAUNCH_EXIT_GRACE_MS,
+): Promise<LaunchOutcome> {
+	const started = Date.now();
+	let probes = 0;
+	for (;;) {
+		probes++;
+		if (await probe()) return { up: true, probes, waitedMs: Date.now() - started, mains: [] };
+		const exit = childExit();
+		const now = Date.now();
+		const budgetOver = now - started >= budgetMs;
+		const exitedPastGrace = exit !== undefined && now - started >= exit.afterMs + exitGraceMs;
+		if (budgetOver || exitedPastGrace) {
+			const mains = scan();
+			// Budget over: report whatever runs. Child gone: stop early only when no main
+			// survives it — a handed-off inner main still gets the full budget to boot.
+			if (budgetOver || mains.length === 0) return { up: false, probes, waitedMs: now - started, ...(exit ? { childExit: exit } : {}), mains };
+		}
+		await new Promise((r) => setTimeout(r, pollMs));
+	}
+}
+
+/** The final launch failure as one string of observations, worst ambiguity first. Pure,
+ *  so the wording that reaches an unattended run's log is pinned by tests. */
+export function describeLaunchFailure(appName: string, endpoint: string, outcome: LaunchOutcome): string {
+	const secs = (ms: number) => `${Math.round(ms / 100) / 10}s`;
+	const exit = outcome.childExit;
+	const flagged = outcome.mains.some((m) => debugPortFromArgv(m.argv) !== undefined);
+	const state =
+		outcome.mains.length === 0
+			? "no main process of the app is left running"
+			: `${outcome.mains.length} main process(es) now run ${flagged ? "WITH" : "WITHOUT"} the debug flag (pid ${outcome.mains.map((m) => m.pid).join(", ")})`;
+	const verdict = exit
+		? outcome.mains.length === 0
+			? `the launch process exited after ${secs(exit.afterMs)} (code ${exit.code}, signal ${exit.signal}) — a lingering earlier instance likely held the single-instance lock and swallowed the launch as it died`
+			: `the launch process exited after ${secs(exit.afterMs)} (code ${exit.code}, signal ${exit.signal}) — the app relaunched itself without the flag (updater or wrapper handoff)`
+		: "the launch process is still running but never opened the port — it may sanitize Chromium switches (Figma-style hardening), or an updater relaunched it without them";
+
+	return (
+		`${appName} launched but exposed no debugging endpoint at ${endpoint} after ${secs(outcome.waitedMs)} (${outcome.probes} probes); ` +
+		`${verdict}; ${state}`
+	);
+}
+
+/**
  * Bring up a CDP endpoint for the app and return where it landed. Process truth first,
  * endpoint second — the port number proves nothing about who owns it: the first live run
  * of this path attached to Notion Calendar (which happened to hold the default 9222) and
@@ -347,6 +493,10 @@ const PORT_SCAN_SPAN = 20;
  */
 export async function ensureElectronEndpoint(appName: string, preferredPort: number): Promise<{ endpoint: string; port: number }> {
 	const bin = appExecutable(appName);
+	// Whether acquisition itself watched the previous instance quit or finish dying. That
+	// relaunch is the slow boot (caches, updaters, lock re-registration) and gets the
+	// longer endpoint budget below.
+	let coldRelaunch = false;
 
 	const argv = mainProcessArgv(bin);
 	if (argv) {
@@ -361,20 +511,39 @@ export async function ensureElectronEndpoint(appName: string, preferredPort: num
 			console.log(`${appName} is running without a debug port — quitting it to relaunch with one (BENCH_QUIT_PORTLESS)`);
 			const { quitApp } = await import("../core/appctl.js");
 			await quitApp(appName);
-			// Fall through to the launch path below: mainProcessArgv would now return
-			// undefined, so the state is exactly the "not running" case.
+			// quitApp resolves on System Events' word — NSApp terminated — while the unix
+			// processes tear down for seconds after, still holding the single-instance lock.
+			// Launching into that window hands the flag to the dying instance (it exits, the
+			// flag never applies), so wait for PROCESS truth before falling through to launch.
+			const lingering = await awaitMainsGone(() => chromeMains(bin));
+			if (lingering.length > 0)
+				throw new Error(
+					`${appName} quit (System Events agrees) but ${lingering.length} main process(es) are still alive after ` +
+						`${EXIT_WAIT_MS / 1000}s (pid ${lingering.map((l) => l.pid).join(", ")}) — teardown is hung, and relaunching now ` +
+						`would hand the debug flag to the dying instance`,
+				);
+			coldRelaunch = true;
 		} else {
 			const endpoint = `http://127.0.0.1:${declared}`;
-			if (!(await endpointAlive(endpoint, 8, 250)))
-				// The flag is on the argv yet nothing listens: an argv-sanitizing app strips it
-				// before Chromium sees it, so ps shows the launch-time flag over a dead port.
+			const settled = await settleFlaggedInstance(() => endpointAlive(endpoint, 1, 0), () => chromeMains(bin));
+			if (settled === "up") {
+				if (declared !== preferredPort) console.log(`${appName} already exposes its own debug port ${declared} — attaching there`);
+
+				return { endpoint, port: declared };
+			}
+			if (settled === "alive")
+				// Process outlived the whole wait with no server: an argv-sanitizing app strips
+				// the flag before Chromium sees it, so ps shows the launch-time flag over a
+				// port that will never open.
 				throw new EndpointUnavailableError(
 					"port-stripped",
-					`${appName} is running with --remote-debugging-port=${declared} but ${endpoint} is not answering`,
+					`${appName} is running with --remote-debugging-port=${declared} but ${endpoint} never answered in ` +
+						`${EXIT_WAIT_MS / 1000}s and the process is still alive — the app likely strips Chromium switches before the runtime sees them`,
 				);
-			if (declared !== preferredPort) console.log(`${appName} already exposes its own debug port ${declared} — attaching there`);
-
-			return { endpoint, port: declared };
+			// "died": the flag-bearing main was a DYING instance from a caller's cold-start
+			// quit, and it has now actually exited — the lock is free, so relaunch.
+			console.log(`${appName}'s previous instance finished exiting while its dead endpoint was being probed — relaunching`);
+			coldRelaunch = true;
 		}
 	}
 
@@ -391,17 +560,26 @@ export async function ensureElectronEndpoint(appName: string, preferredPort: num
 	console.log(`launching ${appName} with --remote-debugging-port=${port}`);
 	// Detached and left running on close, same as the Chrome launch in cdp.ts: the app is
 	// the session holder, and the next run reattaches in milliseconds.
+	const spawnedAt = Date.now();
 	const child = spawn(bin, [`--remote-debugging-port=${port}`, ...KEEP_RENDERING_FLAGS], { stdio: "ignore", detached: true });
 	// The poll below produces the honest failure message; an async spawn error would only
 	// add an uncaught crash before it.
 	child.on("error", () => {});
+	// Exit is EVIDENCE, not (yet) failure: the wait uses it to stop early when nothing
+	// survives the child, and the error message uses it to say what actually happened.
+	let exitInfo: LaunchOutcome["childExit"];
+	child.once("exit", (code, signal) => (exitInfo = { code, signal, afterMs: Date.now() - spawnedAt }));
 	child.unref();
-	if (!(await endpointAlive(endpoint, Math.ceil(LAUNCH_TIMEOUT_MS / LAUNCH_POLL_MS), LAUNCH_POLL_MS)))
-		throw new EndpointUnavailableError(
-			"port-stripped",
-			`${appName} launched but exposed no debugging endpoint at ${endpoint} within ${LAUNCH_TIMEOUT_MS / 1000}s — ` +
-				`it may ignore Chromium switches, or an updater relaunched it without them`,
-		);
+	const outcome = await awaitLaunchedEndpoint(
+		() => endpointAlive(endpoint, 1, 0),
+		() => chromeMains(bin),
+		() => exitInfo,
+		coldRelaunch ? COLD_LAUNCH_TIMEOUT_MS : LAUNCH_TIMEOUT_MS,
+	);
+	if (!outcome.up)
+		// Still the marked type: whatever the mechanism, the app is (or will be) running
+		// without a reachable DOM, which is exactly the state the ax fallback exists for.
+		throw new EndpointUnavailableError("port-stripped", describeLaunchFailure(appName, endpoint, outcome));
 	// The scan-then-launch above races anything else binding ports; one owner check after
 	// the endpoint answers turns a lost race into an error instead of a wrong-app attach.
 	const owner = portOwnerPath(port);

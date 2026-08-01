@@ -4,7 +4,20 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { appExecutable, canMintTargets, chooseFlaggedChrome, debugPortFromArgv, isMainProcessOf, pickMainPage, strayChromes } from "../src/backends/electron-attach.js";
+import {
+	appExecutable,
+	awaitLaunchedEndpoint,
+	awaitMainsGone,
+	canMintTargets,
+	chooseFlaggedChrome,
+	debugPortFromArgv,
+	describeLaunchFailure,
+	isMainProcessOf,
+	type LaunchOutcome,
+	pickMainPage,
+	settleFlaggedInstance,
+	strayChromes,
+} from "../src/backends/electron-attach.js";
 
 // The shape a real Electron endpoint presents: the app's window is NOT alone — its
 // devtools, extension machinery and hidden background window are all page targets too,
@@ -231,4 +244,129 @@ test("strayChromes__ListsEveryMain__When__ThereIsNoKeeper", () => {
 
 test("strayChromes__ListsNothing__When__OnlyTheKeeperRuns", () => {
 	assert.deepEqual(strayChromes([FLAGGED], FLAGGED.pid), []);
+});
+
+// ---- relaunch-after-quit: process truth before the flag goes on the command line ------------
+// mac2, 2026-07-31: a bench cold start quit Yarn, and the relaunch window is where the
+// singleton-takeover class lives — quitApp resolves on System Events' word while the unix
+// main tears down for seconds after, still holding Chromium's single-instance lock, so a
+// launch inside that window hands the flag to the dying instance and the new process exits.
+// These waits are pure over injected scanners/probes, so the race is testable without
+// quitting anything real.
+
+const DYING_MAIN = { pid: 4242, argv: "/Applications/Yarn.app/Contents/MacOS/Yarn" };
+
+/** A scanner that walks through canned snapshots and stays on the last one. */
+function scanSequence(snapshots: (typeof DYING_MAIN)[][]): { scan: () => (typeof DYING_MAIN)[]; calls: () => number } {
+	let i = 0;
+
+	return { scan: () => snapshots[Math.min(i++, snapshots.length - 1)], calls: () => i };
+}
+
+test("awaitMainsGone__ReturnsEmpty__When__TheMainsExitMidWait", async () => {
+	// The dying instance is visible on the first two scans and gone on the third — the
+	// wait must keep polling past a non-empty snapshot rather than giving up on it.
+	const seq = scanSequence([[DYING_MAIN], [DYING_MAIN], []]);
+	assert.deepEqual(await awaitMainsGone(seq.scan, 2_000, 10), []);
+	assert.ok(seq.calls() >= 3);
+});
+
+test("awaitMainsGone__ReturnsTheSurvivors__When__TheBudgetEnds", async () => {
+	// A teardown-hung main must come BACK to the caller: relaunching over it would hand
+	// the debug flag to a process that is never going to apply it.
+	assert.deepEqual(await awaitMainsGone(() => [DYING_MAIN], 120, 20), [DYING_MAIN]);
+});
+
+test("awaitMainsGone__ReturnsWithoutSleeping__When__NothingRuns", async () => {
+	const seq = scanSequence([[]]);
+	assert.deepEqual(await awaitMainsGone(seq.scan, 5_000, 1_000), []);
+	// One look was enough — a clean state must not cost a poll interval.
+	assert.equal(seq.calls(), 1);
+});
+
+test("settleFlaggedInstance__ReturnsUp__When__TheEndpointAnswers", async () => {
+	// The booting case: flag on the argv, server arrives mid-wait. The old fixed probe
+	// handled this one; the point here is that the new loop still does.
+	let probes = 0;
+	const settled = await settleFlaggedInstance(async () => ++probes >= 3, () => [DYING_MAIN], 2_000, 10);
+	assert.equal(settled, "up");
+});
+
+test("settleFlaggedInstance__ReturnsDied__When__TheProcessExitsBeforeTheEndpointAnswers", async () => {
+	// The bench cold-start aftermath: the flag-bearing main is a DYING instance whose
+	// server is already down. "died" is what licenses the relaunch — calling this
+	// port-stripped (the old behavior) failed the run instead.
+	const seq = scanSequence([[DYING_MAIN], [DYING_MAIN], []]);
+	assert.equal(await settleFlaggedInstance(async () => false, seq.scan, 2_000, 10), "died");
+});
+
+test("settleFlaggedInstance__ReturnsAlive__When__TheBudgetEndsWithTheProcessStillUp", async () => {
+	// The argv-sanitizing signature: process healthy forever, port never opens.
+	assert.equal(await settleFlaggedInstance(async () => false, () => [DYING_MAIN], 100, 20), "alive");
+});
+
+test("awaitLaunchedEndpoint__ReportsUp__When__TheEndpointAppears", async () => {
+	let probes = 0;
+	const outcome = await awaitLaunchedEndpoint(async () => ++probes >= 3, () => [], () => undefined, 2_000, 10);
+	assert.equal(outcome.up, true);
+	assert.equal(outcome.probes, 3);
+});
+
+test("awaitLaunchedEndpoint__StopsEarly__When__TheChildExitedAndNothingSurvivesIt", async () => {
+	// The singleton handoff: the spawned process exits, no main remains, nothing left
+	// alive could ever open the port. Waiting out a 60s cold budget there just delays the
+	// diagnosis, so the loop must stop at the exit grace instead.
+	const started = Date.now();
+	const outcome = await awaitLaunchedEndpoint(async () => false, () => [], () => ({ code: 0, signal: null, afterMs: 0 }), 60_000, 10, 50);
+	assert.equal(outcome.up, false);
+	assert.ok(Date.now() - started < 5_000, "the wait must not run anywhere near the full budget");
+	assert.equal(outcome.childExit?.code, 0);
+	assert.deepEqual(outcome.mains, []);
+});
+
+test("awaitLaunchedEndpoint__KeepsWaiting__When__AMainSurvivesTheChild", async () => {
+	// The wrapper/handoff shape (Yarn is an app-in-an-app): the outer binary may exit
+	// while an inner main boots. A surviving main means the port could still open, so the
+	// early stop must NOT fire — the endpoint arriving after the grace still wins.
+	let probes = 0;
+	const outcome = await awaitLaunchedEndpoint(async () => ++probes >= 8, () => [DYING_MAIN], () => ({ code: 0, signal: null, afterMs: 0 }), 5_000, 10, 20);
+	assert.equal(outcome.up, true);
+});
+
+test("awaitLaunchedEndpoint__ReportsTheSurvivors__When__TheBudgetEndsWithMainsAlive", async () => {
+	const outcome = await awaitLaunchedEndpoint(async () => false, () => [DYING_MAIN], () => undefined, 100, 20);
+	assert.equal(outcome.up, false);
+	assert.deepEqual(outcome.mains, [DYING_MAIN]);
+	assert.equal(outcome.childExit, undefined);
+});
+
+test("describeLaunchFailure__NamesTheSingletonHandoff__When__TheChildExitedWithNothingLeft", () => {
+	// This string is all an unattended bench run leaves behind — it must carry the
+	// mechanism, not just "no endpoint".
+	const outcome: LaunchOutcome = { up: false, probes: 12, waitedMs: 5_400, childExit: { code: 0, signal: null, afterMs: 800 }, mains: [] };
+	const msg = describeLaunchFailure("Yarn", "http://127.0.0.1:9222", outcome);
+	assert.match(msg, /single-instance lock/);
+	assert.match(msg, /exited after 0\.8s/);
+	assert.match(msg, /no main process of the app is left running/);
+	assert.match(msg, /12 probes/);
+});
+
+test("describeLaunchFailure__NamesArgvSanitizing__When__TheChildStillRunsSilently", () => {
+	// ps shows the launch-time flag even when the app stripped it internally, so the
+	// message must say the process is alive AND that the flag is visibly on the argv.
+	const flaggedMain = { pid: 77, argv: "/Applications/Figma.app/Contents/MacOS/Figma --remote-debugging-port=9222" };
+	const msg = describeLaunchFailure("Figma", "http://127.0.0.1:9222", { up: false, probes: 240, waitedMs: 60_000, mains: [flaggedMain] });
+	assert.match(msg, /sanitize Chromium switches/);
+	assert.match(msg, /WITH the debug flag/);
+	assert.match(msg, /pid 77/);
+});
+
+test("describeLaunchFailure__NamesTheFlaglessRelaunch__When__AMainSurvivedTheExitedChild", () => {
+	// Updater/wrapper shape: our child died but SOMETHING runs, without the flag — the
+	// diagnosis differs from both the handoff and the sanitizer, and so must the message.
+	const outcome: LaunchOutcome = { up: false, probes: 80, waitedMs: 20_000, childExit: { code: 0, signal: null, afterMs: 300 }, mains: [DYING_MAIN] };
+	const msg = describeLaunchFailure("Yarn", "http://127.0.0.1:9222", outcome);
+	assert.match(msg, /relaunched itself without the flag/);
+	assert.match(msg, /WITHOUT the debug flag/);
+	assert.match(msg, /pid 4242/);
 });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CDP_ACT_TOOL, CDP_RULES, cdpActTool, cdpRules, demoClickPlan, originMatches, parseAiSnapshot, playwrightKey, webPageChoice } from "../src/backends/cdp.js";
+import { CDP_ACT_TOOL, CDP_RULES, cdpActTool, cdpRules, demoClickPlan, noEndpointMessage, originMatches, parseAiSnapshot, playwrightKey, webPageChoice } from "../src/backends/cdp.js";
 
 // A real ai-mode snapshot shape, taken from the live probe that preceded this backend
 // (headless Chrome 139, playwright-core 1.62): roles, quoted names, [ref]/[box]/flag
@@ -228,4 +228,33 @@ test("webPageChoice__ColonizesABlankTabAsOwned__When__NoneMatchTheOrigin", () =>
 test("webPageChoice__CreatesAPageAsOwned__When__NothingSuitableExists", () => {
 	// -1 = no usable tab: the caller newPage()s, and that page is the run's to close.
 	assert.deepEqual(webPageChoice(["https://example.com/"], "https://en.wikipedia.org"), { index: -1, owned: true });
+});
+
+// ---- noEndpointMessage: the string an unattended run dies with ------------------------------
+// mac2, 2026-07-31: a bench cold start quit Yarn, and an app target built WITHOUT cdpAttach
+// meant acquire never relaunched it — one instant probe of a port nothing would ever open,
+// then a message telling an absent operator to launch the app by hand. The next run of that
+// class must name the actual fault: the target's construction.
+
+test("noEndpointMessage__NamesTheMissingCdpAttach__When__AnAppTargetWasNeverMarkedForLaunch", () => {
+	const msg = noEndpointMessage({ kind: "app", name: "Yarn" }, "http://127.0.0.1:9222", 9222, false);
+	assert.match(msg, /no CDP endpoint at http:\/\/127\.0\.0\.1:9222/);
+	assert.match(msg, /not marked cdpAttach/);
+	assert.match(msg, /electronTarget\(\)/);
+	// The operator instruction survives — it is still the fix when a human IS present.
+	assert.match(msg, /open -a "<App>" --args --remote-debugging-port=9222/);
+});
+
+test("noEndpointMessage__StaysBare__When__TheTargetWasMarkedCdpAttach", () => {
+	// cdpAttach targets DID go through ensureElectronEndpoint; blaming the target's
+	// construction there would point diagnosis at the one thing known to be right.
+	const msg = noEndpointMessage({ kind: "app", name: "Yarn", cdpAttach: true }, "http://127.0.0.1:9222", 9222, false);
+	assert.doesNotMatch(msg, /cdpAttach/);
+});
+
+test("noEndpointMessage__StaysBare__When__CdpUrlPointedElsewhere", () => {
+	// An explicit CDP_URL bypasses the launch machinery on purpose; the endpoint being
+	// dead is about the operator's URL, not the target.
+	const msg = noEndpointMessage({ kind: "app", name: "Yarn" }, "http://127.0.0.1:9400", 9400, true);
+	assert.doesNotMatch(msg, /cdpAttach/);
 });

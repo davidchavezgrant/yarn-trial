@@ -78,6 +78,28 @@ async function hasPageTarget(endpoint: string): Promise<boolean> {
 	}
 }
 
+/**
+ * The no-endpoint refusal, built from what acquire actually knew. The extra clause is the
+ * lesson of the 2026-07-31 bench kill: an app target WITHOUT `cdpAttach` never calls
+ * ensureElectronEndpoint, so after a caller's cold-start quit there is nothing listening
+ * and nothing that would relaunch — and the old message ("launch it with the flag first")
+ * read as an operator problem when the real fault was the target's construction. Pure,
+ * so the string an unattended run dies with is pinned by tests.
+ */
+export function noEndpointMessage(target: Target, endpoint: string, port: number, cdpUrlSet: boolean): string {
+	const base =
+		`no CDP endpoint at ${endpoint}. For an Electron app, launch it with the flag first:\n` +
+		`  open -a "<App>" --args --remote-debugging-port=${port}\n` +
+		`or point CDP_URL at an existing endpoint.`;
+	if (target.kind !== "app" || target.cdpAttach || cdpUrlSet) return base;
+
+	return (
+		`${base}\n` +
+		`(this app target is not marked cdpAttach, so acquisition never launches "${target.name}" itself — ` +
+		`callers that quit the app before acquiring must build the target with electronTarget(), or nothing relaunches it)`
+	);
+}
+
 /** Open one blank tab over the DevTools HTTP API, giving Playwright a context to attach to. */
 async function openBlankPage(endpoint: string): Promise<void> {
 	// PUT is what current Chrome requires for /json/new; older builds accepted GET.
@@ -420,11 +442,7 @@ export class CdpBackend {
 			({ endpoint, port } = await ensureElectronEndpoint(target.name, port));
 
 		if (!(await endpointAlive(endpoint, 1, 0)))
-			throw new Error(
-				`no CDP endpoint at ${endpoint}. For an Electron app, launch it with the flag first:\n` +
-					`  open -a "<App>" --args --remote-debugging-port=${port}\n` +
-					`or point CDP_URL at an existing endpoint.`,
-			);
+			throw new Error(noEndpointMessage(target, endpoint, port, !!process.env.CDP_URL));
 
 		// A Chrome whose last window was closed keeps RUNNING on macOS: the process lives, the
 		// endpoint answers /json/version, and endpointAlive above is satisfied — but
