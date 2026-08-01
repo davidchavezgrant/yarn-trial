@@ -62,3 +62,7 @@ In single passes, CDP saw 5.4× more controls per action than AX but converted o
 ## 2026-08-01T01:02:34.101Z — 5 collected (gpt-5.6-sol)
 
 In single passes, removing vision from AX exposed 2.1× more controls per action but actuated 8% fewer, cutting conversion from 11.0% to 4.9%. No-vision AX produced 6% fewer nodes and 21% fewer surfaces per action while using 17% more calls and 26% more output tokens. Vision-only mapping yielded 82% fewer surfaces and 75% fewer nodes per action than full AX, despite only 25% fewer calls, virtually identical tokens, and 15% less time per action.
+
+## 2026-08-01T01:09:41.362Z — 4 collected (gpt-5.6-sol)
+
+In one pass each, CDP was not leaner than AX, using 1.6× more calls, 1.7× more output tokens, and 1.5× more time per action. CDP saw 5.4× more controls and actuated 35% more per action, but converted only 2.8% versus AX’s 11.0% and incurred 17× more scope ambiguities per action. On Notion versus the smaller CDP target, actuation density held within 3% while calls and tokens per action fell 34% and 39%, and scope ambiguities fell 89%.

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { buildDetail, buildState, type FleetView, groundingArmId, matchPath } from "../src/bench/dash.js";
+import { buildDetail, buildState, type FleetView, groundingArmId, loadEnvFallback, matchPath, parseEnvLine } from "../src/bench/dash.js";
 import type { Manifest, ManifestEntry } from "../src/bench/manifest.js";
 import { armById } from "../src/bench/matrix.js";
 
@@ -74,7 +74,7 @@ test("BuildState__RollsUpSuccessAndCost__When__EntriesAreCollected", () => {
 				jobId: "job-ok",
 				state: "done",
 				collected: true,
-				metrics: { success: true, steps: 5, elapsedSec: 205, model: "claude-opus-5", inputTokens: 1_000_000, outputTokens: 100_000, endedAt: "2026-07-31T20:10:00.000Z" },
+				metrics: { success: true, steps: 5, elapsedSec: 205, model: "claude-opus-5", inputTokens: 1_000_000, outputTokens: 100_000, cacheReadTokens: 310_000, cacheCreationTokens: 88_000, endedAt: "2026-07-31T20:10:00.000Z" },
 			}),
 			entry({ jobId: "job-bad", state: "failed", collected: true, metrics: { success: false, failureKind: "unready" } }),
 		),
@@ -86,9 +86,16 @@ test("BuildState__RollsUpSuccessAndCost__When__EntriesAreCollected", () => {
 	assert.equal(p?.collected, 2);
 	assert.equal(p?.successes, 1);
 	// The chip's "ran for" readout: the run log's own clock reaches the wire on collected entries.
-	assert.equal(p?.entries.find((e) => e.jobId === "job-ok")?.elapsedSec, 205);
-	// claude-opus-5: $5/M input + $25/M output → 1M in + 0.1M out = $7.50
-	assert.ok(Math.abs((p?.usd ?? 0) - 7.5) < 1e-9);
+	const ok = p?.entries.find((e) => e.jobId === "job-ok");
+	assert.equal(ok?.elapsedSec, 205);
+	// Per-run economics ride the wire so the chip/tooltip can show them (display-only — see EntryView caveat).
+	assert.equal(ok?.inputTokens, 1_000_000);
+	assert.equal(ok?.outputTokens, 100_000);
+	assert.equal(ok?.cacheReadTokens, 310_000);
+	assert.equal(ok?.cacheCreationTokens, 88_000);
+	// claude-opus-5: $5/M in + $25/M out + $0.50/M cache-read + $6.25/M cache-write
+	// → 1M in + 0.1M out + 0.31M read + 0.088M write = $8.205
+	assert.ok(Math.abs((p?.usd ?? 0) - 8.205) < 1e-9);
 	assert.equal(p?.failureBreakdown, "unready 1");
 	assert.equal(s.progress.collected, 2);
 	assert.equal(s.progress.successes, 1);
@@ -266,5 +273,48 @@ test("BuildDetail__QualifiesBareGatedIds__When__AppmapRecordsThemUnpathed", () =
 		);
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+/*
+ * The env fallback exists because watchdogs launch the dash as bare `tsx watch`, skipping
+ * ./run's sourcing. The parser is pure and tested directly; loadEnvFallback's file walk
+ * touches the real filesystem, so only its keyed no-op guard is tested here.
+ */
+
+test("ParseEnvLine__ReturnsPair__When__LineIsPlainAssignment", () => {
+	assert.deepEqual(parseEnvLine("OPENROUTER_API_KEY=sk-or-abc123"), ["OPENROUTER_API_KEY", "sk-or-abc123"]);
+});
+
+test("ParseEnvLine__ReturnsPair__When__LineUsesExportPrefix", () => {
+	assert.deepEqual(parseEnvLine("export ANTHROPIC_API_KEY=sk-ant-xyz"), ["ANTHROPIC_API_KEY", "sk-ant-xyz"]);
+});
+
+test("ParseEnvLine__StripsOneQuoteLayer__When__ValueIsQuoted", () => {
+	assert.deepEqual(parseEnvLine('KEY="quoted value"'), ["KEY", "quoted value"]);
+	assert.deepEqual(parseEnvLine("KEY='single'"), ["KEY", "single"]);
+	// Only MATCHING pairs strip, and only one layer.
+	assert.deepEqual(parseEnvLine("KEY=\"mismatched'"), ["KEY", "\"mismatched'"]);
+	assert.deepEqual(parseEnvLine("KEY=\"'nested'\""), ["KEY", "'nested'"]);
+});
+
+test("ParseEnvLine__ReturnsUndefined__When__LineIsBlankOrComment", () => {
+	assert.equal(parseEnvLine(""), undefined);
+	assert.equal(parseEnvLine("   "), undefined);
+	assert.equal(parseEnvLine("# a comment"), undefined);
+	assert.equal(parseEnvLine("#KEY=value"), undefined);
+	assert.equal(parseEnvLine("not an assignment"), undefined);
+});
+
+test("LoadEnvFallback__DoesNothing__When__EnvironmentAlreadyHoldsAKey", () => {
+	// A keyed environment must never be overridden — presence of any model key short-circuits
+	// before any file is read, so this is safe against the real repo's .env.
+	const saved = process.env.OPENROUTER_API_KEY;
+	process.env.OPENROUTER_API_KEY = "sk-or-test";
+	try {
+		assert.equal(loadEnvFallback(), undefined);
+	} finally {
+		if (saved === undefined) delete process.env.OPENROUTER_API_KEY;
+		else process.env.OPENROUTER_API_KEY = saved;
 	}
 });

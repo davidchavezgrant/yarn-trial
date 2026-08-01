@@ -363,15 +363,27 @@ function statusChip(e, rowKey, selected) {
 	if (e.status === "queued" && e.queuePosition) label += " #" + e.queuePosition;
 	if (e.stalled) label += " ⚠stalled";
 	// Collected chips answer "what did this run amount to": steps, how long it ran
-	// (job-record run time, else the run log's own clock), and what it cost.
+	// (job-record run time, else the run log's own clock), tokens out, and what it cost.
 	const ranFor = e.runSec ?? e.elapsedSec;
 	const extra = e.collected
-		? [e.steps != null ? `${e.steps} steps` : "", ranFor != null ? fmtDur(ranFor) : "", e.usd != null ? fmtMoney(e.usd) : ""]
+		? [e.steps != null ? `${e.steps} steps` : "", ranFor != null ? fmtDur(ranFor) : "",
+			e.outputTokens != null ? `${fmtK(e.outputTokens)} tok` : "", e.usd != null ? fmtMoney(e.usd) : ""]
 			.filter(Boolean).map((p) => ` · ${p}`).join("")
 		: "";
 	const judge = e.judgeTrajectory ? ` · judge ${e.judgeTrajectory[0]}` : "";
+	// Tooltip economics: raw token classes are provider-shaped (Anthropic's input excludes
+	// cache reads, Azure's includes them) — shown per run, never summed across runs.
+	const tok = [
+		e.inputTokens != null ? `in ${fmtK(e.inputTokens)}` : "",
+		e.outputTokens != null ? `out ${fmtK(e.outputTokens)}` : "",
+		e.cacheReadTokens != null ? `cache-read ${fmtK(e.cacheReadTokens)}` : "",
+		e.cacheCreationTokens != null ? `cache-write ${fmtK(e.cacheCreationTokens)}` : "",
+	].filter(Boolean);
+	const econ = tok.length
+		? `\ntokens — ${tok.join(" · ")}` + (e.usd != null ? `\nest cost ${fmtMoney(e.usd)} (published rates, not an invoice)` : "")
+		: "";
 	const open = rowKey ? ` data-row="${esc(rowKey)}" data-job="${esc(e.jobId)}"` : "";
-	return `<span class="chip${selected ? " sel" : ""}"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${e.note ? "\n" + esc(e.note) : ""}\nclick to view on the map">` +
+	return `<span class="chip${selected ? " sel" : ""}"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${e.note ? "\n" + esc(e.note) : ""}\nclick to view on the map${esc(econ)}">` +
 		`<span class="dot" style="background:${color}"></span>${esc(e.host)} · ${label}${esc(extra)}${esc(judge)}</span>`;
 }
 
@@ -449,19 +461,11 @@ const EXPLORE_HEAD = "<tr>" + th("name", NAME_TIP) +
 // it is the key the report and the manifest speak. Perception and actuation are NOT in
 // the name: they are their own columns ("vision-only explore (AX)" folded two axes into
 // one confusing label — it meant sees-pixels-only, acts-via-AX).
-function displayName(a) {
-	const f = a.flags || "";
-	if (a.kind === "explore") return f.includes("--url") ? "web explore" : "explore";
-	const head = a.kind === "replay" ? "recipe replay"
-		: f.includes("USE_RECIPE") ? "curated-recipe task"
-		: f.includes("NO_GROUNDING") ? "ungrounded task" : "grounded task";
-	const mods = [];
-	if (f.includes("APPMAP_VARIANT=vision")) mods.push("vision map");
-	if (f.includes("--no-rescue")) mods.push("no rescue");
-	if (a.phase === 4) mods.push("2nd task");
-	if (a.phase === 5) mods.push("filmed");
-	return mods.length ? `${head} (${mods.join(", ")})` : head;
-}
+// The server derives this from the dispatch object (matrix.ts armTitle). It used to be
+// derived HERE by string-matching the rendered flags — flags.includes("USE_RECIPE") — which
+// is a parse of a display artifact: it breaks silently the moment flagsLine rewords, falling
+// through to "grounded task" rather than erroring.
+const displayName = (a) => a.title || a.id;
 
 const normModel = (m) => m.replace(/^[a-z-]+[:/]/i, "").replace(/:[a-z-]+$/i, "");
 const rowId = (a, p) => `${a.id}|${p.model}`;
@@ -826,7 +830,10 @@ function renderExplore() {
 	const exploreLabel = (a) => {
 		if (!a.perception) return a.id.replace("p1-explore-", "");
 		const full = a.url ? `${a.perception} (web)` : a.perception;
-		return full.length <= 20 ? full : full.replace(" + vision", "+vis");
+		// Compact only when it overruns the column, and compact the LONGEST words first —
+		// the wording now comes from matrix.ts perceptionLine ("AX tree + DOM attrs +
+		// screenshots"), which is more informative and therefore longer than the old copy.
+		return full.length <= 20 ? full : full.replace(" + screenshots", "+shots").replace("AX tree", "AX").replace(" attrs", "");
 	};
 	const groups = arms.flatMap((a) => a.passes.filter((p) => p.explore && p.explore.controlsSeen != null).map((p) => ({
 		label: exploreLabel(a) + (p.model !== "(default)" ? " · " + p.model : ""),

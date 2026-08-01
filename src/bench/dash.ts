@@ -1,6 +1,7 @@
 import { type ChildProcess, execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import type { Duplex } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -11,7 +12,7 @@ import { appSlug, dataRoot } from "../paths.js";
 import { appmapSlug } from "../core/target.js";
 import { archiveDirFor } from "./collect.js";
 import { estimateCost, rollupCost, usd } from "./cost.js";
-import { type Arm, armAppmapSlug, armById, flagsLine, MATRIX, type Phase } from "./matrix.js";
+import { type Arm, armAppmapSlug, armById, armTitle, flagsLine, MATRIX, perceptionLine, type Phase } from "./matrix.js";
 import { benchDir, type Manifest, type ManifestEntry, readManifest, utcDate } from "./manifest.js";
 import { judgeDisagreements, modelPasses, passLabel, rollup } from "./report.js";
 
@@ -68,7 +69,16 @@ export interface EntryView {
 	steps?: number;
 	verifiedSteps?: number;
 	modelCalls?: number;
+	/**
+	 * Raw token classes for the per-run economics readout. Provider caveat (cost.ts header):
+	 * Anthropic's inputTokens EXCLUDES cache reads while Azure's INCLUDES them, so these are
+	 * per-run display numbers only — never sum or compare them across providers. outputTokens
+	 * stays the headline number (the report's own convention).
+	 */
+	inputTokens?: number;
 	outputTokens?: number;
+	cacheReadTokens?: number;
+	cacheCreationTokens?: number;
 	usd?: number;
 	docScopeMutations?: number;
 	judgeTrajectory?: string;
@@ -116,6 +126,12 @@ export interface PassView {
 
 export interface ArmView {
 	id: string;
+	/**
+	 * Plain English, derived — "Grounding — screenshots only" rather than
+	 * `p1-explore-vision`. The ids say nothing about DOM attrs or screenshots, and
+	 * `p2-vision-only-grounded-visionmap` is unreadable at a glance.
+	 */
+	title: string;
 	phase: Phase;
 	kind: string;
 	n: number;
@@ -195,7 +211,10 @@ function entryView(e: ManifestEntry, fleet: FleetView): EntryView {
 			...(m?.elapsedSec !== undefined ? { elapsedSec: m.elapsedSec } : {}),
 			...(m?.verifiedSteps !== undefined ? { verifiedSteps: m.verifiedSteps } : {}),
 			...(m?.modelCalls !== undefined ? { modelCalls: m.modelCalls } : {}),
+			...(m?.inputTokens !== undefined ? { inputTokens: m.inputTokens } : {}),
 			...(m?.outputTokens !== undefined ? { outputTokens: m.outputTokens } : {}),
+			...(m?.cacheReadTokens !== undefined ? { cacheReadTokens: m.cacheReadTokens } : {}),
+			...(m?.cacheCreationTokens !== undefined ? { cacheCreationTokens: m.cacheCreationTokens } : {}),
 			...(cost !== undefined ? { usd: cost } : {}),
 			...(m?.mutationScopes ? { docScopeMutations: m.mutationScopes.filter((s) => s === "document").length } : {}),
 			...(m?.judgeTrajectory ? { judgeTrajectory: m.judgeTrajectory } : {}),
@@ -342,22 +361,15 @@ export function narratorPrompt(digest: Record<string, unknown>, previous?: strin
 }
 
 export function buildState(manifest: Manifest, fleet: FleetView, events: DashEvent[], autoCollect: boolean, defaultModel?: string): DashState {
-	const perceptionOf = (arm: Arm): string => {
-		const els = arm.dispatch.backend === "cdp" ? "DOM" : "AX";
-		const { noAx, noVision, axdomOff } = arm.dispatch;
-		const base = noAx && noVision ? "nothing" : noAx ? "vision only" : noVision ? `${els} only` : `${els} + vision`;
-
-		return axdomOff ? `${base}, axdom off` : base;
-	};
-
 	const arms: ArmView[] = MATRIX.map((arm) => ({
 		id: arm.id,
+		title: armTitle(arm),
 		phase: arm.phase,
 		kind: arm.kind,
 		n: arm.n,
 		flags: flagsLine(arm),
 		app: arm.app,
-		perception: perceptionOf(arm),
+		perception: perceptionLine(arm),
 		actuation: (arm.dispatch.backend ?? "ax").toUpperCase(),
 		...(arm.task ? { task: arm.task } : {}),
 		...(arm.dispatch.url ? { url: arm.dispatch.url } : {}),
@@ -743,7 +755,63 @@ function resolveHtml(): string {
 	throw new Error(`dash.html not found near ${import.meta.url}`);
 }
 
+/**
+ * Parse one .env line into [name, value]. Blanks, comments, and anything that is not a
+ * `KEY=VALUE` / `export KEY=VALUE` assignment come back undefined. One layer of matching
+ * single or double quotes is stripped from the value, mirroring what `source` would do.
+ */
+export function parseEnvLine(line: string): [string, string] | undefined {
+	const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line);
+	if (!m) return undefined;
+	let v = m[2]!.trim();
+	if (v.length >= 2 && ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))))
+		v = v.slice(1, -1);
+
+	return [m[1]!, v];
+}
+
+/**
+ * Seed process.env from the same files ./run sources, in the same order. WHY: launchers that
+ * bypass ./run (watchdogs, bare `tsx watch src/bench/dash.ts`) produced keyless dashes twice
+ * tonight (2026-07-31) — the narrator failed every tick with an OpenRouter-needs-a-key error
+ * and defaultModel resolved wrong. This makes any launch path equivalent to ./run's sourcing.
+ *
+ * A keyed environment is never overridden: if any model key is already present the loader
+ * does nothing at all, and even when a file is read, only names absent from process.env are
+ * set. First existing file wins — same `break` as the run script's loop. Returns the file
+ * that seeded the env, for the startup log line (names only — never values).
+ */
+export function loadEnvFallback(): string | undefined {
+	if ("OPENROUTER_API_KEY" in process.env || "ANTHROPIC_API_KEY" in process.env
+		|| Object.keys(process.env).some((k) => k.startsWith("AZURE"))) return undefined;
+	// Repo root from the module location, not cwd — a watchdog can launch from anywhere.
+	// Two candidates because the compiled copy sits deeper than src/ (resolveHtml's trick);
+	// package.json is the marker that says "this level is actually the repo".
+	let root: string | undefined;
+	for (const rel of ["../..", "../../.."]) {
+		const p = fileURLToPath(new URL(rel, import.meta.url));
+		if (fs.existsSync(path.join(p, "package.json"))) { root = p; break; }
+	}
+	if (!root) return undefined;
+	const runnerDir = process.env.YARN_RUNNER_DIR ?? path.join(os.homedir(), ".yarn-runner");
+	for (const file of [path.join(root, ".env"), path.join(root, "..", "yarn", ".env"), path.join(runnerDir, "env")]) {
+		if (!fs.existsSync(file)) continue;
+		for (const line of fs.readFileSync(file, "utf8").split("\n")) {
+			const kv = parseEnvLine(line);
+			if (kv && !(kv[0] in process.env)) process.env[kv[0]] = kv[1];
+		}
+		console.log(`dash: env seeded from ${file} (launcher bypassed ./run)`);
+
+		return file;
+	}
+
+	return undefined;
+}
+
 export async function startDash(opts: DashOptions): Promise<http.Server> {
+	// Before ANYTHING that calls makeClient — the defaultModel resolution just below and
+	// every narrate tick read the key env vars this seeds.
+	loadEnvFallback();
 	const { port, date, autoCollect } = opts;
 
 	let manifest = readManifest(date);

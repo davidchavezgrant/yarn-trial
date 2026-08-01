@@ -468,29 +468,13 @@ export const phaseRunCount = (phase: Phase): number => phaseArms(phase).reduce((
  * plan` output and dispatch confirmation lines.
  */
 /**
- * What the model can SEE, in words — because the flags do not say it.
- *
- * `--backend ax --no-ax` reads as a contradiction and is not one: the two flags name
- * different axes. `--backend` is ACTUATION (how a click is delivered — the cua driver or
- * CDP), `--no-ax`/`--no-vision` are PERCEPTION (which channels reach the model). So
- * "ax + no-ax" means actuate through the AX driver while showing the model screenshots only,
- * and a reader has to know that to decode it. David read it as "vision + AX" on 2026-07-31,
- * which is the opposite of what the arm measures.
- *
- * Rendered alongside the raw flags rather than instead of them: the flags are what you would
- * type, this is what the arm means.
- */
-/**
  * The appmap slug an arm reads and writes. ONE derivation for the whole bench.
  *
  * Three things vary independently — target, backend, perception tier — and any two arms
  * sharing a filename means the later pass silently overwrites the earlier. That happened
- * twice: first with every Yarn explore writing yarn.json (ax 156 nodes, cdp 196, no-vision
- * 180, last writer wins), then again in the first fix, which added the backend but not the
- * tier so p1-explore-ax and p1-explore-no-vision still collided.
- *
- * Callers must not assemble the options themselves — that is exactly how the second collision
- * survived a check script that computed the slug its own way.
+ * twice on 2026-08-01: first every Yarn explore wrote yarn.json (ax 156 nodes, cdp 196,
+ * no-vision 180, last writer won), then the first fix added the backend but not the tier so
+ * p1-explore-ax and p1-explore-no-vision still collided.
  */
 export const armAppmapSlug = (arm: Arm): string =>
 	appmapSlug(arm.app, {
@@ -499,15 +483,57 @@ export const armAppmapSlug = (arm: Arm): string =>
 		...(arm.dispatch.backend ? { backend: arm.dispatch.backend } : {}),
 	});
 
+/**
+ * What the model can SEE, in words — because the flags do not say it.
+ *
+ * `--backend ax --no-ax` reads as a contradiction and is not one: the two flags name
+ * different axes. `--backend` is ACTUATION (how a click is delivered — the cua driver or
+ * CDP), `--no-ax`/`--no-vision` are PERCEPTION (which channels reach the model). David read
+ * the vision arm as "vision + AX" on 2026-07-31, the opposite of what it measures, because
+ * the plan printed only the flags.
+ *
+ * Names the element channel PER BACKEND, because they are not the same thing: on ax it is
+ * the accessibility tree plus the DOM attributes the axdom sidecar joins on (AXDOM=0 removes
+ * the second half); on cdp the DOM IS the element channel and there is no AX at all.
+ */
 export function perceptionLine(arm: Arm): string {
-	const { noAx, noVision } = arm.dispatch;
+	const { noAx, noVision, axdomOff, backend } = arm.dispatch;
 	// Refused by the explore CLI (a window title and nothing else), but rendered honestly if a
 	// future arm ever declares it — a label that quietly cannot happen teaches nothing.
-	if (noAx && noVision) return "perception: NOTHING";
-	if (noAx) return "perception: screenshots only";
-	if (noVision) return "perception: element list only";
+	if (noAx && noVision) return "nothing";
+	if (noAx) return "screenshots only";
+	const els = backend === "cdp" ? "DOM" : axdomOff ? "AX tree (no DOM attrs)" : "AX tree + DOM attrs";
 
-	return "perception: elements + screenshots";
+	return noVision ? els : `${els} + screenshots`;
+}
+
+/**
+ * A plain-English name for an arm — the KIND and the grounding tier, nothing else.
+ *
+ * Deliberately short and deliberately silent about perception, because every surface that
+ * shows this also shows perceptionLine in its own column; saying "screenshots only" twice in
+ * one row is noise. Together they read: "Grounded task | screenshots only".
+ *
+ * Derived from the dispatch object, never from the rendered flags string. The dash used to
+ * do `flags.includes("USE_RECIPE")`, which is a parse of a display artifact — it breaks the
+ * moment flagsLine changes its wording, and silently, since a missed match just falls
+ * through to "grounded task".
+ */
+export function armTitle(arm: Arm): string {
+	const filmed = arm.dispatch.record ? "filmed " : "";
+	if (arm.kind === "explore") return `${filmed}grounding pass${arm.dispatch.url ? " (web)" : ""}`;
+	if (arm.kind === "compile") return "recipe compile";
+	if (arm.kind === "replay") return `${filmed}recipe replay${arm.dispatch.noRescue ? " (no rescue)" : ""}`;
+
+	const tier = arm.dispatch.noGrounding
+		? "ungrounded"
+		: arm.dispatch.useRecipe
+			? "human-notes"
+			: arm.env?.APPMAP_VARIANT === "vision"
+				? "vision-map grounded"
+				: "grounded";
+
+	return `${filmed}${tier} task`;
 }
 
 export function flagsLine(arm: Arm): string {

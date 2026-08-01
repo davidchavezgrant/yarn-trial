@@ -25,7 +25,7 @@ import {
 	updateEntry,
 	writeManifest,
 } from "../src/bench/manifest.js";
-import { armAppmapSlug, armById, BACKENDS, MATRIX, phaseArms, phaseRunCount, perceptionLine } from "../src/bench/matrix.js";
+import { armTitle, armAppmapSlug, armById, BACKENDS, MATRIX, phaseArms, phaseRunCount, perceptionLine } from "../src/bench/matrix.js";
 import type { DispatchOptions } from "../src/remote/control/dispatch.js";
 import { dateArg,
 	auditPhase,
@@ -884,11 +884,18 @@ test("perceptionLine__SaysWhatTheModelSees__When__FlagsLookContradictory", () =>
 	// vision arm as "vision + AX" on 2026-07-31 — the opposite of what it measures — because
 	// the plan printed only the flags and left the reader to decode them.
 	const arm = (dispatch: any): any => ({ id: "x", phase: 2, kind: "task", app: "Yarn", n: 1, dispatch });
-	assert.equal(perceptionLine(arm({ backend: "ax", noAx: true })), "perception: screenshots only");
-	assert.equal(perceptionLine(arm({ backend: "ax", noVision: true })), "perception: element list only");
-	assert.equal(perceptionLine(arm({ backend: "ax" })), "perception: elements + screenshots");
-	assert.equal(perceptionLine(arm({ backend: "cdp" })), "perception: elements + screenshots");
-	// The actuator must not change the answer — that conflation is the whole bug.
+	assert.equal(perceptionLine(arm({ backend: "ax", noAx: true })), "screenshots only");
+	// The element channel is named PER BACKEND, because they are different things: ax gives
+	// the accessibility tree plus the DOM attributes the axdom sidecar joins on, cdp gives the
+	// DOM itself and no AX at all. Calling both "elements" hid a real distinction.
+	assert.equal(perceptionLine(arm({ backend: "ax", noVision: true })), "AX tree + DOM attrs");
+	assert.equal(perceptionLine(arm({ backend: "ax" })), "AX tree + DOM attrs + screenshots");
+	assert.equal(perceptionLine(arm({ backend: "cdp" })), "DOM + screenshots");
+	// AXDOM=0 removes the second half of the ax element channel, and the label must show it —
+	// that arm exists to measure whether the sidecar is worth shipping.
+	assert.equal(perceptionLine(arm({ backend: "ax", axdomOff: true })), "AX tree (no DOM attrs) + screenshots");
+	// With NO element channel the actuator cannot change the answer — that conflation was the
+	// original bug, and it is the one case where ax and cdp must read identically.
 	assert.equal(perceptionLine(arm({ backend: "cdp", noAx: true })), perceptionLine(arm({ backend: "ax", noAx: true })));
 });
 
@@ -896,7 +903,7 @@ test("perceptionLine__ReportsTheEmptyCase__When__BothChannelsAreOff", () => {
 	// The explore CLI refuses this combination (a window title and nothing else), but a label
 	// that quietly cannot happen teaches nothing to whoever declares the arm that tries it.
 	const both: any = { id: "x", phase: 2, kind: "task", app: "Yarn", n: 1, dispatch: { backend: "ax", noAx: true, noVision: true } };
-	assert.equal(perceptionLine(both), "perception: NOTHING");
+	assert.equal(perceptionLine(both), "nothing");
 });
 
 test("dateArg__PinsAPassToOneManifest__When__ItWillCrossMidnight", () => {
@@ -949,4 +956,21 @@ test("armAppmapSlug__IsWhatTaskArmsWillRead__When__TheyGroundOnAPass", () => {
 		assert.ok(task && explore, backend);
 		assert.equal(armAppmapSlug(task), armAppmapSlug(explore), `p2-${backend}-grounded must read what p1-explore-${backend} wrote`);
 	}
+});
+
+test("armTitle__NamesTheArmWithoutRepeatingPerception__When__ShownBesideIt", () => {
+	// Title and perception appear in adjacent columns, so the title stays silent about
+	// channels — "grounded task | screenshots only" reads once, not twice.
+	const arm = (kind: string, dispatch: any, env?: any): any => ({ id: "x", phase: 2, kind, app: "Yarn", n: 1, dispatch, ...(env ? { env } : {}) });
+	assert.equal(armTitle(arm("explore", { backend: "ax" })), "grounding pass");
+	assert.equal(armTitle(arm("explore", { backend: "cdp", url: "https://app.notion.com" })), "grounding pass (web)");
+	assert.equal(armTitle(arm("task", { backend: "ax" })), "grounded task");
+	assert.equal(armTitle(arm("task", { backend: "ax", noGrounding: true })), "ungrounded task");
+	assert.equal(armTitle(arm("task", { backend: "ax", useRecipe: true })), "human-notes task");
+	assert.equal(armTitle(arm("task", { backend: "ax", noAx: true }, { APPMAP_VARIANT: "vision" })), "vision-map grounded task");
+	assert.equal(armTitle(arm("task", { backend: "ax", record: true })), "filmed grounded task");
+	assert.equal(armTitle(arm("replay", { backend: "ax", noRescue: true })), "recipe replay (no rescue)");
+	// Derived from the DISPATCH, never from the rendered flags string — the dash used to parse
+	// flagsLine output, which fails silently the moment the wording changes.
+	for (const a of MATRIX) assert.ok(armTitle(a).length > 0 && !armTitle(a).includes("undefined"), a.id);
 });
