@@ -1,20 +1,27 @@
 import assert from "node:assert/strict";
+import { createServer, type Server } from "node:http";
+import type { Duplex } from "node:stream";
 import { test } from "node:test";
+import type { EngineEvent } from "../src/remote/liveview.js";
 import {
+	browserCdpEndpoint,
 	browserPageDisposition,
 	cdpModifiers,
 	cdpQuality,
+	connectCdpEngine,
 	FollowStack,
 	fractionToCss,
 	type FrameMeta,
 	homeTransitionGate,
 	isIdlePage,
 	keyEventParams,
+	localBrowserCdpEndpoint,
 	titleFor,
 	mouseEventParams,
 	sameEndpoint,
 	wheelParams,
 } from "../src/remote/liveview-cdp.js";
+import { encodeFrame, handshakeResponse, WsDecoder } from "../src/remote/liveview-ws.js";
 
 // ---- fractionToCss: viewer fractions onto the CURRENT viewport ---------------------------
 // The CDP twin of the Swift engine's globalPoint: clamp first (authority clamp), then map
@@ -571,4 +578,193 @@ test("sameEndpoint__Differs__When__PortsDiffer", () => {
 test("sameEndpoint__FallsBackToLiteralEquality__When__Unparseable", () => {
 	assert.equal(sameEndpoint("not a url", "not a url"), true);
 	assert.equal(sameEndpoint("not a url", "http://127.0.0.1:9222"), false);
+});
+
+// ---- browserCdpEndpoint: the hop is opt-in by presence — there is no default ---------------
+// The removed loopback default (127.0.0.1:9777) meant "the machine I happen to run on",
+// which is only correct for the sign-in CLI running ON the Mac whose flagged Chrome that is.
+// For a caller on the operator's laptop (the dash's fleet peek) the same default let the
+// engine lazily probe the operator's OWN Chrome and silently stream it into the panel.
+
+/** Run fn with the named env vars forced (undefined = unset), restored after — the resolver
+ *  reads process.env directly, so tests must pin it. */
+function withEnv(vars: Record<string, string | undefined>, fn: () => void): void {
+	const saved = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+	for (const [k, v] of Object.entries(vars)) {
+		if (v === undefined) delete process.env[k];
+		else process.env[k] = v;
+	}
+	try {
+		fn();
+	} finally {
+		for (const [k, v] of Object.entries(saved)) {
+			if (v === undefined) delete process.env[k];
+			else process.env[k] = v;
+		}
+	}
+}
+
+test("browserCdpEndpoint__ReturnsUndefined__When__NoArgumentAndNoEnv", () => {
+	// Undefined is the "never hop" signal: without it the engine's lazy re-probe would need a
+	// place to aim, and any built-in place is wrong for every caller class but one.
+	withEnv({ LIVEVIEW_BROWSER_CDP_URL: undefined }, () => {
+		assert.equal(browserCdpEndpoint(undefined), undefined);
+		assert.equal(browserCdpEndpoint(""), undefined);
+		assert.equal(browserCdpEndpoint("   "), undefined);
+	});
+});
+
+test("browserCdpEndpoint__UsesTheArgument__When__ACallerNamesOne", () => {
+	withEnv({ LIVEVIEW_BROWSER_CDP_URL: "http://127.0.0.1:1111" }, () => {
+		assert.equal(browserCdpEndpoint("http://127.0.0.1:2222"), "http://127.0.0.1:2222");
+	});
+});
+
+test("browserCdpEndpoint__FallsBackToEnv__When__ArgumentAbsent", () => {
+	// LIVEVIEW_BROWSER_CDP_URL is still an opt-in: the operator SET it, naming a machine.
+	withEnv({ LIVEVIEW_BROWSER_CDP_URL: "http://127.0.0.1:1111" }, () => {
+		assert.equal(browserCdpEndpoint(undefined), "http://127.0.0.1:1111");
+	});
+});
+
+test("localBrowserCdpEndpoint__DerivesTheLoopback__When__CallerRunsOnTheBrowsersOwnMac", () => {
+	// The sign-in CLI's explicit derivation — the exact semantics the removed in-engine
+	// default had: env URL wins, CDP_PORT beats 9777 when set, blank reads as unset.
+	withEnv({ LIVEVIEW_BROWSER_CDP_URL: undefined, CDP_PORT: undefined }, () => {
+		assert.equal(localBrowserCdpEndpoint(), "http://127.0.0.1:9777");
+	});
+	withEnv({ LIVEVIEW_BROWSER_CDP_URL: undefined, CDP_PORT: "" }, () => {
+		assert.equal(localBrowserCdpEndpoint(), "http://127.0.0.1:9777");
+	});
+	withEnv({ LIVEVIEW_BROWSER_CDP_URL: undefined, CDP_PORT: "9333" }, () => {
+		assert.equal(localBrowserCdpEndpoint(), "http://127.0.0.1:9333");
+	});
+	withEnv({ LIVEVIEW_BROWSER_CDP_URL: "http://127.0.0.1:4444", CDP_PORT: "9333" }, () => {
+		assert.equal(localBrowserCdpEndpoint(), "http://127.0.0.1:4444");
+	});
+});
+
+// ---- the liveness contract: a connect-time death fires onExit ------------------------------
+// These handles used to resolve successfully, emit one buffered error event, and NEVER fire
+// onExit — so every caller had to reimplement death-sniffing off that first event (the dash
+// did). Now cdp-unreachable, no-page, and a refused first screencast all fire exit, and a
+// callback registered after the death is invoked immediately: no wiring order loses it.
+
+/** An ephemeral port nothing listens on: bind 0, read back what the OS chose, release it. */
+async function freePort(): Promise<number> {
+	const { createServer: tcpServer } = await import("node:net");
+
+	return new Promise((resolve, reject) => {
+		const srv = tcpServer();
+		srv.once("error", reject);
+		srv.listen(0, "127.0.0.1", () => {
+			const port = (srv.address() as { port: number }).port;
+			srv.close(() => resolve(port));
+		});
+	});
+}
+
+test("connectCdpEngine__FiresOnExit__When__NothingAnswersTheEndpoint", async () => {
+	const engine = await connectCdpEngine({ endpoint: `http://127.0.0.1:${await freePort()}` });
+	const events: EngineEvent[] = [];
+	engine.onEvent((ev) => events.push(ev));
+	assert.equal(events.length, 1, "the buffered error drains to the first listener");
+	assert.equal(events[0].ev, "error");
+	assert.equal((events[0] as { kind: string }).kind, "cdp-unreachable");
+
+	let exits = 0;
+	engine.onExit(() => exits++);
+	assert.equal(exits, 1, "registered after the death, the callback still fires immediately");
+	engine.onExit(() => exits++);
+	assert.equal(exits, 2, "each listener hears the death exactly once");
+
+	// A dead handle's send/close are no-ops — they must not throw.
+	engine.send({ cmd: "quit" });
+	engine.close();
+});
+
+/**
+ * A fake CDP endpoint with ZERO page targets, built on the repo's own RFC 6455 codec:
+ * answers /json/version (the engine's liveness probe and playwright's discovery both hit
+ * it), upgrades the browser WebSocket, and replies { id, result } to every command —
+ * enough for connectOverCDP to succeed and hand the engine a browser with no drivable
+ * page, which is exactly the no-page death path.
+ */
+async function startFakeCdp(): Promise<{ url: string; close: () => Promise<void> }> {
+	const sockets = new Set<Duplex>();
+	const server: Server = createServer((req, res) => {
+		if (req.url?.startsWith("/json/version")) {
+			const port = (server.address() as { port: number }).port;
+			res.setHeader("content-type", "application/json");
+			res.end(JSON.stringify({
+				Browser: "Chrome/131.0.0.0",
+				"Protocol-Version": "1.3",
+				webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/browser/fake`,
+			}));
+
+			return;
+		}
+		res.statusCode = 404;
+		res.end();
+	});
+	server.on("upgrade", (req, socket: Duplex) => {
+		sockets.add(socket);
+		socket.write(handshakeResponse(String(req.headers["sec-websocket-key"])));
+		const decoder = new WsDecoder();
+		socket.on("data", (chunk: Buffer) => {
+			let frames;
+			try {
+				frames = decoder.push(chunk);
+			} catch {
+				socket.destroy(); // close frames etc. that the tiny codec refuses — done anyway
+
+				return;
+			}
+			for (const frame of frames) {
+				// browser.close() on a connectOverCDP connection sends no CDP command at all —
+				// just a WS close frame — and then WAITS for the RFC 6455 echo. Without this
+				// reply the engine's no-page cleanup stalls on playwright's 30s timeout
+				// (measured: the whole test took 30.0s).
+				if (frame.opcode === "close") {
+					socket.write(encodeFrame(Buffer.alloc(0), "close"));
+					socket.end();
+					continue;
+				}
+				if (frame.opcode !== "text") continue;
+				const msg = JSON.parse(frame.payload.toString("utf8")) as { id: number; method: string };
+				const result = msg.method === "Browser.getVersion"
+					? { protocolVersion: "1.3", product: "Chrome/131.0.0.0", revision: "1", userAgent: "fake", jsVersion: "12" }
+					: {};
+				socket.write(encodeFrame(Buffer.from(JSON.stringify({ id: msg.id, result })), "text"));
+			}
+		});
+		socket.on("error", () => {});
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const port = (server.address() as { port: number }).port;
+
+	return {
+		url: `http://127.0.0.1:${port}`,
+		close: async () => {
+			for (const s of sockets) s.destroy();
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+		},
+	};
+}
+
+test("connectCdpEngine__FiresOnExit__When__TheEndpointHasNoDrivablePage", async () => {
+	const fake = await startFakeCdp();
+	try {
+		const engine = await connectCdpEngine({ endpoint: fake.url });
+		const events: EngineEvent[] = [];
+		let exits = 0;
+		engine.onEvent((ev) => events.push(ev));
+		engine.onExit(() => exits++);
+		assert.equal(events.length, 1);
+		assert.equal(events[0].ev, "error");
+		assert.equal((events[0] as { kind: string }).kind, "no-page");
+		assert.equal(exits, 1, "a handle born dead gives the same signal as one that dies later");
+	} finally {
+		await fake.close();
+	}
 });

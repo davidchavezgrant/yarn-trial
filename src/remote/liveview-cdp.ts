@@ -44,10 +44,13 @@
 // follows it through target space: every BrowserContext is watched for new pages, the newest
 // page wins the stream, and a closing page pops back to the most recent still-open one
 // (FollowStack below — the deep-link return to the app page IS that pop, no special casing).
-// The browser endpoint is optional by design and attached lazily: Chrome may not exist until
-// the handoff launches it, so a silent endpoint is re-probed on an interval, never an error.
-// onExit fires only when the PRIMARY endpoint dies — the sign-in target going away ends the
-// session; the browser leg dying just pops the follow stack.
+// The browser endpoint is opt-in and attached lazily: a caller that wants the hop NAMES the
+// endpoint (or sets LIVEVIEW_BROWSER_CDP_URL), and Chrome may not exist until the handoff
+// launches it, so a silent endpoint is re-probed on an interval, never an error. No endpoint
+// named at all means the engine never hops — browserCdpEndpoint has the why.
+// onExit fires when the PRIMARY leg dies — at connect (endpoint unreachable, no drivable
+// page, first screencast refused) or any time after; the browser leg dying just pops the
+// follow stack.
 
 import { type Browser, type CDPSession, chromium, type Page } from "playwright-core";
 import { envNum } from "../env.js";
@@ -65,9 +68,10 @@ export interface CdpEngineOptions {
 	endpoint?: string;
 	/**
 	 * The OPTIONAL second endpoint: the external browser an OAuth handoff lands in. Falls
-	 * back to LIVEVIEW_BROWSER_CDP_URL, then the CDP_PORT loopback default (9777 — the cdp
-	 * backend's web-Chrome port). Silent is not an error — it is probed lazily and the
-	 * session simply never hops until it answers.
+	 * back to LIVEVIEW_BROWSER_CDP_URL; absent BOTH, the engine never hops — the hop is
+	 * opt-in by presence, there is no default (browserCdpEndpoint has the why). A named but
+	 * silent endpoint is still not an error — it is probed lazily and the session simply
+	 * never hops until it answers.
 	 */
 	browserEndpoint?: string;
 	/** Prefer the page whose origin matches this URL; absent, the first real page wins. */
@@ -242,13 +246,29 @@ export function cdpEndpoint(endpoint?: string): string {
 
 /**
  * Where the OPTIONAL browser endpoint is: explicit argument, then LIVEVIEW_BROWSER_CDP_URL,
- * then the CDP_PORT loopback default — 9777, the cdp backend's web-Chrome port, with its
- * exact env semantics (CDP_PORT wins when set, blank reads as unset via envNum). This is
- * where the external-browser OAuth handoff lands when the Mac's default browser is the
- * debug-flagged persistent-profile Chrome.
+ * then NOWHERE — undefined, and the engine never hops. There used to be a loopback default
+ * here (127.0.0.1:9777, the cdp backend's web-Chrome port), removed deliberately: a default
+ * that means "the machine I happen to run on" is only correct for exactly one caller class —
+ * the sign-in CLI, which runs ON the Mac whose flagged Chrome that is (runner-spawned there,
+ * or run by hand at the machine). For any other caller — the dash's fleet peek runs on the
+ * OPERATOR'S laptop — the same fallback aims the lazy re-probe at the operator's own local
+ * Chrome and silently streams THEIR browser into the panel the moment it answers. The one
+ * caller the loopback is right for now says so explicitly (localBrowserCdpEndpoint).
  */
-export function browserCdpEndpoint(endpoint?: string): string {
-	return endpoint?.trim() || process.env.LIVEVIEW_BROWSER_CDP_URL?.trim() || `http://127.0.0.1:${envNum("CDP_PORT", 9777)}`;
+export function browserCdpEndpoint(endpoint?: string): string | undefined {
+	return endpoint?.trim() || process.env.LIVEVIEW_BROWSER_CDP_URL?.trim() || undefined;
+}
+
+/**
+ * The browser endpoint for the caller class that legitimately means ITS OWN loopback: the
+ * sign-in CLI, which runs on the Mac where the OAuth handoff's Chrome lives. Exactly the env
+ * semantics the removed in-engine default had (LIVEVIEW_BROWSER_CDP_URL wins; CDP_PORT beats
+ * 9777 when set, blank reads as unset via envNum), kept in THIS module so the derivation and
+ * the runner's CDP_BROWSER_PORT (runner/serve.ts) keep agreeing on where the browser leg
+ * lives without anything being configured.
+ */
+export function localBrowserCdpEndpoint(): string {
+	return process.env.LIVEVIEW_BROWSER_CDP_URL?.trim() || `http://127.0.0.1:${envNum("CDP_PORT", 9777)}`;
 }
 
 /** Do two strings name the same debug endpoint? Origin equality when they parse (a trailing
@@ -501,12 +521,18 @@ function pathnameOf(url: string | undefined): string | undefined {
 /**
  * Connect to a Chromium debug endpoint and return an EngineHandle streaming the chosen page.
  *
- * Death handling mirrors spawnEngine's: nothing here throws to the caller. A failure —
- * endpoint silent, no drivable page, screencast refused — resolves to an INERT handle whose
- * send/close are no-ops and whose typed error event reaches the first onEvent listener, so
- * the viewer shows a remedy instead of the server crashing. Events are buffered until that
- * listener registers: the server wires callbacks after this resolves, and both the
- * dead-handle error and the connect-time window event would otherwise fall into the gap.
+ * Nothing here throws to the caller. A connect-time failure — endpoint silent, no drivable
+ * page, first screencast refused — resolves to a DEAD handle: send/close are no-ops, the
+ * typed error event reaches the first onEvent listener (so the viewer shows a remedy instead
+ * of the server crashing), AND onExit fires. That last part is the liveness contract: a
+ * handle that is born dead must give callers the same signal as an endpoint dying
+ * mid-session, or every caller reimplements death-sniffing off the first buffered error
+ * event (the dash did exactly that before this contract existed). Events are buffered until
+ * the onEvent listener registers, and onExit registered after the death invokes its callback
+ * immediately (the `exited` flag, in base below) — so no wiring order can lose either
+ * signal. This deliberately DIVERGES from spawnEngine's spawn-failed posture (error event,
+ * no exit): there the bridge must stay up to display the remedy, and it still does here —
+ * both callers send the error to their viewer before their exit handler tears down.
  *
  * close() disconnects WITHOUT closing the browser (browser.close() on a connectOverCDP
  * connection only detaches — same posture as CdpBackend.close()): the signed-in session the
@@ -551,9 +577,14 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 			exitCbs.push(cb);
 		},
 	};
-	// Inert like a spawn-failed SCK engine: the error event stands, exit never fires, so the
-	// bridge stays up long enough for the viewer to display the remedy.
-	const inert = (): EngineHandle => ({ ...base, send() {}, close() {} });
+	// A connect-time death: send/close are no-ops, but the handle SAYS it is dead — the typed
+	// error event (already emitted by the caller) stands for the remedy, and fireExit gives
+	// every onExit listener, however late it registers, the same signal as any other death.
+	const dead = (): EngineHandle => {
+		fireExit();
+
+		return { ...base, send() {}, close() {} };
+	};
 
 	let browser: Browser;
 	try {
@@ -562,7 +593,7 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 	} catch (e) {
 		emit({ ev: "error", kind: "cdp-unreachable", detail: `${(e as Error).message}` });
 
-		return inert();
+		return dead();
 	}
 
 	// Pick the page like the agent backend does: devtools and extension targets are never the
@@ -578,7 +609,7 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 		});
 		await browser.close().catch(() => {});
 
-		return inert();
+		return dead();
 	}
 
 	const appName = opts.app?.trim();
@@ -614,7 +645,9 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 					page.title().catch(() => ""),
 					new Promise<string>((r) => setTimeout(r, TITLE_TIMEOUT_MS, "")),
 				])) || page.url();
-			const app = appName || hostOf(origin === "primary" ? endpoint : browserEndpoint);
+			// A browser-origin page can only exist once the browser leg attached, which requires
+			// a named endpoint — the ?? arm satisfies the type, not a reachable case.
+			const app = appName || hostOf(origin === "primary" ? endpoint : browserEndpoint ?? endpoint);
 			emit({ ev: "window", id: 0, title: titleFor(raw), app, x: 0, y: 0, w: 0, h: 0, scale: 1 });
 		})();
 	};
@@ -639,9 +672,10 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 				meta = undefined;
 				held = 0;
 				if (!want) {
-					// The stack emptied with the primary endpoint still up. Same posture as an
-					// inert handle: the error stands, exit does NOT fire (only primary-endpoint
-					// death ends the session), and a page opening later revives the stream.
+					// The stack emptied with the primary endpoint still up. NOT a death, so unlike
+					// the connect-time dead() paths exit does NOT fire: the error stands, and a
+					// page opening later revives the stream — only primary-endpoint death (or a
+					// first hop that never streamed) ends the session.
 					if (!closed) emit({ ev: "error", kind: "stream-stopped", detail: "every followed page closed" });
 
 					return;
@@ -774,7 +808,7 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 	if (!streamed) {
 		await browser.close().catch(() => {});
 
-		return inert();
+		return dead();
 	}
 
 	browser.on("disconnected", fireExit);
@@ -783,6 +817,7 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 	// secondary — it is optional by design, and Chrome may not exist until the handoff
 	// launches it. Same-URL endpoints attach once; the primary watcher already covers them.
 	const attachSecondary = async (launchedMidFlow: boolean): Promise<void> => {
+		if (browserEndpoint === undefined) return; // hopping was never opted into
 		let b: Browser;
 		try {
 			b = await chromium.connectOverCDP(browserEndpoint, { timeout: CONNECT_TIMEOUT_MS });
@@ -831,11 +866,14 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 		reprobe.unref();
 	};
 	const probeSecondary = async (launchedMidFlow: boolean): Promise<void> => {
-		if (closed || secondary) return;
+		if (closed || secondary || browserEndpoint === undefined) return;
 		if (await endpointAnswers(browserEndpoint)) await attachSecondary(launchedMidFlow);
 		if (!closed && !secondary) armReprobe();
 	};
-	if (!sameEndpoint(endpoint, browserEndpoint)) void probeSecondary(false);
+	// No browser endpoint at all (no argument, no env) means the caller never opted into the
+	// hop, so the probe loop never starts: the engine must not lazily discover a Chrome the
+	// caller never named — on an operator's laptop, "the local 9777" is THEIR browser.
+	if (browserEndpoint !== undefined && !sameEndpoint(endpoint, browserEndpoint)) void probeSecondary(false);
 
 	/**
 	 * Watch the PRIMARY page for the app's signed-in home screen and announce it.

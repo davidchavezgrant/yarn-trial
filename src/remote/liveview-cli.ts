@@ -19,7 +19,7 @@ import { pathToFileURL } from "node:url";
 import { loadHosts, resolveHost } from "./control/hosts.js";
 import { lastFrame, runnerArgv, runSsh } from "./control/ssh.js";
 import { loginBlockedByRun } from "./liveview.js";
-import { cdpEndpoint, connectCdpEngine, endpointAnswers } from "./liveview-cdp.js";
+import { cdpEndpoint, connectCdpEngine, endpointAnswers, localBrowserCdpEndpoint } from "./liveview-cdp.js";
 import { startLiveViewServer, type ServerOptions } from "./liveview-server.js";
 
 const USAGE = `usage: ./run liveview [<mac>] ["<App Name>"] [--cdp [url] | --sck] [--lan] [--fps N]
@@ -241,9 +241,14 @@ async function main(): Promise<void> {
 	const probeTarget = cdpEndpoint(endpoint);
 	const resolved = await resolveTransport(transport, probeTarget, endpointAnswers);
 	console.log(`transport: ${resolved.why}`);
+	// The browser leg is explicit now: THIS process runs on the Mac whose flagged Chrome the
+	// OAuth handoff lands in (runner-spawned there in fleet mode, or run by hand at the
+	// machine), so the local loopback endpoint is correct HERE — and since the engine no
+	// longer assumes any default (browserCdpEndpoint's comment has the why), the one caller
+	// that wants it has to say so.
 	const engine: ServerOptions["engine"] | undefined =
 		resolved.engine === "cdp"
-			? () => connectCdpEngine({ endpoint: probeTarget, app: targetApp })
+			? () => connectCdpEngine({ endpoint: probeTarget, browserEndpoint: localBrowserCdpEndpoint(), app: targetApp })
 			: undefined;
 	const srv = await startLiveViewServer({ lan, fps, port, token, maxLifetimeMs, idleAfterCloseMs, app: targetApp, engine });
 	// An env-supplied token means runner mode, where stdout lands in a persistent job log
