@@ -3350,7 +3350,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			clients.add(res);
 			req.on("close", () => clients.delete(res));
 		} else if (url.startsWith("/graphs") || url.startsWith("/api/graphs/")) {
-			if (!serveGraphs(req, res, url, { manifest, currentState })) {
+			if (!serveGraphs(req, res, url, { manifest: () => manifest, currentState })) {
 				res.writeHead(404);
 				res.end("not found");
 			}

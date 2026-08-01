@@ -405,7 +405,10 @@ function graphsHtmlPath(): string {
 }
 
 export interface GraphsCtx {
-	manifest: Manifest;
+	/** A GETTER, not a snapshot: dash.ts reassigns its manifest binding on every collect and
+	 *  fleet poll, and a value captured at server start would resolve maps against a board
+	 *  that stopped existing minutes after launch. */
+	manifest: () => Manifest;
 	currentState: () => DashState;
 }
 
@@ -415,10 +418,13 @@ export function serveGraphs(req: http.IncomingMessage, res: http.ServerResponse,
 	const p = parsed.pathname;
 	try {
 		if (p === "/graphs") {
+			// Read BEFORE writeHead: an editor's atomic-save window can ENOENT the html for a
+			// moment, and a 200 already on the wire would turn that into JSON-as-HTML.
+			const page = fs.readFileSync(graphsHtmlPath());
 			res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-			res.end(fs.readFileSync(graphsHtmlPath()));
+			res.end(page);
 		} else if (p === "/api/graphs/data") {
-			const body = buildGraphsData(parsed.searchParams.get("arm") ?? "", parsed.searchParams.get("model") ?? undefined, ctx.manifest, ctx.currentState());
+			const body = buildGraphsData(parsed.searchParams.get("arm") ?? "", parsed.searchParams.get("model") ?? undefined, ctx.manifest(), ctx.currentState());
 			res.writeHead("error" in body ? 404 : 200, { "content-type": "application/json" });
 			res.end(JSON.stringify(body));
 		} else if (p === "/api/graphs/motion") {
