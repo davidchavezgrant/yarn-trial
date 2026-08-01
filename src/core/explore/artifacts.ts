@@ -146,7 +146,25 @@ export const writeArtifacts = (p: Pass, out: FinishInput, stopped: StopReason, s
 		committedNodes = ((JSON.parse(fs.readFileSync(p.graphPath, "utf8")) as AppMap).nodes ?? []).length;
 	} catch {} // no committed map, or an unparseable one — nothing to protect
 	const modelFinished = stopped === "frontier-empty" || stopped === "frontier-conceded";
-	const demoted = salvaged || (!modelFinished && p.graphNodes.size * 2 < committedNodes);
+	/**
+	 * A pass that was CUT SHORT publishes only if it beats half the committed map.
+	 *
+	 * With no committed map the comparison used to be `size * 2 < 0` — always false — so a
+	 * cut-short pass published unconditionally. Least protective exactly where there is no
+	 * baseline to fall back on, which is every arm's state after a wipe: a run that died at
+	 * action 12 with two nodes would have become the app's grounding, and phase 2 would have
+	 * reported `provenance: explore` over it.
+	 *
+	 * No baseline now means DEMOTE. The map still lands in the run folder and can be promoted by
+	 * hand; what it cannot do is silently become the thing later phases ground on.
+	 *
+	 * Deliberately not a quality score. Absolute size breaks on small apps, and a coverage ratio
+	 * is worse than useless here — it counts dismissals, so the pre-fix passes that skipped 1933
+	 * of 1985 controls would score 0.97 while the best pass of the night scores 0.06. The honest
+	 * signal is structural: did the pass end on its own terms, or was it cut off?
+	 */
+	const beatsBaseline = committedNodes > 0 && p.graphNodes.size * 2 >= committedNodes;
+	const demoted = salvaged || (!modelFinished && !beatsBaseline);
 	// The run's own copy is written ALWAYS, and first: whatever this pass produced belongs with
 	// the pass, at a path nothing later can overwrite. Publishing to docs/appmaps is the separate,
 	// conditional step below — that path is keyed by app, so the next pass on the same variant

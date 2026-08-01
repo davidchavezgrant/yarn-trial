@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import type { Driver } from "../core/driver.js";
 import { ensureObservable, findWindow, observe, pickWindow, type ObservationBundle, type WindowCandidate, type WindowRef } from "../core/harness.js";
 import type { Target } from "../core/target.js";
+import { KEEP_RENDERING_FLAGS } from "./electron-attach.js";
 
 /**
  * AX-tree actuation backend: drives a Mac app through cua's Driver (src/core/driver.ts) —
@@ -64,6 +65,24 @@ export class AxBackend {
 		// Both entry points refuse web targets before selecting this backend; the guard is
 		// the invariant for callers that do not — the cdp→ax fallback lands on acquire directly.
 		if (target.kind !== "app") throw new Error(`the ax backend drives Mac apps, not ${target.kind} targets`);
+		/**
+		 * Launch an ELECTRON target with the anti-throttle flags, exactly as the cdp path does.
+		 *
+		 * Electron derives its accessibility tree from the renderer's DOM, so a renderer Chromium
+		 * has backgrounded stops publishing one — not for a single window, for the whole app. On
+		 * 2026-08-01 six AX passes died on that: Yarn opens a recording/media helper, the main
+		 * renderer gets occluded and parked, and every window of the app reports zero elements.
+		 * The recovery ladder below exhausts itself against it, and re-activation cannot help —
+		 * `set frontmost` restores app activation, not a parked renderer.
+		 *
+		 * The cdp path never saw it because launchWithPort passes KEEP_RENDERING_FLAGS. That made
+		 * the two arms differ in how the APP WAS LAUNCHED, not only in how it is read — so the
+		 * ax-vs-cdp comparison was measuring a launch asymmetry alongside the backends.
+		 *
+		 * Best-effort and non-fatal: a non-Electron app has no such flags and `open --args` simply
+		 * passes them to something that ignores them, so the failure mode is the status quo.
+		 */
+		await launchWithRenderingFlags(app);
 		await driver.act({ kind: "tool", name: "launch_app", args: { name: app } });
 		await new Promise((r) => setTimeout(r, 1500));
 		const win = await findWindow(driver, app);
@@ -175,6 +194,23 @@ export class AxBackend {
 		}
 
 		return observe(this.driver, this.currentWin, name, {});
+	}
+}
+
+/**
+ * Start the app with Chromium's anti-throttle flags before the driver's own launch_app.
+ *
+ * `open -a <app> --args <flags>` only passes arguments when open actually STARTS the process;
+ * for an already-running app they are ignored, which is why cold start (coldstart.ts) matters
+ * to this working — a run that inherits a live Yarn inherits its flags too.
+ */
+async function launchWithRenderingFlags(app: string): Promise<void> {
+	try {
+		const { openWithArgs } = await import("../core/appctl.js");
+		await openWithArgs(app, KEEP_RENDERING_FLAGS);
+	} catch {
+		// Non-fatal by design: launch_app below starts the app regardless. Losing the flags costs
+		// the blackout protection, not the run.
 	}
 }
 

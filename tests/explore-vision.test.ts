@@ -463,3 +463,39 @@ test("parseCli__UpgradesToAnElectronTarget__When__TheBackendIsCdp", () => {
 	// rebuild above it exists to prevent (stamping every map "notion-calendar").
 	assert.equal((cdp.target as any).name, "Yarn");
 });
+
+test("writeArtifacts__DemotesACutShortPass__When__ThereIsNoCommittedMapToBeat", () => {
+	// The rule was BACKWARDS where it mattered most. A pass that did not finish on its own terms
+	// publishes only if it beats half the committed map — but with no committed map the
+	// comparison was `size * 2 < 0`, always false, so it published unconditionally. Least
+	// protective exactly where there is no baseline, which is every arm's state after a wipe.
+	//
+	// On 2026-08-01 that was live: all nine phase-1 arms had their maps cleared, so a run that
+	// died at action 12 with two nodes would have become Yarn's grounding and phase 2 would have
+	// reported `provenance: explore` over it.
+	const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "core", "explore", "artifacts.ts"), "utf8");
+	assert.match(src, /const beatsBaseline = committedNodes > 0 && p\.graphNodes\.size \* 2 >= committedNodes/, "no baseline must mean demote");
+	assert.match(src, /const demoted = salvaged \|\| \(!modelFinished && !beatsBaseline\)/);
+
+	// And the bar stays STRUCTURAL — did the pass end on its own terms — never a quality score.
+	// A coverage ratio counts dismissals, so the pre-fix passes that skipped 1933 of 1985
+	// controls would score 0.97 while the best pass of the night scores 0.06.
+	assert.equal(/coverageRatio|actuated \/ seen|resolvedRatio/.test(src), false, "publication must not depend on a gameable quality score");
+});
+
+test("exploreLoop__OffersTheModelAnExit__When__TheAppStopsExposingAnything", () => {
+	// Six AX passes died on 2026-08-01 with the app exposing nothing, and the model was never
+	// told it could stop. blindStreak counted invisibly: the logs show the agent waiting, pressing
+	// Escape, then cmd+W on a helper window it had correctly identified as blank — sensible
+	// recovery — and then the harness killed the run at three strikes. One had 27 findings and 86
+	// graph nodes at the time.
+	//
+	// Conceding on the FIRST blank observation would be wrong too: sometimes closing the window
+	// does bring the app back. What was missing is the information to choose.
+	const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "core", "explore", "loop.ts"), "utf8");
+	assert.match(src, /observation \$\{blindStreak\} of 3/, "the model must be told the count it is being judged on");
+	assert.match(src, /call finish now with what you have already mapped/i, "the exit must be named, not implied");
+	// A pass that takes the exit ends `frontier-conceded`, which is a model finish — so its map
+	// publishes through the ordinary path instead of being salvaged into a folder nobody reads.
+	assert.match(src, /legitimate ending/i);
+});

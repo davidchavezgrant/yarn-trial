@@ -773,10 +773,44 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 		}
 
 		if (obs.appContent === 0) {
-			// AX tree collapsed (e.g. a modal/other window took over). Acting now means
-			// acting blind — stop rather than let the model flail against a menu bar.
-			if (++blindStreak >= 3)
-				throw new TargetNotObservableError(p.app, "no addressable elements for 3 consecutive observations");
+			/**
+			 * The app is exposing nothing. Acting now means acting blind, so this is counted and
+			 * eventually fatal — but the COUNT USED TO BE INVISIBLE to the model, and that is what
+			 * turned a recoverable situation into six lost passes on 2026-08-01.
+			 *
+			 * The model does get these turns and does use them sensibly: the logs show it waiting,
+			 * pressing Escape, then cmd+W on a helper window it correctly identified as blank. It
+			 * was mid-recovery when the harness killed the run at three strikes, having never been
+			 * told a budget existed or that giving up was available. From its side the process
+			 * simply stopped.
+			 *
+			 * Conceding on the first blank observation would be wrong too — sometimes closing the
+			 * offending window does bring the app back, and an immediate surrender throws away a
+			 * recoverable pass. What was missing is the INFORMATION to choose. So say it plainly,
+			 * every time, and name the exit.
+			 *
+			 * A pass that then calls finish ends `frontier-conceded`, which is a model finish —
+			 * so its map publishes through the ordinary path instead of being salvaged into a run
+			 * folder nobody reads. One run had 27 findings and 86 graph nodes when it was killed.
+			 */
+			blindStreak++;
+			const left = 3 - blindStreak;
+			p.messages.push({
+				role: "user",
+				content: [
+					{
+						type: "text",
+						text:
+							`The app is exposing NO addressable elements (observation ${blindStreak} of 3). ` +
+							`Something — a helper window, a native dialog, a modal — is covering it, and acting now would be acting blind.\n\n` +
+							(left > 0
+								? `You have ${left} more observation${left === 1 ? "" : "s"} to restore it: closing the offending window (Escape, cmd+W) or waiting for it to finish loading are the usual moves. ` +
+									`IF YOU CANNOT RESTORE IT, call finish now with what you have already mapped — that is a legitimate ending, it keeps your findings, and it is strictly better than being cut off. Do not keep trying past the point where you believe it will work.`
+								: `This is the last one. Call finish NOW with what you have mapped, or the pass ends with nothing published.`),
+					},
+				],
+			});
+			if (blindStreak >= 3) throw new TargetNotObservableError(p.app, "no addressable elements for 3 consecutive observations");
 		} else blindStreak = 0;
 
 		// Descent: the model pressed a reversible-labelled control ONLY so the harness could

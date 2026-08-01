@@ -53,6 +53,21 @@ export async function openApp(app: string, opts: { foreground?: boolean } = {}, 
 }
 
 /**
+ * Launch an app with extra process arguments.
+ *
+ * `open --args` passes them ONLY when open genuinely starts the process — an already-running app
+ * ignores them entirely. That is why this pairs with the cold start: a run that inherits a live
+ * app inherits whatever flags it was started with, which may be none.
+ *
+ * Backgrounded (`-g`) like openApp's default: acquisition activates deliberately a moment later
+ * (AxBackend.acquire), and stealing focus twice makes the launch animation race the first
+ * observation.
+ */
+export async function openWithArgs(app: string, args: string[], timeoutMs = DEFAULT_TIMEOUT_MS): Promise<void> {
+	await exec("open", ["-g", "-a", app, "--args", ...args], timeoutMs);
+}
+
+/**
  * Quit an app and confirm it actually went.
  *
  * AppleScript `quit` rather than a signal: it is the documented shutdown path, so the app gets
