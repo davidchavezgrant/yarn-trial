@@ -135,6 +135,42 @@ export class AxBackend {
 				// Nothing of this app is listed at all: a genuinely dead app, which
 				// ensureObservable's relaunch path owns. Falling through keeps that story intact.
 			}
+			/**
+			 * A LIVE WINDOW WITH NO ACCESSIBILITY CONTENT IS AS UNUSABLE AS A DEAD ONE, and
+			 * unlike a dead one nothing above notices — pickWindow is perfectly happy with it.
+			 *
+			 * Three passes died this way on 2026-08-01, all AX, all around action 80-140 and
+			 * ~20 minutes in, all reaching the parts of Yarn that publish no AX tree: a
+			 * dismissed native Open panel's ghost, a recording-studio window that is pure
+			 * canvas, and Yarn exposing only its menu bar after a coordinate drag moved focus.
+			 * One agent said it outright — "the screenshot is Yarn but accessibility is exposing
+			 * only menus". All three diagnosed it correctly and were trying to escape; the
+			 * harness threw first, at three empty observations.
+			 *
+			 * So when the window we hold yields nothing, try the app's OTHER windows before
+			 * giving up. The main window is usually still there and still populated — the studio
+			 * or panel merely took the front. This is the same rule as the dead-handle recovery
+			 * above ("do not keep talking to something that cannot answer"), applied to the case
+			 * where the thing is alive but silent.
+			 */
+			if (front && front.window_id === this.currentWin.windowId && all.length > 1) {
+				// observe() THROWS on an empty tree rather than returning one, so the probe has to
+				// tolerate that: a throw and a zero-content answer are the same signal here.
+				const probe = await observe(this.driver, this.currentWin, name, {}).catch(() => undefined);
+				if (probe && probe.appContent > 0) return probe;
+				for (const alt of all.filter((w) => w.app_name === this.app && w.pid === this.currentWin.pid && w.window_id !== this.currentWin.windowId)) {
+					const other = await observe(this.driver, { pid: alt.pid, windowId: alt.window_id, bounds: alt.bounds }, name, {}).catch(() => undefined);
+					if (!other || other.appContent === 0) continue;
+					console.log(`  window follow: "${this.lastTitle ?? ""}" had no AX content — switching to "${alt.title}" (id ${alt.window_id}, ${other.appContent} elements)`);
+					this.currentWin = { pid: alt.pid, windowId: alt.window_id, bounds: alt.bounds };
+					this.lastTitle = alt.title ?? this.lastTitle;
+
+					return other;
+				}
+				// Nothing of this app can answer. Fall through to the ordinary path so the real
+				// error — with ensureObservable's recovery story attached — is what surfaces,
+				// rather than a shape invented here.
+			}
 			if (front && front.window_id !== this.currentWin.windowId) {
 				console.log(`  window follow: "${this.lastTitle ?? ""}" -> "${front.title}" (id ${this.currentWin.windowId} -> ${front.window_id})`);
 				this.currentWin = { pid: front.pid, windowId: front.window_id, bounds: front.bounds };

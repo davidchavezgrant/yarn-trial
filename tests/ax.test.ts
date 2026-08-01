@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import fs from "node:fs";
+import path from "node:path";
 import { activationFailure, AxBackend, ACT_TOOL, DEMO_ACT_TOOL, DEMO_DRIVER_RULES, DRIVER_RULES } from "../src/backends/ax.js";
 import { EndpointUnavailableError, fallbackEligible } from "../src/backends/electron-attach.js";
 import * as actions from "../src/core/harness/actions.js";
@@ -150,4 +152,30 @@ test("AxBackend__RecoversFromADeadWindow__When__ADialogItFollowedIsDismissed", a
 	// of the fix: the run must stop talking to the dismissed panel.
 	await back.observe("probe").catch(() => undefined);
 	assert.equal(observedWindowId, 812, "a live window — even one the area floor rejects — beats a dead one, which is never addressable");
+});
+
+test("AxBackend__TriesSiblingWindows__When__TheFrontOneIsSilent", () => {
+	// Three passes died this way on 2026-08-01, all AX, all ~20 minutes deep: a dismissed native
+	// Open panel's ghost, a recording-studio window that is pure canvas, and Yarn exposing only
+	// its menu bar after a coordinate drag moved focus. In each case the held window was ALIVE
+	// and pickWindow was happy with it — it simply published no accessibility content, so the run
+	// observed nothing three times and threw while the agent was still working the problem. One
+	// said it outright: "the screenshot is Yarn but accessibility is exposing only menus".
+	//
+	// A live window that cannot answer is as useless as a dead one, and unlike a dead one nothing
+	// upstream notices.
+	//
+	// A SOURCE-LEVEL CHECK, deliberately. Exercising this needs a driver double rich enough for a
+	// real get_window_state round trip — screenshot path, tool vocabulary, element shapes — and a
+	// double that elaborate tests itself. What must not silently disappear is the branch, so that
+	// is what is pinned.
+	const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "backends", "ax.ts"), "utf8");
+	assert.match(src, /front\.window_id === this\.currentWin\.windowId && all\.length > 1/, "the silent-front-window branch is gone");
+	assert.match(src, /had no AX content — switching to/, "the switch must announce itself; a silent recovery is unreviewable");
+	// observe() THROWS on an empty tree rather than returning one, so both probes must tolerate
+	// that — treating a throw and a zero-content answer as the same signal.
+	assert.equal((src.match(/observe\(this\.driver[^;]*\.catch\(\(\) => undefined\)/g) ?? []).length >= 1, true, "the probe must tolerate observe() throwing");
+	// And the dead-handle recovery from earlier the same day must still be there: they cover
+	// different states ("gone" vs "alive but silent") and one is not a substitute for the other.
+	assert.match(src, /const heldAlive = all\.some/, "the dead-window recovery must survive alongside it");
 });
