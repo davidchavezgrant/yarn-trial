@@ -84,8 +84,9 @@
 	.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
 	.q { color: var(--muted); font-size: 11px; margin-top: 4px; }
 	.warn { color: var(--warning); font-size: 11px; }
-	/* The task's prompt sits between the peek window and its logs (per David, 2026-08-01),
-	   clamped at 3 lines — the full text rides the data-tip. */
+	/* The run's prompt — quoted; a task's goal, or an explore pass's system prompt — sits
+	   between the peek window and its logs (per David, 2026-08-01), clamped at 3 lines —
+	   the full text rides the data-tip. */
 	.host .prompt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
 	.hostprompt { margin-top: 6px; }
 
@@ -125,10 +126,13 @@
 		color: var(--ink-2); font-variant-numeric: tabular-nums; cursor: help; white-space: nowrap;
 	}
 	/* Convergence meter: consumed share of the discovered frontier as a tiny fill bar. The
-	   fill wears --running — the "this number is still moving" token, never a series hue. */
+	   fill wears --running — the "this number is still moving" token, never a series hue —
+	   only while the number IS moving: a banked pass's bar is a settled fact and wears
+	   neutral ink, or a collected 100% would flash the running blue forever. */
 	.pk-chip.pk-conv { display: inline-flex; align-items: center; gap: 5px; }
 	.pk-convbar { width: 44px; height: 4px; border-radius: 2px; background: var(--grid); overflow: hidden; }
 	.pk-convfill { display: block; height: 100%; background: var(--running); }
+	.pk-convfill.banked { background: var(--ink-2); }
 
 	/* logs disclosure shell — the log-tailing wave fills .hostlogs-body (keyed by the
 	   #host-logs-<name> id + data-job) without restructuring the card. */
@@ -141,16 +145,20 @@
 	th { text-align: left; font-size: 11px; color: var(--ink-2); font-weight: 500; padding: 3px 10px 3px 0; border-bottom: 1px solid var(--grid); }
 	th[data-tip] { cursor: help; text-decoration: underline dotted var(--baseline); text-underline-offset: 3px; }
 	/* TWO header rows for the whole board, both stuck to the top of the #board scroll
-	   viewport: row 1 = every column label (rowspan=2) except Sees, a colspan-3 group label;
-	   row 2 = the AX/DOM/Vision sub-columns. The explicit line-height pins row 1's height so
-	   row 2's sticky offset (22px = 16px line + 3px+3px padding) stays deterministic.
+	   viewport: row 1 = every column label (rowspan=2) except the Sees (colspan-2, AX+DOM)
+	   and Has (Vision) group labels; row 2 = the AX/DOM/Vision sub-columns. The explicit
+	   line-height pins row 1's height so row 2's sticky offset (22px = 16px line + 3px+3px
+	   padding) stays deterministic.
 	   border-collapse lets a stuck th's border scroll away with the rows, so the separator
 	   rides as a box-shadow instead. Opaque surface background: rows pass underneath. */
 	#board thead th { position: sticky; top: 0; z-index: 2; background: var(--surface); border-bottom: none; box-shadow: 0 1px 0 var(--grid); line-height: 16px; }
 	#board thead tr.subhead th { top: 22px; }
-	/* Sees check cells: ✓ per channel, centered under their sub-headers. Muted/normal ink on
-	   purpose — this is configuration, not outcome, so it must not read as a status color. */
-	th.see-h { text-align: center; }
+	/* ctr-h: a heading centered over centered content — every heading aligns with its
+	   column's cells (numeric stays right via num-h, prose stays left), and check/button
+	   columns (✓s, Runs chips, ⤢, 📊, the group labels, the Convergence meter) center. */
+	th.ctr-h { text-align: center; }
+	/* Sees/Has check cells: ✓ per channel, centered under their sub-headers. Muted/normal ink
+	   on purpose — this is configuration, not outcome, so it must not read as a status color. */
 	td.see { text-align: center; color: var(--ink-2); }
 	td { padding: 4px 10px 4px 0; border-bottom: 1px solid var(--grid); font-size: 12px; vertical-align: top; }
 	tr:last-child td { border-bottom: none; }
@@ -160,8 +168,8 @@
 	/* Lineage groups: extra air above each group's first row. The explore row IS the group
 	   header — the board's only column labels live in the two-row sticky thead. */
 	tr.gsep td { padding-top: 16px; }
-	/* 20 columns: the table must overflow sideways rather than crush the prose cells —
-	   wide content scrolls in its own container, the page never scrolls horizontally. */
+	/* 18 columns (NCOLS): the table must overflow sideways rather than crush the prose cells
+	   — wide content scrolls in its own container, the page never scrolls horizontally. */
 	#board { overflow-x: auto; }
 	/* Phase badge on task/replay rows: phases interleave inside a lineage group, so each row
 	   carries its own. */
@@ -191,10 +199,9 @@
 	td.num { text-align: right; }
 	th.num-h { text-align: right; }
 	.txt { color: var(--ink-2); }
-	tr.mrow { cursor: pointer; }
-	tr.mrow:hover td { background: rgba(255, 255, 255, 0.035); }
-	/* Explore rows: faint neutral wash so the two board sections read apart at a glance.
-	   Subtler than the hover wash, which outranks it (specificity), so hover still reads. */
+	/* Rows are inert (David, 2026-08-01) — no pointer/hover wash: only the Runs-column chip
+	   opens a run's dropdown, and a clickable-looking row promises what only the chip does. */
+	/* Explore rows: faint neutral wash so the two board sections read apart at a glance. */
 	tr.exp-row td { background: rgba(255, 255, 255, 0.03); }
 	td.arm .dn { color: var(--ink); }
 	/* Rank badge on explore group headers: comprehensiveness rank within the target as TEXT
@@ -205,9 +212,14 @@
 		font-size: 10px; border: 1px solid var(--border); border-radius: 8px; padding: 0 5px;
 		margin-right: 6px; color: var(--ink-2); cursor: help; font-variant-numeric: tabular-nums;
 	}
-	/* The Runs column: the run's status chip (statusChip keeps it minimal). */
-	td.runs { max-width: 260px; }
+	/* The Runs column: the run's status chip (statusChip keeps it minimal), centered under
+	   its ctr-h heading. */
+	td.runs { max-width: 260px; text-align: center; }
 	td.treecell { text-align: center; white-space: nowrap; }
+	/* Convergence cell: the fleet OSD's meter chip rehomed as a board column — same chip
+	   classes (pk-conv bar/fill), minus the OSD backdrop (the board isn't over video). */
+	td.conv { text-align: center; white-space: nowrap; }
+	td.conv .pk-chip { cursor: help; font-variant-numeric: tabular-nums; }
 	/* A multi-run variant splits after the identity columns — one line per run, the seven
 	   identity cells rowspanned across the group. Internal separators go dashed so the
 	   group still reads as one variant; the solid grid line returns on its last run.
@@ -215,7 +227,9 @@
 	   the variant name hugged line 1 and read as belonging to that run alone. */
 	tr.splitrow > td { border-bottom: 1px dashed var(--grid); }
 	#board td[rowspan] { vertical-align: middle; }
-	td.task { color: var(--muted); max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	/* Task leads the row (David, 2026-08-01) — row ink, never muted; the full prompt rides
+	   the tooltip. */
+	td.task { color: var(--ink-2); max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 	/* row detail: the appmap + the run's path through it */
 	.detail-row > td { background: rgba(255, 255, 255, 0.02); }
@@ -249,19 +263,11 @@
 		/* --plane on --s1 ≈ 5.3:1 (AA); white was 3.6:1 — step order is load-bearing. */
 		color: var(--plane); border-radius: 8px; font-size: 10px; padding: 0 4px; margin-left: 5px; vertical-align: 1px;
 	}
-	/* per-run stats strip: the selected run's own numbers atop the dropdown — muted labels,
-	   tabular numbers, wraps to a second line on narrow viewports. */
-	.d-stats { display: flex; gap: 4px 16px; flex-wrap: wrap; margin: 8px 0 0; font-size: 12px; color: var(--ink); font-variant-numeric: tabular-nums; }
-	.d-stats .k { color: var(--muted); font-size: 10px; margin-right: 6px; text-transform: uppercase; letter-spacing: .05em; }
-	/* results-so-far strip (liveStrip): same idiom as .d-stats, softer ink so counters off a
-	   run's event log never read as collected results. The LIVE tag rides only a RUNNING
-	   entry's strip; it reuses the stepno pill contrast pair (--plane on --s1). */
-	.d-stats.live-strip { color: var(--ink-2); }
 	/* live metric cells (liveNumCell): the running hue + italic mean a run is actually
 	   RUNNING and still updating this number. A run that ended early keeps its event-log
 	   value in normal ink — only the ~ in the label marks it provisional. */
 	td.num.livecell { color: var(--running); font-style: italic; }
-	.d-stats.live-strip .meta { align-self: center; }
+	/* The LIVE tag reuses the stepno pill contrast pair (--plane on --s1). */
 	.livetag {
 		background: var(--s1); color: var(--plane); border-radius: 8px; font-size: 10px;
 		padding: 0 6px; letter-spacing: .08em; text-transform: uppercase; align-self: center;
@@ -320,9 +326,10 @@
 	<h1><span id="conn"></span>bench dash <span id="conn-word" class="meta"></span></h1>
 	<span class="meta" id="metaline">Connecting…</span>
 	<div class="hero">
+		<div class="tile"><div class="v" id="h-elapsed">–</div><div class="k" data-tip="wall-clock for the whole pipeline — earliest submit to now while anything is queued or running; freezes at the last run's finish once every run is terminal">Pipeline</div></div>
 		<div class="tile"><div class="v" id="h-submitted">–</div><div class="k">Submitted / Planned</div></div>
 		<div class="tile"><div class="v" id="h-live">–</div><div class="k">Running · Queued</div></div>
-		<div class="tile"><div class="v" id="h-collected">–</div><div class="k">Collected</div><div class="k" id="h-success"></div></div>
+		<div class="tile"><div class="v" id="h-collected">–</div><div class="k" data-tip="terminal runs — ended on their host, success or failure; banking by a collect pass never moves this number">Finished</div><div class="k" id="h-success"></div></div>
 		<div class="tile"><div class="v" id="h-cost">–</div><div class="k">Est. Spend</div></div>
 	</div>
 </header>
@@ -409,8 +416,10 @@ const STATUS = { good: "var(--good)", warning: "var(--warning)", serious: "var(-
 //              its own token: --s5 magenta already means "mutated by this run" on the map
 //   muted    = the waiting family (queued dots and the outcomes chart's pending segments)
 //   stopped  = operator-terminated: terminal-inert, darker than the waiting gray
-//   ink-2    = collected: banked with no success verdict (explores, compiles) — bright
-//              "done", never the queued gray it used to fall back to
+//   good     = every good end: succeeded, plus "collected" (banked with no failure
+//              verdict — explores, compiles). One green with awaiting-collect, so a chip
+//              never flips when collect banks a run that already ended (David,
+//              2026-08-01: collect is plumbing, not a state the page surfaces).
 const OUTCOME_COLORS = {
 	succeeded: STATUS.good, "gave-up": STATUS.critical, unready: STATUS.serious,
 	crashed: STATUS.serious, "grounding-mismatch": STATUS.serious,
@@ -419,7 +428,7 @@ const OUTCOME_COLORS = {
 	// the gate refused. Same refusal family (and color) as hinted-refused.
 	refused: REFUSED,
 	failed: STATUS.critical, pending: "var(--muted)",
-	collected: "var(--ink-2)",
+	collected: STATUS.good,
 };
 // One resolver for chart segments AND their legend swatches, so a segment can never render
 // a color its legend doesn't show. Unknown kinds get ink — visible, claimed by no state.
@@ -725,7 +734,10 @@ function memorizeLive() {
 	if (dirty) { try { sessionStorage.setItem(LIVE_MEM_KEY, JSON.stringify(liveMem)); } catch {} }
 }
 
-function statusChip(e, rowKey, selected) {
+// `retryOf` (passRows, via retryPairs): the jobId of the technical failure this run was
+// re-dispatched to replace — named in the tooltip, since the replaced run's own chip is
+// folded into this one.
+function statusChip(e, rowKey, selected, retryOf) {
 	// Awaiting-collect is amber ONLY while the outcome is unknown. The runner registry's
 	// verdict may already be on this page via the dropdown's log meta (logPanes) — a run it
 	// graded failed/orphaned must dot red NOW, not after a collect pass. (Once the fleet
@@ -763,7 +775,10 @@ function statusChip(e, rowKey, selected) {
 	const after = took != null ? esc(" after " + fmtDur(took)) : "";
 	let label = e.status === "running" ? (runBase != null ? `Running for ${elapsedSpan(runBase)}` : "Running")
 		: e.status === "queued" ? "Queued"
-		: e.status === "awaiting-collect" ? "Finished" + after
+		// One word for every good end (David, 2026-08-01): succeeded and collected read
+		// "Finished" exactly like awaiting-collect, so collect banking a run never flips its
+		// chip — collect is plumbing, not a state. Failure verdicts keep their own words.
+		: e.status === "awaiting-collect" || e.status === "succeeded" || e.status === "collected" ? "Finished" + after
 		: esc(statusLabel(e.status)) + after;
 	// The dead override changes the LABEL too: two states must never share a name and be
 	// told apart by dot color alone.
@@ -791,12 +806,18 @@ function statusChip(e, rowKey, selected) {
 	const econ = tok.length
 		? `\ntokens — ${tok.join(" · ")}` + (e.usd != null ? `\nest cost ${fmtMoney(e.usd)} (published rates, not an invoice)` : "")
 		: "";
+	// The chip is the run's ONLY dropdown opener (rows are inert, David 2026-08-01) — the tip
+	// says so; a keyless chip (compile rows) selects nothing and keeps the claim out of its tip.
 	const open = rowKey ? ` data-row="${esc(rowKey)}" data-job="${esc(e.jobId)}"` : "";
+	const clickTip = rowKey ? "\nclick to open this run's dropdown — again to collapse" : "";
 	// Start time rides the chip tip too (split rows carry their own start in the Started
 	// column, but compile rows aggregate — the tip works everywhere);
 	// a not-yet-started entry shows its submit time instead.
 	const st = entryStart(e);
 	const when = st != null ? `\nstarted ${startStamp(st)}` : e.submittedAt ? `\nsubmitted ${startStamp(Date.parse(e.submittedAt) || null)}` : "";
+	// A retry names the run it replaced — the failed run's chip is hidden while this one
+	// exists, and the tooltip is where that history survives.
+	const retry = retryOf ? `\nretry — re-dispatched after ${shortJob(retryOf)} ended in a technical failure; that run's chip is folded into this one` : "";
 	// No duration line in the tip: the label itself says "Running for …" / "… after <took>"
 	// since the Time column folded into the chip (David, 2026-08-01).
 	// A failure surfaced BEFORE any collect pass (liveFor read it off the host's job
@@ -816,10 +837,10 @@ function statusChip(e, rowKey, selected) {
 		// headline token number (repo convention), usd priced server-side like collected rows.
 		lp.outputTokens != null ? `~out ${fmtK(lp.outputTokens)} tok` + (lp.usd != null ? `, ~${fmtMoney(lp.usd)}` : "") : "",
 		lp.lastStep ? `last: ${lp.lastStep}` : "",
-		lp.verdict ? `claimed ${lp.verdict.success ? "success" : "failure"} — not yet collected/judged` : "",
+		lp.verdict ? `claimed ${lp.verdict.success ? "success" : "failure"} — not yet judged` : "",
 		lp.cleanup ? `cleanup: ${lp.cleanup}` : "",
 	].filter(Boolean).join(" · ") : "";
-	return `<span class="chip${selected ? " sel" : ""}"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${esc(when)}${e.note ? "\n" + esc(e.note) : ""}${esc(preCollect)}${esc(registry)}${esc(liveTip)}\nclick to view on the map${esc(econ)}">` +
+	return `<span class="chip${selected ? " sel" : ""}"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${esc(when)}${esc(retry)}${e.note ? "\n" + esc(e.note) : ""}${esc(preCollect)}${esc(registry)}${esc(liveTip)}${clickTip}${esc(econ)}">` +
 		`<span class="dot${known ? "" : " unknown"}"${known ? ` style="background:${color}"` : ""}></span>${label}${esc(judge)}</span>`;
 }
 
@@ -864,14 +885,15 @@ function renderFleet() {
 		}
 		prev = card;
 		card.querySelector(".hostinfo").innerHTML = hostInfoHtml(r);
-		// The two per-push slots outside .hostinfo: the task's prompt (between the window and
-		// its logs) and the window's OSD strip (live tokens/cost + convergence). Both derive
-		// from the running run's arm/live counters, so a non-busy card clears them.
+		// The two per-push slots outside .hostinfo: the run's prompt (between the window and
+		// its logs — the task's goal, else an explore pass's system prompt off arm.prompt,
+		// else the URL, quoted) and the window's OSD strip (live tokens/cost + convergence).
+		// Both derive from the running run's arm/live counters, so a non-busy card clears them.
 		const run = r.state === "busy" ? runOf(r.jobId) : null;
 		const promptEl = card.querySelector(".hostprompt");
-		const promptText = run ? run.arm.task || run.arm.url || "" : "";
+		const promptText = run ? run.arm.task || run.arm.prompt || run.arm.url || "" : "";
 		promptEl.hidden = !promptText;
-		promptEl.textContent = promptText;
+		promptEl.textContent = promptText ? `“${promptText}”` : "";
 		if (promptText) promptEl.dataset.tip = promptText; else delete promptEl.dataset.tip;
 		card.querySelector(".pk-stats").innerHTML = run ? peekStatsHtml(run.entry) : "";
 		const logs = card.querySelector(".hostlogs");
@@ -885,9 +907,9 @@ function renderFleet() {
 }
 
 // The persistent card skeleton: .hostinfo re-renders per push; .peekbox and .hostlogs are
-// created once and mutated in place. .pk-stats (the window's OSD) and .hostprompt (the task
-// prompt between window and logs) are per-push slots renderFleet repaints — inside/after the
-// persistent shell so a streaming frame survives the update. The logs disclosure is a
+// created once and mutated in place. .pk-stats (the window's OSD) and .hostprompt (the run's
+// quoted prompt between window and logs) are per-push slots renderFleet repaints — inside/after
+// the persistent shell so a streaming frame survives the update. The logs disclosure is a
 // placeholder SHELL — the log tailing wave fills .hostlogs-body, addressing the card by
 // #host-logs-<name> + data-job.
 function hostCard(name) {
@@ -912,8 +934,9 @@ function hostCard(name) {
 }
 
 // A busy card leads with WHAT is running, not the fact that it runs: app + ticking elapsed,
-// the running arm's display title and one sentence for its configuration ("Explore sees with
-// AX + DOM attrs + Vision and acts with CDP using azure/gpt-5.6-sol"). The prompt moved out
+// the running arm's kind-prefixed title ("Explore (No Vision)") and one sentence for its
+// configuration ("Explore sees with AX + DOM attrs + Vision and acts with CDP using
+// azure/gpt-5.6-sol"). The prompt moved out
 // of this body to the .hostprompt slot under the peek window (renderFleet paints it). The old
 // "Busy · operator" label, raw-job-id line and "Queue: …" arm chain are gone — a card
 // with a running variant is self-evidently busy, and the ids live in the title's hover.
@@ -936,7 +959,9 @@ function hostInfoHtml(r) {
 		${r.state === "busy" ? busyCardBody(r) : ""}${tcc}${r.reason ? `<div class="q">${esc(r.reason)}</div>` : ""}`;
 }
 
-/** The busy card's body: app + ticking elapsed, then the running variant. */
+/** The busy card's body: app + ticking elapsed, then the running variant — its title
+ *  kind-prefixed ("Explore (No Vision)"): the variant names the perception condition alone,
+ *  and without the board's Task cell beside it the kind word has no other home here. */
 function busyCardBody(r) {
 	const app = `<div class="row"><span class="txt">${esc(r.app || "?")}</span><span class="meta">${elapsedSpan(r.elapsedSec)}</span></div>`;
 	const stalled = r.stalled ? ` <span class="warn">⚠ Stalled ${fmtDur(r.logSilenceSec)} silent</span>` : "";
@@ -953,7 +978,7 @@ function busyCardBody(r) {
 		.filter(Boolean).join(" and ");
 	const sentence = `${kind}${cfg ? " " + cfg : ""} using ${busyModel(run)}`;
 	return app
-		+ `<div class="row"><span class="txt" data-tip="${esc(arm.id + "\n" + r.jobId)}">${esc(displayName(arm))}</span>${stalled}</div>`
+		+ `<div class="row"><span class="txt" data-tip="${esc(arm.id + "\n" + r.jobId)}">${esc(`${kind} (${displayName(arm)})`)}</span>${stalled}</div>`
 		+ `<div class="q">${esc(sentence)}</div>`;
 }
 
@@ -985,7 +1010,7 @@ function peekStatsHtml(e) {
 		chips.push(`<span class="pk-chip" data-tip="${esc(tip)}">${esc(text)}</span>`);
 	}
 	const conv = convergenceMeter(lp);
-	if (conv) chips.push(`<span class="pk-chip pk-conv" data-tip="${esc(conv.tip)}"><span class="pk-convbar"><span class="pk-convfill" style="width:${conv.pct}%"></span></span>${conv.pct}%</span>`);
+	if (conv) chips.push(convChip(conv));
 	return chips.join("");
 }
 
@@ -996,16 +1021,22 @@ function peekStatsHtml(e) {
  * discovery outpaces consumption; that is the honest reading of a pass still expanding, not
  * a bug. Null (no meter) for task runs and for pre-enrichment logs whose heartbeats carried
  * no actuated/dismissed — a 0% built from missing fields would read as a stuck pass.
+ * Two homes: the fleet OSD strip (live heartbeat) and the board's Convergence column, which
+ * also feeds it a shape rebuilt from banked stats — `banked` swaps the tip's provenance line.
  */
-function convergenceMeter(lp) {
+function convergenceMeter(lp, banked = false) {
 	if (lp.frontier == null || (lp.actuated == null && lp.dismissed == null)) return null;
 	const done = (lp.actuated ?? 0) + (lp.dismissed ?? 0);
 	const total = done + lp.frontier;
 	if (!total) return null;
 	const pct = Math.round(done / total * 100);
-	const tip = `convergence ${pct}% — ${done} of ${total} discovered controls consumed (${lp.actuated ?? 0} actuated + ${lp.dismissed ?? 0} dismissed) · frontier ${lp.frontier} un-operated · 100% = frontier empty${lp.nodes != null ? ` · map ${lp.nodes} nodes` : ""}\nlive off the run's event log, provisional until collected`;
-	return { pct, tip };
+	const tip = `convergence ${pct}% — ${done} of ${total} discovered controls consumed (${lp.actuated ?? 0} actuated + ${lp.dismissed ?? 0} dismissed) · frontier ${lp.frontier} un-operated · 100% = frontier empty${lp.nodes != null ? ` · map ${lp.nodes} nodes` : ""}\n${banked ? "banked at collect — frontier derived as seen − actuated − dismissed" : "live off the run's event log, provisional until collected"}`;
+	return { pct, tip, banked };
 }
+
+// The meter's one markup, shared by the OSD strip and the board's Convergence cells so the
+// two homes can't drift. banked swaps the fill off --running (see the CSS comment).
+const convChip = (conv) => `<span class="pk-chip pk-conv" data-tip="${esc(conv.tip)}"><span class="pk-convbar"><span class="pk-convfill${conv.banked ? " banked" : ""}" style="width:${conv.pct}%"></span></span>${conv.pct}%</span>`;
 
 // modelCell's precedence, worded for the sentence: what THIS run's usage events named (the
 // only per-run truth while it runs), else what the pass's collected runs recorded, else the
@@ -1038,11 +1069,12 @@ function runOf(jobId) {
 // into one line per run (passRows), the identity cells rowspanned across the group.
 // Flags live in the arm tooltip (the display name is derived from them) and per-run
 // completion lives on the chips, so neither needs a column.
-// cls "num-h" right-aligns a numeric column's header so it sits over its right-aligned cells.
+// cls "num-h" right-aligns a numeric column's header over its right-aligned cells; "ctr-h"
+// centers a header over centered cells (checks, buttons, the meter).
 const th = (label, tip, cls, attrs = "") => `<th${attrs}${cls ? ` class="${cls}"` : ""}${tip ? ` data-tip="${esc(tip)}"` : ""}>${label}</th>`;
-// Row-1 headers span both sticky rows; only the Sees group breaks into row-2 sub-columns.
+// Row-1 headers span both sticky rows; only the Sees/Has groups break into row-2 sub-columns.
 const thr = (label, tip, cls) => th(label, tip, cls, ' rowspan="2"');
-const VARIANT_TIP = "hover for the arm id, flags and the decision this cell informs · a variant with several runs splits into one line per run — click a line to open that run's dropdown (stats · prompt · live log)";
+const VARIANT_TIP = "hover for the arm id, flags and the decision this cell informs · a variant with several runs splits into one line per run — the Runs-column chip opens that run's dropdown (prompt · live log)";
 const RUNS_TIP = "the run's status — click to open/collapse its dropdown; the line, dropdown and ⤢ map all follow this run";
 // Shared by the sticky header AND the row cells (identityRest, the ⤢ map buttons): a reader
 // hovering a value mid-board gets the term explained in place instead of traveling back up
@@ -1053,42 +1085,46 @@ const ACTS_TIP = "what injects the input: AX (cua driver) or CDP";
 const MAP_TIP = "the appmap as a full node-link tree — edge thickness = traversal heat, blue = the run's path";
 // No target column: the app scope picker above the board carries the target, and inside a
 // lineage group every row shares the group's target anyway.
-// Ordering: Variant leads with Task right beside it (David, 2026-08-01), then the Runs
-// chips (the chip is the row's anchor), the config block (the three Sees check columns,
-// Acts With, Model), the run-lifecycle columns (Tokens, Cost — Started and Time folded
-// into the chip label the same day), Actions (every run's count) and the four explore
-// discovery metrics, ops at the right.
+// Ordering: Task leads with Variant right beside it (David, 2026-08-01), then the Runs
+// chips (the chip is the row's anchor), the config block (the Sees AX/DOM checks, the Has
+// Vision check, Acts With, Model), the run-lifecycle columns (Tokens, Cost — Started and
+// Time folded into the chip label the same day), Actions (every run's count), the four
+// explore discovery metrics and their Convergence meter, ops at the right.
 // No Success column: per-run ✓/✗ is already on the Runs column's status chips — a second
 // cell saying the same thing read as a different signal.
-// Sees is three ✓ columns, not a phrase: "AX + DOM attrs + Vision" was an awkward
+// Sees/Has are ✓ columns, not a phrase: "AX + DOM attrs + Vision" was an awkward
 // constructed sentence; the exact wording (perceptionLine) survives in each cell's tooltip.
+// Sees groups the structured channels (AX, DOM); Has sits alone over Vision.
 // Every full-width spanner (detail rows, phase separators) spans NCOLS — keep it in step
-// with TASK_HEAD when adding a column. 17 = Variant + Task + Runs + the three Sees checks
-// + Acts With + Model + Tokens + Cost + Actions + 4 explore discovery + Map + Graphs.
-const NCOLS = 17;
+// with TASK_HEAD when adding a column. 18 = Task + Variant + Runs + the two Sees checks
+// + the Has/Vision check + Acts With + Model + Tokens + Cost + Actions + 4 explore
+// discovery + Convergence + Map + Graphs.
+const NCOLS = 18;
 // The explore percentage columns share one denominator: seen (the pass's total observed
 // controls — actuated + dismissed converge on it, so both stay in [0,100]). graphNodes is
 // NOT a valid denominator: dismissed alone can be 2× the distilled node count (a mass
 // dismissal sweeps controls the graph never keeps). Ambig is the graph's own property, so
 // it reads over graphNodes.
-const TASK_HEAD = "<tr>" + thr("Variant", VARIANT_TIP) +
-	thr("Task", "the goal-only prompt the run was given") +
-	thr("Runs", RUNS_TIP) +
-	th("Sees", "which channels reach the model — ✓ per channel; hover a row's cells for the exact wording", "", ' colspan="3"') +
+const TASK_HEAD = "<tr>" + thr("Task", "the goal-only prompt the run was given") +
+	thr("Variant", VARIANT_TIP) +
+	thr("Runs", RUNS_TIP, "ctr-h") +
+	th("Sees", "which structured channels reach the model — ✓ per channel; hover a row's cells for the exact wording", "ctr-h", ' colspan="2"') +
+	th("Has", "whether screenshots reach the model — ✓ when vision is on", "ctr-h") +
 	thr("Acts With", ACTS_TIP) +
 	thr("Model", "what actually ran, off the run logs") +
-	thr("Tokens", "OUTPUT tokens the run spent", "num-h") + thr("Cost", "published-rate estimate per run — not an invoice · ? = tokens recorded but no pricing", "num-h") +
+	thr("Out Tokens", "OUTPUT tokens the run spent", "num-h") + thr("Cost", "published-rate estimate per run — not an invoice · ? = tokens recorded but no pricing", "num-h") +
 	thr("Actions", "actions the run took — task runs carry their verified count in the hover; explore rows count the grounding pass", "num-h") +
 	thr("Nodes", "explore rows — distilled appmap graph nodes", "num-h") +
 	thr("Activated", "explore rows — share of the controls the pass observed that it operated at least once (actuated ÷ seen); hover for the counts", "num-h") +
 	thr("Dismissed", "explore rows — share of the controls the pass observed that it swept off the frontier without operating (dismissed ÷ seen). The pass ends when the frontier empties, and dismissing is a legitimate way to empty it", "num-h") +
 	thr("Ambig", "explore rows — settings editable at two scopes under one identity (same settingKey, different scope) — the wrong-scope trap; each gets a prompt warning. Shown as a share of graph nodes; hover for the count", "num-h") +
-	thr("Map", MAP_TIP) +
-	thr("Graphs", "this row's own page of charts — touch map, proof strips, judge agreement, attention depth, time anatomy, and more — live-updating as runs land") + "</tr>" +
+	thr("Convergence", "explore rows — consumed share of the discovered frontier (actuated + dismissed over everything seen); 100% = frontier empty, the pass's own stop condition", "ctr-h") +
+	thr("Map", MAP_TIP, "ctr-h") +
+	thr("Graphs", "this row's own page of charts — touch map, proof strips, judge agreement, attention depth, time anatomy, and more — live-updating as runs land", "ctr-h") + "</tr>" +
 	'<tr class="subhead">' +
-	th("AX", "macOS accessibility elements reach the model", "see-h") +
-	th("DOM", "DOM elements (cdp backend) — or DOM attrs the axdom sidecar joins onto AX", "see-h") +
-	th("Vision", "screenshots reach the model", "see-h") + "</tr>";
+	th("AX", "macOS accessibility elements reach the model", "ctr-h") +
+	th("DOM", "DOM elements (cdp backend) — or DOM attrs the axdom sidecar joins onto AX", "ctr-h") +
+	th("Vision", "screenshots reach the model", "ctr-h") + "</tr>";
 
 // Friendly names are DERIVED from the arm's structure (kind + flags + phase), not
 // hand-mapped per id, so new matrix cells name themselves. The id stays in the hover —
@@ -1125,10 +1161,13 @@ function modelCell(p, span = "") {
 }
 
 // Which run a row's detail shows: the explicitly selected one, else the first collected,
-// else the first submitted.
-function selJob(p, key) {
+// else the first submitted — skipping runs a retry replaced (`hidden`, from retryPairs):
+// their chips are gone from the Runs column, so the default selection must never land on
+// one the user cannot see or re-open.
+function selJob(p, key, hidden) {
 	if (typeof openRows[key] === "string") return openRows[key];
-	const c = p.entries.find((e) => e.collected) || p.entries[0];
+	const vis = hidden && hidden.size ? p.entries.filter((e) => !hidden.has(e.jobId)) : p.entries;
+	const c = vis.find((e) => e.collected) || vis[0];
 	return c && c.jobId;
 }
 
@@ -1137,13 +1176,17 @@ const ordinal = (n) => { const s = ["th", "st", "nd", "rd"], v = n % 100; return
 // Rank badge on explore group headers: "1" = the target's most comprehensive map — the
 // "of N" lives only in the tooltip (1 pass ranked = no badge). The ordinal is TEXT — a
 // solid dot in status hues was indistinguishable from the succeeded/failed dots in the
-// Runs column — and the border tint (good/critical/warning for best/worst/between) is
-// only a glance aid. Rank comes off the wire (rankExplore in dash.ts) so the page never
-// re-derives an ordering the server already owns.
+// Runs column — and the border tint is only a glance aid: good for best, critical for
+// worst, and the middle ranks a warning→critical gradient by whole-span position (rank 2
+// of 3 reads orange, the second-worst of a big field a dark orange) — flat yellow said
+// nothing about WHERE between the poles a pass sat. Rank comes off the wire (rankExplore
+// in dash.ts) so the page never re-derives an ordering the server already owns.
 function rankDot(a, p) {
 	if (a.kind !== "explore" || !p.exploreRank || p.exploreRank.of < 2) return "";
 	const { rank, of } = p.exploreRank;
-	const color = rank === 1 ? STATUS.good : rank === of ? STATUS.critical : STATUS.warning;
+	const color = rank === 1 ? STATUS.good
+		: rank === of ? STATUS.critical
+		: `color-mix(in oklab, ${STATUS.critical} ${Math.round((rank - 1) / (of - 1) * 100)}%, ${STATUS.warning})`;
 	const tip = `Comprehensiveness rank within ${targetLabel(a.targetKey)} — by distilled map size (graph nodes; 'seen' deliberately unused, it inflates on repetitive content)\n${ordinal(rank)} of ${of}`
 		+ (a.flags && a.flags.includes("--no-ax") ? "\n" + DECLARED_TIP : "");
 	return `<span class="rankbadge" style="border-color:${color}" data-tip="${esc(tip)}">${rank}</span>`;
@@ -1198,15 +1241,15 @@ function startStamp(t) {
 // truncating at 14 chars cut every same-hour stamp to one identical string ("2026-07-31T05-…").
 const shortJob = (id) => String(id).replace(/\d{4}-\d{2}-\d{2}T/, "");
 
-// The identity cells (Variant + Task, then Sees through Model) are identical for every run
+// The identity cells (Task + Variant, then Sees through Model) are identical for every run
 // of the pass, so on a multi-run variant they render once with `span` (a rowspan attr)
-// covering the group. They split around the Runs column (Task sits right after Variant,
-// Runs right after Task — David, 2026-08-01), so the Variant+Task cells and the Sees…Model
-// cells are two functions — passRows interleaves the per-run Runs chip between them, which
-// the rowspan layout allows because the browser fills each later row's cells into the
-// columns the rowspans left open.
+// covering the group. They split around the Runs column (Variant sits right after Task,
+// Runs right after Variant — David, 2026-08-01), so the Task+Variant cells and the
+// Sees…Model cells are two functions — passRows interleaves the per-run Runs chip between
+// them, which the rowspan layout allows because the browser fills each later row's cells
+// into the columns the rowspans left open.
 
-// Columns 1–2: the arm name (rank dot + display name + phase badge), then the task prompt.
+// Columns 1–2: the task prompt, then the arm name (rank dot + display name + phase badge).
 function variantCell(a, p, span = "") {
 	const tip = [a.id, a.informs || "", `flags: ${a.flags || "(none)"}`].filter(Boolean).join("\n");
 	// Phase badge on task/replay rows only: lineage groups interleave phases 2–5, so the row
@@ -1219,10 +1262,11 @@ function variantCell(a, p, span = "") {
 		: a.kind === "explore"
 			? `<td class="task"${span} data-tip="Explore pass — no task prompt. The objective is coverage: operate every safe control until the frontier of un-operated controls empties, then write the appmap (docs/appmaps/)">Explore</td>`
 			: `<td class="task"${span} data-tip="no prompt — a replay runs its recipe's task">–</td>`;
-	return `<td class="arm"${span} data-tip="${esc(tip)}">${rankDot(a, p)}<span class="dn">${esc(displayName(a))}</span>${badge}</td>${taskCell}`;
+	return `${taskCell}<td class="arm"${span} data-tip="${esc(tip)}">${rankDot(a, p)}<span class="dn">${esc(displayName(a))}</span>${badge}</td>`;
 }
 
-// Columns 4–8 (after the Runs column): the three Sees checks, Acts With, Model.
+// Columns 4–8 (after the Runs column): the Sees AX/DOM checks, the Has/Vision check,
+// Acts With, Model.
 function identityRest(a, p, span = "") {
 	// Sees: a ✓ per channel (AX / DOM / Vision), blank when off. a.perception rides every
 	// cell's tooltip because a bare DOM✓ is ambiguous — it means full DOM elements on cdp OR
@@ -1351,24 +1395,68 @@ function exploreCellsFor(a, e) {
 		+ (amb != null ? liveHuedCell(e, EXPLORE_HUES.ambig, fmtPct(amb), `${fmtNum(lp.scopeAmbiguities)} dual-scope settings across ${fmtNum(lp.nodes)} graph nodes so far`) : num("–"));
 }
 
+// The Convergence column (between Ambig and Map): the fleet OSD's meter, one per explore
+// run. A live pass feeds its heartbeat counters straight in; a collected pass rebuilds the
+// shape from banked stats — the stamp records no frontier, so it derives as
+// seen − actuated − dismissed (0 for a swept pass). Task/replay rows and pre-enrichment
+// logs dash.
+const NO_CONV_CELL = `<td class="conv">–</td>`;
+function convergenceCellFor(e) {
+	const st = e.exploreStamp;
+	const lp = !e.collected && e.live;
+	const conv = st
+		? convergenceMeter({
+			actuated: st.controlsActuated, dismissed: st.controlsDismissed, nodes: st.graphNodes,
+			frontier: st.controlsSeen == null ? null : Math.max(0, st.controlsSeen - (st.controlsActuated ?? 0) - (st.controlsDismissed ?? 0)),
+		}, true)
+		: lp ? convergenceMeter(lp) : null;
+	return conv ? `<td class="conv">${convChip(conv)}</td>` : NO_CONV_CELL;
+}
+
 // A variant with several runs SPLITS after the identity columns (David, 2026-08-01): the
-// seven identity cells (Variant, Task, Sees×3, Acts With, Model) are identical across a
-// pass's runs, so they render once and rowspan the group; everything run-dependent
-// (chip, Tokens…Ambig, ⤢) gets one line per run, reading that run's OWN numbers. Line order = the chips' drain order
-// (finished → running → queued, oldest first in each band). Each line carries the chip's
-// click semantics on the whole row (data-row + data-job): click a line to open/select its
-// run's dropdown, click it again to collapse. The detail row rides AFTER the group — a
+// seven identity cells (Task, Variant, the Sees/Has checks, Acts With, Model) are identical
+// across a pass's runs, so they render once and rowspan the group; everything run-dependent
+// (chip, Tokens…Convergence, ⤢) gets one line per run, reading that run's OWN numbers. Line order = the chips' drain order
+// (finished → running → queued, oldest first in each band). Rows are INERT (David,
+// 2026-08-01): the toggle attrs (data-row + data-job) live on the Runs-column chip alone —
+// click a run's chip to open/select its dropdown, again to collapse. The detail row rides AFTER the group — a
 // colspan row inside a rowspan region would shear the columns. `first` marks a group's
 // first explore row for .gsep air; non-final lines wear .splitrow (dashed separator).
+// Autopilot retries: the manifest writes NO linkage between a technical failure and the
+// run re-dispatched to replace it (collect stamps `technical` and frees the slot,
+// orchestrate appends a plain new entry), so the pairing is inferred. In submission order
+// the first `a.n` entries are the arm's original samples and every entry past `a.n`
+// exists only because a freed slot re-opened; pairing is FIFO — the j-th extra replaces
+// the j-th freed run. Freed = a COLLECTED crashed/unready or collect's TECHNICAL FAILURE
+// note (an uncollected registry-graded crash has not freed anything yet); agent verdicts
+// (failed, gave-up) never free a slot and are never hidden. A replaced run's chip drops
+// out of the Runs column — its replacement's tooltip names it, so the history isn't
+// silently erased. With multiple failures in one arm the FIFO pairing is convention, not
+// a recorded fact — the manifest simply holds nothing stronger.
+function retryPairs(a, p) {
+	const order = p.entries.slice().sort((x, y) => (Date.parse(x.submittedAt) || 0) - (Date.parse(y.submittedAt) || 0));
+	const freed = order.filter((e) => e.collected && (e.status === "crashed" || e.status === "unready" || (e.note || "").includes("TECHNICAL FAILURE")));
+	const extras = order.slice(a.n);
+	const hidden = new Set(), retryOf = {};
+	freed.forEach((t, j) => {
+		const r = extras[j];
+		if (!r || r.jobId === t.jobId) return;
+		hidden.add(t.jobId);
+		retryOf[r.jobId] = t.jobId;
+	});
+	return { hidden, retryOf };
+}
+
 function passRows(a, p, first, metricCells) {
 	const key = rowId(a, p);
-	const sel = openRows[key] ? selJob(p, key) : undefined;
-	const runs = p.entries.slice().sort((x, y) => entryBand(x) - entryBand(y) || entryTime(x) - entryTime(y));
+	const { hidden, retryOf } = retryPairs(a, p);
+	const sel = openRows[key] ? selJob(p, key, hidden) : undefined;
+	const runs = p.entries.filter((e) => !hidden.has(e.jobId)).sort((x, y) => entryBand(x) - entryBand(y) || entryTime(x) - entryTime(y));
 	const span = runs.length > 1 ? ` rowspan="${runs.length}"` : "";
 	const expCls = a.kind === "explore" ? " exp-row" : "";
 	const rows = runs.map((e, i) =>
-		`<tr class="mrow${expCls}${i === 0 && first ? " gsep" : ""}${i < runs.length - 1 ? " splitrow" : ""}" data-row="${esc(key)}" data-job="${esc(e.jobId)}">${i === 0 ? variantCell(a, p, span) : ""}
-		<td class="runs">${statusChip(e, key, e.jobId === sel)}</td>
+		`<tr class="mrow${expCls}${i === 0 && first ? " gsep" : ""}${i < runs.length - 1 ? " splitrow" : ""}">${i === 0 ? variantCell(a, p, span) : ""}
+		<td class="runs">${statusChip(e, key, e.jobId === sel, retryOf[e.jobId])}</td>
 		${i === 0 ? identityRest(a, p, span) : ""}
 		${metricCells(e)}
 		<td class="treecell"><button class="btnv" data-viewtree="${esc(e.jobId)}" data-tip="${esc(MAP_TIP)}">⤢</button></td>
@@ -1383,24 +1471,23 @@ const graphsCell = (a, p, span) =>
 
 function taskRow(a, p) {
 	return passRows(a, p, false, (e) =>
-		tokensCellFor(e) + costCellFor(e) + taskActionsCellFor(e) + NO_EXPLORE_CELLS);
+		tokensCellFor(e) + costCellFor(e) + taskActionsCellFor(e) + NO_EXPLORE_CELLS + NO_CONV_CELL);
 }
 
 // The explore GROUP-HEADER rows — exploreCellsFor leads with the pass's own Actions cell.
 function exploreRow(a, p, first) {
 	return passRows(a, p, first, (e) =>
-		tokensCellFor(e) + costCellFor(e) + exploreCellsFor(a, e));
+		tokensCellFor(e) + costCellFor(e) + exploreCellsFor(a, e) + convergenceCellFor(e));
 }
 
 // Compile arms (phase 3/4 recipe compiles) are local, instant file transforms recorded as
-// already-collected manifest entries — they count in the hero Submitted/Collected numbers,
+// already-collected manifest entries — they count in the hero Submitted/Finished numbers,
 // so hiding them made the totals disagree with the visible rows. One slim line each: no
 // model runs, no steps, no tokens, so every metric column is honestly a dash. The Task
 // column shows the SOURCE run's stamp — a compile entry's jobId IS its source stamp
-// (manifest.ts), and the recipe file path never rides the wire. Deliberately inert: no
-// .mrow (no pointer/hover), no data-toggle, and runsCell gets no row key so the chips
-// carry tooltips (incl. a "compile refused: …" note) but select nothing — there is no log
-// pane or map behind a local file transform.
+// (manifest.ts), and the recipe file path never rides the wire. Deliberately inert:
+// runsCell gets no row key so the chips carry tooltips (incl. a "compile refused: …"
+// note) but select nothing — there is no log pane or map behind a local file transform.
 function compileRow(a, p) {
 	const tip = [a.id, a.informs || "", `flags: ${a.flags || "(none)"}`].filter(Boolean).join("\n");
 	const badge = `<span class="pbadge" data-tip="phase ${a.phase} arm — lineage groups interleave phases">P${a.phase}</span>`;
@@ -1409,13 +1496,13 @@ function compileRow(a, p) {
 		? `<td class="task" data-tip="compiled from this source run's log (a compile entry's jobId is its source stamp; the recipe file path is not on the wire)">src ${esc(shortJob(src.jobId))}</td>`
 		: `<td class="task" data-tip="no source run yet">–</td>`;
 	// This inert row mirrors the board's column order by HAND (no variantCell/passRows split
-	// to lean on), so it must be kept in step with TASK_HEAD: Variant, Task(=src), Runs, the
-	// three Sees dashes (no model runs, so no perception channels), Acts With, Model, Tokens,
-	// Cost, Actions, the four explore dashes, Map, Graphs — 17 cells.
-	return `<tr class="crow"><td class="arm" data-tip="${esc(tip)}"><span class="dn">${esc(displayName(a))}</span>${badge}</td>
-		${srcCell}${runsCell(p, null)}<td class="see">–</td><td class="see">–</td><td class="see">–</td><td class="num">–</td><td class="num">–</td>
+	// to lean on), so it must be kept in step with TASK_HEAD: Task(=src), Variant, Runs, the
+	// three Sees/Has dashes (no model runs, so no perception channels), Acts With, Model,
+	// Tokens, Cost, Actions, the four explore dashes, Convergence, Map, Graphs — 18 cells.
+	return `<tr class="crow">${srcCell}<td class="arm" data-tip="${esc(tip)}"><span class="dn">${esc(displayName(a))}</span>${badge}</td>
+		${runsCell(p, null)}<td class="see">–</td><td class="see">–</td><td class="see">–</td><td class="num">–</td><td class="num">–</td>
 		<td class="num">–</td><td class="num">–</td><td class="num">–</td>
-		${NO_EXPLORE_CELLS}<td class="treecell"></td><td class="treecell"></td></tr>`;
+		${NO_EXPLORE_CELLS}${NO_CONV_CELL}<td class="treecell"></td><td class="treecell"></td></tr>`;
 }
 
 /* ---- row detail: appmap + path ------------------------------------------------------- */
@@ -1463,111 +1550,42 @@ function fetchDetail(job) {
 		});
 }
 
-// Term explainers for the dropdown stat keys (statsStrip + liveStrip), same delegated
-// tooltip as the board cells — "Ambig", "Tok In" and "Judge" are opaque without one.
-const STAT_TIPS = {
-	Actions: "actions the run took",
-	Time: "wall-clock for this run",
-	Seen: "controls the pass observed",
-	Actuated: "controls the pass operated",
-	Dismissed: "controls dropped without operating",
-	Surfaces: "distinct screens/panels/dialogs seen",
-	Nodes: "distilled appmap graph nodes",
-	Ambig: "same setting editable at two scopes",
-	Verified: "actions with verified effects",
-	"Tok In": "input tokens sent to the model",
-	Out: "output tokens generated",
-	"Cache-Read": "prompt tokens read from cache",
-	"Cache-Write": "prompt tokens written to cache",
-	"Est Cost": "published-rate estimate — not an invoice",
-	Judge: "judge verdicts: trajectory / visual",
-	Frontier: "un-operated controls — the pass ends when this empties",
-	Stopped: "has the pass declared itself done",
-	Last: "the run's latest action",
-	Claimed: "the run's own claim — pre-judge",
-	Cleanup: "the run's cleanup status",
-	Fatal: "the error that killed the run",
-};
-const statSpan = ([k, v]) => `<span><span class="k"${STAT_TIPS[k] ? ` data-tip="${esc(STAT_TIPS[k])}"` : ""}>${k}</span>${esc(String(v))}</span>`;
-
-// Per-run stats header: the SELECTED run's own numbers atop the dropdown. Explore runs show
-// their pass's exploreStamp (the row shows medians across passes); task/replay runs show the
-// run's economics. Missing values simply don't render — a running entry may show only Time.
-function statsStrip(a, e) {
-	const st = e.exploreStamp;
-	const pairs = a.kind === "explore" && st
-		? [["Actions", fmtNum(st.actions)], ["Time", e.elapsedSec != null ? fmtDur(e.elapsedSec) : null],
-			["Seen", fmtNum(st.controlsSeen)], ["Actuated", fmtNum(st.controlsActuated)],
-			["Dismissed", fmtNum(st.controlsDismissed)], ["Surfaces", fmtNum(st.surfaces)], ["Nodes", fmtNum(st.graphNodes)],
-			["Ambig", fmtNum(st.scopeAmbiguities)]]
-		: [["Actions", e.steps], ["Verified", e.verifiedSteps],
-			["Time", e.elapsedSec != null ? fmtDur(e.elapsedSec) : null],
-			["Tok In", e.inputTokens != null ? fmtK(e.inputTokens) : null],
-			["Out", e.outputTokens != null ? fmtK(e.outputTokens) : null],
-			["Cache-Read", e.cacheReadTokens != null ? fmtK(e.cacheReadTokens) : null],
-			["Cache-Write", e.cacheCreationTokens != null ? fmtK(e.cacheCreationTokens) : null],
-			["Est Cost", e.usd != null ? fmtMoney(e.usd) : null],
-			["Judge", e.judgeTrajectory ? e.judgeTrajectory + (e.judgeVisual ? " / " + e.judgeVisual : "") : null]];
-	const cells = pairs.filter(([, v]) => v != null && v !== "–").map(statSpan).join("");
-	return cells ? `<div class="d-stats">${cells}</div>` : "";
-}
-
-// Results-so-far strip (EntryView.live): the run's own event log, folded into counters while
-// collect has nothing to show. Uncollected entries only — the moment collect banks the run,
-// the field is gone from the wire and the real stats above are the only numbers on the row.
-// The trailing caveat keeps a glance from reading these as results; the LIVE tag is worn
-// only by a RUNNING entry — a run that ended keeps the provenance line without the live claim.
-function liveStrip(a, e) {
-	const lp = e.live;
-	if (!lp || e.collected) return "";
-	const running = e.status === "running";
-	const pairs = a.kind === "explore"
-		? [["Actions", lp.actions], ["Frontier", lp.frontier], ["Actuated", lp.actuated], ["Dismissed", lp.dismissed], ["Seen", lp.seen], ["Nodes", lp.nodes], ["Stopped", lp.finished]]
-		: [["Actions", lp.steps], ["Verified", lp.verified], ["Last", lp.lastStep]];
-	// Usage is common to both kinds (one event per model call, cumulative). Same ~ prefix as
-	// the live cells; the strip's trailing caveat already marks the whole row provisional.
-	if (lp.outputTokens != null) pairs.push(["Out", "~" + fmtK(lp.outputTokens)]);
-	if (lp.modelCalls != null) pairs.push(["Calls", "~" + fmtNum(lp.modelCalls)]);
-	if (lp.usd != null) pairs.push(["Est Cost", "~" + fmtMoney(lp.usd)]);
-	if (lp.verdict) pairs.push(["Claimed", (lp.verdict.success ? "success" : "failure") + (lp.verdict.summary ? " — " + lp.verdict.summary : "")]);
-	if (lp.cleanup) pairs.push(["Cleanup", lp.cleanup]);
-	if (lp.fatal) pairs.push(["Fatal", lp.fatal]);
-	const cells = pairs.filter(([, v]) => v != null && v !== "").map(statSpan).join("");
-	return cells
-		? `<div class="d-stats live-strip">${running ? `<span class="livetag">live</span>` : ""}${cells}<span class="meta">${running ? "from the run's event log — provisional until collected" : "run ended — from its event log, provisional until collected"}</span></div>`
-		: "";
-}
-
 // No run-selector tabs here: the chips in the row's Runs column are the selector, and the
 // displayed run's chip is the highlighted one.
-// The dropdown is the run's live console: its stats strip, the prompt it was given in
-// plaintext, then the log pane as bytes land. The map tree lives wholly behind the row's ⤢
-// button (openTree); detailBody/mapTree remain below as code for other views.
+// The dropdown is the run's live console: the prompt it was given in plaintext, the
+// narrator's note, then the log pane as bytes land. The stats/live counter strips left
+// with the per-run metric COLUMNS (David, 2026-08-01) — the board cells carry those
+// numbers now. The map tree lives wholly behind the row's ⤢ button (openTree);
+// detailBody/mapTree remain below as code for other views.
 function detailRowHtml(a, p, key) {
-	const sel = selJob(p, key);
+	const sel = selJob(p, key, retryPairs(a, p).hidden);
 	if (!sel) return `<tr class="detail-row"><td colspan="${NCOLS}"><div class="empty">nothing submitted yet</div></td></tr>`;
 	const e = p.entries.find((x) => x.jobId === sel) || {};
 	// The detail is still fetched: the ⤢ modal reads its graph, and its payload carries the
 	// run log's own task — the prompt fallback for arms that carry none (replays).
 	if (!detailCache[sel]) fetchDetail(sel);
 	const d = detailCache[sel];
+	// Every row kind prints its prompt (David, 2026-08-01) — an explore pass's is the system
+	// prompt the pass ran under (ArmView.prompt, same across the pass's runs; absent on cdp
+	// arms until the lazily-loaded CDP_RULES lands server-side).
 	const prompt =
-		a.kind === "explore" ? `<span class="meta">Explore pass — no task prompt</span>`
+		a.kind === "explore" ? (a.prompt ? `<span class="k">Prompt</span>${esc(a.prompt)}` : `<span class="meta">Explore pass — system prompt not on the wire yet</span>`)
 		: a.task ? `<span class="k">Prompt</span>${esc(a.task)}`
 		: a.kind === "replay" ? (d && d.task ? `<span class="k">Replay — recipe task</span>${esc(d.task)}` : `<span class="meta">Replay — recipe task not collected yet</span>`)
 		: d && d.task ? `<span class="k">Prompt</span>${esc(d.task)}`
 		: `<span class="meta">no task prompt recorded</span>`;
 	// The run's own narrator note (its run dir's narrative.jsonl) — model-written, so it keeps
-	// the same "verify before quoting" caveat the findings card carries.
+	// the same "verify before quoting" caveat the findings card carries. The margin-top is a
+	// blank line's worth of block separation from the prompt above it.
 	const note = d && d.narratorNote
-		? `<div class="d-note" style="max-width:90ch;white-space:pre-wrap">${esc(d.narratorNote.text)} <span class="meta">— narrator, ${hhmm(d.narratorNote.t)} · verify before quoting</span></div>`
+		? `<div class="d-note" style="max-width:90ch;white-space:pre-wrap;margin-top:12px">${esc(d.narratorNote.text)} <span class="meta">— narrator, ${hhmm(d.narratorNote.t)} · verify before quoting</span></div>`
 		: "";
 	// A failed detail fetch caches its reason in d.note — surface it, or the dropdown reads
 	// as "this run simply has nothing" when the truth is "the fetch failed".
 	const fetchNote = d && d.note && !d.graph ? `<div class="d-note">⚠ ${esc(d.note)}</div>` : "";
 	// The convergence chart moved to the row's graphs page (the 📊 cell) — the dropdown
-	// stays the run's live console: stats, prompt, notes, log.
-	return `<tr class="detail-row"><td colspan="${NCOLS}">${statsStrip(a, e)}${liveStrip(a, e)}<div class="d-prompt">${prompt}</div>${note}${fetchNote}
+	// stays the run's live console: prompt, notes, log.
+	return `<tr class="detail-row"><td colspan="${NCOLS}"><div class="d-prompt">${prompt}</div>${note}${fetchNote}
 		<div class="logwrap" data-logjob="${esc(sel)}" data-loghost="${esc(e.host || "")}"></div></td></tr>`;
 }
 
@@ -2066,9 +2084,13 @@ function renderExplore() {
 	if (!arms.length) { $("chart-explore").innerHTML = `<div class="empty">waiting for a collected explore…</div>`; return; }
 	// Funnel order (seen ≥ actuated+dismissed); colors follow the series, not the position.
 	// Group labels speak the board's Variant names (per David, 2026-08-01) — one vocabulary
-	// between table and chart. A title two arms share (both backends run a "Baseline") gets
-	// the actuation appended, the same axis the board's Acts With column disambiguates by;
-	// web arms append "(web)". HORIZONTAL on purpose: these labels are long, per-model
+	// between table and chart: the server title VERBATIM (it already carries "(Web)" for url
+	// arms — the chart's own "(web)" append doubled it) and the model as the board's short
+	// name (friendlyModel, never normModel — the chart said "gpt-5.6-sol" where the Model
+	// column said "Sol 5.6"). The actuation suffix is collision-only and now defensive: the
+	// channel-truthful rename split the one shared title (cdp full-perception reads "No AX",
+	// not a second "Baseline"), but a future collision gets the same axis the board's Acts
+	// With column disambiguates by. HORIZONTAL on purpose: these labels are long, per-model
 	// passes multiply the groups, and vBars' centered x-labels stepped on each other until
 	// the axis was unreadable. The gutter fits the full words and the model rides its own
 	// muted sub-line.
@@ -2078,11 +2100,10 @@ function renderExplore() {
 	for (const a of arms) titleCounts[displayName(a)] = (titleCounts[displayName(a)] || 0) + 1;
 	const exploreLabel = (a) => displayName(a)
 		+ (titleCounts[displayName(a)] > 1 && a.actuation ? ` (${a.actuation})` : "")
-		+ (a.url ? " (web)" : "")
 		+ (a.flags && a.flags.includes("--no-ax") ? " ⚠ declared" : "");
 	const groups = arms.flatMap((a) => a.passes.filter((p) => p.explore && p.explore.controlsSeen != null).map((p) => ({
 		label: exploreLabel(a),
-		...(p.model !== "(default)" ? { sub: normModel(p.model) } : {}),
+		...(p.model !== "(default)" ? { sub: friendlyModel(p.model) } : {}),
 		values: [p.explore.controlsSeen, p.explore.controlsActuated, p.explore.controlsDismissed],
 	})));
 	// seen/actuated/dismissed in SERIES hues — all three are categorical facets of one
@@ -2287,7 +2308,22 @@ function render() {
 	safe("hero", null, () => {
 		$("h-submitted").textContent = `${p.submitted} / ${p.planned}`;
 		$("h-live").textContent = `${p.running} · ${p.queued}`;
-		$("h-collected").textContent = String(p.collected);
+		// "Finished" counts TERMINAL runs — the board's finished band (ended on its host,
+		// banked or not), computed off the entries directly: progress.collected stays a
+		// collect-pass count internally, but collect is plumbing the page stopped surfacing.
+		const entries = visibleArms().flatMap((a) => a.passes.flatMap((q) => q.entries));
+		$("h-collected").textContent = String(entries.filter((e) => entryBand(e) === 0).length);
+		// Pipeline wall-clock: earliest submit → now while anything still moves (the shared
+		// 1s js-elapsed ticker advances it between pushes); once every run is terminal it
+		// freezes at the last entry's finish — a pass viewed tomorrow must not read as a
+		// 30-hour run still climbing.
+		const firstSubmit = Math.min(...entries.map((e) => Date.parse(e.submittedAt) || Infinity));
+		if (!isFinite(firstSubmit)) $("h-elapsed").textContent = "–";
+		else if (entries.some((e) => entryBand(e) > 0)) $("h-elapsed").innerHTML = elapsedSpan((receivedAt - firstSubmit) / 1000);
+		else {
+			const lastEnd = Math.max(...entries.map(entryTime).filter(isFinite));
+			$("h-elapsed").textContent = lastEnd > firstSubmit ? fmtDur((lastEnd - firstSubmit) / 1000) : "–";
+		}
 		// "Succeeded", the word every other surface uses — and marked self-reported, the
 		// distinction the judge pipeline exists to expose.
 		$("h-success").textContent = `${p.successes} Succeeded`;
@@ -2325,17 +2361,17 @@ $("target-picker").addEventListener("click", (ev) => {
 	render();
 });
 
-// Row expansion + run selection, delegated once — the board's innerHTML is replaced on
-// every push, so handlers must live on the container, not the rows.
+// Run selection, delegated once — the board's innerHTML is replaced on every push, so
+// handlers must live on the container. Only the Runs-column chips toggle (David,
+// 2026-08-01): rows are inert, so the toggle attrs live on the chips alone.
 $("board").addEventListener("click", (ev) => {
 	const vt = ev.target.closest("[data-viewtree]");
 	if (vt) { requestTree(vt.dataset.viewtree); return; }
-	const job = ev.target.closest("[data-job][data-row]");
-	if (job) {
-		const { row, job: id } = job.dataset;
-		// A run's LINE (and its chip — same data attrs) toggles ITS run's view: click once
-		// to open/select, click the same run's line again to collapse; clicking a sibling
-		// line switches the dropdown to that run.
+	const chip = ev.target.closest(".chip[data-job][data-row]");
+	if (chip) {
+		const { row, job: id } = chip.dataset;
+		// A run's chip toggles ITS run's view: click once to open/select, click the same
+		// run's chip again to collapse; clicking a sibling's chip switches the dropdown.
 		if (openRows[row] === id) delete openRows[row];
 		else openRows[row] = id;
 		render();

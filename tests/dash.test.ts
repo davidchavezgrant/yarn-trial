@@ -914,7 +914,7 @@ test("NarratorPrompt__FramesTheTriggeringRun__When__RunContextIsGiven", () => {
 	assert.ok(p.includes("A run just completed: job-x (arm p2-cdp-grounded)"));
 	assert.ok(p.includes("write the note for THIS run"));
 	assert.ok(p.includes('"steps": 9'));
-	assert.ok(p.includes("AT MOST 5 sentences"));
+	assert.ok(p.includes("Write 2–3 sentences"));
 	// No run context — the framing stays out entirely (the pre-per-run prompt, unchanged).
 	assert.ok(!narratorPrompt({ progress: {} }).includes("A run just completed"));
 });

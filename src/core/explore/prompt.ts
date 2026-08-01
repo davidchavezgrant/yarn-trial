@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { ACT_TOOL } from "../harness.js";
+import { ACT_TOOL } from "../harness/actions.js";
 import type { TargetVocabulary } from "../target.js";
 import { DISMISS_REASON_HELP, DISMISS_REASONS } from "../harness/dismissal.js";
 import { DISMISS_CAP } from "./config.js";

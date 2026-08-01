@@ -11,7 +11,11 @@ import type { HostEntry, Inventory } from "../remote/control/hosts.js";
 import type { EngineHandle } from "../remote/liveview.js";
 import { readJob as readLocalJob, readLog } from "../remote/runner/jobs.js";
 import { ARCHIVE_DIR, LIVE_DIR, OLD_ARCHIVE_DIR, OLD_LIVE_DIR, RUN_FILES, appSlug, dataRoot, outDir, resolveRunDir, runFile } from "../paths.js";
-import { appmapSlug } from "../core/target.js";
+import { appmapSlug, type Target, targetVocabulary, webTarget } from "../core/target.js";
+// Narrow modules, per the harness barrel's own header rule — never the barrel from here.
+import { DESCENT_ON } from "../core/explore/config.js";
+import { systemPrompt } from "../core/explore/prompt.js";
+import { DRIVER_RULES, VISION_ONLY_RULES } from "../core/harness/actions.js";
 import { archiveDirFor } from "./collect.js";
 import { estimateCost } from "./cost.js";
 import { BENCH_PRIMARY_MODEL, MATRIX, armAppmapSlug, armById, armTitle, flagsLine, perceptionLine, phaseArms, type Arm, type Phase } from "./matrix.js";
@@ -223,6 +227,12 @@ export interface ArmView {
 	task?: string;
 	/** Web arms: the URL the run pointed at (off the dispatch flags). */
 	url?: string;
+	/**
+	 * Explore arms: the system prompt the pass runs under — reconstructed from the dispatch
+	 * flags (explorePrompt below), because no run artifact records it. Absent until the
+	 * lazily-loaded CDP_RULES lands (cdp arms, a push or two after start).
+	 */
+	prompt?: string;
 	/**
 	 * The phase-1 explore arm whose map this task/replay arm consumed (groundingArmId — the
 	 * same resolution orchestrate applies), so the board can nest arms under their lineage.
@@ -1213,18 +1223,18 @@ export function narratorPrompt(
 		"surfaces, graph nodes, scope ambiguities); what vision costs/buys; whether recipe replay",
 		"is fleet-ready; judge disagreements with self-reports.",
 		"",
-		"Write AT MOST 5 sentences, 100 words total. Every sentence is one finding carried by its",
-		"numbers (ratios beat raw counts). Newest or most decision-relevant first. No preamble, no",
-		"inventory of what hasn't run, no hedging boilerplate — at most one short sample-size",
-		"caveat, and only where it changes the conclusion. Never speculate past the data. Plain",
-		"prose, no headers, no lists, no markdown.",
+		"Write 2–3 sentences, Strunk & White style: plain, active, omit needless words. Every",
+		"sentence is one finding carried by its numbers (ratios beat raw counts). Newest or most",
+		"decision-relevant first. No preamble, no inventory of what hasn't run, no hedging",
+		"boilerplate — a sample-size caveat only where it changes the conclusion. Never speculate",
+		"past the data. Plain prose, no headers, no lists, no markdown.",
 		...(previous ? ["", "Your previous note (already seen — write only what CHANGED or sharpened):", previous] : []),
 		...(run
 			? [
 					"",
 					`A run just completed: ${run.runKey} (arm ${run.armId}). Given the COMPLETE state below —`,
 					"every run finished so far — write the note for THIS run: what it contributes, confirms,",
-					"or changes versus its arm and the field to date. ≤5 sentences, numbers-first, plain prose.",
+					"or changes versus its arm and the field to date. 2–3 sentences, numbers-first, plain prose.",
 					...(run.stats !== undefined ? ["", "The completed run's own numbers:", JSON.stringify(run.stats, null, 1)] : []),
 				]
 			: []),
@@ -1255,19 +1265,22 @@ const ARM_TITLE_COPY: Record<string, string> = {
  * entirely (David, 2026-08-01): the Task cell already reads "Explore" on these rows, so
  * repeating it in the Variant cell said everything twice. Never the backend as actuation:
  * Acts carries that, and folding actuation into the label is how "vision-only explore (AX)"
- * got misread as vision + AX on 2026-07-31. The one backend-discriminated branch is
- * noVision, which used to render ONE label ("Element-Only") for two different arms —
- * ax-without-screenshots and cdp-without-screenshots — so the pair now say what the model
- * is left with: "No Vision" (AX + DOM attrs remain) vs "CDP Only" (the CDP ref list alone).
+ * got misread as vision + AX on 2026-07-31. Names are CHANNEL-TRUTHFUL (renamed
+ * 2026-08-01): each says which of the three channels (AX / DOM / Vision — armSees' axes)
+ * the model is missing, or the single one it is left with. "Baseline" is all three, so it
+ * is ax-only — a cdp arm never has the AX tree, and letting its full-perception label read
+ * "Baseline" too hid that; it is "No AX". Likewise "DOM Only" (was "CDP Only") names the
+ * channel, not the backend, and "No DOM" (was "No Sidecar") names what the sidecar's
+ * absence costs, not the mechanism.
  * Derived from the dispatch object, same rule as armTitle — new cells name themselves.
  */
 function exploreTitle(arm: Arm): string {
 	const d = arm.dispatch;
 	const base = d.noAx ? "Vision Only"
 		: d.axdomOff && d.noVision ? "AX Only"
-		: d.axdomOff ? "No Sidecar"
-		: d.noVision ? (d.backend === "cdp" ? "CDP Only" : "No Vision")
-		: "Baseline";
+		: d.axdomOff ? "No DOM"
+		: d.noVision ? (d.backend === "cdp" ? "DOM Only" : "No Vision")
+		: (d.backend === "cdp" ? "No AX" : "Baseline");
 
 	return base + (d.url ? " (Web)" : "");
 }
@@ -1293,6 +1306,49 @@ const armSees = (arm: Arm): ArmView["sees"] => ({
 	vision: !arm.dispatch.noVision,
 });
 
+// CDP_RULES lives in src/backends/cdp.ts, whose static imports pull playwright-core — the one
+// genuinely heavy module dash's graph does not already carry. Loaded lazily ONCE on first use
+// and cached (same seam as core's backend selection branches); until it lands, cdp explore
+// arms omit their prompt for a push or two rather than blocking the sync buildState. A failed
+// load stays unloaded — prompts for those arms just never appear.
+let cdpRules: string | undefined;
+let cdpRulesRequested = false;
+const requestCdpRules = (): void => {
+	if (cdpRulesRequested) return;
+	cdpRulesRequested = true;
+	void import("../backends/cdp.js").then((m) => {
+		cdpRules = m.CDP_RULES;
+	}, () => {});
+};
+
+/**
+ * The system prompt an explore arm runs under, mirroring explore.ts's selection branch
+ * exactly (rules by backend/noAx, target vocabulary, vision, descent). A RECONSTRUCTION,
+ * not a record: no artifact persists the explore prompt (checkpoint() writes only
+ * coverage/nodes/edges), and the runner Mac's own env decides the real run's descent —
+ * nothing in bench/remote sets EXPLORE_DESCENT, so DESCENT_ON here reproduces the fleet
+ * default (off).
+ */
+function explorePrompt(arm: Arm): string | undefined {
+	try {
+		const d = arm.dispatch;
+		const target: Target = d.url ? webTarget(d.url) : { kind: "app", name: arm.app };
+		const vocab = targetVocabulary(target);
+		const vision = !d.noVision;
+		const descent = DESCENT_ON && !d.noAx;
+		if (d.backend === "cdp") {
+			requestCdpRules();
+
+			return cdpRules === undefined ? undefined : systemPrompt(cdpRules, vocab, descent, vision);
+		}
+
+		return d.noAx ? systemPrompt(VISION_ONLY_RULES, vocab, descent, vision, true) : systemPrompt(DRIVER_RULES, vocab, descent, vision);
+	} catch {
+		// A malformed dispatch URL must degrade to a missing prompt, never kill the push.
+		return undefined;
+	}
+}
+
 export function buildState(manifest: Manifest, fleet: FleetView, events: DashEvent[], autoCollect: boolean, defaultModel?: string, live?: Map<string, RunProgress>): DashState {
 	const arms: ArmView[] = MATRIX.map((arm) => ({
 		id: arm.id,
@@ -1309,6 +1365,9 @@ export function buildState(manifest: Manifest, fleet: FleetView, events: DashEve
 		actuation: (arm.dispatch.backend ?? "ax").toUpperCase(),
 		...(arm.task ? { task: arm.task } : {}),
 		...(arm.dispatch.url ? { url: arm.dispatch.url } : {}),
+		// JSON.stringify drops the undefined (cdp arms before CDP_RULES lands), so the wire
+		// never carries an empty prompt field.
+		...(arm.kind === "explore" ? { prompt: explorePrompt(arm) } : {}),
 		// Lineage off the dispatch object, never the rendered flags string (same rule as
 		// armTitle): a task/replay arm without noGrounding consumed SOME explore map.
 		...((arm.kind === "task" || arm.kind === "replay") && !arm.dispatch.noGrounding
@@ -2191,7 +2250,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 						model: mc.model,
 						// 4000, not a text-sized budget: reasoning models spend max_tokens on thinking
 						// BEFORE the visible text, and 400 was exhausted mid-reason — every tick failed
-						// with no text at all. The prompt caps the visible output (~5 sentences), so
+						// with no text at all. The prompt caps the visible output (2–3 sentences), so
 						// this ceiling does not bound the note's length.
 						max_tokens: 4000,
 						messages: [{
