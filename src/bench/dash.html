@@ -133,7 +133,7 @@
 	/* Lineage groups: extra air above each group's first row. The explore row IS the group
 	   header — the board's only column labels live in the single sticky thead. */
 	tr.gsep td { padding-top: 16px; }
-	/* 18 columns: the table must overflow sideways rather than crush the prose cells —
+	/* 17 columns: the table must overflow sideways rather than crush the prose cells —
 	   wide content scrolls in its own container, the page never scrolls horizontally. */
 	#board { overflow-x: auto; }
 	/* Phase badge on task/replay rows: phases interleave inside a lineage group, so each row
@@ -171,9 +171,9 @@
 	tr.exp-row td { background: rgba(255, 255, 255, 0.03); }
 	td.arm .dn { color: var(--ink); }
 	/* Rank badge on explore group headers: comprehensiveness rank within the target as TEXT
-	   ("1/3"), border-tinted by rank. A solid dot here was indistinguishable from the status
-	   dots two cells over — same glyph, same hues, different meaning. The ordinal is the
-	   fact; the border is only a glance aid. */
+	   (the numerator alone, "1" — the "of N" lives in the tooltip), border-tinted by rank.
+	   A solid dot here was indistinguishable from the status dots two cells over — same glyph,
+	   same hues, different meaning. The ordinal is the fact; the border is only a glance aid. */
 	td.arm .rankbadge {
 		font-size: 10px; border: 1px solid var(--border); border-radius: 8px; padding: 0 5px;
 		margin-right: 6px; color: var(--ink-2); cursor: help; font-variant-numeric: tabular-nums;
@@ -226,12 +226,13 @@
 	   tabular numbers, wraps to a second line on narrow viewports. */
 	.d-stats { display: flex; gap: 4px 16px; flex-wrap: wrap; margin: 8px 0 0; font-size: 12px; color: var(--ink); font-variant-numeric: tabular-nums; }
 	.d-stats .k { color: var(--muted); font-size: 10px; margin-right: 6px; text-transform: uppercase; letter-spacing: .05em; }
-	/* results-so-far strip (liveStrip): same idiom as .d-stats, visually claimed as live —
-	   softer ink and a LIVE tag, so counters off a run's event log never read as collected
-	   results. The tag reuses the stepno pill contrast pair (--plane on --s1). */
+	/* results-so-far strip (liveStrip): same idiom as .d-stats, softer ink so counters off a
+	   run's event log never read as collected results. The LIVE tag rides only a RUNNING
+	   entry's strip; it reuses the stepno pill contrast pair (--plane on --s1). */
 	.d-stats.live-strip { color: var(--ink-2); }
-	/* live metric cells (liveNumCell): the running hue + italic + the ~ in the label — three
-	   signals that this number is a run speaking mid-flight, not a collected aggregate. */
+	/* live metric cells (liveNumCell): the running hue + italic mean a run is actually
+	   RUNNING and still updating this number. A run that ended early keeps its event-log
+	   value in normal ink — only the ~ in the label marks it provisional. */
 	td.num.livecell { color: var(--running); font-style: italic; }
 	.d-stats.live-strip .meta { align-self: center; }
 	.livetag {
@@ -368,12 +369,15 @@ const REFUSED = "var(--refused)";
 const AMB_TIP = "this setting exists at TWO scopes under one identity (same settingKey — e.g. a brand-wide default in Brand Kit AND a per-document override in the editor). The wrong-scope trap: an agent asked to change the default can silently change only the document's copy and still pass every check. Both routes are always shown to the agent; the numbered path shows which one this run took.";
 // Vision-only (--no-ax) passes have no element list to count against, so their tallies are
 // self-reported. One explainer, two homes: the row's ⚠ and the rank dot's tooltip.
-const DECLARED_TIP = "DECLARED — the vision-only pass has no element list to count against, so these tallies are the model's own report; not comparable like-for-like with mechanically counted passes.";
+const DECLARED_TIP = "DECLARED — the Vision-only pass has no element list to count against, so these tallies are the model's own report; not comparable like-for-like with mechanically counted passes.";
 // Live cells: an uncollected run's metric cells read the run's OWN event-log counters
-// (EntryView.live) instead of rendering "–" until collect. ~tilde + --running tint + this
-// tip keep a provisional number from ever reading as a collected one; the moment collect
-// banks the run, the run log's numbers take the line back.
+// (EntryView.live) instead of rendering "–" until collect. The ~tilde and these tips keep
+// a provisional number from ever reading as a collected one. Blue means RUNNING: the
+// --running tint is earned only while the run is still running — a run that ended keeps
+// its value in normal ink under the ENDED tip. The moment collect banks the run, the run
+// log's numbers take the line back.
 const LIVE_CELL_TIP = "LIVE — off the running run's own event log; provisional until collected";
+const ENDED_CELL_TIP = "run ended — value off its event log; provisional until collected";
 const STATUS = { good: "var(--good)", warning: "var(--warning)", serious: "var(--serious)", critical: "var(--critical)" };
 // Every status the wire can put on an entry has an explicit entry here; statusChip renders
 // anything NOT in this map as a hollow "unknown" dot rather than dressing it as a known
@@ -882,26 +886,20 @@ function statusChip(e, rowKey, selected) {
 		claimed ? (claimed.success ? OUTCOME_COLORS.succeeded : STATUS.critical) :
 		e.status === "running" ? RUNNING : e.status === "queued" ? "var(--muted)" :
 		e.status === "awaiting-collect" ? STATUS.warning : OUTCOME_COLORS[e.status];
-	// Chips are minimal on purpose: dot + Status + elapsed — per-run detail lives in the
-	// tooltip and the row dropdown, not on the chip line. The elapsed ticks while Running
-	// (js-elapsed span so the 1s ticker advances it between SSE pushes — a static
-	// "Running 22m43s" that jumps every 20s reads as frozen) and FREEZES at the run's final
-	// duration once it finishes: how long a run took must not vanish the moment it lands.
-	// Queued chips show no time — nothing has started.
+	// Chips are STATUS-ONLY: dot + status word — since the per-run refactor the same row's
+	// Time column carries the wall-clock (ticking while running, frozen at the final
+	// duration), so a time readout on the chip said the same number twice. Duration stays
+	// discoverable here via the chip tooltip ("elapsed …" while running, "took …" once
+	// finished); queued chips carry neither — nothing has started.
 	const took = e.elapsedSec != null ? e.elapsedSec : e.runSec != null ? e.runSec : (liveMem[e.jobId] || {}).elapsed;
-	// A running entry whose poll carried no elapsedSec renders plain "Running" (with the
-	// liveMem pin as fallback) — fabricating "Running 0s" off a missing number reads as a
-	// fresh start that never happened.
 	const runBase = e.elapsedSec != null ? e.elapsedSec
 		: (liveMem[e.jobId] || {}).start != null ? (receivedAt - liveMem[e.jobId].start) / 1000 : null;
-	let label = e.status === "running"
-		? `Running${runBase != null ? " " + elapsedSpan(runBase) : ""}`
-		: esc(statusLabel(e.status)) + (e.status !== "queued" && took != null ? " " + fmtDur(took) : "");
+	let label = e.status === "running" ? "Running" : esc(statusLabel(e.status));
 	// The dead override changes the LABEL too: two states must never share a name and be
 	// told apart by dot color alone.
-	if (dead) label = esc(statusLabel(pane.state)) + (took != null ? " " + fmtDur(took) : "") + " — uncollected";
+	if (dead) label = esc(statusLabel(pane.state)) + " — uncollected";
 	// Same rule for a self-reported verdict: its own label, never a green dot on "Awaiting collect".
-	if (claimed) label = (claimed.success ? "Succeeded" : "Failed") + (took != null ? " " + fmtDur(took) : "") + " — self-reported";
+	if (claimed) label = (claimed.success ? "Succeeded" : "Failed") + " — self-reported";
 	// Chips stay minimal: the live counters moved to the metric COLUMNS (the per-run cells
 	// — David, 2026-08-01: "actions should be its own column"). Only a mid-run fatal stays
 	// on the chip — it is status, not a metric, and the columns have nowhere to say it.
@@ -925,6 +923,11 @@ function statusChip(e, rowKey, selected) {
 	// a not-yet-started entry shows its submit time instead.
 	const st = entryStart(e);
 	const when = st != null ? `\nstarted ${startStamp(st)}` : e.submittedAt ? `\nsubmitted ${startStamp(Date.parse(e.submittedAt) || null)}` : "";
+	// Duration rides the tip since it left the label: elapsed-as-of-this-push while running
+	// (tooltips are plain text — no ticker), the final duration once finished.
+	const dur = e.status === "running"
+		? (runBase != null ? `\nelapsed ${fmtDur(runBase)}` : "")
+		: (e.status !== "queued" && took != null ? `\ntook ${fmtDur(took)}` : "");
 	// A failure surfaced BEFORE any collect pass (liveFor read it off the host's job
 	// registry): say where the verdict came from, or the red chip reads as a collected result.
 	const preCollect = !e.collected && (e.status === "failed" || e.status === "crashed" || e.status === "stopped")
@@ -933,8 +936,9 @@ function statusChip(e, rowKey, selected) {
 	// logPanes-fallback note: name the registry verdict, or the red dot reads as a collected result.
 	const registry = dead ? `\nregistry: ${pane.state}${pane.exitCode != null ? ` (exit ${pane.exitCode})` : ""} — not yet collected` : "";
 	// The event-log tail, one tooltip line: last step, claim, cleanup. Named as provisional
-	// so a hover never reads live counters as collected numbers.
-	const liveTip = lp ? "\nlive (event log, provisional): " + [
+	// so a hover never reads live counters as collected numbers — and named "live" only
+	// while the run actually runs; an ended run's tail says so.
+	const liveTip = lp ? (e.status === "running" ? "\nlive (event log, provisional): " : "\nevent log (run ended, provisional): ") + [
 		lp.steps != null ? `step ${lp.steps}, ${lp.verified != null ? lp.verified : 0}✓` : "",
 		lp.actions != null ? `${lp.actions} actions` + (lp.frontier != null ? `, frontier ${lp.frontier}` : "") + (lp.nodes != null ? `, ${lp.nodes} nodes` : "") : "",
 		// Live economics ride the same provisional line, ~-prefixed: outputTokens is the
@@ -944,7 +948,7 @@ function statusChip(e, rowKey, selected) {
 		lp.verdict ? `claimed ${lp.verdict.success ? "success" : "failure"} — not yet collected/judged` : "",
 		lp.cleanup ? `cleanup: ${lp.cleanup}` : "",
 	].filter(Boolean).join(" · ") : "";
-	return `<span class="chip${selected ? " sel" : ""}"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${esc(when)}${e.note ? "\n" + esc(e.note) : ""}${esc(preCollect)}${esc(registry)}${esc(liveTip)}\nclick to view on the map${esc(econ)}">` +
+	return `<span class="chip${selected ? " sel" : ""}"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${esc(when)}${esc(dur)}${e.note ? "\n" + esc(e.note) : ""}${esc(preCollect)}${esc(registry)}${esc(liveTip)}\nclick to view on the map${esc(econ)}">` +
 		`<span class="dot${known ? "" : " unknown"}"${known ? ` style="background:${color}"` : ""}></span>${label}${esc(judge)}</span>`;
 }
 
@@ -1053,8 +1057,7 @@ function armOf(jobId) {
 // rows repeated the column labels down the page, which got hard to read. Explore rows'
 // discovery numbers each get their OWN column (Actions…Ambig, after the task metrics) so
 // passes compare down the page — they were one colspan-5 inline-labeled blob, unscannable.
-// Task rows show "–" there; explore rows show "–" under Success/Steps (no success field —
-// rendering one as "0/1 ok" read as a failure — and Actions IS the explore's steps).
+// Task rows show "–" there; explore rows show "–" under Steps (Actions IS the explore's steps).
 // Every metric column is PER RUN: a multi-run variant splits after the identity columns
 // into one line per run (passRows), the identity cells rowspanned across the group.
 // Flags live in the arm tooltip (the display name is derived from them) and per-run
@@ -1072,27 +1075,26 @@ const MAP_TIP = "the appmap as a full node-link tree — edge thickness = traver
 // No target column: the app scope picker above the board carries the target, and inside a
 // lineage group every row shares the group's target anyway.
 // Ordering: the two wide prose cells (Variant, Task) together at the left, then the three
-// short config tokens (Sees, Acts With, Model), the five task metrics, the five explore
-// discovery metrics, ops at the right.
-// "Success", not "Passed": PASS/FAIL is the judge's vocabulary and this column is
-// self-reported success — the distinction the judge pipeline exists to expose.
+// short config tokens (Sees, Acts With, Model), the run-lifecycle columns (Started, Time,
+// Steps, Tokens, Cost), the five explore discovery metrics, ops at the right.
+// No Success column: per-run ✓/✗ is already on the Runs column's status chips — a second
+// cell saying the same thing read as a different signal.
 // Every full-width spanner (detail rows, phase separators) spans NCOLS — keep it in step
 // with TASK_HEAD when adding a column.
-const NCOLS = 19;
+const NCOLS = 17;
 const TASK_HEAD = "<tr>" + th("Variant", VARIANT_TIP) +
 	th("Task", "the goal-only prompt the run was given") +
-	th("Sees", SEES_TIP) +
-	th("Acts With", ACTS_TIP) +
+	th("Sees", "what the agent SEES: AX or DOM elements, plus Vision — or Vision only") +
+	th("Acts With", "what injects the input: AX (cua driver) or CDP") +
 	th("Model", "what actually ran, off the run logs") +
-	th("Success", "self-reported, per run: ✓ succeeded · ✗ failed · ~ = the running run's own claim off its event log (the judge's verdict lives in the Judge card)", "num-h") +
-	th("Steps", "actions the run took (hover for the verified count)", "num-h") + th("Time", "wall-clock per run — ticking while the run executes", "num-h") +
+	th("Started", "when this run began — collected runs off the run log, running runs derived from their ticking elapsed; a queued run shows – until it starts") +
+	th("Time", "wall-clock per run — ticking while the run executes", "num-h") + th("Steps", "actions the run took (hover for the verified count)", "num-h") +
 	th("Tokens", "OUTPUT tokens the run spent", "num-h") + th("Cost", "published-rate estimate per run — not an invoice · ? = tokens recorded but no pricing", "num-h") +
 	th("Actions", "explore rows — actions the grounding pass took", "num-h") +
-	th("Controls", "explore rows — actuated/dismissed/seen (the stamp's own order): of every control the pass observed (seen), how many it operated (actuated) vs swept off the frontier without operating (dismissed). The pass ends when the frontier empties, and dismissing is a legitimate way to empty it", "num-h") +
+	th("Controls", "explore rows — seen/actuated/dismissed: every control the pass observed (seen, the total), then how many it operated (actuated) vs swept off the frontier without operating (dismissed). The pass ends when the frontier empties, and dismissing is a legitimate way to empty it", "num-h") +
 	th("Surfaces", "explore rows — distinct screens/panels/tabs/dialogs controls were SEEN on: what you navigate BETWEEN; controls live ON them. The distilled appmap graph (Map column) typically keeps fewer surface nodes than this", "num-h") +
 	th("Nodes", "explore rows — distilled appmap graph nodes", "num-h") +
 	th("Ambig", "explore rows — settings editable at two scopes under one identity (same settingKey, different scope) — the wrong-scope trap; each gets a prompt warning", "num-h") +
-	th("Started", "when this run began — collected runs off the run log, running runs derived from their ticking elapsed; a queued run shows – until it starts") +
 	th("Runs", RUNS_TIP) +
 	th("Map", MAP_TIP) +
 	th("Graphs", "this row's own page of charts — touch map, proof strips, judge agreement, attention depth, time anatomy, and more — live-updating as runs land") + "</tr>";
@@ -1100,8 +1102,8 @@ const TASK_HEAD = "<tr>" + th("Variant", VARIANT_TIP) +
 // Friendly names are DERIVED from the arm's structure (kind + flags + phase), not
 // hand-mapped per id, so new matrix cells name themselves. The id stays in the hover —
 // it is the key the report and the manifest speak. Perception and actuation are NOT in
-// the name: they are their own columns ("vision-only explore (AX)" folded two axes into
-// one confusing label — it meant sees-pixels-only, acts-via-AX).
+// the name: they are their own columns ("Vision-only explore (AX)" folded two axes into
+// one confusing label — it meant sees-Vision-only, acts-via-AX).
 // The server derives this from the dispatch object (matrix.ts armTitle). It used to be
 // derived HERE by string-matching the rendered flags — flags.includes("USE_RECIPE") — which
 // is a parse of a display artifact: it breaks silently the moment flagsLine rewords, falling
@@ -1133,19 +1135,19 @@ function selJob(p, key) {
 
 const ordinal = (n) => { const s = ["th", "st", "nd", "rd"], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };
 
-// Rank badge on explore group headers: "1/3" = the target's most comprehensive map of 3
-// ranked (1 pass ranked = no badge). The ordinal is TEXT — a solid dot in status hues was
-// indistinguishable from the succeeded/failed dots in the Runs column — and the border
-// tint (good/critical/warning for best/worst/between) is only a glance aid. Rank comes off
-// the wire (rankExplore in dash.ts) so the page never re-derives an ordering the server
-// already owns.
+// Rank badge on explore group headers: "1" = the target's most comprehensive map — the
+// "of N" lives only in the tooltip (1 pass ranked = no badge). The ordinal is TEXT — a
+// solid dot in status hues was indistinguishable from the succeeded/failed dots in the
+// Runs column — and the border tint (good/critical/warning for best/worst/between) is
+// only a glance aid. Rank comes off the wire (rankExplore in dash.ts) so the page never
+// re-derives an ordering the server already owns.
 function rankDot(a, p) {
 	if (a.kind !== "explore" || !p.exploreRank || p.exploreRank.of < 2) return "";
 	const { rank, of } = p.exploreRank;
 	const color = rank === 1 ? STATUS.good : rank === of ? STATUS.critical : STATUS.warning;
 	const tip = `Comprehensiveness rank within ${targetLabel(a.targetKey)} — by distilled map size (graph nodes; 'seen' deliberately unused, it inflates on repetitive content)\n${ordinal(rank)} of ${of}`
 		+ (a.flags && a.flags.includes("--no-ax") ? "\n" + DECLARED_TIP : "");
-	return `<span class="rankbadge" style="border-color:${color}" data-tip="${esc(tip)}">${rank}/${of}</span>`;
+	return `<span class="rankbadge" style="border-color:${color}" data-tip="${esc(tip)}">${rank}</span>`;
 }
 
 // COMPILE rows only: every chip in one cell (their entries are inert file transforms with
@@ -1241,42 +1243,34 @@ function armCell(a, p, span = "") {
 }
 
 // The five explore-discovery columns, dashed on task/replay rows so every row spans the
-// same 18 columns without colspan bookkeeping.
-const NO_EXPLORE_CELLS = `<td class="num" data-tip="explore-only column">–</td>`.repeat(5);
+// same 17 columns without colspan bookkeeping.
+const NO_EXPLORE_CELLS = `<td class="num">–</td>`.repeat(5);
 
-// A metric cell carrying a live value: ~ marks it approximate, .livecell tints it --running.
-const liveNumCell = (label, extraTip) =>
-	`<td class="num livecell" data-tip="${esc(LIVE_CELL_TIP + (extraTip ? "\n" + extraTip : ""))}">${esc(label)}</td>`;
+// A metric cell carrying an event-log value: ~ marks it approximate. Blue means RUNNING —
+// the .livecell tint + LIVE tip are worn only while the entry is running; an entry that
+// ended keeps its value in normal ink under the ENDED tip.
+const liveNumCell = (e, label, extraTip) => {
+	const running = e.status === "running";
+	return `<td class="num${running ? " livecell" : ""}" data-tip="${esc((running ? LIVE_CELL_TIP : ENDED_CELL_TIP) + (extraTip ? "\n" + extraTip : ""))}">${esc(label)}</td>`;
+};
 
 /* Per-run metric cells. Per cell, collected always wins: the run's own event-log counters
-   (EntryView.live) stand in ONLY while the run is uncollected, marked ~/tinted per
-   LIVE_CELL_TIP, so a provisional number can never blend with a banked one. */
-
-// ✓/✗ for a collected run; the running run's own done() claim as ~✓/~✗ the moment its
-// verdict event lands; "–" until either exists.
-function successCellFor(e) {
-	if (e.collected) {
-		if (e.success === true) return `<td class="num" data-tip="self-reported success — judged separately (Judge card)"><span class="ok-v">✓</span></td>`;
-		if (e.success === false) return `<td class="num" data-tip="${esc("self-reported failure" + (e.failureKind ? ": " + e.failureKind : ""))}"><span class="bad-v">✗</span></td>`;
-		return `<td class="num" data-tip="no verdict in the run log">–</td>`;
-	}
-	const v = e.live && e.live.verdict;
-	return v ? liveNumCell(v.success ? "~✓" : "~✗", "the run's own done() claim — self-reported, pre-collect, pre-judge") : `<td class="num" data-tip="no claim yet">–</td>`;
-}
+   (EntryView.live) stand in ONLY while the run is uncollected, marked ~ (tinted only while
+   it runs), so a provisional number can never blend with a banked one. */
 
 function stepsCellFor(e) {
 	if (e.steps != null)
 		return `<td class="num" data-tip="${esc(e.verifiedSteps != null ? `steps taken — ${e.verifiedSteps} of ${e.steps} verified` : "steps taken (no verified count)")}">${fmtNum(e.steps)}</td>`;
 	const lp = !e.collected && e.live;
 	return lp && lp.steps != null
-		? liveNumCell(`~${fmtNum(lp.steps)}${lp.verified != null ? ` (${fmtNum(lp.verified)}✓)` : ""}`, "steps so far (verified in parens)")
-		: `<td class="num" data-tip="no steps recorded yet">–</td>`;
+		? liveNumCell(e, `~${fmtNum(lp.steps)}${lp.verified != null ? ` (${fmtNum(lp.verified)}✓)` : ""}`, "steps so far (verified in parens)")
+		: `<td class="num">–</td>`;
 }
 
-// Wall-clock: the run log's duration once collected; a RUNNING run ticks live (the same
-// 1s ticker that advances its chip); a finished-but-uncollected run serves the remembered
-// live elapsed (liveMem — the same fallback the chip uses) so the number survives the
-// awaiting-collect window.
+// Wall-clock: the run log's duration once collected; a RUNNING run ticks live (the shared
+// 1s js-elapsed ticker); a finished-but-uncollected run serves the remembered last elapsed
+// (liveMem — the same fallback the chip tooltip uses) in normal ink, so the number
+// survives the awaiting-collect window without claiming to still tick.
 function timeCellFor(e) {
 	const took = e.collected ? (e.elapsedSec != null ? e.elapsedSec : e.runSec) : null;
 	if (took != null) return `<td class="num" data-tip="wall-clock for this run">${fmtDur(took)}</td>`;
@@ -1287,8 +1281,8 @@ function timeCellFor(e) {
 	}
 	const mem = (liveMem[e.jobId] || {}).elapsed;
 	return !e.collected && PRE_COLLECT_TERMINAL.has(e.status) && mem != null
-		? liveNumCell(`~${fmtDur(mem)}`)
-		: `<td class="num" data-tip="not started yet">–</td>`;
+		? `<td class="num" data-tip="run ended — the last elapsed the dashboard saw while it ran; the run log's exact duration lands at collect">~${fmtDur(mem)}</td>`
+		: `<td class="num">–</td>`;
 }
 
 // Tokens: collected wins; an uncollected run serves its usage events' cumulative total
@@ -1296,19 +1290,19 @@ function timeCellFor(e) {
 const tokensCellFor = (e) => e.outputTokens != null
 	? `<td class="num" data-tip="output tokens the run spent">${fmtK(e.outputTokens)}</td>`
 	: !e.collected && e.live && e.live.outputTokens != null
-		? liveNumCell(`~${fmtK(e.live.outputTokens)}`, "output tokens so far — cumulative, off the run's usage events")
-		: `<td class="num" data-tip="no tokens reported yet">–</td>`;
+		? liveNumCell(e, `~${fmtK(e.live.outputTokens)}`, "output tokens so far — cumulative, off the run's usage events")
+		: `<td class="num">–</td>`;
 // Per-run cost: "?" = tokens recorded but no pricing (the report's unpriced), "–" = nothing
-// to price (queued, or a tokenless entry). A running run serves its live estimate (usd is
-// priced server-side in entryView, same estimateCost + fallbacks as collected rows).
-const costCellFor = (e) => e.usd != null ? `<td class="num" data-tip="published-rate estimate — not an invoice">${fmtMoney(e.usd)}</td>`
+// to price (queued, or a tokenless entry). An uncollected run serves its live estimate (usd
+// is priced server-side in entryView, same estimateCost + fallbacks as collected rows).
+const costCellFor = (e) => e.usd != null ? `<td class="num">${fmtMoney(e.usd)}</td>`
 	: e.collected && e.outputTokens != null
 		? `<td class="num" data-tip="tokens recorded but no pricing for this run's model">?</td>`
 		: !e.collected && e.live && e.live.usd != null
-			? liveNumCell(`~${fmtMoney(e.live.usd)}`, "est cost so far — published rates, not an invoice")
-			: `<td class="num" data-tip="nothing to price yet">–</td>`;
+			? liveNumCell(e, `~${fmtMoney(e.live.usd)}`, "est cost so far — published rates, not an invoice")
+			: `<td class="num">–</td>`;
 
-// The five explore-discovery cells for ONE pass (EntryView.exploreStamp); an in-flight
+// The five explore-discovery cells for ONE pass (EntryView.exploreStamp); an uncollected
 // pass serves its heartbeat counters (actions/frontier/seen/nodes — surfaces and ambig are
 // stamped only at finish).
 // The actuated/dismissed/seen triple in the SAME hues the controls chart plots them
@@ -1322,7 +1316,7 @@ function exploreCellsFor(a, e) {
 	const num = (value, tip) => `<td class="num"${tip ? ` data-tip="${esc(tip)}"` : ""}>${value}</td>`;
 	const st = e.exploreStamp;
 	if (st) {
-		// A vision-only pass (--no-ax) has no element list to count against, so its tallies
+		// A Vision-only pass (--no-ax) has no element list to count against, so its tallies
 		// are self-reported — flagged so they never read as mechanically counted. Flag
 		// sniffing is display-only here; the arm's dispatch stays the authority.
 		const declared = a.flags && a.flags.includes("--no-ax")
@@ -1330,12 +1324,10 @@ function exploreCellsFor(a, e) {
 			: "";
 		return num(fmtNum(st.actions), "actions the pass took")
 			+ (st.controlsSeen != null
-				? num(`${controlsTriple(st.controlsActuated, st.controlsDismissed, st.controlsSeen)}${declared}`,
-					`actuated ${st.controlsActuated} · dismissed ${st.controlsDismissed} · seen ${st.controlsSeen}`)
-				: num("–", "not in this pass's stamp"))
-			+ num(fmtNum(st.surfaces), "distinct screens/panels/dialogs seen")
-			+ num(fmtNum(st.graphNodes), "distilled appmap graph nodes")
-			+ num(fmtNum(st.scopeAmbiguities), "same setting editable at two scopes");
+				? num(`${st.controlsSeen}/${st.controlsActuated}/${st.controlsDismissed}${declared}`,
+					`seen ${st.controlsSeen} (total observed) · actuated ${st.controlsActuated} · dismissed ${st.controlsDismissed}`)
+				: num("–"))
+			+ num(fmtNum(st.surfaces)) + num(fmtNum(st.graphNodes)) + num(fmtNum(st.scopeAmbiguities));
 	}
 	const lp = !e.collected && e.live;
 	// The heartbeat carries the full discovery counters (2026-08-01), so the live cell shows
@@ -1348,17 +1340,17 @@ function exploreCellsFor(a, e) {
 			: liveNumCell(`~${fmtNum(lp.seen)} seen`))
 		: num("–", "arrives with the pass's heartbeat");
 	return (lp && lp.actions != null
-			? liveNumCell(`~${fmtNum(lp.actions)}`, lp.frontier != null ? `frontier: ${fmtNum(lp.frontier)} controls left un-operated (the pass ends when this empties)` : "")
-			: num("–", "arrives with the pass's heartbeat"))
-		+ controlsLive
-		+ num("–", "stamped when the pass finishes")
-		+ (lp && lp.nodes != null ? liveNumCell(`~${fmtNum(lp.nodes)}`) : num("–", "arrives with the pass's heartbeat"))
-		+ num("–", "stamped when the pass finishes");
+			? liveNumCell(e, `~${fmtNum(lp.actions)}`, lp.frontier != null ? `frontier: ${fmtNum(lp.frontier)} controls left un-operated (the pass ends when this empties)` : "")
+			: num("–"))
+		+ (lp && lp.seen != null ? liveNumCell(e, `~${fmtNum(lp.seen)} seen`) : num("–"))
+		+ num("–")
+		+ (lp && lp.nodes != null ? liveNumCell(e, `~${fmtNum(lp.nodes)}`) : num("–"))
+		+ num("–");
 }
 
 // A variant with several runs SPLITS after the identity columns (David, 2026-08-01): the
 // five identity cells (Variant…Model) are identical across a pass's runs, so they render
-// once and rowspan the group; everything run-dependent (Success…Started, chip, ⤢) gets one
+// once and rowspan the group; everything run-dependent (Started…Ambig, chip, ⤢) gets one
 // line per run, reading that run's OWN numbers. Line order = the chips' drain order
 // (finished → running → queued, oldest first in each band). Each line carries the chip's
 // click semantics on the whole row (data-row + data-job): click a line to open/select its
@@ -1374,7 +1366,6 @@ function passRows(a, p, first, metricCells) {
 	const rows = runs.map((e, i) =>
 		`<tr class="mrow${expCls}${i === 0 && first ? " gsep" : ""}${i < runs.length - 1 ? " splitrow" : ""}" data-row="${esc(key)}" data-job="${esc(e.jobId)}">${i === 0 ? armCell(a, p, span) : ""}
 		${metricCells(e)}
-		${startedCellFor(e)}
 		<td class="runs">${statusChip(e, key, e.jobId === sel)}</td>
 		<td class="treecell"><button class="btnv" data-viewtree="${esc(e.jobId)}" data-tip="${esc(MAP_TIP)}">⤢</button></td>
 		${i === 0 ? graphsCell(a, p, span) : ""}</tr>`).join("");
@@ -1388,16 +1379,13 @@ const graphsCell = (a, p, span) =>
 
 function taskRow(a, p) {
 	return passRows(a, p, false, (e) =>
-		successCellFor(e) + stepsCellFor(e) + timeCellFor(e) + tokensCellFor(e) + costCellFor(e) + NO_EXPLORE_CELLS);
+		startedCellFor(e) + timeCellFor(e) + stepsCellFor(e) + tokensCellFor(e) + costCellFor(e) + NO_EXPLORE_CELLS);
 }
 
-// The explore GROUP-HEADER rows. Success and Steps stay "–": an explore has no success
-// field (rendering one as "0/1 ok" read as a failure) and Actions IS its step count.
+// The explore GROUP-HEADER rows. Steps stays "–": Actions IS an explore's step count.
 function exploreRow(a, p, first) {
 	return passRows(a, p, first, (e) =>
-		`<td class="num" data-tip="explores report no success — coverage is the goal">–</td>`
-		+ `<td class="num" data-tip="see Actions — an explore's step count">–</td>`
-		+ timeCellFor(e) + tokensCellFor(e) + costCellFor(e) + exploreCellsFor(a, e));
+		startedCellFor(e) + timeCellFor(e) + `<td class="num">–</td>` + tokensCellFor(e) + costCellFor(e) + exploreCellsFor(a, e));
 }
 
 // Compile arms (phase 3/4 recipe compiles) are local, instant file transforms recorded as
@@ -1422,8 +1410,9 @@ function compileRow(a, p) {
 	// explanation on a row that IS the local file transform.
 	const dash = `<td class="num" data-tip="compiles run no model — nothing to measure">–</td>`;
 	return `<tr class="crow"><td class="arm" data-tip="${esc(tip)}"><span class="dn">${esc(displayName(a))}</span>${badge}</td>
-		${srcCell}${dash.repeat(8)}
-		${dash.repeat(5)}${startedCell(p)}${runsCell(p, null)}<td class="treecell" data-tip="no map — compiles don't drive the app"></td><td class="treecell" data-tip="no graphs — compiles don't drive the app"></td></tr>`;
+		${srcCell}<td class="num">–</td><td class="num">–</td><td class="num">–</td>
+		${startedCell(p)}<td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num">–</td>
+		${NO_EXPLORE_CELLS}${runsCell(p, null)}<td class="treecell"></td></tr>`;
 }
 
 /* ---- row detail: appmap + path ------------------------------------------------------- */
@@ -1524,15 +1513,17 @@ function statsStrip(a, e) {
 // Results-so-far strip (EntryView.live): the run's own event log, folded into counters while
 // collect has nothing to show. Uncollected entries only — the moment collect banks the run,
 // the field is gone from the wire and the real stats above are the only numbers on the row.
-// The LIVE tag + trailing caveat are what keep a glance from reading these as results.
+// The trailing caveat keeps a glance from reading these as results; the LIVE tag is worn
+// only by a RUNNING entry — a run that ended keeps the provenance line without the live claim.
 function liveStrip(a, e) {
 	const lp = e.live;
 	if (!lp || e.collected) return "";
+	const running = e.status === "running";
 	const pairs = a.kind === "explore"
 		? [["Actions", lp.actions], ["Frontier", lp.frontier], ["Actuated", lp.actuated], ["Dismissed", lp.dismissed], ["Seen", lp.seen], ["Nodes", lp.nodes], ["Stopped", lp.finished]]
 		: [["Steps", lp.steps], ["Verified", lp.verified], ["Last", lp.lastStep]];
 	// Usage is common to both kinds (one event per model call, cumulative). Same ~ prefix as
-	// the live cells; the strip's LIVE tag + caveat already mark the whole row provisional.
+	// the live cells; the strip's trailing caveat already marks the whole row provisional.
 	if (lp.outputTokens != null) pairs.push(["Out", "~" + fmtK(lp.outputTokens)]);
 	if (lp.modelCalls != null) pairs.push(["Calls", "~" + fmtNum(lp.modelCalls)]);
 	if (lp.usd != null) pairs.push(["Est Cost", "~" + fmtMoney(lp.usd)]);
@@ -1541,7 +1532,7 @@ function liveStrip(a, e) {
 	if (lp.fatal) pairs.push(["Fatal", lp.fatal]);
 	const cells = pairs.filter(([, v]) => v != null && v !== "").map(statSpan).join("");
 	return cells
-		? `<div class="d-stats live-strip"><span class="livetag">live</span>${cells}<span class="meta">from the run's event log — provisional until collected</span></div>`
+		? `<div class="d-stats live-strip">${running ? `<span class="livetag">live</span>` : ""}${cells}<span class="meta">${running ? "from the run's event log — provisional until collected" : "run ended — from its event log, provisional until collected"}</span></div>`
 		: "";
 }
 
@@ -2029,7 +2020,7 @@ function renderBoard(progress) {
 		html += `<tr class="phase-h"><td colspan="${NCOLS}">Compiles — local recipe compiles, no model in the loop</td></tr>`;
 		html += timelineRows(compiles).map(({ a, p }) => compileRow(a, p)).join("");
 	}
-	// The one section that had no empty state: a bare 18-column header floating over nothing
+	// The one section that had no empty state: a bare 17-column header floating over nothing
 	// was indistinguishable from a board that failed to render its rows.
 	if (!groups.length && !Object.keys(deps).length && !ungrounded.length && !compiles.length)
 		html += `<tr><td colspan="${NCOLS}"><div class="empty">nothing submitted for ${esc(targetLabel(currentTarget()))} yet — arms appear as bench phase submits</div></td></tr>`;
@@ -2075,13 +2066,13 @@ function renderExplore() {
 	if (!arms.length) { $("chart-explore").innerHTML = `<div class="empty">waiting for a collected explore…</div>`; return; }
 	// Funnel order (seen ≥ actuated+dismissed); colors follow the series, not the position.
 	// Group labels mirror the board's "perceives" column; web arms append "(web)" so the
-	// two DOM+vision explores (Yarn app vs the web target) stay distinguishable — the exact
+	// two DOM+Vision explores (Yarn app vs the web target) stay distinguishable — the exact
 	// host adds nothing a chart label needs. HORIZONTAL on purpose: these labels are long,
 	// per-model passes multiply the groups, and vBars' centered x-labels stepped on each
 	// other until the axis was unreadable. The gutter fits the full words (the old "+vis"
 	// compaction hack is gone) and the model rides its own muted sub-line.
 	// The ⚠ declared marker rides the LABEL here (SVG text can't carry a tooltip): a
-	// vision-only arm's tallies are self-reported, and the board flags the same numbers.
+	// Vision-only arm's tallies are self-reported, and the board flags the same numbers.
 	const exploreLabel = (a) => (!a.perception ? a.id.replace("p1-explore-", "") : a.url ? `${a.perception} (web)` : a.perception)
 		+ (a.flags && a.flags.includes("--no-ax") ? " ⚠ declared" : "");
 	const groups = arms.flatMap((a) => a.passes.filter((p) => p.explore && p.explore.controlsSeen != null).map((p) => ({
@@ -2728,8 +2719,8 @@ setInterval(() => {
 // busy host by itself — a reload within the server's 30s idle linger still rejoins the live
 // sessions with zero tunnel/engine setup, just via syncPeekArming instead of storage.
 
-// Elapsed tickers between pushes: every js-elapsed span (fleet cards AND matrix run chips)
-// advances from the last push's base — the page reads as live even between SSE frames.
+// Elapsed tickers between pushes: every js-elapsed span (fleet cards AND Time-column live
+// cells) advances from the last push's base — the page reads as live even between SSE frames.
 setInterval(() => {
 	if (!state) return;
 	document.querySelectorAll(".js-elapsed").forEach((el) => {
