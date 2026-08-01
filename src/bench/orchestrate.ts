@@ -590,6 +590,7 @@ const USAGE = `usage: ./run bench plan
        ./run bench collect [--date YYYY-MM-DD]
        ./run bench judge [--cross] [--date YYYY-MM-DD]
        ./run bench harvest [--date YYYY-MM-DD]
+       ./run bench watch <phase> [--then <phase>] [--interval <sec>] [--date YYYY-MM-DD]
        ./run bench truecost [--since <RFC3339>] [--bucket 1m|1h|1d]
        ./run bench challenger --model <id> [--primary <id>] [--go]
 
@@ -642,6 +643,11 @@ judge    grades collected runs with the offline adversarial judge. --cross adds 
          Base judge is pinned to
          azure/gpt-5.6-sol; JUDGE_MODEL overrides); idempotent — skips runs already
          judged. Run after runs land, before reading the report's Judge section.
+watch    waits for a phase to finish, collecting as it goes (which is also what pulls
+         artifacts home and fans the appmaps out to the fleet). Prints only on change.
+         --then <phase> dispatches the next phase ONCE when this one completes — opt-in,
+         and it never chains further, because phase 2 wants a human to read the phase-1
+         maps first. Holds no leash: a dying watcher never touches a run.
 harvest  turns judged-PASS phase-2 runs into procedures — prose describing the route that
          worked, for a later agent to ground on. Refuses any run the judge did not pass, so
          run \`bench judge\` first. Writes into each run's own folder; promoting one into
@@ -756,6 +762,28 @@ async function main(argv: string[]): Promise<number> {
 
 		// Advisory step: per-entry failures are reported above, not fatal — a re-run judges
 		// only what failed or landed since.
+		return EXIT_OK;
+	}
+	if (cmd === "watch") {
+		const phase = Number(argv[1]);
+		const ti = argv.indexOf("--then");
+		const then = ti >= 0 ? Number(argv[ti + 1]) : undefined;
+		const ii = argv.indexOf("--interval");
+		const valid = (p: number) => [1, 2, 3, 4, 5, 6].includes(p);
+		if (!valid(phase) || (then !== undefined && !valid(then))) {
+			console.error(USAGE);
+
+			return EXIT_REFUSED;
+		}
+		const { watchPhase } = await import("./watch.js");
+		const wDate = dateArg(argv);
+		await watchPhase({
+			phase: phase as Phase,
+			...(then !== undefined ? { then: then as Phase } : {}),
+			...(ii >= 0 ? { intervalSec: Number(argv[ii + 1]) } : {}),
+			...(wDate ? { date: wDate } : {}),
+		});
+
 		return EXIT_OK;
 	}
 	if (cmd === "harvest") {

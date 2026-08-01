@@ -13,6 +13,7 @@ import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, auditPhase, dateArg, dispatchOpti
 import { renderReport, reportFileName, writeReport } from "../src/bench/report.js";
 import { host, withTemp, withTempAsync } from "./fixtures.js";
 import { liveDir } from "../src/paths.js";
+import { phaseProgress, watchPhase } from "../src/bench/watch.js";
 
 /**
  * The bench orchestrator, offline by construction — the same rule as dispatch.test.ts:
@@ -1258,4 +1259,89 @@ test("runPhase__StampsTheDeclaredModel__When__NoOverrideIsGiven", async () => {
 		const m = readManifest(DATE, liveDir(dir));
 		for (const e of m.entries) assert.equal(e.model, BENCH_PRIMARY_MODEL);
 	});
+});
+
+test("phaseProgress__WaitsForOwedSamples__When__NothingIsInFlight", () => {
+	// Two conditions, and BOTH matter. "Nothing running" is not "finished": a technical failure
+	// frees its sample slot (submittedCount skips it), so a phase can have an idle fleet and
+	// still owe runs — which is exactly the state a retry is supposed to fill.
+	const arms = phaseArms(1);
+	const full: Manifest = {
+		date: DATE,
+		createdAt: "",
+		entries: arms.flatMap((a) =>
+			Array.from({ length: a.n }, (_, i) => entry(a.id, `${a.id}-${i}`, { state: "done", collected: true })),
+		),
+	};
+	assert.deepEqual(phaseProgress(1, full), { outstanding: 0, inFlight: 0, done: true });
+
+	// One still running → not done, nothing owed.
+	const running = { ...full, entries: full.entries.map((e, i) => (i === 0 ? { ...e, state: "running" } : e)) };
+	assert.equal(phaseProgress(1, running).done, false);
+	assert.equal(phaseProgress(1, running).inFlight, 1);
+	assert.equal(phaseProgress(1, running).outstanding, 0);
+
+	// One crashed → terminal, so nothing is in flight, but the sample is owed again.
+	const crashed = {
+		...full,
+		entries: full.entries.map((e, i) => (i === 0 ? { ...e, state: "failed", technical: { kind: "crashed", detail: "died on acquisition" } } : e)),
+	};
+	assert.deepEqual(phaseProgress(1, crashed), { outstanding: 1, inFlight: 0, done: false });
+});
+
+test("watchPhase__DispatchesTheNextPhaseOnce__When__ThenIsGiven", async () => {
+	// The loop nobody had: results already came home on their own (collect pulls, and the dash
+	// collects on a timer), but nothing NOTICED a phase finishing. An operator polled for two
+	// hours, and the session doing it is how five batches of explores died to a caller's timeout.
+	const arms = phaseArms(1);
+	const complete: Manifest = {
+		date: DATE,
+		createdAt: "",
+		entries: arms.flatMap((a) => Array.from({ length: a.n }, (_, i) => entry(a.id, `${a.id}-${i}`, { state: "done", collected: true }))),
+	};
+	await withTempAsync("bench-watch-", async (dir) => {
+		// liveDir(path.join(dir, "out")), not liveDir(dir): watchPhase resolves through outDir(),
+		// which is <dataRoot>/out. Getting this wrong made the manifest read empty, the phase
+		// never complete, and — with sleepFn stubbed and no maxPolls — the loop spin forever.
+		process.env.YARN_RUNNER_DATA = dir;
+		writeManifest(complete, liveDir(path.join(dir, "out")));
+		const prev = process.env.YARN_RUNNER_DATA;
+		try {
+			const fired: number[] = [];
+			const lines: string[] = [];
+			const p = await watchPhase({
+				phase: 1,
+				then: 2,
+				date: DATE,
+				log: (l) => lines.push(l),
+				collectFn: async () => undefined,
+				// A backstop even on the happy path: a test that stubs sleep and reaches a
+				// not-done state would otherwise spin at full CPU until something kills it.
+				maxPolls: 5,
+				runPhaseFn: async (n) => {
+					fired.push(n);
+
+					return 0;
+				},
+				sleepFn: async () => undefined,
+			});
+			assert.equal(p.done, true);
+			// Exactly one dispatch, of exactly the named phase. Chaining further would spend the
+			// rest of the matrix on a judgement nobody made.
+			assert.deepEqual(fired, [2]);
+			assert.ok(lines.some((l) => /phase 1 complete/.test(l)));
+		} finally {
+			if (prev === undefined) delete process.env.YARN_RUNNER_DATA;
+			else process.env.YARN_RUNNER_DATA = prev;
+		}
+	});
+});
+
+test("watchPhase__NeverTouchesRuns__When__ItGivesUp", async () => {
+	// A watcher's death must not imply the run's — the lesson from 2026-08-01, where a foreground
+	// follow hitting its caller's 600s cap turned into healthy 40-minute explores being stopped.
+	// The backstop exits; it does not stop, kill or signal anything.
+	const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "bench", "watch.ts"), "utf8");
+	for (const forbidden of ["stopRemote", "runnerctl", "SIGTERM", "SIGINT", "kill("])
+		assert.equal(src.includes(forbidden), false, `watch.ts must never ${forbidden} — a dead watcher must not kill a run`);
 });
