@@ -124,12 +124,9 @@
 	/* Lineage groups: extra air above each group's first row. The explore row IS the group
 	   header — the board's only column labels live in the single sticky thead. */
 	tr.gsep td { padding-top: 16px; }
-	/* Explore group-header summary: discovery medians folded into one cell spanning the task
-	   metric columns — inline labels muted, values a notch brighter, segments never break
-	   mid-number (wraps only at the " · " joins). */
-	td.exp-sum { color: var(--ink-2); font-size: 11px; }
-	td.exp-sum > span { white-space: nowrap; }
-	td.exp-sum .k { color: var(--muted); margin-right: 4px; }
+	/* 18 columns: the table must overflow sideways rather than crush the prose cells —
+	   wide content scrolls in its own container, the page never scrolls horizontally. */
+	#board { overflow-x: auto; }
 	/* Phase badge on task/replay rows: phases interleave inside a lineage group, so each row
 	   carries its own. */
 	.pbadge {
@@ -226,6 +223,7 @@
 	text { font: 11px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--muted); }
 	text.val { fill: var(--ink-2); font-variant-numeric: tabular-nums; }
 	text.lbl { fill: var(--ink-2); }
+	text.sublbl { fill: var(--muted); font-size: 10px; }
 
 	#tooltip {
 		position: fixed; pointer-events: none; z-index: 20; display: none;
@@ -491,6 +489,50 @@ function vBars(groups, series, opts = {}) {
 	return legend(series) + `<svg viewBox="0 0 ${W} ${H}">${svg}</svg>`;
 }
 
+/**
+ * Grouped HORIZONTAL bars. groups: [{label, sub?, values:[…]}] aligned with series
+ * [{name,color}]. The horizontal form exists for long category names — vBars centers one
+ * single-line label under each group, so long labels (perception copy plus a model id) step
+ * on each other the moment groups multiply. Here every label owns a full line in a left
+ * gutter, with `sub` (the model) muted underneath, full words, no compaction. Height grows
+ * with the data so the container never clips the last group (charts size to include their
+ * label bands). Value axis rides the top edge — the rows read left-to-right immediately.
+ */
+function hBars(groups, series, opts = {}) {
+	const fmt = opts.fmt || fmtNum;
+	const W = 460, padL = opts.padL || 168, padR = 40, padT = 16, padB = 4;
+	const bh = 11, gap = 2, gpad = 10; // bar height · in-group gap · air between groups
+	const gh = series.length * (bh + gap) - gap + gpad;
+	const H = padT + groups.length * gh + padB;
+	const max = Math.max(1, ...groups.flatMap((g) => g.values.filter((v) => v != null)));
+	const iw = W - padL - padR;
+	const x = (v) => padL + v / max * iw;
+	let svg = "";
+	const ticks = 4;
+	for (let i = 0; i <= ticks; i++) {
+		const tv = max * i / ticks, tx = x(tv);
+		svg += `<line x1="${tx}" x2="${tx}" y1="${padT}" y2="${H - padB}" stroke="${i === 0 ? "var(--baseline)" : "var(--grid)"}" stroke-width="1"/>`;
+		svg += `<text x="${tx}" y="${padT - 5}" text-anchor="middle">${fmt(tv)}</text>`;
+	}
+	groups.forEach((g, gi) => {
+		const gy = padT + gi * gh + gpad / 2;
+		const mid = gy + (series.length * (bh + gap) - gap) / 2;
+		svg += g.sub
+			? `<text class="lbl" x="${padL - 8}" y="${mid - 1}" text-anchor="end">${esc(g.label)}</text>`
+				+ `<text class="sublbl" x="${padL - 8}" y="${mid + 10}" text-anchor="end">${esc(g.sub)}</text>`
+			: `<text class="lbl" x="${padL - 8}" y="${mid + 4}" text-anchor="end">${esc(g.label)}</text>`;
+		series.forEach((s, si) => {
+			const v = g.values[si];
+			if (v == null || v <= 0) return; // a zero draws no mark — the axis baseline says 0
+			const by = gy + si * (bh + gap);
+			const bw = Math.max(v / max * iw, 1.5);
+			svg += `<path d="${barPath(padL, by, bw, bh, 4, true)}" fill="${s.color}" data-tip="${esc(g.label)}${g.sub ? " · " + esc(g.sub) : ""} — ${esc(s.name)}: ${fmt(v)}"/>`;
+			svg += `<text class="val" x="${padL + bw + 4}" y="${by + bh - 2}">${fmt(v)}</text>`;
+		});
+	});
+	return legend(series) + `<svg viewBox="0 0 ${W} ${H}">${svg}</svg>`;
+}
+
 /** Horizontal stacked bars. rows: [{label, tip, segs:[{name,color,value}]}]. */
 function hStack(rows, seriesNames, opts = {}) {
 	const fmt = opts.fmt || fmtNum;
@@ -718,22 +760,26 @@ function armOf(jobId) {
 }
 
 // ONE header row for the whole board, sticky atop the #board scroll — per-section header
-// rows repeated the column labels down the page, which got hard to read. The columns are
-// task-shaped; explore rows keep their discovery numbers out from under "Steps"/"Tokens"
-// by folding them into one spanning inline-labeled cell (exploreRow) — an explore also has
-// no success ratio to show (its stamp has no success field; rendering one as "0/1 ok" read
-// as a failure). Flags live in the arm tooltip (the display name is derived from them) and
-// per-run completion lives on the chips, so neither needs a column.
+// rows repeated the column labels down the page, which got hard to read. Explore rows'
+// discovery numbers each get their OWN column (Actions…Ambig, after the task metrics) so
+// passes compare down the page — they were one colspan-5 inline-labeled blob, unscannable.
+// Task rows show "–" there; explore rows show "–" under Success/Steps (no success field —
+// rendering one as "0/1 ok" read as a failure — and Actions IS the explore's steps).
+// Flags live in the arm tooltip (the display name is derived from them) and per-run
+// completion lives on the chips, so neither needs a column.
 const th = (label, tip) => `<th${tip ? ` data-tip="${esc(tip)}"` : ""}>${label}</th>`;
 const VARIANT_TIP = "hover for the arm id, flags and the decision this cell informs · click to expand the selected run's dropdown (stats · prompt · live log) · pick the run via its chip in the Runs column";
 const RUNS_TIP = "one chip per run — click a chip to select that run: the row's dropdown and ⤢ map follow the selected chip";
 // No target column: the app scope picker above the board carries the target, and inside a
 // lineage group every row shares the group's target anyway.
 // Ordering: the two wide prose cells (Variant, Task) together at the left, then the three
-// short config tokens (Sees, Acts With, Model), then the five-column metric band exploreRow
-// spans with ONE colspan=5 cell — reordering across that band means colspan surgery.
+// short config tokens (Sees, Acts With, Model), the five task metrics, the five explore
+// discovery metrics, ops at the right.
 // "Success", not "Passed": PASS/FAIL is the judge's vocabulary and this column is
 // self-reported success — the distinction the judge pipeline exists to expose.
+// Every full-width spanner (detail rows, phase separators) spans NCOLS — keep it in step
+// with TASK_HEAD when adding a column.
+const NCOLS = 18;
 const TASK_HEAD = "<tr>" + th("Variant", VARIANT_TIP) +
 	th("Task", "the goal-only prompt the run was given") +
 	th("Sees", "what the agent SEES: AX tree or DOM elements, plus vision — or pixels only") +
@@ -742,6 +788,11 @@ const TASK_HEAD = "<tr>" + th("Variant", VARIANT_TIP) +
 	th("Success", "self-reported: succeeded / collected (the judge's verdict lives in the Judge card)") +
 	th("Steps", "mean actions per run") + th("Time", "mean wall-clock per run") +
 	th("Tokens", "mean OUTPUT tokens per run") + th("Cost", "published-rate estimate across collected runs — not an invoice") +
+	th("Actions", "explore rows — actions the grounding pass took (x̃ = median across the arm's passes; hover the cell for elapsed)") +
+	th("Controls", "explore rows — seen/actuated/dismissed: every control the pass observed, how many it operated, how many it swept off the frontier without operating. The pass ends when the frontier empties, and dismissing is a legitimate way to empty it") +
+	th("Surfaces", "explore rows — distinct screens/panels/tabs/dialogs controls were SEEN on: what you navigate BETWEEN; controls live ON them. The distilled appmap graph (Map column) typically keeps fewer surface nodes than this") +
+	th("Nodes", "explore rows — distilled appmap graph nodes (hover the cell for edges)") +
+	th("Ambig", "explore rows — settings editable at two scopes under one identity (same settingKey, different scope) — the wrong-scope trap; each gets a prompt warning") +
 	th("Started", "when the row's LATEST run began — collected runs off the run log, running runs derived from their ticking elapsed; a queued run shows – until it starts. Hover lists every run") +
 	th("Runs", RUNS_TIP) +
 	th("Map", "the appmap as a full node-link tree — edge thickness = traversal heat, blue = the run's path") + "</tr>";
@@ -873,6 +924,10 @@ function armCell(a, p) {
 		${modelCell(p)}`;
 }
 
+// The five explore-discovery columns, dashed on task/replay rows so every row spans the
+// same 18 columns without colspan bookkeeping.
+const NO_EXPLORE_CELLS = `<td class="num">–</td>`.repeat(5);
+
 function taskRow(a, p) {
 	const key = rowId(a, p);
 	return `<tr class="mrow" data-toggle="${esc(key)}">${armCell(a, p)}
@@ -880,17 +935,19 @@ function taskRow(a, p) {
 		<td class="num">${fmtNum(p.meanSteps)}</td>
 		<td class="num">${p.meanElapsedSec != null ? fmtDur(p.meanElapsedSec) : "–"}</td>
 		<td class="num">${fmtK(p.meanOutputTokens)}</td>
-		<td class="num">${p.usd ? fmtMoney(p.usd) : p.unpriced ? "?×" + p.unpriced : "–"}</td>${startedCell(p)}${runsCell(p, key)}${treeCell(p, key)}</tr>` + (openRows[key] ? detailRowHtml(a, p, key) : "");
+		<td class="num">${p.usd ? fmtMoney(p.usd) : p.unpriced ? "?×" + p.unpriced : "–"}</td>
+		${NO_EXPLORE_CELLS}${startedCell(p)}${runsCell(p, key)}${treeCell(p, key)}</tr>` + (openRows[key] ? detailRowHtml(a, p, key) : "");
 }
 
 // The explore GROUP-HEADER row. Its discovery numbers are MEDIANS (x̃) across the arm's
-// collected passes (task columns stay means x̄ for report parity via the shared rollup());
-// they live in ONE cell spanning the five task-metric columns, since the board's single
-// sticky header is task-shaped and explore medians must never sit under "Steps"/"Tokens"
-// labels. Each segment carries the tooltip its old column header + cell held — with the
-// headers gone, the segment tip is the only place the column semantics survive. Variant,
-// Task("Explore"), Sees, Acts With, Model, Runs and Map stay real cells so they align
-// with the task rows beneath. `first` marks the group's first row for .gsep air.
+// collected passes and live in their own columns (Actions…Ambig) so passes compare down
+// the page; the column semantics live in the sticky header's tips, the cell tips keep the
+// per-value extras (elapsed, edges, the seen/actuated/dismissed breakdown) plus MED_TIP.
+// Time/Tokens/Cost are the shared rollup()'s means — the same numbers, same semantics, as
+// the task rows' cells (report parity) — a grounding pass spends real minutes and money,
+// and the old spanning blob threw those away. Success and Steps stay "–": an explore has
+// no success field (rendering one as "0/1 ok" read as a failure) and Actions is its step
+// count. `first` marks the group's first row for .gsep air.
 function exploreRow(a, p, first) {
 	const key = rowId(a, p);
 	const ex = p.explore || {};
@@ -900,26 +957,19 @@ function exploreRow(a, p, first) {
 	const declared = a.flags && a.flags.includes("--no-ax")
 		? ` <span data-tip="${esc(DECLARED_TIP)}">⚠</span>`
 		: "";
-	const seg = (label, value, tip) => `<span data-tip="${esc(tip)}"><span class="k">${label}</span>${value}</span>`;
-	// No explore data at all → render the cell empty rather than a line of dashes; the cell
-	// itself stays (colspan=5) so column alignment with Started/Runs/Map is unchanged.
-	const hasData = [ex.actions, ex.controlsSeen, ex.surfaces, ex.graphNodes, ex.scopeAmbiguities]
-		.some(v => v != null);
-	const summary = !hasData ? "" : [
-		seg("Actions x̃", fmtNum(ex.actions),
-			"actions the pass took" + (ex.elapsed ? "\nelapsed " + ex.elapsed : "") + "\n" + MED_TIP),
-		seg("Controls", ex.controlsSeen != null ? `${ex.controlsSeen}/${ex.controlsActuated}/${ex.controlsDismissed}` : "–",
-			(ex.controlsSeen != null ? `seen ${ex.controlsSeen} · actuated ${ex.controlsActuated} · dismissed ${ex.controlsDismissed}\n` : "")
-			+ "of every control the pass observed (seen), how many it operated (actuated) vs swept off the frontier without operating (dismissed) — the pass ends when the frontier empties, and dismissing is a legitimate way to empty it\n" + MED_TIP) + declared,
-		seg("Surfaces", fmtNum(ex.surfaces),
-			"stamp coverage: distinct screens/panels/tabs/dialogs controls were SEEN on during the pass — what you navigate BETWEEN; controls live ON them. The distilled appmap graph (the map column) typically keeps fewer surface nodes than this\n" + MED_TIP),
-		seg("Nodes", fmtNum(ex.graphNodes),
-			"appmap graph nodes" + (ex.graphEdges != null ? "\n" + ex.graphEdges + " edges" : "") + "\n" + MED_TIP),
-		seg("Ambig", fmtNum(ex.scopeAmbiguities),
-			"settings editable at two scopes under one identity (same settingKey, different scope) — the wrong-scope trap; each gets a prompt warning\n" + MED_TIP),
-	].join(" · ");
+	const num = (value, tip) => `<td class="num" data-tip="${esc(tip)}">${value}</td>`;
 	return `<tr class="mrow exp-row${first ? " gsep" : ""}" data-toggle="${esc(key)}">${armCell(a, p)}
-		<td class="exp-sum" colspan="5">${summary}</td>${startedCell(p)}${runsCell(p, key)}${treeCell(p, key)}</tr>` + (openRows[key] ? detailRowHtml(a, p, key) : "");
+		<td class="num">–</td>
+		<td class="num">–</td>
+		<td class="num">${p.meanElapsedSec != null ? fmtDur(p.meanElapsedSec) : "–"}</td>
+		<td class="num">${fmtK(p.meanOutputTokens)}</td>
+		<td class="num">${p.usd ? fmtMoney(p.usd) : p.unpriced ? "?×" + p.unpriced : "–"}</td>
+		${num(fmtNum(ex.actions), "actions the pass took" + (ex.elapsed ? "\nelapsed " + ex.elapsed : "") + "\n" + MED_TIP)}
+		${num((ex.controlsSeen != null ? `${ex.controlsSeen}/${ex.controlsActuated}/${ex.controlsDismissed}` : "–") + declared,
+			(ex.controlsSeen != null ? `seen ${ex.controlsSeen} · actuated ${ex.controlsActuated} · dismissed ${ex.controlsDismissed}\n` : "") + MED_TIP)}
+		${num(fmtNum(ex.surfaces), MED_TIP)}
+		${num(fmtNum(ex.graphNodes), (ex.graphEdges != null ? ex.graphEdges + " edges\n" : "") + MED_TIP)}
+		${num(fmtNum(ex.scopeAmbiguities), MED_TIP)}${startedCell(p)}${runsCell(p, key)}${treeCell(p, key)}</tr>` + (openRows[key] ? detailRowHtml(a, p, key) : "");
 }
 
 // Compile arms (phase 3/4 recipe compiles) are local, instant file transforms recorded as
@@ -938,10 +988,12 @@ function compileRow(a, p) {
 	const srcCell = src
 		? `<td class="task" data-tip="compiled from this source run's log (a compile entry's jobId is its source stamp; the recipe file path is not on the wire)">src ${esc(shortJob(src.jobId))}</td>`
 		: `<td class="task">–</td>`;
+	// srcCell sits under Task (position 2) — it was marooned under "Acts With" when 5eade56
+	// reordered the header and only the armCell-based rows followed.
 	return `<tr class="crow"><td class="arm" data-tip="${esc(tip)}"><span class="dn">${esc(displayName(a))}</span>${badge}</td>
-		<td class="num">–</td><td class="num">–</td>${srcCell}<td class="num">–</td>
+		${srcCell}<td class="num">–</td><td class="num">–</td><td class="num">–</td>
 		<td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num">–</td>
-		${startedCell(p)}${runsCell(p, null)}<td class="treecell"></td></tr>`;
+		${NO_EXPLORE_CELLS}${startedCell(p)}${runsCell(p, null)}<td class="treecell"></td></tr>`;
 }
 
 /* ---- row detail: appmap + path ------------------------------------------------------- */
@@ -1015,7 +1067,7 @@ function statsStrip(a, e) {
 // button (openTree); detailBody/mapTree remain below as code for other views.
 function detailRowHtml(a, p, key) {
 	const sel = selJob(p, key);
-	if (!sel) return `<tr class="detail-row"><td colspan="13"><div class="empty">nothing submitted yet</div></td></tr>`;
+	if (!sel) return `<tr class="detail-row"><td colspan="${NCOLS}"><div class="empty">nothing submitted yet</div></td></tr>`;
 	const e = p.entries.find((x) => x.jobId === sel) || {};
 	// The detail is still fetched: the ⤢ modal reads its graph, and its payload carries the
 	// run log's own task — the prompt fallback for arms that carry none (replays).
@@ -1032,7 +1084,7 @@ function detailRowHtml(a, p, key) {
 	const note = d && d.narratorNote
 		? `<div class="d-note" style="max-width:90ch;white-space:pre-wrap">${esc(d.narratorNote.text)} <span class="meta">— narrator, ${hhmm(d.narratorNote.t)} · verify before quoting</span></div>`
 		: "";
-	return `<tr class="detail-row"><td colspan="13">${statsStrip(a, e)}<div class="d-prompt">${prompt}</div>${note}
+	return `<tr class="detail-row"><td colspan="${NCOLS}">${statsStrip(a, e)}<div class="d-prompt">${prompt}</div>${note}
 		<div class="logwrap" data-logjob="${esc(sel)}" data-loghost="${esc(e.host || "")}"></div></td></tr>`;
 }
 
@@ -1402,7 +1454,7 @@ function timelineRows(arms) {
 }
 
 // The board is grouped by LINEAGE, not phase: each explore arm heads a group (its row IS
-// the group header, carrying its own discovery metrics in a spanning summary cell), and
+// the group header, carrying its discovery metrics in the Actions…Ambig columns), and
 // beneath it sit the task/replay arms that consumed its map (groundedBy on the wire — the
 // same resolution orchestrate applies), in drain-timeline order. Ungrounded (NO_GROUNDING)
 // arms sit under "No Explore Pass"; compile arms close the board under "Compiles". Phases
@@ -1444,11 +1496,11 @@ function renderBoard(progress) {
 	for (const gid of Object.keys(deps)) {
 		if (seen.has(gid)) continue;
 		const ex = state.arms.find((x) => x.id === gid);
-		html += `<tr class="phase-h"><td colspan="13">${esc(gid)} — ${ex ? "grounding pass not yet submitted" : "not in the matrix"}</td></tr>`;
+		html += `<tr class="phase-h"><td colspan="${NCOLS}">${esc(gid)} — ${ex ? "grounding pass not yet submitted" : "not in the matrix"}</td></tr>`;
 		html += timelineRows(deps[gid]).map(({ a, p }) => taskRow(a, p)).join("");
 	}
 	if (ungrounded.length) {
-		html += `<tr class="phase-h"><td colspan="13">No Explore Pass</td></tr>`;
+		html += `<tr class="phase-h"><td colspan="${NCOLS}">No Explore Pass</td></tr>`;
 		html += timelineRows(ungrounded).map(({ a, p }) => taskRow(a, p)).join("");
 	}
 	// Compiles get their own labeled line at the board's end, NOT a lineage group: the wire
@@ -1459,7 +1511,7 @@ function renderBoard(progress) {
 	// p2 ids; explore: phase 1) — keep it that way: compile entries carry zero metrics, and
 	// folding their nothing into means would drag every average toward zero.
 	if (compiles.length) {
-		html += `<tr class="phase-h"><td colspan="13">Compiles — local recipe compiles, no model in the loop</td></tr>`;
+		html += `<tr class="phase-h"><td colspan="${NCOLS}">Compiles — local recipe compiles, no model in the loop</td></tr>`;
 		html += timelineRows(compiles).map(({ a, p }) => compileRow(a, p)).join("");
 	}
 	$("board").innerHTML = html + "</tbody></table>";
@@ -1505,24 +1557,19 @@ function renderExplore() {
 	// Funnel order (seen ≥ actuated+dismissed); colors follow the series, not the position.
 	// Group labels mirror the board's "perceives" column; web arms append "(web)" so the
 	// two DOM+vision explores (Yarn app vs the web target) stay distinguishable — the exact
-	// host adds nothing a chart label needs. Four groups share the 460px viewBox — ≈18-20
-	// chars of 11px text each — so a label compacts ("+vis") ONLY when it overruns that
-	// budget; full words otherwise.
-	const exploreLabel = (a) => {
-		if (!a.perception) return a.id.replace("p1-explore-", "");
-		const full = a.url ? `${a.perception} (web)` : a.perception;
-		// Compact only when it overruns the column, and compact the LONGEST words first —
-		// the wording comes from perceptionLine with "screenshots" rendered as "vision"
-		// (dash.ts), more informative and therefore longer than the old copy.
-		return full.length <= 20 ? full : full.replace(" + vision", "+vis").replace("AX tree", "AX").replace(" attrs", "");
-	};
+	// host adds nothing a chart label needs. HORIZONTAL on purpose: these labels are long,
+	// per-model passes multiply the groups, and vBars' centered x-labels stepped on each
+	// other until the axis was unreadable. The gutter fits the full words (the old "+vis"
+	// compaction hack is gone) and the model rides its own muted sub-line.
+	const exploreLabel = (a) => !a.perception ? a.id.replace("p1-explore-", "") : a.url ? `${a.perception} (web)` : a.perception;
 	const groups = arms.flatMap((a) => a.passes.filter((p) => p.explore && p.explore.controlsSeen != null).map((p) => ({
-		label: exploreLabel(a) + (p.model !== "(default)" ? " · " + p.model : ""),
+		label: exploreLabel(a),
+		...(p.model !== "(default)" ? { sub: normModel(p.model) } : {}),
 		values: [p.explore.controlsSeen, p.explore.controlsActuated, p.explore.controlsDismissed],
 	})));
 	// seen/actuated/dismissed as green/blue/red (found / operated / skipped) — green and red
 	// are never adjacent (blue sits between) and the bars carry direct labels.
-	$("chart-explore").innerHTML = vBars(groups, [
+	$("chart-explore").innerHTML = hBars(groups, [
 		{ name: "Seen", color: SERIES[2] }, { name: "Actuated", color: SERIES[0] }, { name: "Dismissed", color: RED },
 	]);
 }
