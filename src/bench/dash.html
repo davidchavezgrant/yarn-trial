@@ -2125,7 +2125,7 @@ function renderOutcomes() {
 			// statusLabel on BOTH the segs and the series list below: hStack matches them by
 			// name, so the render-time casing must be applied on both sides identically.
 			rows.push({
-				label: a.id + (p.model !== "(default)" ? " · " + p.model : ""),
+				label: a.id + (p.model !== "(default)" ? " · " + friendlyModel(p.model) : ""),
 				segs: [
 					{ name: statusLabel("succeeded"), color: OUTCOME_COLORS.succeeded, value: p.successes },
 					...Object.entries(kinds).map(([k, v]) => ({ name: statusLabel(k), color: outcomeColor(k), value: v })),
@@ -2160,7 +2160,7 @@ function groundingChart(el, pick, fmt) {
 				const p = (armOf(grounded)?.passes ?? []).find((x) => x.model === m);
 				return p && p.collected ? pick(p) : null;
 			};
-			groups.push({ label: b, ...(m !== "(default)" ? { sub: normModel(m) } : {}), values: [v(true), v(false)] });
+			groups.push({ label: b, ...(m !== "(default)" ? { sub: friendlyModel(m) } : {}), values: [v(true), v(false)] });
 		}
 	}
 	if (!groups.some((g) => g.values.some((v) => v != null))) { $(el).innerHTML = `<div class="empty">waiting for phase-2 core runs…</div>`; return; }
@@ -2173,7 +2173,7 @@ function renderAttention() {
 	// One group per (arm × model pass) — passes[0] alone dropped every later model pass.
 	const groups = arms.flatMap((a) => a.passes.filter((p) => p.meanObsNodes != null).map((p) => ({
 		label: a.id.replace("p2-", ""),
-		...(p.model !== "(default)" ? { sub: normModel(p.model) } : {}),
+		...(p.model !== "(default)" ? { sub: friendlyModel(p.model) } : {}),
 		values: [p.meanObsNodes, p.meanShownLines],
 	})));
 	$("chart-attention").innerHTML = hBars(groups, [{ name: "Observed Nodes", color: SERIES[0] }, { name: "Shown to Model", color: SERIES[1] }], { padL: 120 });
