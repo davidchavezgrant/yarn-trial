@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { buildDetail, buildState, defaultDashDate, type FleetView, fromStore, groundingArmId, legacyNarrativeLogPath, loadEnvFallback, matchPath, narrativeLogPath, parseDashArgs, parseEnvLine, parseLogFrames, rankExplore } from "../src/bench/dash.js";
+import { buildDetail, buildState, defaultDashDate, type FleetView, fromStore, groundingArmId, legacyNarrativeLogPath, loadEnvFallback, matchPath, narrativeLogPath, parseDashArgs, parseEnvLine, parseLogFrames, rankExplore, utf8Tail } from "../src/bench/dash.js";
 import type { Manifest, ManifestEntry } from "../src/bench/manifest.js";
 import { armById } from "../src/bench/matrix.js";
 
@@ -156,6 +156,50 @@ test("BuildState__LeavesRunUnpriced__When__ModelIsUnknownAndNoDefaultExists", ()
 	assert.equal(s.cost.assumedRuns, 0);
 	assert.equal(s.costSeries.length, 0);
 	assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.unpriced, 1);
+});
+
+test("BuildState__ExcludesTokenlessEntriesFromPricing__When__EntriesRecordNoTokens", () => {
+	// Compiles (no metrics at all) and failed runs whose metrics carry no token fields cost
+	// nothing and prove nothing — they must not surface as unpriced "+N?" on the hero.
+	// "Unpriced" stays reserved for runs that DID spend tokens nobody could price.
+	const s = buildState(
+		manifest(
+			entry({ armId: "p3-compile-ax", jobId: "compile-refused", host: "local", state: "failed", collected: true, note: "compile refused: hinted run" }),
+			entry({ jobId: "job-ok", state: "done", collected: true, metrics: { success: true, model: "claude-opus-5", outputTokens: 100_000, endedAt: "2026-07-31T20:10:00.000Z" } }),
+			entry({ jobId: "job-bad", state: "failed", collected: true, metrics: { success: false, failureKind: "unready" } }),
+		),
+		fleet([]),
+		[],
+		true,
+	);
+	// claude-opus-5 output $25/M → 0.1M out = $2.50; the other two entries contribute nothing.
+	assert.ok(Math.abs(s.cost.totalUsd - 2.5) < 1e-9);
+	assert.equal(s.cost.unpriced, 0);
+	assert.equal(s.cost.assumedRuns, 0);
+	assert.equal(s.cost.passes[0]?.priced, 1);
+	assert.equal(s.cost.passes[0]?.unpriced, 0);
+	assert.equal(s.costSeries.length, 1);
+	// Per-arm rollups agree: the tokenless failure sits in the same pass as the priced run.
+	assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.unpriced, 0);
+	assert.equal(armView(s, "p3-compile-ax")?.passes[0]?.unpriced, 0);
+});
+
+test("BuildState__MarksCompileRefused__When__CollectedEntryFailedWithoutMetrics", () => {
+	// A refused compile is recorded collected with state "failed" and NO metrics (orchestrate's
+	// runCompiles) — before this, the wire derived "collected" and the board rendered a
+	// refusal as Collected. Metrics absent → the manifest's own state decides.
+	const s = buildState(
+		manifest(
+			entry({ armId: "p3-compile-ax", jobId: "compile-refused", host: "local", state: "failed", collected: true, note: "compile refused: hinted run" }),
+			entry({ armId: "p3-compile-cdp", jobId: "compile-ok", host: "local", state: "done", collected: true }),
+		),
+		fleet([]),
+		[],
+		true,
+	);
+	assert.equal(armView(s, "p3-compile-ax")?.passes[0]?.entries[0]?.status, "refused");
+	// A succeeded compile still reads "collected" — there is no run log to grade it further.
+	assert.equal(armView(s, "p3-compile-cdp")?.passes[0]?.entries[0]?.status, "collected");
 });
 
 test("BuildState__ReportsDisagreement__When__SelfReportContradictsJudge", () => {
@@ -491,6 +535,38 @@ test("ParseLogFrames__ReassemblesBytes__When__ChunkBoundarySplitsAUtf8Character"
 		JSON.stringify({ ok: true, done: true, nextOffset: 2, state: "running", exitCode: null }),
 	].join("\n");
 	assert.equal(Buffer.from(parseLogFrames(stdout).chunkB64, "base64").toString("utf8"), "é");
+});
+
+/*
+ * The offset-0 64KB tail is a byte-arithmetic slice, and a byte offset can land mid-UTF-8
+ * sequence — the pane would open on a replacement char. utf8Tail advances the start past
+ * continuation bytes to the next character boundary.
+ */
+
+test("Utf8Tail__ReturnsWholeBuffer__When__ItFitsTheBudget", () => {
+	const buf = Buffer.from("short log", "utf8");
+	assert.equal(utf8Tail(buf, 64), buf);
+	// Exactly at the budget is still whole — only a longer buffer slices.
+	assert.equal(utf8Tail(buf, buf.length), buf);
+});
+
+test("Utf8Tail__AdvancesToCharacterBoundary__When__SliceStartsMidUtf8", () => {
+	// "a😀b" = 61 f0 9f 98 80 62. A 3-byte tail starts on the emoji's second continuation
+	// byte; the slice must skip forward to 'b' rather than open on a replacement char.
+	const buf = Buffer.from("a😀b", "utf8");
+	assert.equal(utf8Tail(buf, 3).toString("utf8"), "b");
+	// A 5-byte tail starts on the emoji's LEAD byte (a boundary) — nothing is skipped.
+	assert.equal(utf8Tail(buf, 5).toString("utf8"), "😀b");
+	// Two-byte class too: "aaé" = 61 61 c3 a9; a 1-byte tail lands on é's continuation byte.
+	assert.equal(utf8Tail(Buffer.from("aaé", "utf8"), 1).toString("utf8"), "");
+	assert.equal(utf8Tail(Buffer.from("aaé", "utf8"), 2).toString("utf8"), "é");
+});
+
+test("Utf8Tail__StopsAfterThreeSteps__When__BytesAreNotUtf8", () => {
+	// Valid UTF-8 never carries more than 3 continuation bytes in a row — a longer run is
+	// not UTF-8, and the advance must stay bounded rather than scan (or empty) the tail.
+	const buf = Buffer.alloc(8, 0x80);
+	assert.equal(utf8Tail(buf, 6).length, 3); // start 2, advanced exactly 3 to 5 — never further
 });
 
 /*

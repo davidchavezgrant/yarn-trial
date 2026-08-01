@@ -317,6 +317,9 @@ const STATUS = { good: "#0ca30c", warning: "#fab219", serious: "#ec835a", critic
 const OUTCOME_COLORS = {
 	succeeded: STATUS.good, "gave-up": STATUS.critical, unready: STATUS.warning,
 	crashed: STATUS.serious, stopped: "#898781", "hinted-refused": "#d55181",
+	// "refused": a metric-less collected entry whose manifest state is failed — a compile
+	// the gate refused. Same refusal family (and color) as hinted-refused.
+	refused: "#d55181",
 	failed: STATUS.critical, pending: "#383835",
 };
 const fmtMoney = (n) => n < 0.01 && n > 0 ? "$" + n.toFixed(4) : "$" + n.toFixed(2);
@@ -1810,11 +1813,12 @@ function handlePeekText(host, raw) {
 	}
 }
 
-// Classify by close code. FATAL = {4400 unknown host / setup failed, 4409 superseded — the
-// server no longer preempts across hosts, kept for a teardown racing the upgrade}: mark the
-// ⚠, disarm, and don't re-arm until the row leaves busy (the fatal flag). Everything else
-// (1001 server restart, 1006 bare TCP drop, …) retries with backoff WHILE the host is still
-// busy; a close after the row left busy just completes the disarm.
+// Classify by close code. FATAL = {4400 genuinely bad input (unknown host / bad params —
+// a retry cannot help), 4409 genuine same-host supersede}: mark the ⚠, disarm, and don't
+// re-arm until the row leaves busy (the fatal flag). Everything else retries with backoff
+// WHILE the host is still busy: 1001 covers server restart AND an idle teardown racing the
+// upgrade, 1011 is a transient setup failure (hosts-file hiccup, tunnel spawn race), 1006 a
+// bare TCP drop. A close after the row left busy just completes the disarm.
 function handlePeekClose(host, ev) {
 	const ps = peekStateFor(host);
 	setStreaming(host, false);

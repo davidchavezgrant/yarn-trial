@@ -276,7 +276,12 @@ function entryView(e: ManifestEntry, fleet: FleetView): EntryView {
 			host: e.host,
 			submittedAt: e.submittedAt,
 			collected: true,
-			status: m?.success === true ? "succeeded" : (m?.failureKind ?? (m?.success === false ? "failed" : "collected")),
+			// With metrics, the run log speaks. WITHOUT metrics (compiles — pure local file
+			// transforms), the manifest's own state is the only signal: a REFUSED compile is
+			// recorded state "failed" and must render as Refused, not Collected.
+			status: m
+				? (m.success === true ? "succeeded" : (m.failureKind ?? (m.success === false ? "failed" : "collected")))
+				: (e.state === "failed" ? "refused" : "collected"),
 			...(m?.success !== undefined ? { success: m.success } : {}),
 			...(m?.failureKind ? { failureKind: m.failureKind } : {}),
 			...(m?.steps !== undefined ? { steps: m.steps } : {}),
@@ -310,16 +315,19 @@ function entryView(e: ManifestEntry, fleet: FleetView): EntryView {
  * model id, so before this every explore pass read as "unpriced" and the hero showed
  * "$0.00 +5?" — noise, per David; price them at the published default rates instead.
  * `assumed: true` marks the retry so totals can say "priced at default-model rates" rather
- * than pretend the card was known. A tokenless artifact never retries: it would "price" to
- * $0.00 and pad the assumed count without informing anyone.
+ * than pretend the card was known.
+ *
+ * Entries with NO token fields at all (compiles, refusals) are excluded from pricing
+ * ENTIRELY — `tokenless: true`, never "unpriced": they cost nothing and prove nothing, and
+ * counting them as unpriced added phantom "+N?" to the hero for runs that never touched a
+ * model. "Unpriced" is reserved for runs that DID spend tokens we could not price.
  */
-export function priceWithFallback(e: ManifestEntry, defaultModel?: string): { usd?: number; assumed: boolean } {
+export function priceWithFallback(e: ManifestEntry, defaultModel?: string): { usd?: number; assumed: boolean; tokenless?: boolean } {
 	const m = e.metrics;
-	if (!m) return { assumed: false };
+	if (!m || (m.inputTokens === undefined && m.outputTokens === undefined && m.cacheReadTokens === undefined && m.cacheCreationTokens === undefined))
+		return { assumed: false, tokenless: true };
 	const direct = estimateCost(m, m.model ?? e.model);
 	if (direct !== undefined) return { usd: direct, assumed: false };
-	if (m.inputTokens === undefined && m.outputTokens === undefined && m.cacheReadTokens === undefined && m.cacheCreationTokens === undefined)
-		return { assumed: false };
 	const assumed = estimateCost(m, e.model ?? defaultModel);
 
 	return assumed !== undefined ? { usd: assumed, assumed: true } : { assumed: false };
@@ -401,7 +409,8 @@ function passView(arm: Arm, model: string | undefined, entries: ManifestEntry[],
 		collected: r.collected.length,
 		successes: r.successes,
 		usd: priced.reduce((s, p) => s + (p.usd ?? 0), 0),
-		unpriced: priced.filter((p) => p.usd === undefined).length,
+		// Tokenless entries (compiles) are neither priced nor unpriced — see priceWithFallback.
+		unpriced: priced.filter((p) => p.usd === undefined && !p.tokenless).length,
 		assumed: priced.filter((p) => p.assumed).length,
 		...(r.meanSteps !== undefined ? { meanSteps: r.meanSteps } : {}),
 		...(r.meanElapsedSec !== undefined ? { meanElapsedSec: r.meanElapsedSec } : {}),
@@ -657,7 +666,8 @@ export function buildState(manifest: Manifest, fleet: FleetView, events: DashEve
 			pass,
 			usd: priced.reduce((s, p) => s + (p.usd ?? 0), 0),
 			priced: priced.filter((p) => p.usd !== undefined).length,
-			unpriced: priced.filter((p) => p.usd === undefined).length,
+			// Same exclusion as passView: a tokenless compile must not surface as "+N?".
+			unpriced: priced.filter((p) => p.usd === undefined && !p.tokenless).length,
 			assumed: priced.filter((p) => p.assumed).length,
 		};
 	});
@@ -1004,6 +1014,23 @@ const SSE_HEARTBEAT_MS = 15_000;
 const LOG_JOB_RE = /^(?!\.+$)[A-Za-z0-9._-]+$/;
 /** A first read (offset 0) of a huge log forwards only this much tail — the pane wants recent lines, not 10MB. */
 const LOG_TAIL_BYTES = 64 * 1024;
+
+/**
+ * The offset-0 tail slice, started on a UTF-8 character boundary. A byte-arithmetic slice
+ * can open mid-sequence — on a continuation byte (0b10xxxxxx) — and the pane's streaming
+ * TextDecoder would render a replacement char as the log's first visible character. Advance
+ * the start past continuation bytes to the next boundary; at most 3 steps, because a valid
+ * UTF-8 sequence carries at most 3 continuation bytes — a longer run means the data is not
+ * UTF-8, and slicing anywhere in it is equally honest. Skipping forward never corrupts
+ * offsets: nextOffset is the file's true offset, independent of how much tail we forward.
+ */
+export function utf8Tail(buf: Buffer, maxBytes: number): Buffer {
+	if (buf.length <= maxBytes) return buf;
+	let start = buf.length - maxBytes;
+	for (let i = 0; i < 3 && start < buf.length && ((buf[start] as number) & 0xc0) === 0x80; i++) start++;
+
+	return buf.subarray(start);
+}
 
 /** Everything one single-shot `runnerctl logs` reply folds down to for the /api/logs response. */
 export interface LogFrames {
@@ -1485,6 +1512,14 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		lastWindow?: Buffer;
 		/** Set by teardown so child-exit handlers no-op instead of respawning. */
 		closing: boolean;
+		/**
+		 * How teardown closed this session — recorded BEFORE its sockets die, so an upgrade
+		 * that resolved ensurePeek in the same window can replay the same code to its late
+		 * socket. This is what lets the race check tell an idle teardown (1001, retryable —
+		 * the armed client re-ensures while the host stays busy) from a genuine same-host
+		 * supersede (4409, fatal).
+		 */
+		closedWith?: { code: number; reason: string };
 	}
 	// One live session per host, all hosts concurrently — the preview wall's server half.
 	// "Is p still current?" is always `peeks.get(p.host) === p`, never identity against a slot.
@@ -1537,6 +1572,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		if (!p) return;
 		peeks.delete(host);
 		p.closing = true; // BEFORE killing tunnels, so their exit handlers don't respawn
+		p.closedWith = { code, reason }; // BEFORE sockets die — the upgrade race check reads it
 		clearTimeout(p.idleTimer);
 		clearTimeout(p.reprobeTimer);
 		clearTimeout(p.heartbeatTimer);
@@ -1585,11 +1621,18 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		// tunnelArgv emits its own anti-mux options ahead of the base block — no overrides needed here.
 		const child = spawn("ssh", tunnelArgv(p.hostCfg, remote, local), { stdio: "ignore" });
 		p.tunnels[slot] = child;
-		child.once("exit", () => {
+		// ONE downed-tunnel path for both signals: 'exit' (the tunnel died) and 'error' (spawn
+		// itself failed — ENOENT et al. never fires 'exit', and an unlistened ChildProcess
+		// 'error' is an uncaught exception that takes the whole dash down). Some failure modes
+		// fire both for one child, so the guard makes the respawn single-shot.
+		let handled = false;
+		const down = (what: string): void => {
+			if (handled) return;
+			handled = true;
 			if (p.closing || peeks.get(p.host) !== p) return; // teardown killed it — expected
 			// Viewers learn via the status frame; the event feed does NOT — tunnel churn across
 			// three always-on sessions would drown it (attach/first-stream/teardown only).
-			p.lastStatus = castJson(p, { ev: "error", kind: "tunnel-died", message: `ssh tunnel for :${remote} on ${p.host} dropped — respawning` });
+			p.lastStatus = castJson(p, { ev: "error", kind: "tunnel-died", message: `ssh tunnel for :${remote} on ${p.host} ${what} — respawning` });
 			const n = Math.min(p.respawnCounts[slot], TUNNEL_RESPAWN_MS.length - 1);
 			p.respawnCounts[slot]++;
 			p.respawnTimers[slot] = setTimeout(() => {
@@ -1602,7 +1645,9 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 					spawnTunnel(p, slot, tunnelArgv);
 				})();
 			}, TUNNEL_RESPAWN_MS[n]);
-		});
+		};
+		child.once("exit", () => down("dropped"));
+		child.once("error", (err) => down(`failed to spawn (${String((err as NodeJS.ErrnoException).code ?? err).slice(0, 40)})`));
 	};
 	// A dead endpoint tunnel also kills the CDP websocket riding it, so the engine fires
 	// onExit → the waiting/reprobe loop picks up the respawned tunnel's new local port
@@ -1727,7 +1772,11 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		}
 	};
 
-	type EnsureResult = { ok: true; session: Peek } | { ok: false; error: string };
+	// `fatal` classifies the failure for the close code: true = the INPUT is bad (unknown
+	// host, bad params — retrying the same request cannot help; 4400), false = a transient
+	// setup failure (hosts-file read hiccup, import/spawn race; 1011, the client's armed
+	// backoff keeps trying while the host is busy).
+	type EnsureResult = { ok: true; session: Peek } | { ok: false; error: string; fatal: boolean };
 	const ensurePeek = (hostName: string): Promise<EnsureResult> => {
 		const chain = ensureChains.get(hostName) ?? Promise.resolve();
 		const r = chain.then(() => doEnsurePeek(hostName), () => doEnsurePeek(hostName));
@@ -1745,7 +1794,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		if (existing) return { ok: true, session: existing };
 		const [{ loadHosts }, { tunnelArgv }] = await Promise.all([import("../remote/control/hosts.js"), import("../remote/control/ssh.js")]);
 		const host = loadHosts().hosts.find((h) => h.name === hostName);
-		if (!host) return { ok: false, error: `unknown host ${JSON.stringify(hostName)}` };
+		if (!host) return { ok: false, error: `unknown host ${JSON.stringify(hostName)}`, fatal: true };
 
 		// Each remote debug port tunnels to a FRESH ephemeral local port. The old fixed
 		// 9222/9777 local bindings needed a squatter-refusal check and a wait-for-release loop
@@ -1829,7 +1878,8 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		if (logsInflight.has(guard)) return json(429, { error: "a read for this job is already in flight" });
 		logsInflight.add(guard);
 		try {
-			const tail = (buf: Buffer): Buffer => (offset === 0 && buf.length > LOG_TAIL_BYTES ? buf.subarray(buf.length - LOG_TAIL_BYTES) : buf);
+			// utf8Tail, not a bare subarray: the arithmetic start can land mid-character.
+			const tail = (buf: Buffer): Buffer => (offset === 0 ? utf8Tail(buf, LOG_TAIL_BYTES) : buf);
 
 			// The local fast path answers BEFORE host validation: it shells nothing, and the
 			// synthetic "local" fleet row (plus pulled runs queried with a stale host) would
@@ -1940,21 +1990,31 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		};
 		// Resolves fast — no probe inside. A thrown setup error (unreadable hosts file, import
 		// failure) must become a close-frame rejection, not an unhandled rejection that kills
-		// the dash: the contract is handshake-then-attach-or-reject, always.
-		const r = await ensurePeek(url.searchParams.get("host") ?? "").catch((err): EnsureResult => ({ ok: false, error: `view setup failed — ${String(err).slice(0, 200)}` }));
+		// the dash: the contract is handshake-then-attach-or-reject, always. Thrown errors are
+		// TRANSIENT by classification — a one-off fs/spawn hiccup must not close 4400 and
+		// disarm the client for the rest of the run; only doEnsurePeek's own verdict on the
+		// input (unknown host) is fatal.
+		const r = await ensurePeek(url.searchParams.get("host") ?? "").catch((err): EnsureResult => ({ ok: false, error: `view setup failed — ${String(err).slice(0, 200)}`, fatal: false }));
 		if (!r.ok) {
 			say({ ev: "error", message: r.error });
-			closeSocket(socket, 4400, r.error);
+			// 4400 strictly for bad input; 1011 (retryable) for transient setup failures.
+			closeSocket(socket, r.fatal ? 4400 : 1011, r.error);
 
 			return;
 		}
 		// NEVER re-resolve the host's session here: ensurePeek returned THIS socket's session.
 		// If a teardown raced the await (idle reaper, process exit), this socket belongs to a
-		// corpse and must not attach to whatever replaces it.
+		// corpse and must not attach to whatever replaces it. Close with the SAME code the
+		// teardown used on its live sockets — an idle/exit teardown is 1001-class (retryable;
+		// the armed client backs off and re-ensures while the host is still busy). 4409 is
+		// reserved STRICTLY for a genuine same-host supersede: a session replaced without a
+		// recorded teardown, which no current call site produces — the fallback keeps the
+		// reservation honest if one ever does.
 		const session = r.session;
 		if (peeks.get(session.host) !== session) {
-			say({ ev: "error", kind: "superseded", message: "superseded by a newer view" });
-			closeSocket(socket, 4409, "superseded by a newer view");
+			const { code, reason } = session.closedWith ?? { code: 4409, reason: "superseded by a newer view" };
+			say({ ev: "error", ...(code === 4409 ? { kind: "superseded" } : { kind: "session-closed" }), message: reason });
+			closeSocket(socket, code, reason);
 
 			return;
 		}
