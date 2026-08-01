@@ -297,13 +297,6 @@
 	text.val { fill: var(--ink-2); font-variant-numeric: tabular-nums; }
 	text.lbl { fill: var(--ink-2); }
 	text.sublbl { fill: var(--muted); font-size: 10px; }
-	/* convergence chart (explore dropdown): stacked same-x panels — see convChart */
-	.convwrap { max-width: 620px; margin: 8px 0 10px; }
-	.convhead { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-	.convaxis { white-space: nowrap; display: inline-flex; align-items: baseline; gap: 8px; }
-	.convaxis .chip { cursor: pointer; color: var(--muted); }
-	.convaxis .chip.sel { color: var(--ink); border-color: var(--ink-2); }
-
 	#tooltip {
 		position: fixed; pointer-events: none; z-index: 20; display: none;
 		background: #242423; border: 1px solid var(--border); border-radius: 6px;
@@ -707,161 +700,6 @@ function stepLine(points, color, opts = {}) {
 	});
 	svg += `<text x="${padL}" y="${H - 6}">${esc(points[0].x)}</text><text x="${W - padR}" y="${H - 6}" text-anchor="end">${esc(points[points.length - 1].x)}</text>`;
 	return `<svg viewBox="0 0 ${W} ${H}">${svg}</svg>`;
-}
-
-/* ---- convergence chart: the shape of an explore pass over time ------------------------ */
-
-// One x-axis choice shared by every convergence chart on the page (module state, same idiom
-// as the target picker). The two axes answer different questions: "time" is the throughput
-// view, model latency included; "actions" isolates exploration strategy from how fast the
-// model thinks. A model can win one and lose the other.
-let convAxis = "time";
-
-// Fixed categorical order, never cycled: a series keeps its hue whether or not the others
-// plotted. Panel 0 is the convergence family (one magnitude: does the frontier burn down
-// while actuated and the map climb to meet it). Panel 1 is the ledger ceiling — seen and
-// dismissed leap an order of magnitude on a mass dismissal, which is exactly the event
-// that must not crush panel 0's scale, so they get their own axis (never a second scale
-// on the same panel).
-const CONV_SERIES = [
-	{ key: "frontier", name: "frontier", color: "var(--s1)", panel: 0 },
-	{ key: "actuated", name: "actuated", color: "var(--s2)", panel: 0 },
-	{ key: "nodes", name: "map nodes", color: "var(--s3)", panel: 0 },
-	{ key: "seen", name: "seen", color: "var(--s4)", panel: 1 },
-	{ key: "dismissed", name: "dismissed", color: "var(--s5)", panel: 1 },
-];
-
-const fmtMin = (ms) => { const m = Math.round(ms / 60000); return m >= 60 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}` : `${m}m`; };
-
-// Actions coordinate for points that lack one (chapter marks carry no action count):
-// interpolate between the bracketing heartbeats by wall-clock, so chapter-borne data —
-// the only source of `nodes` on pre-enrichment logs — still plots on the actions axis.
-function convActionsAt(pts) {
-	const known = pts.filter((p) => p.actions != null).map((p) => ({ t: p.t, a: p.actions }));
-	return pts.map((p) => {
-		if (p.actions != null) return p.actions;
-		let prev = null, next = null;
-		for (const q of known) { if (q.t <= p.t) prev = q; if (q.t >= p.t && !next) next = q; }
-		if (prev && next) return next.t === prev.t ? prev.a : prev.a + ((next.a - prev.a) * (p.t - prev.t)) / (next.t - prev.t);
-		return prev ? prev.a : next ? next.a : null;
-	});
-}
-
-// Everything one point carried, as the marker tooltip — the chart's table view. Fields the
-// event lacked are absent, so pre-enrichment logs simply read shorter.
-function convTip(p) {
-	const head = [
-		p.actions != null ? `action ${p.actions}` : null,
-		fmtMin(p.t),
-		p.kind === "chapter" ? `chapter ${p.chapter ?? "?"} (context reset)` : null,
-	].filter(Boolean).join(" · ");
-	const body = [
-		p.frontier != null ? `frontier ${p.frontier}` : null,
-		p.seen != null ? `seen ${p.seen}` : null,
-		p.actuated != null ? `actuated ${p.actuated}` : null,
-		p.dismissed != null ? `dismissed ${p.dismissed}` : null,
-		p.nodes != null ? `map nodes ${p.nodes}` : null,
-		p.tokensIn != null || p.tokensOut != null ? `tokens ${fmtK(p.tokensIn)} in · ${fmtK(p.tokensOut)} out` : null,
-	].filter(Boolean).join(" · ");
-	return body ? `${head}\n${body}` : head;
-}
-
-/**
- * The discovery series (detail payload's `series`, folded off the run's events.jsonl) as
- * stacked panels over one x-axis. A healthy pass reads: frontier rises (expansion), peaks,
- * and burns toward the baseline while actuated and map nodes climb — where the curves
- * cross is where the pass flipped from discovering to consuming. A frontier that never
- * turns down is a pass that will not converge; a `dismissed` line leaping to track `seen`
- * is a mass dismissal, not discovery.
- */
-function convChart(series) {
-	const pts = series.filter((p) => p.kind === "progress" || p.kind === "chapter" || p.kind === "finish" || p.kind === "fatal");
-	if (pts.length < 2) return "";
-	const acts = convActionsAt(pts);
-	const useActions = convAxis === "actions" && acts.some((a) => a != null);
-	const items = pts.map((p, i) => ({ p, x: useActions ? acts[i] : p.t })).filter((it) => it.x != null);
-	const plotted = CONV_SERIES.map((s) => ({
-		...s,
-		data: items.filter((it) => it.p[s.key] != null).map((it) => ({ x: it.x, y: it.p[s.key], p: it.p })),
-	})).filter((s) => s.data.length >= 2);
-	if (!plotted.length) return "";
-	const W = 460, padL = 46, padR = 40, padT = 14;
-	const xsAll = plotted.flatMap((s) => s.data.map((d) => d.x));
-	const x0 = Math.min(...xsAll), x1 = Math.max(...xsAll);
-	const iw = W - padL - padR;
-	const xpos = (x) => (x1 === x0 ? padL + iw / 2 : padL + ((x - x0) / (x1 - x0)) * iw);
-	const chapters = items.filter((it) => it.p.kind === "chapter");
-	const endIt = [...items].reverse().find((it) => it.p.kind === "finish" || it.p.kind === "fatal");
-	// Round axis numbers (0/50/100/150/200) instead of max-fractions (63/125/188): the
-	// tightest of a 3- or 4-division scale built from a 1/2/5×10^k step ladder.
-	const niceScale = (m) => {
-		let best = null;
-		for (const div of [3, 4]) {
-			const raw = m / div;
-			const pow = 10 ** Math.floor(Math.log10(raw));
-			const s = raw / pow;
-			const total = (s <= 1 ? 1 : s <= 2 ? 2 : s <= 5 ? 5 : 10) * pow * div;
-			if (!best || total < best.max) best = { max: total, div };
-		}
-		return best;
-	};
-
-	const panelSvg = (ss, H, first, showXTicks) => {
-		const ih = H - padT - (showXTicks ? 20 : 6);
-		const baseY = padT + ih;
-		const { max, div } = niceScale(Math.max(1, ...ss.flatMap((s) => s.data.map((d) => d.y))));
-		const y = (v) => padT + ih * (1 - v / max);
-		let svg = "";
-		for (let i = 0; i <= div; i++) {
-			const tv = (max * i) / div, ty = y(tv);
-			svg += `<line x1="${padL}" x2="${W - padR}" y1="${ty}" y2="${ty}" stroke="${i === 0 ? "var(--baseline)" : "var(--grid)"}" stroke-width="1"/>`;
-			svg += `<text x="${padL - 6}" y="${ty + 3}" text-anchor="end">${fmtK(Math.round(tv))}</text>`;
-		}
-		// Chapter marks: context resets as top-edge ticks on the first panel — annotations,
-		// not gridlines (the nodes markers carry the same tooltip with a real hit target).
-		if (first) for (const it of chapters) svg += `<line x1="${xpos(it.x).toFixed(1)}" x2="${xpos(it.x).toFixed(1)}" y1="${padT - 7}" y2="${padT - 2}" stroke="var(--baseline)" stroke-width="1" data-tip="${esc(convTip(it.p))}"/>`;
-		const usedLabelYs = [];
-		for (const s of ss) {
-			let path = "";
-			s.data.forEach((q, i) => { path += `${i ? "L" : "M"}${xpos(q.x).toFixed(1)},${y(q.y).toFixed(1)}`; });
-			svg += `<path d="${path}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
-			for (const q of s.data) svg += `<circle cx="${xpos(q.x).toFixed(1)}" cy="${y(q.y).toFixed(1)}" r="4" fill="${s.color}" stroke="var(--surface)" stroke-width="2" data-tip="${esc(convTip(q.p))}"/>`;
-			// Endpoint value label (identity stays with the legend); skipped when it would
-			// land on a neighbour's — collided labels read as noise, the tooltip still has it.
-			const last = s.data[s.data.length - 1];
-			const ly = Math.max(padT + 4, Math.min(baseY - 2, y(last.y) + 3));
-			if (!usedLabelYs.some((u) => Math.abs(u - ly) < 11)) {
-				usedLabelYs.push(ly);
-				svg += `<text class="val" x="${xpos(last.x) + 8}" y="${ly}">${fmtK(last.y)}</text>`;
-			}
-		}
-		if (showXTicks) {
-			const lab = (x) => (useActions ? String(Math.round(x)) : fmtMin(x));
-			svg += `<text x="${padL}" y="${H - 4}">${lab(x0)}</text>`;
-			svg += `<text x="${padL + iw / 2}" y="${H - 4}" text-anchor="middle">${lab(x0 + (x1 - x0) / 2)}</text>`;
-			svg += `<text x="${W - padR}" y="${H - 4}" text-anchor="end">${lab(x1)}${useActions ? " actions" : ""}</text>`;
-		}
-		return `<svg viewBox="0 0 ${W} ${H}">${svg}</svg>`;
-	};
-
-	const p0 = plotted.filter((s) => s.panel === 0), p1 = plotted.filter((s) => s.panel === 1);
-	// How the pass ended, in the header — a vertical end-line is useless geometry when the
-	// endpoint is by definition the domain's right edge. Fatal is status, so it wears the
-	// status color with an icon, never a bare hue.
-	const endNote = endIt
-		? endIt.p.kind === "fatal"
-			? `<span class="meta" style="color:var(--critical)" data-tip="${esc(endIt.p.fatal || "fatal")}">✕ fatal</span>`
-			: `<span class="meta" data-tip="how the pass stopped">${esc(endIt.p.stopped || "finished")}</span>`
-		: "";
-	const axisToggle = acts.some((a) => a != null)
-		? `<span class="convaxis">${endNote}<span class="chip${useActions ? "" : " sel"}" data-convaxis="time" data-tip="x = wall clock — throughput view, model latency included">time</span><span class="chip${useActions ? " sel" : ""}" data-convaxis="actions" data-tip="x = actions taken — strategy view, model latency removed">actions</span></span>`
-		: `<span class="convaxis">${endNote}</span>`;
-	// Each panel's legend doubles as its title; a single-series panel keeps the one-swatch
-	// row for exactly that reason (there is no other title naming what is plotted).
-	let html = `<div class="convhead">${p0.length ? legend(p0) : "<span></span>"}${axisToggle}</div>`;
-	if (p0.length) html += panelSvg(p0, 175, true, !p1.length);
-	if (p1.length) html += legend(p1) + panelSvg(p1, 115, !p0.length, true);
-	return html;
 }
 
 /* ---- sections ----------------------------------------------------------------------- */
@@ -1727,11 +1565,9 @@ function detailRowHtml(a, p, key) {
 	// A failed detail fetch caches its reason in d.note — surface it, or the dropdown reads
 	// as "this run simply has nothing" when the truth is "the fetch failed".
 	const fetchNote = d && d.note && !d.graph ? `<div class="d-note">⚠ ${esc(d.note)}</div>` : "";
-	// The pass's own shape — frontier burn-down, map growth — off the series buildDetail
-	// folded from its events.jsonl. Explore rows only; a fleet run's chart appears once
-	// collect pulls the event log onto this machine, and a pre-events run never has one.
-	const conv = a.kind === "explore" && d && d.series ? convChart(d.series) : "";
-	return `<tr class="detail-row"><td colspan="${NCOLS}">${statsStrip(a, e)}${liveStrip(a, e)}<div class="d-prompt">${prompt}</div>${note}${fetchNote}${conv ? `<div class="convwrap">${conv}</div>` : ""}
+	// The convergence chart moved to the row's graphs page (the 📊 cell) — the dropdown
+	// stays the run's live console: stats, prompt, notes, log.
+	return `<tr class="detail-row"><td colspan="${NCOLS}">${statsStrip(a, e)}${liveStrip(a, e)}<div class="d-prompt">${prompt}</div>${note}${fetchNote}
 		<div class="logwrap" data-logjob="${esc(sel)}" data-loghost="${esc(e.host || "")}"></div></td></tr>`;
 }
 
@@ -2492,8 +2328,6 @@ $("target-picker").addEventListener("click", (ev) => {
 // Row expansion + run selection, delegated once — the board's innerHTML is replaced on
 // every push, so handlers must live on the container, not the rows.
 $("board").addEventListener("click", (ev) => {
-	const ax = ev.target.closest("[data-convaxis]");
-	if (ax) { convAxis = ax.dataset.convaxis; render(); return; }
 	const vt = ev.target.closest("[data-viewtree]");
 	if (vt) { requestTree(vt.dataset.viewtree); return; }
 	const job = ev.target.closest("[data-job][data-row]");
