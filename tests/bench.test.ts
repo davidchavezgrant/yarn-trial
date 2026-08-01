@@ -7,7 +7,7 @@ import { auditTaskPrompt } from "../src/core/harness.js";
 import type { JobRecord } from "../src/remote/runner/jobs.js";
 import { archiveDirFor, collect, expectedProvenance, failureKind, jobTiming, journalScopes, parseAppmapStamp, parseGraphCounts, parseRunMetrics, poisonedHosts, technicalFailure } from "../src/bench/collect.js";
 import { entriesForArm, manifestPath, readManifest, recordSubmissions, submittedCount, type Manifest, type ManifestEntry, updateEntry, writeManifest } from "../src/bench/manifest.js";
-import { BACKENDS, MATRIX, armAppmapSlug, armById, armTitle, perceptionLine, phaseArms, phaseRunCount, type Arm } from "../src/bench/matrix.js";
+import { BACKENDS, BENCH_PRIMARY_MODEL, MATRIX, armAppmapSlug, armById, armTitle, perceptionLine, phaseArms, phaseRunCount, type Arm } from "../src/bench/matrix.js";
 import type { DispatchOptions } from "../src/remote/control/dispatch.js";
 import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, auditPhase, dateArg, dispatchOptionsFor, findCompileSource, plannedRuns, runPhase } from "../src/bench/orchestrate.js";
 import { renderReport, reportFileName, writeReport } from "../src/bench/report.js";
@@ -156,6 +156,10 @@ const entry = (armId: string, jobId: string, over: Partial<ManifestEntry> = {}):
 	host: "mac1",
 	submittedAt: "2026-07-31T10:00:00.000Z",
 	state: "queued",
+	// Entries are keyed by (armId, model) — runPhase stamps every dispatch with the pass's
+	// declared model now, so a fixture without one belongs to a different pass and the top-up
+	// arithmetic correctly ignores it.
+	model: BENCH_PRIMARY_MODEL,
 	collected: false,
 	...over,
 });
@@ -181,7 +185,7 @@ test("recordSubmissions__DropsDuplicates__When__SameArmAndJobRecordedTwice", () 
 	const m: Manifest = { date: DATE, createdAt: "", entries: [entry("p2-ax-grounded", "j1")] };
 	const next = recordSubmissions(m, [entry("p2-ax-grounded", "j1"), entry("p2-ax-grounded", "j2")]);
 	assert.equal(next.entries.length, 2);
-	assert.equal(submittedCount(next, "p2-ax-grounded"), 2);
+	assert.equal(submittedCount(next, "p2-ax-grounded", BENCH_PRIMARY_MODEL), 2);
 });
 
 test("updateEntry__ReplacesByKey__When__ArmAndJobMatch", () => {
@@ -476,7 +480,7 @@ test("findCompileSource__SkipsTriedStamps__When__PreviousCompileRefused", () => 
 			entry("p2-ax-grounded", "run-2", { collected: true, metrics: { success: true } }),
 		],
 	};
-	assert.equal(findCompileSource(m, "p2-ax-grounded", new Set(["run-1"]))?.jobId, "run-2");
+	assert.equal(findCompileSource(m, "p2-ax-grounded", new Set(["run-1"]), BENCH_PRIMARY_MODEL)?.jobId, "run-2");
 });
 
 // --- collect: metrics off fixture artifacts ---
@@ -799,8 +803,10 @@ test("renderReport__ListsStampsAndSections__When__ManifestHasEntries", () => {
 	assert.match(md, /## Phase 3 — recipes/);
 	assert.match(md, /## Timing/);
 	assert.match(md, /## For Aman/);
-	assert.match(md, /`job-1` \(mac1\)/);
-	assert.match(md, /`job-2` \(mac1, uncollected\)/);
+		// The stamp line now names the MODEL too, because the pass declares one — that is the
+	// transparency whose absence let a whole phase display the wrong model on 2026-08-01.
+	assert.match(md, /`job-1` \(mac1, azure\/gpt-5\.6-sol\)/);
+	assert.match(md, /`job-2` \(mac1, azure\/gpt-5\.6-sol, uncollected\)/);
 	// The collected arm's row carries its numbers; the arm with no collected runs shows —.
 	assert.match(md, /\| p2-ax-grounded \|[^\n]*\| 1\/3 \| 1\/1 \| — \| 4 \| 52 \| 6 \|/);
 	assert.match(md, /TODO: which backend/);
@@ -1231,4 +1237,25 @@ test("MATRIX__CoversTheNativeEquivalentGrid__When__AxdomIsOff", () => {
 			MATRIX.some((e) => e.kind === "explore" && e.dispatch.axdomOff && Boolean(e.dispatch.noVision) === Boolean(a.dispatch.noVision)),
 			`${a.id} has no sidecar-less explore pass to ground on`,
 		);
+});
+
+test("runPhase__StampsTheDeclaredModel__When__NoOverrideIsGiven", async () => {
+	// The model is a MEASUREMENT VARIABLE — the headline comparison is Claude against OpenAI —
+	// so it must be a property of the pass, never of whichever machine dequeued the job.
+	//
+	// It was inferred. makeClient resolves (default) from whatever API keys a host carries, so
+	// on 2026-08-01 the fleet Macs ran azure/gpt-5.6-sol from their own AGENT_MODEL while the
+	// operator's laptop — Anthropic key, no Azure key — resolved the same "(default)" to
+	// claude-fable-5 and the dashboard displayed that for the whole pass. Nothing was wrong with
+	// the runs and everything was wrong with what a human could see.
+	await withTempAsync("bench-model-", async (dir) => {
+		const fake = fakeDispatch();
+		await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
+		assert.ok(fake.calls.length > 0);
+		for (const c of fake.calls) assert.equal(c.model, BENCH_PRIMARY_MODEL, "every dispatch must carry the pass's declared model");
+
+		// And it reaches the manifest, so a re-collect months later can still say what ran.
+		const m = readManifest(DATE, liveDir(dir));
+		for (const e of m.entries) assert.equal(e.model, BENCH_PRIMARY_MODEL);
+	});
 });

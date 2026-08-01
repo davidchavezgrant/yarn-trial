@@ -13,7 +13,7 @@ import { ARCHIVE_DIR, LIVE_DIR, OLD_ARCHIVE_DIR, OLD_LIVE_DIR, RUN_FILES, appSlu
 import { appmapSlug } from "../core/target.js";
 import { archiveDirFor } from "./collect.js";
 import { estimateCost } from "./cost.js";
-import { MATRIX, armAppmapSlug, armById, armTitle, flagsLine, perceptionLine, phaseArms, type Arm, type Phase } from "./matrix.js";
+import { BENCH_PRIMARY_MODEL, MATRIX, armAppmapSlug, armById, armTitle, flagsLine, perceptionLine, phaseArms, type Arm, type Phase } from "./matrix.js";
 import { benchDir, type Manifest, type ManifestEntry, readManifest, utcDate } from "./manifest.js";
 import { judgeDisagreements, modelPasses, passLabel, rollup } from "./report.js";
 
@@ -1455,16 +1455,34 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	let manifest = readStoredManifest(date);
 	let fleet: FleetView = { rows: [] };
 	const events: DashEvent[] = [];
+	const addEventLater: string[] = [];
 	const clients = new Set<http.ServerResponse>();
 
-	// What "(default)" would run HERE — the same key precedence makeClient applies. A hint
-	// for uncollected passes only; keyless environments just leave it blank.
-	let defaultModel: string | undefined;
+	/**
+	 * What an UNCOLLECTED run will have used — the pass's declared model, not this machine's.
+	 *
+	 * This used to resolve makeClient() locally, which reads whichever API keys the OPERATOR'S
+	 * machine happens to carry. On 2026-08-01 that displayed `claude-fable-5` for a whole
+	 * phase-1 pass — the laptop had an Anthropic key and no Azure one — while every Mac was
+	 * correctly running azure/gpt-5.6-sol from its own AGENT_MODEL. The runs were right and the
+	 * dashboard was wrong, which is the worse way round: it is the thing a human reads.
+	 *
+	 * The pass declares its model now (BENCH_PRIMARY_MODEL, stamped onto every dispatch), so the
+	 * hint comes from the same place the runs do. A collected run's own log still wins in the UI
+	 * — that is the only true answer — and this is only what to show before one exists.
+	 */
+	let defaultModel: string | undefined = BENCH_PRIMARY_MODEL;
 	try {
-		defaultModel = (await import("../core/harness/model.js")).makeClient().model;
+		const local = (await import("../core/harness/model.js")).makeClient().model;
+		// Say so when they disagree rather than silently preferring either: a mismatch means
+		// anything run LOCALLY (the offline judge, a hand-started run) is on a different model
+		// from the fleet, which is worth knowing before comparing their numbers.
+		if (local !== defaultModel) addEventLater.push(`note: this machine's default model is ${local}, the pass runs ${defaultModel}`);
 	} catch {
-		// No usable key on this machine — collected runs will supply the truth.
+		// No usable key here — the pass's declared model stands on its own.
 	}
+
+	for (const line of addEventLater) events.push({ t: new Date().toISOString(), line });
 
 	const addEvent = (line: string): void => {
 		events.push({ t: new Date().toISOString(), line });

@@ -6,15 +6,7 @@ import { CHALLENGER_N, challengerNeedsExplore, planChallenger } from "./challeng
 import { collect } from "./collect.js";
 import { rollupCost } from "./cost.js";
 import { fetchTrueCost, reconcile } from "./truecost.js";
-import {
-	type Arm,
-	armById,
-	BENCH_APP,
-	flagsLine,
-	MATRIX,
-	type Phase,
-	phaseArms,
-	phaseRunCount, perceptionLine } from "./matrix.js";
+import { BENCH_APP, BENCH_PRIMARY_MODEL, MATRIX, armById, flagsLine, perceptionLine, phaseArms, phaseRunCount, type Arm, type Phase } from "./matrix.js";
 import {
 	entriesForArm,
 	type Manifest,
@@ -383,6 +375,17 @@ async function syncFleet(opts: PhaseOptions, log: (s: string) => void): Promise<
 
 export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<number> {
 	const log = opts.log ?? console.log;
+	/**
+	 * DECLARED HERE, not at the CLI boundary — every caller of runPhase gets it, including the
+	 * programmatic ones. Defaulting in the argv parser left the real API still inferring, which
+	 * is the hole this closes.
+	 *
+	 * Without it a dispatch carries no model and the child falls through to makeClient's key
+	 * precedence on whichever Mac dequeued it. See BENCH_PRIMARY_MODEL: on 2026-08-01 the fleet
+	 * ran Sol from its own AGENT_MODEL while the laptop's default was claude-fable-5, and the
+	 * dashboard showed the laptop's answer for the whole pass.
+	 */
+	opts = { ...opts, model: opts.model ?? BENCH_PRIMARY_MODEL };
 	const outRoot = opts.outRoot ?? outDir();
 	const date = opts.date ?? utcDate();
 	const liveRoot = liveDir(outRoot);

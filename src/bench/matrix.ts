@@ -153,6 +153,24 @@ export const PHASE4_TASK = "show me how to change the motion blur";
 
 export const BACKENDS: readonly BenchBackend[] = ["ax", "cdp"];
 
+/**
+ * The model the primary pass runs on — DECLARED, never inferred from ambient keys.
+ *
+ * `makeClient` resolves `(default)` from whichever API keys a machine happens to have, which
+ * means two machines answer "what model is this benchmark on" differently. On 2026-08-01 that
+ * produced a real scare: the fleet Macs carry AGENT_MODEL=azure/gpt-5.6-sol and were running
+ * Sol correctly, while the operator's laptop — Anthropic key, no Azure key — resolved the
+ * default to claude-fable-5 and the dashboard displayed THAT for every uncollected run. The
+ * pass looked like it was running on the challenger.
+ *
+ * For a benchmark whose headline comparison is Claude against OpenAI, the model is the variable.
+ * `runPhase` now stamps every dispatch with this id unless --model overrides, so a run's model
+ * is a property of the pass rather than of the host that picked up the job. David set OpenAI as
+ * the primary and Claude as the challenger (2026-07-31); `bench challenger` is the arm that
+ * varies it deliberately.
+ */
+export const BENCH_PRIMARY_MODEL = "azure/gpt-5.6-sol";
+
 const task = (id: string, dispatch: ArmDispatch, informs: string, over: Partial<Arm> = {}): Arm => ({
 	id,
 	phase: 2,
