@@ -553,13 +553,16 @@ function stepLine(points, color, opts = {}) {
 function statusChip(e, rowKey, selected) {
 	const color = e.status === "running" ? SERIES[0] : e.status === "queued" ? "#898781" :
 		e.status === "awaiting-collect" ? STATUS.warning : OUTCOME_COLORS[e.status] || "#898781";
-	// Chips are minimal on purpose: dot + Status (+ the ticking elapsed while Running) —
-	// per-run detail lives in the tooltip and the row dropdown, not on the chip line.
-	// Running chips carry a js-elapsed span so the 1s ticker advances them between SSE
-	// pushes — a static "Running 22m43s" that jumps every 20s reads as frozen.
+	// Chips are minimal on purpose: dot + Status + elapsed — per-run detail lives in the
+	// tooltip and the row dropdown, not on the chip line. The elapsed ticks while Running
+	// (js-elapsed span so the 1s ticker advances it between SSE pushes — a static
+	// "Running 22m43s" that jumps every 20s reads as frozen) and FREEZES at the run's final
+	// duration once it finishes: how long a run took must not vanish the moment it lands.
+	// Queued chips show no time — nothing has started.
+	const took = e.elapsedSec != null ? e.elapsedSec : e.runSec;
 	let label = e.status === "running"
 		? `Running ${elapsedSpan(e.elapsedSec)}`
-		: esc(statusLabel(e.status));
+		: esc(statusLabel(e.status)) + (e.status !== "queued" && took != null ? " " + fmtDur(took) : "");
 	if (e.status === "queued" && e.queuePosition) label += " #" + e.queuePosition;
 	if (e.stalled) label += " ⚠ Stalled";
 	const judge = e.judgeTrajectory ? ` · Judge ${e.judgeTrajectory[0]}` : "";
@@ -799,10 +802,13 @@ const shortJob = (id) => String(id).length > 14 ? String(id).slice(0, 14) + "…
 // for every entry — started / queued (submitted …) / finished — so a "–" is explained.
 function startedCell(p) {
 	const starts = p.entries.map(entryStart).filter((t) => t != null);
-	const lines = p.entries.map((e) => shortJob(e.jobId) + " — " +
-		(e.collected ? "finished " + startStamp(Date.parse(e.endedAt || e.submittedAt) || null)
-		: e.status === "running" ? "started " + startStamp(entryStart(e))
-		: `${e.status} (submitted ${startStamp(Date.parse(e.submittedAt) || null)})`)).join("\n");
+	const lines = p.entries.map((e) => {
+		const dur = e.elapsedSec != null ? e.elapsedSec : e.runSec;
+		return shortJob(e.jobId) + " — " +
+			(e.collected ? "finished " + startStamp(Date.parse(e.endedAt || e.submittedAt) || null) + (dur != null ? ` — took ${fmtDur(dur)}` : "")
+			: e.status === "running" ? "started " + startStamp(entryStart(e))
+			: `${e.status} (submitted ${startStamp(Date.parse(e.submittedAt) || null)})`);
+	}).join("\n");
 	return `<td class="num" data-tip="${esc(lines)}">${startStamp(starts.length ? Math.max(...starts) : null)}</td>`;
 }
 
@@ -943,7 +949,8 @@ function fetchDetail(job) {
 function statsStrip(a, e) {
 	const st = e.exploreStamp;
 	const pairs = a.kind === "explore" && st
-		? [["Actions", fmtNum(st.actions)], ["Seen", fmtNum(st.controlsSeen)], ["Actuated", fmtNum(st.controlsActuated)],
+		? [["Actions", fmtNum(st.actions)], ["Time", e.elapsedSec != null ? fmtDur(e.elapsedSec) : null],
+			["Seen", fmtNum(st.controlsSeen)], ["Actuated", fmtNum(st.controlsActuated)],
 			["Dismissed", fmtNum(st.controlsDismissed)], ["Surfaces", fmtNum(st.surfaces)], ["Nodes", fmtNum(st.graphNodes)],
 			["Ambig", fmtNum(st.scopeAmbiguities)]]
 		: [["Steps", e.steps], ["Verified", e.verifiedSteps],
