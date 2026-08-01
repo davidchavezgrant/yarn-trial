@@ -1265,7 +1265,10 @@ function logChip(pane) {
 	// "Done" would assert an exit nobody observed. statusLabel: the same render-time Title
 	// Caser every other label goes through.
 	const name = pane.state === "done" ? "Done" : statusLabel(pane.state);
-	const color = pane.exitCode === 0 ? STATUS.good : STATUS.critical;
+	// The dot must agree with the STATE, not the exit code: a run the registry graded
+	// "failed" can still exit 0 (the child died cleanly; the RUN failed), and a green dot
+	// under a "Failed" label reads as success.
+	const color = pane.state === "done" && pane.exitCode === 0 ? STATUS.good : STATUS.critical;
 	return `<span class="chip"><span class="dot" style="background:${color}"></span>${esc(name)}${pane.exitCode != null ? " exit " + pane.exitCode : ""}</span>`;
 }
 
