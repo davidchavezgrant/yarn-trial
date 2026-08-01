@@ -98,116 +98,80 @@ export class AxBackend {
 	 * or out with.
 	 */
 	async observe(name: string): Promise<ObservationBundle> {
+		/**
+		 * Pick a window that can actually ANSWER, then observe it.
+		 *
+		 * This was three patched branches and the patches left a hole. Each fix on 2026-08-01
+		 * covered the case that had just bitten — the held window being gone, then the held
+		 * window being silent — and the third crash went straight through the gap between them:
+		 * a click opened an untitled window, the follow moved TO it because the pick returned a
+		 * DIFFERENT id, and the "moved" branch adopted it without ever asking whether it had
+		 * content. Three arms died on a window the harness had just chosen for them.
+		 *
+		 * So the flow is one ladder now, tried in order, and every rung is "can this thing
+		 * answer" rather than "does this thing exist":
+		 *
+		 *   1. the app's front window, which is right almost always
+		 *   2. any other window of the app — the studio or panel merely took the front; the
+		 *      main window is usually still there and still populated
+		 *   3. re-activate the app and look again — an AppKit app that is not KEY/MAIN has menu
+		 *      validation disable everything and its AX tree collapses to the menu bar, which is
+		 *      the activation-policy finding acquire() already exists for. A coordinate drag can
+		 *      knock that loose mid-run, and nothing used to put it back.
+		 *
+		 * Falls through to the ordinary path when nothing answers, so the real error arrives with
+		 * ensureObservable's recovery story rather than a shape invented here. observe() THROWS
+		 * on an empty tree instead of returning one, so every rung treats a throw and a
+		 * zero-content answer as the same signal.
+		 */
+		let candidates: WindowCandidate[] = [];
 		try {
 			const windows = await this.driver.act({ kind: "tool", name: "list_windows", args: {} });
-			const all: WindowCandidate[] = JSON.parse(windows.structuredJson ?? "{}").windows ?? [];
-			const front = pickWindow(all, this.app, this.currentWin.pid);
-			/**
-			 * KEEPING THE HELD REF IS ONLY SAFE WHILE IT STILL EXISTS.
-			 *
-			 * The comment here used to say a failed pick keeps the current window because
-			 * observe/ensureObservable own that failure. True when the held window is merely
-			 * unpickable — off-screen, shrunk below the area floor — and catastrophic when it is
-			 * GONE, because every later observation addresses a window id that no longer exists
-			 * and returns nothing. Three of those in a row is a TargetNotObservableError.
-			 *
-			 * That killed a pass on 2026-08-01. A click opened a native Open panel, the follow
-			 * correctly moved to it, the agent pressed Escape without touching a user file —
-			 * exactly right — and the panel vanished. The pick then found no window passing the
-			 * 50,000px floor while the app settled, so the run kept the DEAD panel's id and
-			 * observed nothing for the rest of its life.
-			 *
-			 * So: distinguish "cannot pick one" from "the one we hold is gone". If the held id is
-			 * absent from the listing it is dead, and ANY live window of this app beats it —
-			 * including one the floor would reject, since a small real window is still
-			 * addressable and a dead one never is.
-			 */
-			const heldAlive = all.some((w) => w.window_id === this.currentWin.windowId);
-			if (!front && !heldAlive) {
-				const survivor = all.find((w) => w.app_name === this.app && w.pid === this.currentWin.pid) ?? all.find((w) => w.app_name === this.app);
-				if (survivor) {
-					console.log(`  window follow: held window ${this.currentWin.windowId} is GONE (dialog dismissed?) — recovering onto "${survivor.title}" (id ${survivor.window_id})`);
-					this.currentWin = { pid: survivor.pid, windowId: survivor.window_id, bounds: survivor.bounds };
-					this.lastTitle = survivor.title ?? this.lastTitle;
-
-					return observe(this.driver, this.currentWin, name, {});
-				}
-				// Nothing of this app is listed at all: a genuinely dead app, which
-				// ensureObservable's relaunch path owns. Falling through keeps that story intact.
-			}
-			/**
-			 * A LIVE WINDOW WITH NO ACCESSIBILITY CONTENT IS AS UNUSABLE AS A DEAD ONE, and
-			 * unlike a dead one nothing above notices — pickWindow is perfectly happy with it.
-			 *
-			 * Three passes died this way on 2026-08-01, all AX, all around action 80-140 and
-			 * ~20 minutes in, all reaching the parts of Yarn that publish no AX tree: a
-			 * dismissed native Open panel's ghost, a recording-studio window that is pure
-			 * canvas, and Yarn exposing only its menu bar after a coordinate drag moved focus.
-			 * One agent said it outright — "the screenshot is Yarn but accessibility is exposing
-			 * only menus". All three diagnosed it correctly and were trying to escape; the
-			 * harness threw first, at three empty observations.
-			 *
-			 * So when the window we hold yields nothing, try the app's OTHER windows before
-			 * giving up. The main window is usually still there and still populated — the studio
-			 * or panel merely took the front. This is the same rule as the dead-handle recovery
-			 * above ("do not keep talking to something that cannot answer"), applied to the case
-			 * where the thing is alive but silent.
-			 */
-			if (front && front.window_id === this.currentWin.windowId && all.length > 1) {
-				// observe() THROWS on an empty tree rather than returning one, so the probe has to
-				// tolerate that: a throw and a zero-content answer are the same signal here.
-				const probe = await observe(this.driver, this.currentWin, name, {}).catch(() => undefined);
-				if (probe && probe.appContent > 0) return probe;
-				for (const alt of all.filter((w) => w.app_name === this.app && w.pid === this.currentWin.pid && w.window_id !== this.currentWin.windowId)) {
-					const other = await observe(this.driver, { pid: alt.pid, windowId: alt.window_id, bounds: alt.bounds }, name, {}).catch(() => undefined);
-					if (!other || other.appContent === 0) continue;
-					console.log(`  window follow: "${this.lastTitle ?? ""}" had no AX content — switching to "${alt.title}" (id ${alt.window_id}, ${other.appContent} elements)`);
-					this.currentWin = { pid: alt.pid, windowId: alt.window_id, bounds: alt.bounds };
-					this.lastTitle = alt.title ?? this.lastTitle;
-
-					return other;
-				}
-				/**
-				 * NO WINDOW OF THIS APP CAN ANSWER — so the problem is not which window we hold,
-				 * it is the app itself, and there is one known cause with a known remedy.
-				 *
-				 * An AppKit app that is not KEY/MAIN has menu validation disable everything and
-				 * its AX tree collapses to the menu bar. That is the activation-policy finding
-				 * from the native-apps investigation, and it is why acquire() performs one
-				 * genuine System Events activation at run start (Hex Fiend: 0/15, DISABLED
-				 * throughout, until it did).
-				 *
-				 * On 2026-08-01 a pass hit the same signature MID-RUN. Its own step note reads
-				 * "the coordinate drag unexpectedly changed foreground focus", and the next
-				 * observation reported "the screenshot is Yarn but accessibility is exposing only
-				 * menus" — the app lost activation and never got it back. Activation was treated
-				 * as a start-up concern; nothing re-established it when a run knocked it loose.
-				 *
-				 * Once per observation at most, and only when every window has already come back
-				 * empty: this costs an osascript round trip, so it must not run on the happy path.
-				 * A refusal is non-fatal — the fall-through below reports the real error with
-				 * ensureObservable's recovery story attached.
-				 */
-				const woken = await activate(this.app, this.currentWin.pid);
-				if (woken.applied) {
-					const after = await observe(this.driver, this.currentWin, name, {}).catch(() => undefined);
-					if (after && after.appContent > 0) {
-						console.log(`  window follow: "${this.app}" exposed no AX content — re-activated it and recovered (${after.appContent} elements)`);
-
-						return after;
-					}
-				}
-				// Still nothing. Fall through to the ordinary path so the real error — with
-				// ensureObservable's recovery story attached — is what surfaces, rather than a
-				// shape invented here.
-			}
-			if (front && front.window_id !== this.currentWin.windowId) {
-				console.log(`  window follow: "${this.lastTitle ?? ""}" -> "${front.title}" (id ${this.currentWin.windowId} -> ${front.window_id})`);
-				this.currentWin = { pid: front.pid, windowId: front.window_id, bounds: front.bounds };
-			}
-			this.lastTitle = front?.title ?? this.lastTitle;
+			candidates = (JSON.parse(windows.structuredJson ?? "{}").windows ?? []).filter((w: WindowCandidate) => w.app_name === this.app);
 		} catch {
 			// A follow that cannot list windows must not fail the observation it serves.
+		}
+
+		if (candidates.length) {
+			const mine = candidates.filter((w) => w.pid === this.currentWin.pid);
+			const pool = mine.length ? mine : candidates;
+			const front = pickWindow(candidates, this.app, this.currentWin.pid);
+			const held = pool.find((w) => w.window_id === this.currentWin.windowId);
+			// Front first, then the one we hold if it is still listed, then everything else.
+			// Deduped by id so a window is never probed twice in one observation.
+			const order = [front, held, ...pool].filter((w): w is WindowCandidate => Boolean(w));
+			const seen = new Set<number>();
+
+			for (const w of order) {
+				if (seen.has(w.window_id)) continue;
+				seen.add(w.window_id);
+				const ref = { pid: w.pid, windowId: w.window_id, bounds: w.bounds };
+				const got = await observe(this.driver, ref, name, {}).catch(() => undefined);
+				if (!got || got.appContent === 0) continue;
+				if (w.window_id !== this.currentWin.windowId) {
+					console.log(`  window follow: "${this.lastTitle ?? ""}" -> "${w.title}" (id ${this.currentWin.windowId} -> ${w.window_id}, ${got.appContent} elements)`);
+					this.currentWin = ref;
+				}
+				this.lastTitle = w.title ?? this.lastTitle;
+
+				return got;
+			}
+
+			// Every window of the app came back empty: the problem is the app, not the choice.
+			const woken = await activate(this.app, this.currentWin.pid);
+			console.log(`  window follow: no window of "${this.app}" exposed AX content — re-activation ${woken.applied ? "applied" : `refused (${woken.error ?? "unknown"})`}`);
+			if (woken.applied) {
+				const target = front ?? held ?? pool[0]!;
+				const ref = { pid: target.pid, windowId: target.window_id, bounds: target.bounds };
+				const after = await observe(this.driver, ref, name, {}).catch(() => undefined);
+				if (after && after.appContent > 0) {
+					console.log(`  window follow: re-activated "${this.app}" and recovered (${after.appContent} elements)`);
+					this.currentWin = ref;
+					this.lastTitle = target.title ?? this.lastTitle;
+
+					return after;
+				}
+			}
 		}
 
 		return observe(this.driver, this.currentWin, name, {});
