@@ -1898,8 +1898,9 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	// onExit → the waiting/reprobe loop picks up the respawned tunnel's new local port
 	// automatically. No extra wiring needed; the composition is the design.
 
-	const probeOnce = async (p: Peek): Promise<{ endpoint: string; browserEndpoint: string } | undefined> => {
-		// Probe slot 0 (app :9222) first; the first answering local port is primary.
+	const probeOnce = async (p: Peek): Promise<{ endpoint: string; browserEndpoint: string; slot: number } | undefined> => {
+		// Probe slot 0 (app :9222) first; the first answering local port is primary. WHICH slot
+		// answered travels with the result — primary semantics depend on it (tryConnect).
 		for (const slot of [0, 1]) {
 			const { local } = p.locals[slot];
 			if (await endpointUp(local)) {
@@ -1910,19 +1911,31 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 				// it appears, and never passing it would make the engine default to the LAPTOP'S
 				// OWN 127.0.0.1:9777 — which can silently stream the operator's local Chrome into
 				// the panel.
-				return { endpoint: `http://127.0.0.1:${p.locals[slot].local}`, browserEndpoint: `http://127.0.0.1:${other}` };
+				return { endpoint: `http://127.0.0.1:${p.locals[slot].local}`, browserEndpoint: `http://127.0.0.1:${other}`, slot };
 			}
 		}
 
 		return undefined;
 	};
 
-	const tryConnect = async (p: Peek, eps: { endpoint: string; browserEndpoint: string }): Promise<boolean> => {
+	const tryConnect = async (p: Peek, eps: { endpoint: string; browserEndpoint: string; slot: number }): Promise<boolean> => {
 		const { connectCdpEngine } = await import("../remote/liveview-cdp.js");
 		// idleNeverStreams: the wall is VIEW-ONLY, so a parked New Tab becoming the last page
 		// standing (profile swap bounces the app between jobs) must show a spinner, not stream
 		// Chrome's Google-lookalike New Tab as if the run had wandered off (2026-08-01).
-		const engine = await connectCdpEngine({ endpoint: eps.endpoint, browserEndpoint: eps.browserEndpoint, quality: 80, maxWidth: 1600, app: p.host, idleNeverStreams: true });
+		// preExistingParked when the WEB leg (slot 1) answered first: its pre-existing pages are
+		// residue from earlier runs — mac3's leftover Notion tab streamed into the wall as if it
+		// were the run (2026-08-01). The app leg (slot 0) keeps full-live semantics: an Electron
+		// window that exists is exactly the thing to stream.
+		const engine = await connectCdpEngine({
+			endpoint: eps.endpoint,
+			browserEndpoint: eps.browserEndpoint,
+			quality: 80,
+			maxWidth: 1600,
+			app: p.host,
+			idleNeverStreams: true,
+			preExistingParked: eps.slot === 1,
+		});
 		if (peeks.get(p.host) !== p || p.closing) {
 			engine.close();
 
@@ -1933,8 +1946,17 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		engine.onFrame((jpeg) => {
 			if (peeks.get(p.host) !== p || p.engine !== engine) return;
 			if (!p.gotFrame) {
+				// The FIRST frame is what flips the panel to "streaming" — never the attach. An
+				// alive engine can be deliberately showing nothing (gate-refused residue), and a
+				// "streaming" status without frames leaves viewers a spinner labeled as a stream.
 				p.gotFrame = true;
 				setStatus(p, "streaming", `streaming ${p.host}`);
+				// First stream only: an always-armed session re-attaches every time a run's
+				// Chrome comes and goes, and per-re-attach lines would flood the feed.
+				if (!p.streamLogged) {
+					p.streamLogged = true;
+					addEvent(`view: streaming ${p.host} via ${eps.endpoint} (+${eps.browserEndpoint})`);
+				}
 			}
 			cast(p, jpeg, "binary");
 		});
@@ -1943,7 +1965,9 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			if (ev?.ev === "window") p.lastWindow = castJson(p, ev);
 			else castJson(p, ev);
 			// Inert-handle detection: connect-time deaths resolve to an engine whose exit NEVER
-			// fires; the only signal is this first buffered error event. Treat it as a failed attach.
+			// fires; the only signal is this first buffered error event. Treat it as a failed
+			// attach. idle-parked is deliberately NOT here — a gate-refused connect returns a
+			// LIVE engine now, and its refusal event is a waiting state, not a death.
 			if (ev?.ev === "error" && !p.gotFrame && (ev.kind === "cdp-unreachable" || ev.kind === "no-page" || ev.kind === "capture-failed")) {
 				engine.close();
 				if (p.engine === engine) p.engine = undefined;
@@ -1956,13 +1980,18 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			p.lastStatus = castJson(p, { ev: "error", kind: "stream-ended", message: "target closed — waiting for it to come back" });
 			enterWaiting(p, `waiting for a debuggable target on ${p.host}`);
 		});
-		setStatus(p, "streaming", `streaming ${p.host}`);
-		// First stream only: an always-armed session re-attaches every time a run's Chrome
-		// comes and goes, and per-re-attach lines would flood the feed.
-		if (!p.streamLogged) {
-			p.streamLogged = true;
-			addEvent(`view: streaming ${p.host} via ${eps.endpoint} (+${eps.browserEndpoint})`);
+		// Registration may have killed the engine SYNCHRONOUSLY (a connect-time death drains its
+		// buffered error into the onEvent branch above, and onExit fires immediately off the
+		// exited flag) — then enterWaiting already owns this session and stamping a status here
+		// would overwrite it. Only a still-alive engine gets the honest attach status; the flip
+		// to "streaming" belongs to the first frame alone.
+		if (peeks.get(p.host) === p && p.engine === engine) {
+			setStatus(p, "waiting", `attached to ${p.host} — waiting for content`);
 		}
+		// True in BOTH cases — alive (the engine's own page watchers + secondary re-probe drive
+		// recovery: while p.engine is set, reprobeTick early-returns) and dead-at-registration
+		// (enterWaiting armed the dash's own re-probe). Either way responsibility is handed off,
+		// and the caller's attach loop must not keep double-driving alongside it.
 
 		return true;
 	};

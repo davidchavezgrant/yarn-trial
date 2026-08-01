@@ -89,10 +89,25 @@ export interface CdpEngineOptions {
 	 * the app endpoint, the followed page drops, and the parked New Tab becomes the last
 	 * entry standing — the panel then shows what reads as "the agent went to google.com"
 	 * (Chrome's New Tab renders as a Google search page; reported 2026-08-01). A spinner is
-	 * honest there; the impersonation is not. The sign-in liveview leaves this OFF — its
-	 * operator can cmd+] to parked pages, and a flow can legitimately sit on about:blank.
+	 * honest there; the impersonation is not. With preExistingParked the same gate also
+	 * refuses parked residue pages, and a refused connect stays ALIVE rather than dying —
+	 * the page watchers and the secondary re-probe revive the stream when the run opens a
+	 * page. The sign-in liveview leaves this OFF — its operator can cmd+] to parked pages,
+	 * and a flow can legitimately sit on about:blank.
 	 */
 	idleNeverStreams?: boolean;
+	/**
+	 * Treat pages that already existed at connect as PARKED on the PRIMARY leg too, not just
+	 * the browser leg. For the peek's web-leg-primary case: when a host's app port is silent
+	 * (an ax-arm run) the answering endpoint is the persistent-profile web Chrome, whose
+	 * pre-existing pages are residue from earlier runs, not the flow — mac3's leftover Notion
+	 * tab streamed into the wall as if it were the run (2026-08-01). They park; pages born
+	 * during the session, or a parked page that main-frame-navigates (cameHome promotes
+	 * primary pages on navigation — a run reusing a residue tab IS the flow arriving), take
+	 * the stream. The sign-in liveview leaves this OFF: there the primary target is the app
+	 * the operator was sent to sign in, and a window that exists is exactly the thing to show.
+	 */
+	preExistingParked?: boolean;
 }
 
 /** Map a viewer fraction onto the current viewport. Clamped first — the authority clamp,
@@ -308,10 +323,13 @@ export type FollowOrigin = "primary" | "browser";
  * close events arrive for pages the engine chose never to follow.
  */
 export class FollowStack<T> {
-	private entries: { page: T; origin: FollowOrigin }[] = [];
+	private entries: { page: T; origin: FollowOrigin; parked: boolean }[] = [];
 
-	/** The page the engine should be streaming right now; undefined when none remains. */
-	get active(): { page: T; origin: FollowOrigin } | undefined {
+	/** The page the engine should be streaming right now; undefined when none remains. The
+	 *  entry carries its parked rank so the sync gate can tell "this page entered as residue /
+	 *  idle" apart from a live page — the rank records how a page ENTERED the stack, which its
+	 *  current URL alone cannot recover. */
+	get active(): { page: T; origin: FollowOrigin; parked: boolean } | undefined {
 		return this.entries.at(-1);
 	}
 
@@ -320,19 +338,21 @@ export class FollowStack<T> {
 	}
 
 	/**
-	 * `idle` marks a page nothing is happening on — Chrome's New Tab, about:blank. It goes in
-	 * BELOW everything live rather than on top, because newest-wins otherwise hands the stream
-	 * to whatever the browser happened to have open. Measured on mac3, 2026-07-31: adopting
-	 * pre-existing pages (the fix for the interstitial being unreachable) meant the lazily
-	 * attached OAuth Chrome contributed its New Tab, which arrived after Yarn's login page and
-	 * won — the operator opened the viewer onto an empty tab while the sign-in sat behind it.
-	 * Ranked, not filtered: an idle page is still reachable with cmd+], because a flow can
-	 * legitimately land on about:blank mid-redirect.
+	 * `parked` marks a page the stream must not seek out — an idle page nothing is happening
+	 * on (Chrome's New Tab, about:blank) or, under preExistingParked, a page left over from
+	 * before the session. It goes in BELOW everything live rather than on top, because
+	 * newest-wins otherwise hands the stream to whatever the browser happened to have open.
+	 * Measured on mac3, 2026-07-31: adopting pre-existing pages (the fix for the interstitial
+	 * being unreachable) meant the lazily attached OAuth Chrome contributed its New Tab, which
+	 * arrived after Yarn's login page and won — the operator opened the viewer onto an empty
+	 * tab while the sign-in sat behind it. Ranked, not filtered: a parked page is still
+	 * reachable with cmd+], because a flow can legitimately land on about:blank mid-redirect.
+	 * A re-push without the flag is the promotion: it clears the rank and takes the top.
 	 */
-	push(page: T, origin: FollowOrigin, idle = false): void {
+	push(page: T, origin: FollowOrigin, parked = false): void {
 		this.entries = this.entries.filter((e) => e.page !== page);
-		if (idle) this.entries.unshift({ page, origin });
-		else this.entries.push({ page, origin });
+		if (parked) this.entries.unshift({ page, origin, parked });
+		else this.entries.push({ page, origin, parked });
 	}
 
 	/** A page closed: the active one pops back to the most recent still-open page, a
@@ -395,6 +415,29 @@ export function browserPageDisposition(preExisting: boolean, url: string): { ran
 	if (preExisting) return { rank: "parked", promoteOnNavigate: false };
 
 	return isIdlePage(url) ? { rank: "parked", promoteOnNavigate: true } : { rank: "live", promoteOnNavigate: false };
+}
+
+/**
+ * The idleNeverStreams gate, pure: may the active page take the stream, and if not, why not?
+ * Checked at SYNC time, not push time — a parked page becomes active precisely when
+ * everything above it drops, and only its URL now can say whether it is idle. Both inputs
+ * matter and neither subsumes the other:
+ *
+ *  - The URL check stands even for a LIVE-ranked page: a page that NAVIGATES to
+ *    chrome://newtab (the profile-swap bounce between jobs) must still be refused — rank
+ *    records how a page entered the stack, not where it went since. That was the 2026-08-01
+ *    New-Tab fix and must not regress.
+ *  - The parked check stands even for a real-looking URL: under preExistingParked a residue
+ *    page from a dead run carries whatever the run left it on (mac3's leftover Notion tab),
+ *    and streaming it impersonates a run that is not there.
+ *
+ * Two reasons so the viewer's status line can be honest about which state it is waiting out.
+ */
+export function streamRefusal(parked: boolean, url: string): "idle" | "parked-residue" | undefined {
+	if (isIdlePage(url)) return "idle";
+	if (parked) return "parked-residue";
+
+	return undefined;
 }
 
 /** How long the endpoint gets to answer /json/version. The target is already running (the
@@ -634,6 +677,19 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 	const stack = new FollowStack<Page>();
 	/** What is streaming right now — undefined mid-hop, and after the stack empties. */
 	let streamed: { page: Page; session: CDPSession } | undefined;
+	/**
+	 * Why the most recent sync ended with nothing streaming, when the reason was the
+	 * idleNeverStreams gate. Read exactly once — at connect, to tell a DELIBERATE refusal
+	 * (only parked residue / an idle page to show: a live engine waiting for the run to open
+	 * a page) from a genuine connect failure (no-page, a refused screencast), which must
+	 * still die exactly as before. Every sync rewrites it, so a later capture failure is
+	 * never masked by an earlier refusal.
+	 */
+	let gateRefusal: "idle" | "parked-residue" | undefined;
+	/** The refusal event is edge-triggered: announced when a stream stops (or was never able
+	 *  to start), not on every convergence over an unchanged refused state — watch() adopting
+	 *  three residue tabs runs three syncs and must not emit three times. */
+	let refusalAnnounced = false;
 	let meta: FrameMeta | undefined;
 	let held = 0;
 	let closed = false;
@@ -666,13 +722,32 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 	const sync = () => {
 		hopQueue = hopQueue
 			.then(async () => {
-				// idleNeverStreams: an idle-page active streams NOTHING (checked at sync time,
-				// not push time — a parked page becomes active precisely when everything above
-				// it drops, and its idleness can only be judged by its URL now). The next real
-				// page's push re-syncs and takes the stream as usual.
+				// idleNeverStreams: a refused active streams NOTHING (streamRefusal has why the
+				// gate reads both the parked rank and the CURRENT url). The next live page's
+				// push re-syncs and takes the stream as usual.
 				const active = closed ? undefined : stack.active;
-				const want = active && opts.idleNeverStreams && isIdlePage(active.page.url()) ? undefined : active;
-				if (want?.page === streamed?.page) return;
+				const refusal = active && opts.idleNeverStreams ? streamRefusal(active.parked, active.page.url()) : undefined;
+				const want = refusal ? undefined : active;
+				gateRefusal = refusal;
+				const refusalEvent = (): EngineEvent => ({
+					ev: "error",
+					kind: "idle-parked",
+					detail: refusal === "parked-residue"
+						? "only pages from before this session are open — waiting for the run to open a page"
+						: "only an idle page (New Tab) is open — waiting for a live page",
+				});
+				if (want?.page === streamed?.page) {
+					// Nothing to converge — but a refusal nothing has announced yet still owes
+					// the viewer its status line. This is the CONNECT-time path: the gate refuses
+					// before anything ever streamed, so there is no stream-stop below to carry
+					// the event.
+					if (!closed && refusal && !refusalAnnounced) {
+						refusalAnnounced = true;
+						emit(refusalEvent());
+					}
+
+					return;
+				}
 				if (streamed) {
 					const old = streamed.session;
 					streamed = undefined;
@@ -687,17 +762,18 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 				meta = undefined;
 				held = 0;
 				if (!want) {
-					// The stack emptied with the primary endpoint still up. NOT a death, so unlike
-					// the connect-time dead() paths exit does NOT fire: the error stands, and a
-					// page opening later revives the stream — only primary-endpoint death (or a
-					// first hop that never streamed) ends the session. Both kinds render as a calm
-					// spinner + status line client-side; only close codes are fatal there.
-					if (!closed)
-						emit(
-							active
-								? { ev: "error", kind: "idle-parked", detail: "only an idle page (New Tab) is open — waiting for a live page" }
-								: { ev: "error", kind: "stream-stopped", detail: "every followed page closed" },
-						);
+					// The stack emptied — or the gate refused what remains — with the primary
+					// endpoint still up. NOT a death, so unlike the connect-time dead() paths exit
+					// does NOT fire: the error stands, and a page opening later revives the stream
+					// — only primary-endpoint death (or a first hop the SCREENCAST refused) ends
+					// the session. Both kinds render as a calm spinner + status line client-side;
+					// only close codes are fatal there.
+					if (!closed) {
+						if (refusal) {
+							refusalAnnounced = true;
+							emit(refusalEvent());
+						} else emit({ ev: "error", kind: "stream-stopped", detail: "every followed page closed" });
+					}
 
 					return;
 				}
@@ -734,6 +810,7 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 
 					return;
 				}
+				refusalAnnounced = false; // streaming again — the NEXT refusal announces afresh
 				announce(want.page, want.origin);
 			})
 			.catch(() => {}); // a failed hop must not wedge the queue — the next sync converges
@@ -752,9 +829,17 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 	 * over — the app only re-navigates when the deep link lands. So promote the app and demote
 	 * the browser pages that led here. Not closing them: the flow can bounce back to the
 	 * browser, and cmd+] still reaches them.
+	 *
+	 * The guard skips a page that is already active AND live — but not one that is active and
+	 * PARKED: a parked page navigating is the flow arriving (the run reusing a residue tab, a
+	 * New Tab landing somewhere real), and the live re-push is exactly what clears its rank so
+	 * the sync gate lets it stream. Without the parked exception a sole parked page — active
+	 * by default, refused by the gate — could never take the stream at all.
 	 */
 	const cameHome = (page: Page) => {
-		if (closed || stack.active?.page === page) return;
+		if (closed) return;
+		const a = stack.active;
+		if (a?.page === page && !a.parked) return;
 		stack.push(page, "primary");
 		sync();
 	};
@@ -785,12 +870,14 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 			stack.dropClosed(page);
 			sync();
 		});
-		// The deep-link return: only the primary target's own navigation counts, and only after
-		// the stream has already wandered off to a browser leg. A browser page navigating is
-		// just the OAuth chain doing its several redirects.
+		// The deep-link return: only the primary target's own navigation counts. A browser
+		// page navigating is just the OAuth chain doing its several redirects.
 		if (origin === "primary") {
 			page.on("framenavigated", (f) => { if (f === page.mainFrame()) cameHome(page); });
-			stack.push(page, origin, isIdlePage(page.url()));
+			// Under preExistingParked a page that predates the session parks on the primary leg
+			// too — residue from an earlier run, not the flow. cameHome above is its promotion
+			// channel: navigating somewhere real re-pushes it live.
+			stack.push(page, origin, isIdlePage(page.url()) || (preExisting && !!opts.preExistingParked));
 		} else {
 			const d = browserPageDisposition(preExisting, page.url());
 			if (d.promoteOnNavigate) armPromotion(page);
@@ -815,18 +902,26 @@ export async function connectCdpEngine(opts: CdpEngineOptions = {}): Promise<Eng
 			c.on("page", (p) => follow(p, origin));
 			// Adopted as PRE-EXISTING: on the browser leg that parks them (an operator's old
 			// tabs are reachable with cmd+], never the stream's owner); primary pages ignore
-			// the flag — an app window that exists is exactly the thing to stream.
+			// the flag — an app window that exists is exactly the thing to stream — unless
+			// preExistingParked says the primary leg is residue-prone too.
 			for (const p of c.pages()) follow(p, origin, true);
 		}
 	};
 
 	watch(browser, "primary");
-	follow(first, "primary");
-	// The first hop decides connect success exactly as the single-page engine did: a refused
-	// screencast on the chosen page is a dead engine with a typed remedy already emitted, not
-	// a live one showing nothing.
+	// `first` is itself pre-existing at connect — watch() above already adopted it as such
+	// (the WeakSet dedupes this into a no-op), and the flag here keeps both call sites
+	// agreeing on that fact should the order ever change.
+	follow(first, "primary", true);
+	// The first hop decides connect success exactly as the single-page engine did — with ONE
+	// carve-out: a hop the idleNeverStreams gate refused (only parked residue / an idle page
+	// to show) is a LIVE engine deliberately showing nothing, not a failed connect. The page
+	// and context watchers plus the secondary-endpoint re-probe keep it worth keeping: when
+	// the run opens a page — or the app endpoint comes up mid-flow — the stream starts. A
+	// refused SCREENCAST (capture-failed) or an endpoint with no page still dies exactly as
+	// before: nothing will revive those.
 	await hopQueue;
-	if (!streamed) {
+	if (!streamed && !gateRefusal) {
 		await browser.close().catch(() => {});
 
 		return dead();

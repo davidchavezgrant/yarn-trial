@@ -19,6 +19,7 @@ import {
 	titleFor,
 	mouseEventParams,
 	sameEndpoint,
+	streamRefusal,
 	wheelParams,
 } from "../src/remote/liveview-cdp.js";
 import { encodeFrame, handshakeResponse, WsDecoder } from "../src/remote/liveview-ws.js";
@@ -368,9 +369,9 @@ test("homeTransitionGate__NeverFires__When__TheSessionStartUrlIsUnparseable", ()
 test("FollowStack__MakesNewestPageActive__When__Pushed", () => {
 	const s = new FollowStack<string>();
 	s.push("app", "primary");
-	assert.deepEqual(s.active, { page: "app", origin: "primary" });
+	assert.deepEqual(s.active, { page: "app", origin: "primary", parked: false });
 	s.push("oauth", "browser");
-	assert.deepEqual(s.active, { page: "oauth", origin: "browser" });
+	assert.deepEqual(s.active, { page: "oauth", origin: "browser", parked: false });
 	assert.equal(s.size, 2);
 });
 
@@ -380,7 +381,7 @@ test("FollowStack__PopsToPreviousLivePage__When__ActivePageCloses", () => {
 	s.push("app", "primary");
 	s.push("oauth", "browser");
 	s.dropClosed("oauth");
-	assert.deepEqual(s.active, { page: "app", origin: "primary" });
+	assert.deepEqual(s.active, { page: "app", origin: "primary", parked: false });
 	assert.equal(s.size, 1);
 });
 
@@ -390,7 +391,7 @@ test("FollowStack__RemovesSilently__When__NonActivePageCloses", () => {
 	s.push("app", "primary");
 	s.push("oauth", "browser");
 	s.dropClosed("app");
-	assert.deepEqual(s.active, { page: "oauth", origin: "browser" });
+	assert.deepEqual(s.active, { page: "oauth", origin: "browser", parked: false });
 	assert.equal(s.size, 1);
 });
 
@@ -407,7 +408,7 @@ test("FollowStack__Ignores__When__UnknownPageCloses", () => {
 	const s = new FollowStack<string>();
 	s.push("app", "primary");
 	s.dropClosed("devtools");
-	assert.deepEqual(s.active, { page: "app", origin: "primary" });
+	assert.deepEqual(s.active, { page: "app", origin: "primary", parked: false });
 	assert.equal(s.size, 1);
 });
 
@@ -418,9 +419,9 @@ test("FollowStack__MovesToTopWithoutDuplicating__When__PagePushedTwice", () => {
 	s.push("tab", "browser");
 	s.push("app", "primary");
 	assert.equal(s.size, 2);
-	assert.deepEqual(s.active, { page: "app", origin: "primary" });
+	assert.deepEqual(s.active, { page: "app", origin: "primary", parked: false });
 	s.dropClosed("app");
-	assert.deepEqual(s.active, { page: "tab", origin: "browser" });
+	assert.deepEqual(s.active, { page: "tab", origin: "browser", parked: false });
 	assert.equal(s.size, 1);
 });
 
@@ -432,7 +433,7 @@ test("FollowStack__DropsEveryBrowserPage__When__BrowserOriginDies", () => {
 	s.push("oauth", "browser");
 	s.push("consent", "browser");
 	s.dropOrigin("browser");
-	assert.deepEqual(s.active, { page: "app", origin: "primary" });
+	assert.deepEqual(s.active, { page: "app", origin: "primary", parked: false });
 	assert.equal(s.size, 1);
 });
 
@@ -440,7 +441,7 @@ test("FollowStack__KeepsActive__When__DeadOriginContributedNothing", () => {
 	const s = new FollowStack<string>();
 	s.push("app", "primary");
 	s.dropOrigin("browser");
-	assert.deepEqual(s.active, { page: "app", origin: "primary" });
+	assert.deepEqual(s.active, { page: "app", origin: "primary", parked: false });
 	assert.equal(s.size, 1);
 });
 
@@ -452,7 +453,7 @@ test("FollowStack__DropsOnlyPrimaryPages__When__PrimaryOriginNamed", () => {
 	s.push("app", "primary");
 	s.push("oauth", "browser");
 	s.dropOrigin("primary");
-	assert.deepEqual(s.active, { page: "oauth", origin: "browser" });
+	assert.deepEqual(s.active, { page: "oauth", origin: "browser", parked: false });
 	assert.equal(s.size, 1);
 });
 
@@ -513,6 +514,55 @@ test("isIdlePage__NamesOnlyLandingSurfaces__When__GivenBrowserUrls", () => {
 		assert.equal(isIdlePage(u), false, u);
 });
 
+// ---- the parked rank is visible on the entry, so the sync gate can read it ----------------
+// The peek's web-leg-primary case (2026-08-01): a host busy on an ax arm leaves the web
+// Chrome the only answering endpoint, and its pre-existing pages are residue from earlier
+// runs — mac3's leftover Notion tab streamed into the wall as if it were the run. Refusing
+// residue requires knowing how a page ENTERED the stack; its current URL cannot say.
+
+test("FollowStack__ExposesParkedRank__When__PushedParked", () => {
+	const s = new FollowStack<string>();
+	s.push("residue", "primary", true);
+
+	assert.deepEqual(s.active, { page: "residue", origin: "primary", parked: true });
+});
+
+test("FollowStack__ClearsParkedRank__When__RePushedLive", () => {
+	// The promotion channel: cameHome re-pushes a parked page WITHOUT the flag when it
+	// main-frame-navigates — a run reusing a residue tab is the flow arriving.
+	const s = new FollowStack<string>();
+	s.push("residue", "primary", true);
+	s.push("residue", "primary");
+
+	assert.deepEqual(s.active, { page: "residue", origin: "primary", parked: false });
+	assert.equal(s.size, 1);
+});
+
+// ---- streamRefusal: the idleNeverStreams gate, pure ----------------------------------------
+// Both inputs matter and neither subsumes the other — the rank records how a page entered
+// the stack, the URL records where it is now.
+
+test("streamRefusal__RefusesAsResidue__When__AParkedPageSitsOnARealUrl", () => {
+	// mac3's leftover Notion tab: a real-looking URL is exactly what makes residue dangerous.
+	assert.equal(streamRefusal(true, "https://app.notion.com/workspace"), "parked-residue");
+});
+
+test("streamRefusal__RefusesAsIdle__When__ALiveRankedPageNavigatesToTheNewTab", () => {
+	// The profile-swap bounce (fixed 2026-08-01, must not regress): a page that entered live
+	// and then navigated to chrome://newtab is still refused, by URL.
+	assert.equal(streamRefusal(false, "chrome://newtab/"), "idle");
+});
+
+test("streamRefusal__RefusesAsIdle__When__AParkedPageIsAlsoIdle", () => {
+	// mac1's case: the web Chrome's sole page is a pre-existing New Tab. Both reasons hold;
+	// "idle" is the more specific status for the viewer.
+	assert.equal(streamRefusal(true, "chrome://newtab/"), "idle");
+});
+
+test("streamRefusal__AllowsTheStream__When__ALivePageSitsOnARealUrl", () => {
+	assert.equal(streamRefusal(false, "https://y-prod-react.onrender.com/library"), undefined);
+});
+
 // ---- cycle: the operator's override for a newest-wins pick that landed wrong -------------
 
 test("FollowStack__MakesAnotherPageActive__When__Cycled", () => {
@@ -559,7 +609,7 @@ test("FollowStack__RevivesWithNewPage__When__PushedAfterEmptying", () => {
 	s.push("app", "primary");
 	s.dropClosed("app");
 	s.push("fresh", "primary");
-	assert.deepEqual(s.active, { page: "fresh", origin: "primary" });
+	assert.deepEqual(s.active, { page: "fresh", origin: "primary", parked: false });
 	assert.equal(s.size, 1);
 });
 
