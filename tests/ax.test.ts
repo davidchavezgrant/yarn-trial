@@ -116,3 +116,38 @@ test("activationFailure__StringifiesTheThrow__When__ItIsNotAnError", () => {
 	// execFileSync only throws Errors, but the classifier is called on an unknown catch.
 	assert.deepEqual(activationFailure("plain string throw"), { applied: false, error: "plain string throw" });
 });
+
+test("AxBackend__RecoversFromADeadWindow__When__ADialogItFollowedIsDismissed", async () => {
+	// The 2026-08-01 wedge. A click opened a native Open panel; the follow correctly moved onto
+	// it; the agent pressed Escape without touching a user file — exactly right — and the panel
+	// vanished. pickWindow then found nothing passing its 50,000px floor while the app settled,
+	// and the old code KEPT the held ref on the principle that observe/ensureObservable own that
+	// failure. But the held ref was the dismissed panel: every later observation addressed a
+	// window id that no longer existed, and three empty ones in a row ended the pass at action
+	// 60 with a 197-control frontier still open.
+	//
+	// "Cannot pick one" and "the one we hold is gone" are different states. Only the first is
+	// safe to wait out.
+	const listed: unknown[] = [];
+	let observedWindowId: number | undefined;
+	const driver = {
+		act: async (a: any) => {
+			if (a.name === "list_windows") return { structuredJson: JSON.stringify({ windows: listed }) };
+			// get_window_state carries the window the observation is addressed to.
+			observedWindowId = a.args?.window_id;
+
+			return { structuredJson: JSON.stringify({ elements: [] }), text: "" };
+		},
+	} as unknown as Driver;
+
+	const back = new (AxBackend as any)(driver, "Yarn", { pid: 42, windowId: 853, bounds: { x: 0, y: 0, width: 900, height: 700 } }, { applied: true });
+
+	// The panel (853) is gone. Yarn's real window survives but is BELOW the area floor, so
+	// pickWindow returns nothing — the exact shape that stranded the run.
+	listed.push({ app_name: "Yarn", pid: 42, window_id: 812, title: "Yarn", is_on_screen: true, bounds: { x: 0, y: 0, width: 120, height: 90 } });
+	// The observation itself still fails here — the fake returns an empty tree, and that path is
+	// owned by ensureObservable. What this pins is WHICH WINDOW was addressed, which is the whole
+	// of the fix: the run must stop talking to the dismissed panel.
+	await back.observe("probe").catch(() => undefined);
+	assert.equal(observedWindowId, 812, "a live window — even one the area floor rejects — beats a dead one, which is never addressable");
+});

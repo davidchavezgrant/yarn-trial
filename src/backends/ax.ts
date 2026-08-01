@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import type { Driver } from "../core/driver.js";
-import { ensureObservable, findWindow, observe, pickWindow, type ObservationBundle, type WindowRef } from "../core/harness.js";
+import { ensureObservable, findWindow, observe, pickWindow, type ObservationBundle, type WindowCandidate, type WindowRef } from "../core/harness.js";
 import type { Target } from "../core/target.js";
 
 /**
@@ -100,9 +100,41 @@ export class AxBackend {
 	async observe(name: string): Promise<ObservationBundle> {
 		try {
 			const windows = await this.driver.act({ kind: "tool", name: "list_windows", args: {} });
-			const front = pickWindow(JSON.parse(windows.structuredJson ?? "{}").windows ?? [], this.app, this.currentWin.pid);
-			// No pick (all windows gone mid-run) keeps the held ref: observe/ensureObservable
-			// already own that failure and report it with the recovery story attached.
+			const all: WindowCandidate[] = JSON.parse(windows.structuredJson ?? "{}").windows ?? [];
+			const front = pickWindow(all, this.app, this.currentWin.pid);
+			/**
+			 * KEEPING THE HELD REF IS ONLY SAFE WHILE IT STILL EXISTS.
+			 *
+			 * The comment here used to say a failed pick keeps the current window because
+			 * observe/ensureObservable own that failure. True when the held window is merely
+			 * unpickable — off-screen, shrunk below the area floor — and catastrophic when it is
+			 * GONE, because every later observation addresses a window id that no longer exists
+			 * and returns nothing. Three of those in a row is a TargetNotObservableError.
+			 *
+			 * That killed a pass on 2026-08-01. A click opened a native Open panel, the follow
+			 * correctly moved to it, the agent pressed Escape without touching a user file —
+			 * exactly right — and the panel vanished. The pick then found no window passing the
+			 * 50,000px floor while the app settled, so the run kept the DEAD panel's id and
+			 * observed nothing for the rest of its life.
+			 *
+			 * So: distinguish "cannot pick one" from "the one we hold is gone". If the held id is
+			 * absent from the listing it is dead, and ANY live window of this app beats it —
+			 * including one the floor would reject, since a small real window is still
+			 * addressable and a dead one never is.
+			 */
+			const heldAlive = all.some((w) => w.window_id === this.currentWin.windowId);
+			if (!front && !heldAlive) {
+				const survivor = all.find((w) => w.app_name === this.app && w.pid === this.currentWin.pid) ?? all.find((w) => w.app_name === this.app);
+				if (survivor) {
+					console.log(`  window follow: held window ${this.currentWin.windowId} is GONE (dialog dismissed?) — recovering onto "${survivor.title}" (id ${survivor.window_id})`);
+					this.currentWin = { pid: survivor.pid, windowId: survivor.window_id, bounds: survivor.bounds };
+					this.lastTitle = survivor.title ?? this.lastTitle;
+
+					return observe(this.driver, this.currentWin, name, {});
+				}
+				// Nothing of this app is listed at all: a genuinely dead app, which
+				// ensureObservable's relaunch path owns. Falling through keeps that story intact.
+			}
 			if (front && front.window_id !== this.currentWin.windowId) {
 				console.log(`  window follow: "${this.lastTitle ?? ""}" -> "${front.title}" (id ${this.currentWin.windowId} -> ${front.window_id})`);
 				this.currentWin = { pid: front.pid, windowId: front.window_id, bounds: front.bounds };

@@ -43,6 +43,7 @@ import type { Expectation, StepRecord } from "../../types.js";
 import { parseCli } from "./cli.js";
 import { gradeDone } from "./done.js";
 import { loadGrounding } from "./grounding.js";
+import { coldStart } from "../coldstart.js";
 import { CLAIM_TOOL, DONE_TOOL, systemPrompt } from "./prompt.js";
 import { type DriverSync, finishRecording, newRecording, startRecording } from "./recording.js";
 import { executeAction, type StepLoopState } from "./step.js";
@@ -314,6 +315,19 @@ export async function main(): Promise<void> {
 	}
 
 	try {
+		/**
+		 * Cold start, before acquisition relaunches it (David, 2026-08-01).
+		 *
+		 * The task agent had only resetToHome, which navigates — it cannot clear a native dialog
+		 * holding focus, and it does nothing at all on an arm whose map declares no home. A pass
+		 * on 2026-08-01 opened a native Open panel, escaped it correctly, and left Yarn
+		 * unobservable; every later run on that Mac would have inherited it.
+		 *
+		 * resetToHome STAYS: this clears transient state, that one puts the app on a known
+		 * surface, and the two answer different questions.
+		 */
+		await coldStart(target, app);
+
 		// On the CDP backend there is no driver and no window: the page is the target, and
 		// acquisition (launch-or-attach, tab pick, navigate) lives in CdpBackend.acquire —
 		// which is the whole web story too, now that the driver-owned browser path went

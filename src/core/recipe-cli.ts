@@ -23,6 +23,7 @@ import { modelRescue, replayRecipe } from "./replay.js";
 import { runTeardown } from "./teardown.js";
 import { LIVE_DIR, RUN_FILES, archiveRun, recipesDir, relToData, runDir, runFile, runPath } from "../paths.js";
 import { parseTarget } from "./target.js";
+import { coldStart } from "./coldstart.js";
 import { type DriverSync, finishRecording, newRecording, startRecording } from "./agent/recording.js";
 
 /**
@@ -168,6 +169,10 @@ async function main(): Promise<void> {
 	let exitCode = 1;
 
 	try {
+		// BEFORE acquisition, or the window handle below is stale the moment the app dies. A
+		// recipe records a route from a freshly launched app, so replaying into whatever the last
+		// run left behind measures that drift rather than the recipe.
+		await coldStart(target, recipe.app);
 		let win = cdp ? undefined : await findWindow(driver!, recipe.app);
 		if (!cdp) {
 			await driver!.act({ kind: "tool", name: "launch_app", args: { name: recipe.app } });
