@@ -230,6 +230,9 @@
 	   softer ink and a LIVE tag, so counters off a run's event log never read as collected
 	   results. The tag reuses the stepno pill contrast pair (--plane on --s1). */
 	.d-stats.live-strip { color: var(--ink-2); }
+	/* live metric cells (liveNumCell): the running hue + italic + the ~ in the label — three
+	   signals that this number is a run speaking mid-flight, not a collected aggregate. */
+	td.num.livecell { color: var(--running); font-style: italic; }
 	.d-stats.live-strip .meta { align-self: center; }
 	.livetag {
 		background: var(--s1); color: var(--plane); border-radius: 8px; font-size: 10px;
@@ -361,6 +364,12 @@ const AMB_TIP = "this setting exists at TWO scopes under one identity (same sett
 const DECLARED_TIP = "DECLARED — the vision-only pass has no element list to count against, so these tallies are the model's own report; not comparable like-for-like with mechanically counted passes.";
 // The multi-pass matrix runs n>1 explores per arm; the explore columns aggregate as medians.
 const MED_TIP = "median across N passes — medians resist a degenerate pass (an 8-node husk map happened)";
+// Live column cells: a metric column with NOTHING collected borrows the in-flight runs'
+// event-log counters instead of rendering "–" for the whole run. ~tilde + --running tint +
+// this tip keep a provisional number from ever reading as a collected one; the moment a
+// pass collects, the real aggregate takes the cell back and the live value retreats to the
+// remaining uncollected runs' chips/dropdowns.
+const LIVE_CELL_TIP = "LIVE — off the running run's own event log; provisional until collected";
 const STATUS = { good: "var(--good)", warning: "var(--warning)", serious: "var(--serious)", critical: "var(--critical)" };
 // Every status the wire can put on an entry has an explicit entry here; statusChip renders
 // anything NOT in this map as a hollow "unknown" dot rather than dressing it as a known
@@ -734,13 +743,10 @@ function statusChip(e, rowKey, selected) {
 	if (dead) label = esc(statusLabel(pane.state)) + (took != null ? " " + fmtDur(took) : "") + " — uncollected";
 	// Same rule for a self-reported verdict: its own label, never a green dot on "Awaiting collect".
 	if (claimed) label = (claimed.success ? "Succeeded" : "Failed") + (took != null ? " " + fmtDur(took) : "") + " — self-reported";
-	// Live counters on a running chip — what the run just landed, off its own event log.
-	// Counters, not results: the row's metric columns stay empty until collect banks them.
-	if (e.status === "running" && lp) {
-		if (lp.steps != null) label += ` · step ${lp.steps}${lp.verified != null ? ` (${lp.verified}✓)` : ""}`;
-		else if (lp.actions != null) label += ` · ${lp.actions} actions`;
-		if (lp.fatal) label += " · ⚠ fatal";
-	}
+	// Chips stay minimal: the live counters moved to the metric COLUMNS (liveAgg/liveNumCell
+	// — David, 2026-08-01: "actions should be its own column"). Only a mid-run fatal stays
+	// on the chip — it is status, not a metric, and the columns have nowhere to say it.
+	if (e.status === "running" && lp && lp.fatal) label += " · ⚠ fatal";
 	if (e.status === "queued" && e.queuePosition) label += " #" + e.queuePosition;
 	if (e.stalled) label += " ⚠ Stalled";
 	const judge = e.judgeTrajectory ? ` · Judge ${e.judgeTrajectory}` : "";
@@ -1076,11 +1082,38 @@ const NO_EXPLORE_CELLS = `<td class="num">–</td>`.repeat(5);
 const costCell = (p) => p.usd ? fmtMoney(p.usd) + (p.unpriced ? " +" + p.unpriced + "?" : "")
 	: p.unpriced ? "?×" + p.unpriced : "–";
 
+// Live aggregates for a pass's IN-FLIGHT runs (EntryView.live): the median across them,
+// the same aggregation shape the collected columns use, so a live cell means the same
+// thing its collected successor will. null when nothing is in flight.
+function liveAgg(p) {
+	const ls = p.entries.filter((e) => !e.collected && e.live).map((e) => e.live);
+	if (!ls.length) return null;
+	const med = (k) => {
+		const v = ls.map((l) => l[k]).filter((n) => typeof n === "number").sort((a, b) => a - b);
+		if (!v.length) return null;
+		const m = Math.floor(v.length / 2);
+		return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
+	};
+	return { actions: med("actions"), frontier: med("frontier"), seen: med("seen"), nodes: med("nodes"), steps: med("steps"), verified: med("verified") };
+}
+
+// A metric cell carrying a live value: ~ marks it approximate, .livecell tints it --running.
+const liveNumCell = (label, extraTip) =>
+	`<td class="num livecell" data-tip="${esc(LIVE_CELL_TIP + (extraTip ? "\n" + extraTip : ""))}">${esc(label)}</td>`;
+
 function taskRow(a, p) {
 	const key = rowId(a, p);
+	const lv = liveAgg(p);
+	// Same collected-wins rule as exploreRow: the live steps stand in only while the mean
+	// has nothing collected behind it.
+	const stepsCell = p.meanSteps != null
+		? `<td class="num">${fmtNum(p.meanSteps)}</td>`
+		: lv && lv.steps != null
+			? liveNumCell(`~${fmtNum(lv.steps)}${lv.verified != null ? ` (${fmtNum(lv.verified)}✓)` : ""}`, "steps so far (verified in parens)")
+			: `<td class="num">–</td>`;
 	return `<tr class="mrow" data-toggle="${esc(key)}">${armCell(a, p)}
 		<td class="num">${p.collected ? p.successes + "/" + p.collected : "–"}</td>
-		<td class="num">${fmtNum(p.meanSteps)}</td>
+		${stepsCell}
 		<td class="num">${p.meanElapsedSec != null ? fmtDur(p.meanElapsedSec) : "–"}</td>
 		<td class="num">${fmtK(p.meanOutputTokens)}</td>
 		<td class="num">${costCell(p)}</td>
@@ -1099,6 +1132,7 @@ function taskRow(a, p) {
 function exploreRow(a, p, first) {
 	const key = rowId(a, p);
 	const ex = p.explore || {};
+	const lv = liveAgg(p);
 	// A vision-only pass (--no-ax) has no element list to count against, so its tallies are
 	// self-reported — flagged so they never read as mechanically counted. Flag sniffing is
 	// display-only here; the arm's dispatch stays the authority for what actually ran.
@@ -1106,17 +1140,34 @@ function exploreRow(a, p, first) {
 		? ` <span data-tip="${esc(DECLARED_TIP)}">⚠</span>`
 		: "";
 	const num = (value, tip) => `<td class="num" data-tip="${esc(tip)}">${value}</td>`;
+	// Per cell, collected always wins: a live number stands in ONLY where the column has
+	// nothing collected — the columns keep one semantic (collected aggregate) and the live
+	// stand-in is marked ~/tinted, so the two can never blend.
+	const actionsCell = ex.actions != null
+		? num(fmtNum(ex.actions), "actions x̃ across the arm's passes" + (ex.elapsed ? "\nelapsed (first pass) " + ex.elapsed : "") + "\n" + MED_TIP)
+		: lv && lv.actions != null
+			? liveNumCell(`~${fmtNum(lv.actions)}`, lv.frontier != null ? `frontier: ${fmtNum(lv.frontier)} controls left un-operated (the pass ends when this empties)` : "")
+			: num("–", MED_TIP);
+	const controlsCell = ex.controlsSeen != null
+		? num(`${ex.controlsActuated}/${ex.controlsDismissed}/${ex.controlsSeen}${declared}`,
+			`actuated ${ex.controlsActuated} · dismissed ${ex.controlsDismissed} · seen ${ex.controlsSeen}\n` + MED_TIP)
+		: lv && lv.seen != null
+			// The heartbeat carries seen only — actuated/dismissed are stamped at finish.
+			? liveNumCell(`~${fmtNum(lv.seen)} seen`)
+			: num("–", MED_TIP);
+	const nodesCell = ex.graphNodes != null
+		? num(fmtNum(ex.graphNodes), (ex.graphEdges != null ? ex.graphEdges + " edges\n" : "") + MED_TIP)
+		: lv && lv.nodes != null ? liveNumCell(`~${fmtNum(lv.nodes)}`) : num("–", MED_TIP);
 	return `<tr class="mrow exp-row${first ? " gsep" : ""}" data-toggle="${esc(key)}">${armCell(a, p)}
 		<td class="num">–</td>
 		<td class="num">–</td>
 		<td class="num">${p.meanElapsedSec != null ? fmtDur(p.meanElapsedSec) : "–"}</td>
 		<td class="num">${fmtK(p.meanOutputTokens)}</td>
 		<td class="num">${costCell(p)}</td>
-		${num(fmtNum(ex.actions), "actions x̃ across the arm's passes" + (ex.elapsed ? "\nelapsed (first pass) " + ex.elapsed : "") + "\n" + MED_TIP)}
-		${num(ex.controlsSeen != null ? `${ex.controlsActuated}/${ex.controlsDismissed}/${ex.controlsSeen}${declared}` : "–",
-			(ex.controlsSeen != null ? `actuated ${ex.controlsActuated} · dismissed ${ex.controlsDismissed} · seen ${ex.controlsSeen}\n` : "") + MED_TIP)}
+		${actionsCell}
+		${controlsCell}
 		${num(fmtNum(ex.surfaces), MED_TIP)}
-		${num(fmtNum(ex.graphNodes), (ex.graphEdges != null ? ex.graphEdges + " edges\n" : "") + MED_TIP)}
+		${nodesCell}
 		${num(fmtNum(ex.scopeAmbiguities), MED_TIP)}${startedCell(p)}${runsCell(p, key)}${treeCell(p, key)}</tr>` + (openRows[key] ? detailRowHtml(a, p, key) : "");
 }
 
