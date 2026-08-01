@@ -170,6 +170,10 @@ export function parseAppmapStamp(md: string): RunMetrics {
 		...(num("calls") !== undefined ? { modelCalls: num("calls") } : {}),
 		...(controls ? { controlsActuated: Number(controls[1]), controlsDismissed: Number(controls[2]), controlsSeen: Number(controls[3]) } : {}),
 		...(num("surfaces") !== undefined ? { surfaces: num("surfaces") } : {}),
+		// Absent from the stamp on a pass that never went dark — the header omits them at zero
+		// rather than carrying two dead fields on every map.
+		...(num("blackouts") !== undefined ? { blackouts: num("blackouts") } : {}),
+		...(num("relaunches") !== undefined ? { relaunches: num("relaunches") } : {}),
 	};
 }
 

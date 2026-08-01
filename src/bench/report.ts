@@ -184,21 +184,54 @@ function taskTable(arms: Arm[], m: Manifest): string[] {
 	return [taskTableHeader, taskTableRule, ...rows];
 }
 
+/**
+ * Phase 1, ONE ROW PER RUN — not per arm.
+ *
+ * This used to `.find()` the first collected entry, so an n=2 arm showed a single sample and its
+ * repeat was invisible. That is the opposite of why the repeats exist: on 2026-08-01 the two cdp
+ * passes reported 44 and 12 surfaces, and the report displayed one of them as the arm's result.
+ *
+ * Column order is also a claim about trust, so it is ordered by it:
+ *
+ * - `actuated` / `nodes` / `edges` are measured — controls the pass really operated, and the
+ *   graph it really built. `actuated` is the only metric that separates the backends cleanly
+ *   (ax 49–98 against cdp 106–155 over 8 runs, non-overlapping).
+ * - `surfaces` and `seen` are LEDGER-DERIVED and go last, marked. They count distinct surface
+ *   labels the model attached to controls it noticed, which is a reporting habit rather than
+ *   coverage — and they demonstrably disagree with the graph the same pass wrote: one run
+ *   stamped 76 surfaces over a 66-surface-node graph, another stamped 12 over 22. They were the
+ *   headline number for a day and should not have been.
+ */
 function exploreTable(arms: Arm[], m: Manifest): string[] {
-	const header = "| arm | model | perception | flags | actions | elapsed | calls | out-tok | $ | actuated/dismissed/seen | surfaces | nodes | edges | ambiguities |";
+	const header =
+		"| arm | model | perception | flags | actions | elapsed | calls | out-tok | $ | actuated | dismissed | nodes | edges | ambiguities | surfaces † | seen † |";
 	const rows = arms.flatMap((a) =>
-		modelPasses(m, a.id).map((model) => {
-			const e = m.entries.filter((x) => x.armId === a.id && x.model === model).find((x) => x.collected);
-			const mm = e?.metrics ?? {};
-			const controls = mm.controlsSeen !== undefined ? `${fmt(mm.controlsActuated)}/${fmt(mm.controlsDismissed)}/${fmt(mm.controlsSeen)}` : "—";
+		modelPasses(m, a.id).flatMap((model) => {
+			const es = m.entries.filter((x) => x.armId === a.id && x.model === model);
+			// Every collected run gets a line; an arm with nothing collected still gets its
+			// placeholder row, so a missing sample reads as missing rather than as absent.
+			const shown = es.filter((x) => x.collected);
+			const lines = shown.length ? shown : [undefined];
 
-			const cost = rollupCost(e?.collected ? [{ ...mm, ...(mm.model ? { model: mm.model } : { model }) }] : []);
+			return lines.map((e) => {
+				const mm = e?.metrics ?? {};
+				const cost = rollupCost(e?.collected ? [{ ...mm, ...(mm.model ? { model: mm.model } : { model }) }] : []);
+				// A pass the harness had to restart carries a discontinuity a clean one does not.
+				const blackout = mm.blackouts ? ` ⟲${mm.blackouts}` : "";
 
-			return `| ${a.id} | ${passLabel(model)} | ${perceptionLine(a).replace("perception: ", "")} | ${flagsLine(a)} | ${fmt(mm.exploreActions)} | ${fmt(mm.exploreElapsed)} | ${fmt(mm.modelCalls)} | ${fmt(mm.outputTokens)} | ${costCell(cost)} | ${controls} | ${fmt(mm.surfaces)} | ${fmt(mm.graphNodes)} | ${fmt(mm.graphEdges)} | ${fmt(mm.scopeAmbiguities)} |`;
+				return `| ${a.id}${blackout} | ${passLabel(model)} | ${perceptionLine(a).replace("perception: ", "")} | ${flagsLine(a)} | ${fmt(mm.exploreActions)} | ${fmt(mm.exploreElapsed)} | ${fmt(mm.modelCalls)} | ${fmt(mm.outputTokens)} | ${costCell(cost)} | ${fmt(mm.controlsActuated)} | ${fmt(mm.controlsDismissed)} | ${fmt(mm.graphNodes)} | ${fmt(mm.graphEdges)} | ${fmt(mm.scopeAmbiguities)} | ${fmt(mm.surfaces)} | ${fmt(mm.controlsSeen)} |`;
+			});
 		}),
 	);
 
-	return [header, "|---|---|---|---|---|---|---|---|---|---|", ...rows];
+	return [
+		header,
+		"|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+		...rows,
+		"",
+		"> One row per RUN — a repeated arm shows every sample, because the spread is the point. `⟲n` marks a pass the harness restarted after an AX blackout (see the blackout note in CLAUDE.md); its numbers include a discontinuity a clean pass does not have.",
+		"> † `surfaces` and `seen` are ledger-derived — distinct surface labels the model attached to controls it noticed — and disagree with the graph the same pass wrote (76 stamped over a 66-node graph; 12 over 22). Read `actuated` and `nodes`; do not quote these two.",
+	];
 }
 
 function replayTable(arms: Arm[], m: Manifest): string[] {

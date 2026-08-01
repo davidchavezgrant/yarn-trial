@@ -1457,3 +1457,52 @@ test("collectEntry__FlagsAnUnpublishedMap__When__TheRunOnlyWroteItsOwnCopy", () 
 		assert.match(out.note ?? "", /map not published/);
 	});
 });
+
+test("renderReport__ShowsEveryRun__When__AnArmHasRepeatedSamples", () => {
+	// The phase-1 table used to `.find()` the first collected entry, so an n=2 arm rendered ONE
+	// sample and its repeat was invisible. That defeats the only reason those arms repeat: on
+	// 2026-08-01 the two cdp passes stamped 44 and 12 surfaces, and the report showed one of
+	// them as "the" result — which is how a metric with a 6x spread got quoted as a finding.
+	const m: Manifest = {
+		date: DATE,
+		createdAt: "",
+		entries: [
+			entry("p1-explore-cdp", "job-a", { collected: true, state: "done", metrics: { controlsActuated: 136, graphNodes: 207, surfaces: 44 } }),
+			entry("p1-explore-cdp", "job-b", { collected: true, state: "done", metrics: { controlsActuated: 119, graphNodes: 144, surfaces: 12 } }),
+		],
+	};
+	// Scoped to the Phase 1 SECTION — later sections (Timing) list the same arm ids — and matched
+	// on the exact cell, because `p1-explore-cdp` is a prefix of `p1-explore-cdp-no-vision`.
+	const md = renderReport(m);
+	const phase1 = md.slice(md.indexOf("## Phase 1")).split("\n## ")[0];
+	const rows = phase1.split("\n").filter((l) => /^\| p1-explore-cdp \|/.test(l));
+	assert.equal(rows.length, 2, "both samples must render");
+	assert.ok(
+		rows.some((r) => r.includes("| 136 |")) && rows.some((r) => r.includes("| 119 |")),
+		"each row carries its own run's numbers, not a shared or first-wins value",
+	);
+});
+
+test("renderReport__RanksColumnsByTrust__When__RenderingPhase1", () => {
+	const md = renderReport({ date: DATE, createdAt: "", entries: [] });
+	const header = md.split("\n").find((l) => l.includes("| actuated |"));
+	assert.ok(header, "phase 1 must have an actuated column");
+	// Measured before ledger-derived. `surfaces` and `seen` count the surface LABELS a model
+	// attached to controls it noticed, and disagree with the graph the same pass wrote (76
+	// stamped over a 66-surface-node graph; 12 over 22). They stay in the table — they are
+	// cheap and occasionally suggestive — but they must not sit where the eye lands first.
+	assert.ok(header!.indexOf("| actuated |") < header!.indexOf("surfaces"), "actuated precedes surfaces");
+	assert.ok(header!.indexOf("| nodes |") < header!.indexOf("surfaces"), "nodes precedes surfaces");
+	assert.match(md, /do not quote these two/, "the caveat must travel with the numbers");
+});
+
+test("renderReport__MarksRescuedPasses__When__ARunSurvivedABlackout", () => {
+	// A restarted pass carries a discontinuity a clean one does not, and the old retry policy
+	// hid this class of run by re-running it until it stopped happening.
+	const m: Manifest = {
+		date: DATE,
+		createdAt: "",
+		entries: [entry("p1-explore-ax", "job-x", { collected: true, state: "done", metrics: { controlsActuated: 85, blackouts: 1, relaunches: 1 } })],
+	};
+	assert.match(renderReport(m), /p1-explore-ax ⟲1/);
+});

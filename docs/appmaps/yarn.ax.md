@@ -1,122 +1,94 @@
-<!-- provenance: explore | app: Yarn | date: 2026-08-01 | backend: ax | actions: 115 | elapsed: 23m | calls: 197 | tokens-in: 1368325 | tokens-out: 25631 | cache-read: 8124928 | cache-write: 0 | findings: 29 | finds: 0 | controls: 69 actuated / 187 dismissed / 394 seen | surfaces: 35 | chapters: 11 | stopped: frontier-empty | descent: off | gated: 0 read / 4 refused -->
+<!-- provenance: explore | app: Yarn | date: 2026-08-01 | backend: ax | actions: 73 | elapsed: 18m | calls: 145 | tokens-in: 1071383 | tokens-out: 20993 | cache-read: 8301568 | cache-write: 0 | findings: 41 | finds: 0 | controls: 49 actuated / 198 dismissed / 1055 seen | surfaces: 33 | chapters: 7 | stopped: frontier-empty | descent: off | gated: 0 read / 0 refused | blackouts: 1 | relaunches: 1 -->
 <!-- controls actuated/seen is a LOWER BOUND ON BREADTH, not a coverage percentage: the denominator only grows as surfaces are opened, and operating a control is not understanding it. -->
 <!-- Written by src/core/explore.ts. DO NOT HAND-EDIT: edits make this a curated recipe, not exploration output — move such notes to docs/recipes/<app>.md instead. -->
 
 # Layout
 
 ## Library (home)
-- Stable landing/overview: click **Library** in the persistent left rail.
-- Header: **Search**, **Grid/List**, sort popup, **New Draft**.
-- **Collections** row contains collection buttons and **New Collection**.
-- Draft cards show an ellipsis actions popup. Accessibility may expose duplicate ellipsis wrappers; verify that menu text actually appears after clicking.
-- **Your Drafts** is a separate left-rail overview. Open documents, templates, and Brand Kits also appear as temporary left-rail tabs.
+- Dark overview reached with left-rail **Library**. Header: Search, Grid/List, sort, New Draft. Collections row includes New Collection; project cards have inline title fields and ellipsis menus.
+- Sort choices: Newest first, Oldest first, A - Z, Z - A.
+- Left rail also contains Your Drafts, open documents, New draft, Invite Members, Brand Kits, and Settings.
 
 ## Settings
-- Open from left rail **Settings**; close with the modal’s top-right X.
-- Preferences: Auto-Add Screen Zooms, Theme (Dark/Light/System), Agent model (Opus 5, Fable 5, Opus 4.8, GPT-5.6 Sol), Agent effort (Low/Medium/High/Extra High/Max), Agent Fast Mode.
-- Workspace settings: name, icon, custom recording window sizes (**Add Size/Remove**).
-- Also contains plan/Upgrade, integrations (Figma, Google Slides, Notion MCP, team/personal YouTube, Screen Studio Import), and team members.
-
-## Brand Kit
-- Click **Brand Kits** in the left rail, then choose a brand. The popup marks the primary brand.
-- Tabs: **Brand Overview, Templates, Workflows, Colors, Type, Screen Clips, Motion, Layout, Misc**.
-- **Templates**: Grid/List, newest/A–Z sort, New Template, template selection, name/description, Edit Template, options menu.
-- **Workflows**: custom workflow list; opening one shows Name, Description (“When should the agent use this?”), Prompt/instructions, Delete/Cancel/Done.
-- **Colors**: brand Background and Text palettes, color picker/actions, Add Background/Add Text Color, Color Notes.
-- **Type**: Primary Font, Secondary Font, weights, New Text Style, Font Usage Notes.
-- **Screen Clips**: brand defaults for cursor, screen/window display, sound effects, visual effects, default zoom type/level.
-- **Motion/Layout/Misc**: freeform guidance fields.
-- Brand options: Rename Brand, Make Default, Duplicate Brand, New Brand, Archive Brand.
+- Open with left-rail **Settings**; close with X.
+- Preferences: Auto-Add Screen Zooms; Theme Dark/Light/System; default Agent model (Opus 5, Fable 5, Opus 4.8, GPT-5.6 Sol); default Agent effort (Low/Medium/High/Extra High).
+- Workspace: name/icon, custom recording window sizes, integrations, team members. Custom sizes use `WIDTHxHEIGHT`; Add Size immediately appends a row.
+- Scope: preference defaults are app/user; workspace name/icon and custom sizes are workspace-level.
 
 ## Draft editor
-- Left panel has **Agent/Script**, voice picker, **Project actions**, transcript, composer, composer actions, and per-message effort.
-- Preview/canvas is central; timeline and insertion toolbar are below.
-- Top status controls: composition paint, captions, music, Publish, Export.
-- Timeline insertion controls include overlays, media upload, recording/text-slide style actions, talk track, comments, Library, and Timeline Zoom.
+- Left: editable title, Agent/Script tabs, voice picker, Project actions, script editor, agent composer.
+- Main: composition Paint, captions, Music, Publish, Export, playback/timeline, overlay/media/text-slide/talk-track/comment insertion, Library picker, Timeline Zoom, Add scene.
+- Project actions: Copy Transcript, Make a copy, Download SRT, Screen Clip Settings, Version History, Brand, aspect ratio, Performance Mode, Delete.
+- Screen Clip Settings is a document override panel for cursor, window/shadow, click/key sounds, entrance/exit animation, motion blur, and default zoom.
+- Voice picker tabs: English, World, Creative; bottom Default Speed control.
+- Paint types: Solid, Linear, Radial, Multi, Image, Shader.
+- Captions mode provides Presets, font, weight, size, paint, Effects, punctuation visibility, More.
+- Music opens a background-track picker with No background track, previews, Remix Music to Fit, and custom upload.
+- Timeline overlay insert opens brand templates and New Blank Overlay. Overlay mode has Insert, paint, and detail-panel controls. Insert supports Text, Image, Video, Icon, Rectangle, Ellipse, Polygon, Line, Arrow, Pen, Group.
+- Media insert opens an asset grid plus laptop upload.
 
-## Per-document Screen Recording Settings
-- Draft editor → **Project actions** → **Screen Clip Settings…**.
-- Mirrors Brand Kit Screen Clips but changes only the current draft: cursor visibility/style/scale; padding and shadow; click/key sounds; entrance/exit animation; motion blur; default zoom type/level.
-- Close with **Done**.
-
-## Voice picker
-- Click **Select voice**.
-- Tabs: English, World, Creative. English includes Annie, Brynn, Cassidy, Fay, Jacob, Jada, James, Jeff, Kendra, Miranda, Robert, Sarah.
-- Speaker icon previews a voice. **Default Speed** offers Slowest, Slow, Default, Fast, Faster.
-
-## Overlay editor
-- Timeline overlay-template picker → **New Blank Overlay** creates a four-second overlay and opens overlay editing.
-- Top bar: **Insert**, background paint/Add BG, detail-panel button.
-- Insert menu: Text, Image, Video, Icon, Rectangle, Ellipse, Polygon, Line, Arrow, Pen, Group.
-- Selecting a text layer exposes layout, font, weight, size, alignment, fill, opacity, and detail panel.
-- Detail panel includes position/alignment/X/Y/rotation; layout/W/H/scale/anchors; typography; opacity/corner radius/fill; Highlight/Stroke/Shadow/Blur.
-
-## Caption styling
-- Draft top captions icon switches the top bar into per-draft caption styling: Presets, font, weight, size, paint, Effects, Hidden, and more menu.
-
-## Native pickers
-- Composer actions → **Add Reference…** opens a macOS Open dialog; Cancel exits.
-- Timeline media control opens a centered popover with a laptop-upload button, then a local file chooser.
-- **Add Music** opens “Upload background track” (MP3/WAV/M4A), then a local file chooser.
+## Brand Kit
+- Open with left-rail **Brand Kits**, then select a kit. Sections: Brand Overview, Templates, Workflows, Colors, Type, Screen Clips, Motion, Layout, Misc.
+- Templates: grid/list, sort, New Template, template metadata, Edit Template, options.
+- Workflows: New Workflow; editor fields Name, Description, Prompt/Workflow instructions.
+- Colors: separate Background and Text palettes, full Paint editor, Add Background/Add Text Color, actions Make Default/Duplicate/Remove, Color Notes.
+- Type: Primary/Secondary searchable font fields, weights, Text Styles, Font Usage Notes. Text-style editor fields name, preview text, family, weight, size, line height, letter spacing.
+- Screen Clips contains brand defaults matching the draft Screen Clip Settings controls.
+- Motion, Layout, Misc are brand-scoped markdown guidance pages.
 
 # How to
 
 ## Create a draft
-1. From Library, click **New Draft** (or left-rail **New draft**).
-2. Name the scratch draft distinctly once the editor opens.
-3. Use **Script** for transcript editing or **Agent** for assisted editing.
+1. From Library click **New Draft** or left-rail **New draft**.
+2. Rename through the title field.
+3. Enter script in **Type script or # for new scene** or use Agent composer.
 
-## Change a draft’s brand
+## Change a draft’s screen-recording appearance
 1. Open the draft.
-2. Open **Project actions** → **Brand**.
-3. Choose a brand; this changes only the current document’s assignment.
-4. **Edit Brands…** navigates to the brand-wide Brand Kit instead.
+2. Open **Project actions**.
+3. Choose **Screen Clip Settings…**.
+4. Adjust controls; click **Done**.
+- This changes only that document. For brand defaults use Brand Kit > Screen Clips.
 
-## Change aspect ratio or performance
-1. Draft → **Project actions**.
-2. Choose Widescreen (16:9), Laptop (16:10), Square (1:1), or Vertical (9:16); it applies immediately.
-3. Performance Mode choices are Efficiency, Default, Ultra.
+## Change brand screen-clip defaults
+1. Open **Brand Kits** and select the intended kit.
+2. Click **Screen Clips**.
+3. Set cursor, display/shadow, sound, animation, motion-blur, and zoom defaults.
+- These are brand-scoped and pair with document overrides of the same names.
 
-## Make a draft copy
-1. Draft → **Project actions** → **Make a copy**.
-2. Yarn immediately creates and opens “Copy of <original>”, inheriting timeline contents.
+## Set a composition paint
+1. Open a draft and click the composition paint control.
+2. Pick Solid, Linear, Radial, Multi, Image, or Shader.
+3. Edit stops/points/colors; gradient endpoints and multi-points are draggable directly on canvas.
 
-## Copy transcript / download subtitles
-- Draft → **Project actions** → **Copy Transcript** copies to clipboard with no confirmation.
-- Adjacent **Download SRT…** enters a native save flow.
+## Insert and edit an overlay
+1. Put the playhead where needed.
+2. Click the first timeline insert button.
+3. Choose a template or **New Blank Overlay**.
+4. In overlay mode click **Insert** and choose an object type.
+5. Select the object; use the top toolbar or right detail panel for position, layout, typography, fill, opacity, highlight, stroke, shadow, blur.
 
-## View version history
-1. Draft → **Project actions** → **Show Version History…**.
-2. A right popover shows timestamp/author entries and explains reversible reverts.
-3. Close with **Close**. Revert changes document content, so confirm the intended version first.
+## Edit captions
+1. Click the captions status icon.
+2. Select the caption box.
+3. Use Presets/font/weight/size/paint/Effects and punctuation visibility in the top toolbar.
 
-## Create/edit a reusable workflow
-1. Brand Kit → **Workflows** → New Workflow or open an existing workflow.
-2. Fill Name, Description, and Prompt/instructions.
+## Add or edit a brand text style
+1. Brand Kit > **Type**.
+2. Click **New Text Style** or a row’s **Edit Style**.
+3. Set name, preview, family, weight, size, line height, letter spacing.
+4. Click **Done**.
+
+## Add a workflow
+1. Brand Kit > **Workflows** > **New Workflow**.
+2. Fill Name, use-case Description, and Prompt/Workflow instructions.
 3. Click **Done**.
 
-## Create/duplicate a brand
-1. Open **Brand Kits** and start the new-brand flow.
-2. Enter Brand name and optional Overview; **Done** opens its Brand Kit.
-3. To duplicate: Brand options → **Duplicate Brand**; copy is created immediately as “<name> Copy”.
-
-## Adjust screen-clip behavior at the correct scope
-- Brand-wide default: Brand Kit → **Screen Clips**.
-- Current-draft override: Draft → **Project actions** → **Screen Clip Settings…**.
-- These are separate stores; do not edit Brand Kit when the task asks for one draft, or vice versa.
-
-## Add an overlay text layer
-1. Draft timeline overlay picker → **New Blank Overlay**.
-2. Overlay top bar → **Insert** → **Text**.
-3. Select the new “New Text” layer.
-4. Use top-bar controls for quick formatting or the right detail panel for full geometry/typography/effects.
-
 # Dead ends & quirks
-- Clicking a web control may warn that it lacks AXPress but still work; trust the next observation.
-- Library card ellipses can appear twice in accessibility (row and column wrappers); one may silently no-op.
-- Aspect ratio, Make a copy, and Duplicate Brand apply immediately without confirmation.
-- Copy Transcript has no visible confirmation.
-- Publish/share/invite/export completion and destructive actions on pre-existing user content were not executed.
-- Version reversion was not executed because it would alter existing document history.
-- Local upload/reference controls proceed to native file dialogs; Cancel safely returns.
-- Scratch artifacts created during mapping and safe to clean up: **Scratch Collection M11**, **Scratch Collection Draft M11**, copies named **Copy of Scratch Collection Draft M11**, **Scratch Template Map M11**, **Untitled Template**, **Scratch Brand Map M11**, **Scratch Brand Map M11 Copy**, and an **Untitled Brand** tab if still present. Scratch Collection Draft M11 contains a four-second Overlay with a New Text layer.
+- Timeline text-slide control opened an inaccessible helper window titled “Untitled”; Escape and Cmd+W did not recover Yarn. Avoid this control in automation.
+- Web controls may warn that AXPress is unavailable; ordinary click often still works.
+- Text fields are often prefilled: click, Cmd+A, then type.
+- Dropdown alternatives normally change the value without opening another surface.
+- Brand Screen Clips and draft Screen Clip Settings are different stores: brand defaults versus per-document overrides.
+- Motion, Layout, and Misc Brand Kit sections contain only guidance text areas, not numeric presets.
+- Scratch artifacts created during mapping and eligible for cleanup include `scratch-draft-map-ch4` (with blank Overlay and “New Text”), `scratch-map-workflow-20250308`, `scratch-map-text-style-20250308`, `scratch-collection-map-7f3a`, scratch templates/brands/copies, and other names beginning `scratch-` or `Copy of scratch-`.

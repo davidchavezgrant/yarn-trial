@@ -1,0 +1,791 @@
+{
+  "app": "Yarn",
+  "capturedAt": "2026-08-01T15:11:34.087Z",
+  "provenance": "explore-vision",
+  "proseSha256": "05cd425f829d",
+  "elapsed": "1h03m",
+  "coverage": {
+    "seen": 530,
+    "actuated": 173,
+    "dismissed": 360,
+    "surfaces": 21,
+    "chapters": 29,
+    "stopped": "frontier-empty",
+    "dismissals": [
+      "content",
+      "repetitive-value",
+      "external",
+      "dead-end",
+      "destroys-user-data"
+    ],
+    "gatedRead": 0,
+    "gatedRefused": 0
+  },
+  "nodes": [
+    {
+      "id": "library",
+      "title": "Your Library",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "library/new-draft",
+      "title": "+ New Draft",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "create-draft"
+    },
+    {
+      "id": "library/new-collection",
+      "title": "+ New Collection",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "create-collection"
+    },
+    {
+      "id": "library/brand-kits",
+      "title": "Brand Kits",
+      "kind": "control",
+      "scope": "workspace"
+    },
+    {
+      "id": "library/settings",
+      "title": "Settings",
+      "kind": "control",
+      "scope": "app",
+      "notes": "Sidebar click and Cmd+, both no visible result in observed build."
+    },
+    {
+      "id": "library/your-drafts",
+      "title": "Your Drafts",
+      "kind": "control",
+      "scope": "workspace"
+    },
+    {
+      "id": "brand-kit",
+      "title": "Brand Kit",
+      "kind": "surface",
+      "scope": "brand"
+    },
+    {
+      "id": "brand-kit/templates",
+      "title": "Templates",
+      "kind": "surface",
+      "scope": "brand"
+    },
+    {
+      "id": "brand-kit/templates/new-template",
+      "title": "New Template",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "create-template"
+    },
+    {
+      "id": "brand-kit/colors",
+      "title": "Colors",
+      "kind": "surface",
+      "scope": "brand"
+    },
+    {
+      "id": "brand-kit/colors/backgrounds",
+      "title": "Background",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "background-colors",
+      "options": [
+        "#6985FF",
+        "#26272A",
+        "#EDEEF8",
+        "#000000"
+      ]
+    },
+    {
+      "id": "brand-kit/colors/text-colors",
+      "title": "Text Colors",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "text-colors",
+      "options": [
+        "#6985FF",
+        "#FFFFFF",
+        "#505155",
+        "#14181E"
+      ]
+    },
+    {
+      "id": "brand-kit/colors/color-notes",
+      "title": "Color Notes",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "color-notes"
+    },
+    {
+      "id": "brand-kit/colors/picker",
+      "title": "Color Picker",
+      "kind": "surface",
+      "scope": "brand",
+      "notes": "Inline popover from a brand color swatch; fill modes Solid/Linear/Radial/Multi/Image."
+    },
+    {
+      "id": "brand-kit/colors/picker/fill-mode",
+      "title": "Fill mode",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "brand-color-fill-mode",
+      "options": [
+        "Solid",
+        "Linear",
+        "Radial",
+        "Multi",
+        "Image"
+      ]
+    },
+    {
+      "id": "brand-kit/colors/picker/hex",
+      "title": "HEX value",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "brand-color-value"
+    },
+    {
+      "id": "brand-kit/colors/picker/opacity",
+      "title": "Opacity",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "brand-color-opacity"
+    },
+    {
+      "id": "brand-kit/workflows",
+      "title": "Workflows",
+      "kind": "surface",
+      "scope": "brand"
+    },
+    {
+      "id": "brand-kit/workflows/new-workflow",
+      "title": "New Workflow",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "create-workflow",
+      "notes": "Clicked in empty observed brand; no visible response."
+    },
+    {
+      "id": "brand-kit/type",
+      "title": "Brand Kit — Type",
+      "kind": "surface",
+      "scope": "brand"
+    },
+    {
+      "id": "brand-kit/type/primary-font",
+      "title": "Primary Font",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "primary-font",
+      "notes": "Card opens searchable inline font catalogue; Inter shown with available weights."
+    },
+    {
+      "id": "brand-kit/type/secondary-font",
+      "title": "Secondary Font",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "secondary-font",
+      "notes": "None in observed brand."
+    },
+    {
+      "id": "brand-kit/type/new-text-style",
+      "title": "New Text Style",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "text-styles",
+      "notes": "Clicked; no visible response in observed brand."
+    },
+    {
+      "id": "brand-kit/type/font-usage-notes",
+      "title": "Font Usage Notes",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "font-usage-notes"
+    },
+    {
+      "id": "brand-kit/screen-clips",
+      "title": "Screen Clip Settings",
+      "kind": "surface",
+      "scope": "brand"
+    },
+    {
+      "id": "brand-kit/screen-clips/auto-hide-cursor",
+      "title": "Auto-Hide Cursor",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "screen-clips-auto-hide-cursor",
+      "options": [
+        "Auto Hide",
+        "Off"
+      ]
+    },
+    {
+      "id": "brand-kit/screen-clips/text-cursor",
+      "title": "Text Cursor",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "screen-clips-text-cursor",
+      "options": [
+        "Hide",
+        "Show"
+      ]
+    },
+    {
+      "id": "brand-kit/screen-clips/cursor-style",
+      "title": "Cursor Style",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "screen-clips-cursor-style",
+      "notes": "Observed Arrow-first; clicking label/disclosure produced no visible menu."
+    },
+    {
+      "id": "brand-kit/screen-clips/cursor-scale",
+      "title": "Cursor Scale",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "screen-clips-cursor-scale"
+    },
+    {
+      "id": "brand-kit/screen-clips/screen-window-padding",
+      "title": "Screen Window Padding",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "screen-window-padding"
+    },
+    {
+      "id": "brand-kit/screen-clips/shadow-opacity",
+      "title": "Shadow Opacity",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "screen-shadow-opacity"
+    },
+    {
+      "id": "brand-kit/screen-clips/shadow-blur",
+      "title": "Shadow Blur",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "screen-shadow-blur"
+    },
+    {
+      "id": "brand-kit/screen-clips/shadow-spread",
+      "title": "Shadow Spread",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "screen-shadow-spread"
+    },
+    {
+      "id": "brand-kit/screen-clips/shadow-x-offset",
+      "title": "Shadow X Offset",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "screen-shadow-x-offset"
+    },
+    {
+      "id": "brand-kit/screen-clips/shadow-y-offset",
+      "title": "Shadow Y Offset",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "screen-shadow-y-offset"
+    },
+    {
+      "id": "brand-kit/screen-clips/cursor-clicks",
+      "title": "Cursor Clicks",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "screen-clips-cursor-clicks"
+    },
+    {
+      "id": "brand-kit/screen-clips/keyboard-presses",
+      "title": "Keyboard Presses",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "screen-clips-keyboard-presses"
+    },
+    {
+      "id": "brand-kit/screen-clips/keyboard-sound-set",
+      "title": "Keyboard Sound Set",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "screen-clips-keyboard-sound-set"
+    },
+    {
+      "id": "brand-kit/screen-clips/entrance-exit",
+      "title": "Entrance/Exit Animation",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "screen-clips-entrance-exit"
+    },
+    {
+      "id": "brand-kit/screen-clips/motion-blur",
+      "title": "Motion Blur",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "screen-clips-motion-blur",
+      "options": [
+        "Off",
+        "Low",
+        "Medium",
+        "High"
+      ]
+    },
+    {
+      "id": "workspace-switcher",
+      "title": "Workspace switcher",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "workspace-switcher/new-workspace",
+      "title": "New workspace",
+      "kind": "control",
+      "scope": "workspace",
+      "notes": "Observed click produced no visible response."
+    },
+    {
+      "id": "workspace-switcher/sign-out",
+      "title": "Sign out",
+      "kind": "control",
+      "scope": "app",
+      "notes": "External/account action; not operated."
+    },
+    {
+      "id": "draft-editor",
+      "title": "Draft Editor",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/background-color",
+      "title": "background color",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "background-color",
+      "notes": "Blue top-right swatch; observed click no-op."
+    },
+    {
+      "id": "draft-editor/add-bg",
+      "title": "Add BG",
+      "kind": "control",
+      "scope": "document",
+      "notes": "Observed click no-op."
+    },
+    {
+      "id": "draft-editor/agent",
+      "title": "Agent",
+      "kind": "control",
+      "scope": "document",
+      "notes": "Observed click did not change visible editor."
+    },
+    {
+      "id": "draft-editor/comments-panel",
+      "title": "comments panel",
+      "kind": "control",
+      "scope": "document",
+      "notes": "Observed click no-op."
+    },
+    {
+      "id": "draft-editor/music-panel",
+      "title": "music panel",
+      "kind": "control",
+      "scope": "document",
+      "notes": "Observed click no-op."
+    },
+    {
+      "id": "draft-editor/language",
+      "title": "language",
+      "kind": "control",
+      "scope": "document",
+      "notes": "Observed click no-op."
+    },
+    {
+      "id": "draft-editor/script-input",
+      "title": "Type script or # for new scene",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "draft-script"
+    },
+    {
+      "id": "draft-editor/scene",
+      "title": "Untitled Scene row",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/scene/comment-composer",
+      "title": "Scene comment composer",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/scene/canvas",
+      "title": "Scene Canvas",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/scene/captions",
+      "title": "Captions",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "scene-captions"
+    },
+    {
+      "id": "draft-editor/scene/media",
+      "title": "Media",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "scene-media"
+    },
+    {
+      "id": "draft-editor/scene/record",
+      "title": "Record",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "scene-record"
+    },
+    {
+      "id": "draft-editor/scene/timeline",
+      "title": "Timeline",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/narration-voice",
+      "title": "Narration voice label (Annie)",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "narration-voice",
+      "notes": "Revealed by Script header ellipsis; no picker opened when clicked in observed build."
+    },
+    {
+      "id": "draft-editor/title",
+      "title": "Draft title",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "draft-title",
+      "notes": "Direct inline text field in the editor header; click to focus, then Cmd+A/type. Avoid on existing user drafts."
+    },
+    {
+      "id": "draft-editor/document-context-menu",
+      "title": "Document Context Menu",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/document-context-menu/move",
+      "title": "Move to Scratch-Yarn-",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "document-location"
+    },
+    {
+      "id": "draft-editor/document-context-menu/rename",
+      "title": "Rename",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "document-title"
+    },
+    {
+      "id": "draft-editor/document-context-menu/make-copy",
+      "title": "Make a copy",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/document-context-menu/add-to-collection",
+      "title": "Add to Collection",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "document-collection"
+    },
+    {
+      "id": "draft-editor/document-context-menu/delete",
+      "title": "Delete",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/scene/canvas-object-context-menu",
+      "title": "Canvas Object Context Menu",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/scene/canvas-object-context-menu/no-actions",
+      "title": "No actions",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/export",
+      "title": "Export",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "export",
+      "notes": "Produced no visible export surface in observed build."
+    },
+    {
+      "id": "template-editor",
+      "title": "Template Editor",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Full editor for a template; observed scratch object “Untitled Template”."
+    },
+    {
+      "id": "template-editor/title",
+      "title": "Untitled Template title",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "template-title"
+    },
+    {
+      "id": "template-editor/agent",
+      "title": "Agent",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "template-editor/layers",
+      "title": "Layers",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "template-editor/duration",
+      "title": "Duration",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "template-duration"
+    },
+    {
+      "id": "template-editor/opacity",
+      "title": "Opacity",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "template-opacity"
+    },
+    {
+      "id": "template-editor/layout",
+      "title": "Layout",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "template-layout",
+      "options": [
+        "first",
+        "second",
+        "third"
+      ]
+    },
+    {
+      "id": "template-editor/background",
+      "title": "Background — Add",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "template-background"
+    },
+    {
+      "id": "template-editor/motion-blur",
+      "title": "Motion Blur — Add",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "template-motion-blur"
+    },
+    {
+      "id": "template-editor/description",
+      "title": "Description",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "template-description"
+    },
+    {
+      "id": "template-editor/webcam-preview",
+      "title": "Webcam Preview",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "webcam-preview",
+      "options": [
+        "None"
+      ],
+      "notes": "Dropdown-like control; click produced no visible menu."
+    },
+    {
+      "id": "template-editor/project-bg-preview",
+      "title": "Project BG Preview",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "project-bg-preview"
+    },
+    {
+      "id": "template-editor/publish",
+      "title": "Publish Template",
+      "kind": "control",
+      "scope": "document",
+      "notes": "Externally visible; do not operate during exploration."
+    },
+    {
+      "id": "template-editor/header-add",
+      "title": "Header +",
+      "kind": "control",
+      "scope": "document",
+      "notes": "Observed click focused title; no add surface."
+    },
+    {
+      "id": "template-editor/more",
+      "title": "Header …",
+      "kind": "control",
+      "scope": "document",
+      "notes": "No visible menu in observed build."
+    },
+    {
+      "id": "template-editor/canvas",
+      "title": "Template canvas",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Blank blue canvas; right-click produced no menu."
+    },
+    {
+      "id": "template-editor/text-tool",
+      "title": "Text tool",
+      "kind": "control",
+      "scope": "document",
+      "notes": "No visible result in observed build."
+    },
+    {
+      "id": "template-editor/description-input",
+      "title": "Template description",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "template-agent-description"
+    },
+    {
+      "id": "template-editor/description-modal",
+      "title": "Template Description Modal",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Large blank modal opened by clicking description placeholder; only upload icon visible even after 60s."
+    },
+    {
+      "id": "template-editor/description-modal/upload",
+      "title": "Upload",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "template-description",
+      "notes": "Upload icon at bottom of blank Description modal."
+    }
+  ],
+  "edges": [
+    {
+      "from": "root",
+      "to": "library",
+      "action": "Open Yarn or click “Library” in the left sidebar."
+    },
+    {
+      "from": "library",
+      "to": "brand-kit",
+      "action": "Click a brand kit item (or Brand Kits, then select a brand)."
+    },
+    {
+      "from": "brand-kit",
+      "to": "brand-kit/templates",
+      "action": "Click “Templates” in the brand-kit secondary rail."
+    },
+    {
+      "from": "brand-kit",
+      "to": "brand-kit/colors",
+      "action": "Click “Colors” in the brand-kit secondary rail."
+    },
+    {
+      "from": "brand-kit/colors",
+      "to": "brand-kit/colors/picker",
+      "action": "click a background or text color swatch"
+    },
+    {
+      "from": "brand-kit",
+      "to": "brand-kit/workflows",
+      "action": "click Workflows in brand-kit secondary rail"
+    },
+    {
+      "from": "brand-kit/workflows",
+      "to": "brand-kit/workflows/new-workflow",
+      "action": "click New Workflow"
+    },
+    {
+      "from": "brand-kit",
+      "to": "brand-kit/type",
+      "action": "click “Type” in brand-kit secondary rail"
+    },
+    {
+      "from": "brand-kit",
+      "to": "brand-kit/screen-clips",
+      "action": "click \"Screen Clips\" in brand-kit secondary rail"
+    },
+    {
+      "from": "library",
+      "to": "workspace-switcher",
+      "action": "click current workspace name at top-left"
+    },
+    {
+      "from": "library",
+      "to": "draft-editor",
+      "action": "open a draft row"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/scene",
+      "action": "focus “Type script or # for new scene” and type `#`"
+    },
+    {
+      "from": "draft-editor/scene",
+      "to": "draft-editor/scene/comment-composer",
+      "action": "click the scene-comment bubble icon"
+    },
+    {
+      "from": "draft-editor/scene",
+      "to": "draft-editor/scene/canvas",
+      "action": "Canvas appears on the right after a scene is created."
+    },
+    {
+      "from": "draft-editor/scene",
+      "to": "draft-editor/scene/timeline",
+      "action": "Timeline appears below the scene canvas."
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/narration-voice",
+      "action": "click the Script header “…” to reveal “Annie”"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/document-context-menu",
+      "action": "right-click a document in the left sidebar"
+    },
+    {
+      "from": "draft-editor/scene/canvas",
+      "to": "draft-editor/scene/canvas-object-context-menu",
+      "action": "right-click the canvas text object"
+    },
+    {
+      "from": "brand-kit/templates",
+      "to": "template-editor",
+      "action": "click “New Template”; allow time for editor to appear"
+    },
+    {
+      "from": "template-editor",
+      "to": "library",
+      "action": "click “Your Drafts” as fallback escape if Library does not navigate"
+    },
+    {
+      "from": "template-editor",
+      "to": "template-editor/canvas",
+      "action": "Open/create a template from Brand Kit → Templates → New Template"
+    },
+    {
+      "from": "template-editor",
+      "to": "template-editor/description-modal",
+      "action": "click “Write template description for the agent here…”"
+    }
+  ]
+}

@@ -102,6 +102,15 @@ export interface RunMetrics {
 	controlsDismissed?: number;
 	controlsSeen?: number;
 	surfaces?: number;
+	/**
+	 * Times the app went dark for the full blind budget, and times the harness restarted it to
+	 * recover. Carried into the report so a rescued pass stays distinguishable from one that
+	 * never needed rescuing — a recovered run has a discontinuity in the middle of it, and the
+	 * retry policy used to hide that class of run entirely by re-running it until it stopped
+	 * happening.
+	 */
+	blackouts?: number;
+	relaunches?: number;
 	exploreActions?: number;
 	exploreElapsed?: string;
 	graphNodes?: number;
