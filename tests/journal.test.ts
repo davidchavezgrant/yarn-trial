@@ -223,6 +223,55 @@ test("detectMutation__JournalsTheCombobox__When__TheClickedOptionPersists", () =
 	assert.equal(m?.after, "Arrow-first");
 });
 
+test("detectMutation__JournalsTheCombobox__When__AnOpenPortalPopupInertsTheRestOfThePage", () => {
+	// Radix-style Select, probed live on Yarn 2026-08-01 — the third and final layer of the
+	// empty-journal class. While the popup is open the REST OF THE PAGE loses its refs, so
+	// the pre-click observation contains only the popup: the owning combobox is absent
+	// entirely, not merely valueless, and the (name, surface) before-match can never see it.
+	// The prior value survives in exactly one place — the popup's listbox, whose
+	// [selected]-option lift recorded which option was current when the menu opened.
+	const prev = obsWith([
+		ie("", "", { handle: "e333", role: "listbox", value: "Pointer-first" }),
+		ie("Arrow-first", "", { handle: "e334", role: "option" }),
+		ie("Pointer-first", "", { handle: "e336", role: "option" }),
+	]);
+	const next = obsWith([
+		ie("Cursor Style", "Screen Clip Settings", { handle: "e179", role: "combobox", value: "Arrow-first" }),
+	]);
+	const m = detectMutation({ name: "click", ref: "e334" }, prev, next, undefined, 2);
+	assert.equal(m?.control, "Cursor Style");
+	assert.equal(m?.surface, "Screen Clip Settings");
+	assert.equal(m?.before, "Pointer-first");
+	assert.equal(m?.after, "Arrow-first");
+});
+
+test("detectMutation__JournalsNothing__When__TheOwnerIsAbsentAndTwoValuedListsRemain", () => {
+	// The popup-inert fallback accepts the listbox's value only when it is the SINGLE valued
+	// list-shaped element left — two of them cannot say which one owned the clicked option.
+	const prev = obsWith([
+		ie("", "", { handle: "e333", role: "listbox", value: "Pointer-first" }),
+		ie("", "", { handle: "e400", role: "combobox", value: "Set B" }),
+		ie("Arrow-first", "", { handle: "e334", role: "option" }),
+	]);
+	const next = obsWith([
+		ie("Cursor Style", "Screen Clip Settings", { handle: "e179", role: "combobox", value: "Arrow-first" }),
+	]);
+	assert.equal(detectMutation({ name: "click", ref: "e334" }, prev, next, undefined, 2), undefined);
+});
+
+test("detectMutation__JournalsNothing__When__TheClickReselectsTheCurrentOption", () => {
+	// Re-picking the already-selected option: the listbox's prior equals the clicked label,
+	// so the fallback finds no valued list with a DIFFERENT value and journals nothing.
+	const prev = obsWith([
+		ie("", "", { handle: "e333", role: "listbox", value: "Arrow-first" }),
+		ie("Arrow-first", "", { handle: "e334", role: "option" }),
+	]);
+	const next = obsWith([
+		ie("Cursor Style", "Screen Clip Settings", { handle: "e179", role: "combobox", value: "Arrow-first" }),
+	]);
+	assert.equal(detectMutation({ name: "click", ref: "e334" }, prev, next, undefined, 2), undefined);
+});
+
 test("detectMutation__JournalsNothing__When__TwoControlsCommitTheSameOptionLabel", () => {
 	// Two comboboxes newly reading the clicked label: (name, surface) evidence cannot say
 	// which one the option belonged to, and a guess would send teardown to the wrong control.

@@ -222,9 +222,33 @@ function optionCommit(
 		if (seen.has(key)) continue;
 		seen.add(key);
 		const before = prevObs.interactive.filter((p) => p.name === e.name && p.surface === e.surface);
-		// Absent before the click means it appeared WITH the menu's closing — not a change we
-		// can prove; disagreeing twins are skipped for the reason detectMutation skips them.
-		if (before.length === 0) continue;
+		// Absent before the click USUALLY means it appeared with the menu's closing — not a
+		// change we can prove. One shape is different (probed live on Yarn, 2026-08-01): a
+		// Radix-style PORTAL popup makes the rest of the page inert while it is open, every
+		// element outside the popup loses its ref, and the owning combobox is absent from the
+		// pre-click observation entirely — the (name, surface) match above can never see it.
+		// The prior value survives in exactly one place: the popup's own listbox, whose
+		// [selected]-option lift recorded which option was current when the menu opened.
+		// Accept it as the before-value only when it is the SINGLE valued list-shaped element
+		// the pre-click observation holds — the popup-inert state guarantees that by
+		// construction, and anything more crowded is ambiguity, which journals nothing.
+		if (before.length === 0) {
+			const owners = prevObs.interactive.filter(
+				(p) => (p.role === "listbox" || p.role === "combobox") && p.value && !titleEq(p.value, optionLabel),
+			);
+			if (owners.length === 1)
+				candidates.push({
+					kind: "setting",
+					control: e.name,
+					surface: e.surface,
+					...graphFields(graph, e.name, e.surface),
+					before: owners[0].value,
+					after: e.value,
+					step,
+				});
+
+			continue;
+		}
 		const prior = new Set(before.map((p) => p.value));
 		if (prior.size !== 1) continue;
 		const beforeValue = [...prior][0];
