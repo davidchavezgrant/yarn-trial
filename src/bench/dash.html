@@ -1403,9 +1403,16 @@ function renderBoard(progress) {
 	// group air comes from .gsep on each group's first explore row, not from header rows.
 	let html = "<table><thead>" + TASK_HEAD + "</thead><tbody>";
 	const seen = new Set();
-	for (const e of arms.filter((a) => a.kind === "explore" && a.passes.length)) {
+	// Lineage groups obey the same canonical band order as the rows inside them: a group
+	// sorts by its explore header's best (min) [band, time] key — completed-explore groups
+	// first (oldest first), then in-flight, then queued. Matrix declaration order used to
+	// leak through here, interleaving running group headers between finished ones.
+	const groups = arms.filter((a) => a.kind === "explore" && a.passes.length)
+		.map((e) => ({ e, rows: timelineRows([e]) }))
+		.sort((x, y) => x.rows[0].k[0] - y.rows[0].k[0] || x.rows[0].k[1] - y.rows[0].k[1]);
+	for (const { e, rows } of groups) {
 		seen.add(e.id);
-		html += timelineRows([e]).map(({ a, p }, i) => exploreRow(a, p, i === 0)).join("");
+		html += rows.map(({ a, p }, i) => exploreRow(a, p, i === 0)).join("");
 		const d = deps[e.id] || [];
 		if (d.length) html += timelineRows(d).map(({ a, p }) => taskRow(a, p)).join("");
 	}
