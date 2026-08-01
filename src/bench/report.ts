@@ -111,11 +111,35 @@ export function rollup(arm: Arm, entries: ManifestEntry[]): ArmRollup {
 }
 
 const taskTableHeader =
-	"| arm | model | flags | done | success | failures | steps x̄ | s x̄ | calls x̄ | out-tok x̄ | $ | rejections | doc-scope muts | obs-nodes x̄ | shown x̄ | depth x̄ | max idx | unnormalised |";
-const taskTableRule = "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|";
+	"| arm | model | tier | map | flags | done | success | failures | steps x̄ | s x̄ | calls x̄ | out-tok x̄ | $ | rejections | doc-scope muts | obs-nodes x̄ | shown x̄ | depth x̄ | max idx | unnormalised |";
+const taskTableRule = "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|";
+
+/**
+ * The grounding TIER the runs actually reported, not the one the arm's name promises.
+ * `groundingChecked` already fails a run whose provenance disagrees with its arm, so a row here
+ * agreeing is a restatement — but the restatement is the point: the tier is what phase 2
+ * measures, and reading it off arm ids invites exactly the mistake of trusting the label.
+ * Divergence within an arm (it should never happen) renders as the set, loudly.
+ */
+const tierCell = (r: ArmRollup): string => {
+	const seen = [...new Set(r.collected.map((e) => e.metrics?.provenance).filter(Boolean))];
+
+	return seen.length === 0 ? "—" : seen.length === 1 ? String(seen[0]) : `⚠ ${seen.join("/")}`;
+};
+
+/**
+ * Node count of the map the arm grounded on — the confound "grounded" hides. Phase 1's maps
+ * ranged 89-234 nodes, so a grounded arm underperforming may have drawn a thin map rather than
+ * been failed by grounding. A range means the arm's runs did not all read the same map.
+ */
+const mapCell = (r: ArmRollup): string => {
+	const ns = [...new Set(r.collected.map((e) => e.metrics?.groundingNodes).filter((n): n is number => typeof n === "number"))].sort((a, b) => a - b);
+
+	return ns.length === 0 ? "—" : ns.length === 1 ? String(ns[0]) : `${ns[0]}–${ns[ns.length - 1]}`;
+};
 
 const taskRow = (r: ArmRollup, model: string): string =>
-	`| ${r.arm.id} | ${model} | ${flagsLine(r.arm)} | ${r.collected.length}/${r.arm.n} | ${pct(r.successes, r.collected.length)} | ${r.failureBreakdown || "—"} | ${fmt(r.meanSteps)} | ${fmt(r.meanElapsedSec)} | ${fmt(r.meanModelCalls)} | ${fmt(r.meanOutputTokens)} | ${costCell(r.cost)} | ${r.rejections} | ${r.documentScopeMutations} | ${fmt(r.meanObsNodes)} | ${fmt(r.meanShownLines)} | ${r.meanChosenDepth === undefined ? "—" : `${Math.round(r.meanChosenDepth * 100)}%`} | ${fmt(r.maxChosenIndex)} | ${r.unnormalisedRuns ? `⚠ ${r.unnormalisedRuns}` : "0"} |`;
+	`| ${r.arm.id} | ${model} | ${tierCell(r)} | ${mapCell(r)} | ${flagsLine(r.arm)} | ${r.collected.length}/${r.arm.n} | ${pct(r.successes, r.collected.length)} | ${r.failureBreakdown || "—"} | ${fmt(r.meanSteps)} | ${fmt(r.meanElapsedSec)} | ${fmt(r.meanModelCalls)} | ${fmt(r.meanOutputTokens)} | ${costCell(r.cost)} | ${r.rejections} | ${r.documentScopeMutations} | ${fmt(r.meanObsNodes)} | ${fmt(r.meanShownLines)} | ${r.meanChosenDepth === undefined ? "—" : `${Math.round(r.meanChosenDepth * 100)}%`} | ${fmt(r.maxChosenIndex)} | ${r.unnormalisedRuns ? `⚠ ${r.unnormalisedRuns}` : "0"} |`;
 
 /**
  * `$4.12` — or `$4.12 +2?` when some of the arm's runs ran on a model with no rate card.

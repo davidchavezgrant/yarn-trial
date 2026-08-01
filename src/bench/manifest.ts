@@ -37,6 +37,13 @@ export interface RunMetrics {
 	cacheCreationTokens?: number;
 	modelCalls?: number;
 	provenance?: string;
+	/**
+	 * Node count of the appmap graph this run was grounded on. The TIER alone is not the
+	 * condition: phase 1's maps ranged 89–234 nodes, so two runs both reading `explore` can have
+	 * had very different inputs. Present on ungrounded runs too — it records what was on the box,
+	 * not what was injected — which is exactly what makes the comparison separable.
+	 */
+	groundingNodes?: number;
 	/** What actually ran, off the run log — the manifest entry's `model` is only what was asked for. */
 	model?: string;
 	/** Which wire served it: anthropic | openrouter | azure-responses. See makeClient. */

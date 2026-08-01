@@ -70,6 +70,12 @@ export function parseRunMetrics(runLog: Record<string, any>): RunMetrics {
 				? { modelCalls: runLog.modelCalls }
 				: {}),
 		...(runLog.grounding?.provenance ? { provenance: String(runLog.grounding.provenance) } : {}),
+		// HOW BIG the map was, not just which tier it came from. Phase 1 produced maps ranging
+		// 89-234 nodes, so "grounded" is not one condition — a grounded arm that underperforms
+		// might have drawn a thin map rather than been failed by grounding. Recording it here
+		// keeps that separable afterwards; the alternative is re-deriving it by hand from 45 run
+		// logs, which is what happened the first time.
+		...(typeof runLog.grounding?.graph?.nodes === "number" ? { groundingNodes: runLog.grounding.graph.nodes } : {}),
 		// The run log's model is ground truth (makeClient records what actually ran); the
 		// manifest's model field is only what dispatch asked for. Divergence is a finding.
 		...(runLog.model ? { model: String(runLog.model) } : {}),
