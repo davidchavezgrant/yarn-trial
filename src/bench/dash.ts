@@ -86,6 +86,8 @@ export interface EntryView {
 	judgeVisual?: string;
 	queueWaitSec?: number;
 	runSec?: number;
+	/** When the run actually began, off the run log's jobTiming — the board's Started column. */
+	startedAt?: string;
 	endedAt?: string;
 	note?: string;
 	/**
@@ -283,6 +285,7 @@ function entryView(e: ManifestEntry, fleet: FleetView): EntryView {
 			...(m?.judgeVisual ? { judgeVisual: m.judgeVisual } : {}),
 			...(m?.queueWaitSec !== undefined ? { queueWaitSec: m.queueWaitSec } : {}),
 			...(m?.runSec !== undefined ? { runSec: m.runSec } : {}),
+			...(m?.startedAt ? { startedAt: m.startedAt } : {}),
 			...(m?.endedAt ? { endedAt: m.endedAt } : {}),
 			...(e.note ? { note: e.note } : {}),
 			...(Object.keys(stamp).length ? { exploreStamp: stamp } : {}),

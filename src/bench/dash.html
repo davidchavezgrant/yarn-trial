@@ -108,14 +108,24 @@
 	table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
 	th { text-align: left; font-size: 11px; color: var(--ink-2); font-weight: 500; padding: 3px 10px 3px 0; border-bottom: 1px solid var(--grid); }
 	th[data-tip] { cursor: help; text-decoration: underline dotted var(--baseline); text-underline-offset: 3px; }
+	/* ONE header row for the whole board, stuck to the top of the #board scroll viewport.
+	   border-collapse lets a stuck th's border scroll away with the rows, so the separator
+	   rides as a box-shadow instead. Opaque surface background: rows pass underneath. */
+	#board thead th { position: sticky; top: 0; z-index: 2; background: var(--surface); border-bottom: none; box-shadow: 0 1px 0 var(--grid); }
 	td { padding: 4px 10px 4px 0; border-bottom: 1px solid var(--grid); font-size: 12px; vertical-align: top; }
 	tr:last-child td { border-bottom: none; }
 	td.arm { color: var(--ink); white-space: nowrap; }
 	td.flags { color: var(--muted); font-family: ui-monospace, monospace; font-size: 11px; }
 	.phase-h td { color: var(--muted); font-size: 11px; letter-spacing: .05em; text-transform: uppercase; padding-top: 12px; border-bottom: none; }
-	/* Lineage groups: extra air above each group's first header row — the explore row IS the
-	   group header, so a title row would only repeat what that row already says. */
-	tr.gsep th { padding-top: 16px; }
+	/* Lineage groups: extra air above each group's first row. The explore row IS the group
+	   header — the board's only column labels live in the single sticky thead. */
+	tr.gsep td { padding-top: 16px; }
+	/* Explore group-header summary: discovery medians folded into one cell spanning the task
+	   metric columns — inline labels muted, values a notch brighter, segments never break
+	   mid-number (wraps only at the " · " joins). */
+	td.exp-sum { color: var(--ink-2); font-size: 11px; }
+	td.exp-sum > span { white-space: nowrap; }
+	td.exp-sum .k { color: var(--muted); margin-right: 4px; }
 	/* Phase badge on task/replay rows: phases interleave inside a lineage group, so each row
 	   carries its own. */
 	.pbadge {
@@ -543,7 +553,11 @@ function statusChip(e, rowKey, selected) {
 		? `\ntokens — ${tok.join(" · ")}` + (e.usd != null ? `\nest cost ${fmtMoney(e.usd)} (published rates, not an invoice)` : "")
 		: "";
 	const open = rowKey ? ` data-row="${esc(rowKey)}" data-job="${esc(e.jobId)}"` : "";
-	return `<span class="chip${selected ? " sel" : ""}"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${e.note ? "\n" + esc(e.note) : ""}\nclick to view on the map${esc(econ)}">` +
+	// Start time rides the chip tip too (the Started column shows only the row's latest);
+	// a not-yet-started entry shows its submit time instead.
+	const st = entryStart(e);
+	const when = st != null ? `\nstarted ${startStamp(st)}` : e.submittedAt ? `\nsubmitted ${startStamp(Date.parse(e.submittedAt) || null)}` : "";
+	return `<span class="chip${selected ? " sel" : ""}"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${esc(when)}${e.note ? "\n" + esc(e.note) : ""}\nclick to view on the map${esc(econ)}">` +
 		`<span class="dot" style="background:${color}"></span>${label}${esc(judge)}</span>`;
 }
 
@@ -641,12 +655,13 @@ function armOf(jobId) {
 	return null;
 }
 
-// Explore passes and task runs measure different things, so each section of the board gets
-// its own header row — an explore's discovery numbers must never sit under "steps"/"tokens"
-// columns, and an explore has no success ratio to show (its stamp has no success field;
-// rendering one as "0/1 ok" read as a failure). Flags live in the arm tooltip (the display
-// name is derived from them) and per-run completion lives on the chips, so neither needs
-// a column.
+// ONE header row for the whole board, sticky atop the #board scroll — per-section header
+// rows repeated the column labels down the page, which got hard to read. The columns are
+// task-shaped; explore rows keep their discovery numbers out from under "Steps"/"Tokens"
+// by folding them into one spanning inline-labeled cell (exploreRow) — an explore also has
+// no success ratio to show (its stamp has no success field; rendering one as "0/1 ok" read
+// as a failure). Flags live in the arm tooltip (the display name is derived from them) and
+// per-run completion lives on the chips, so neither needs a column.
 const th = (label, tip) => `<th${tip ? ` data-tip="${esc(tip)}"` : ""}>${label}</th>`;
 const NAME_TIP = "hover for the arm id, flags and the decision this cell informs · click to expand the selected run's dropdown (stats · prompt · live log) · pick the run via its chip in the Runs column";
 const RUNS_TIP = "one chip per run — click a chip to select that run: the row's dropdown and ⤢ map follow the selected chip";
@@ -659,21 +674,9 @@ const TASK_HEAD = "<tr>" + th("Name", NAME_TIP) +
 	th("OK", "succeeded / collected") +
 	th("Steps", "mean actions per run") + th("Time", "mean wall-clock per run") +
 	th("Out-Tok", "mean output tokens per run") + th("Est $", "published-rate estimate across collected runs — not an invoice") +
+	th("Started", "when the row's LATEST run began — collected runs off the run log, running runs derived from their ticking elapsed; a queued run shows – until it starts. Hover lists every run") +
 	th("Runs", RUNS_TIP) +
 	th("Map", "the appmap as a full node-link tree — edge thickness = traversal heat, blue = the run's path") + "</tr>";
-// Explore data columns are MEDIANS (x̃) across the arm's collected passes; task columns
-// above stay means (x̄) for report parity via the shared rollup().
-const EXPLORE_HEAD = "<tr>" + th("Name", NAME_TIP) +
-	th("Perceives", "what the pass SEES while exploring: AX tree or DOM elements, plus vision — or pixels only") +
-	th("Acts", "what injects the input: AX (cua driver) or CDP") +
-	th("Task") + th("Model", "what actually ran, off the run logs") +
-	th("Actions x̃", "actions the pass took (elapsed on hover)\n" + MED_TIP) +
-	th("Controls Seen / Act / Dism x̃", "of every control the pass observed (seen), how many it operated (actuated) vs swept off the frontier without operating (dismissed) — the pass ends when the frontier empties, and dismissing is a legitimate way to empty it\n" + MED_TIP) +
-	th("Surfaces x̃", "stamp coverage: distinct screens/panels/tabs/dialogs controls were SEEN on during the pass — what you navigate BETWEEN; controls live ON them. The distilled appmap graph (the map column) typically keeps fewer surface nodes than this\n" + MED_TIP) +
-	th("Nodes x̃", "appmap graph nodes (edges on hover)\n" + MED_TIP) +
-	th("Ambig x̃", "settings editable at two scopes under one identity (same settingKey, different scope) — the wrong-scope trap; each gets a prompt warning\n" + MED_TIP) +
-	th("Runs", RUNS_TIP + " — each pass's own numbers sit in its dropdown") +
-	th("Map", "the appmap this pass produced, as a full node-link tree — edge thickness = traversal heat across collected runs") + "</tr>";
 
 // Friendly names are DERIVED from the arm's structure (kind + flags + phase), not
 // hand-mapped per id, so new matrix cells name themselves. The id stays in the hover —
@@ -727,9 +730,49 @@ function rankDot(a, p) {
 
 // The run selector: minimal chips (dot + Status + ticking elapsed while Running) in their
 // own trailing column — clicking one selects that run for the row's dropdown (selJob/openRows).
+// Chips drain like the board itself: finished → running → queued, oldest first in each band.
 function runsCell(p, key) {
 	const sel = openRows[key] ? selJob(p, key) : undefined;
-	return `<td class="runs">${p.entries.map((e) => statusChip(e, key, e.jobId === sel)).join("")}</td>`;
+	const ordered = p.entries.slice().sort((a, b) => entryBand(a) - entryBand(b) || entryTime(a) - entryTime(b));
+	return `<td class="runs">${ordered.map((e) => statusChip(e, key, e.jobId === sel)).join("")}</td>`;
+}
+
+// "Started" column: when each entry actually BEGAN. collected → the run log's startedAt
+// (fallbacks: endedAt minus the run's duration, then submittedAt); running → start derived
+// from the ticking elapsed; queued/other → null (it hasn't started — its submit time
+// belongs in the tooltip, not the column).
+function entryStart(e) {
+	if (e.collected) {
+		if (e.startedAt) return Date.parse(e.startedAt) || null;
+		const dur = e.runSec != null ? e.runSec : e.elapsedSec;
+		if (e.endedAt && dur != null) return (Date.parse(e.endedAt) - dur * 1000) || null;
+		return Date.parse(e.submittedAt) || null;
+	}
+	if (e.status === "running" && e.elapsedSec != null) return receivedAt - e.elapsedSec * 1000;
+	return null;
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+// HH:MM, prefixed with its day ("Jul 31 23:58") when the start falls on a previous UTC
+// day — an overnight bench must not read as this morning.
+function startStamp(t) {
+	if (t == null) return "–";
+	const d = new Date(t), now = new Date();
+	const today = d.getUTCFullYear() === now.getUTCFullYear() && d.getUTCMonth() === now.getUTCMonth() && d.getUTCDate() === now.getUTCDate();
+	return (today ? "" : MONTHS[d.getUTCMonth()] + " " + d.getUTCDate() + " ") + hhmm(d.toISOString());
+}
+
+const shortJob = (id) => String(id).length > 14 ? String(id).slice(0, 14) + "…" : String(id);
+
+// The cell shows the LATEST relevant start among the row's entries; the tooltip accounts
+// for every entry — started / queued (submitted …) / finished — so a "–" is explained.
+function startedCell(p) {
+	const starts = p.entries.map(entryStart).filter((t) => t != null);
+	const lines = p.entries.map((e) => shortJob(e.jobId) + " — " +
+		(e.collected ? "finished " + startStamp(Date.parse(e.endedAt || e.submittedAt) || null)
+		: e.status === "running" ? "started " + startStamp(entryStart(e))
+		: `${e.status} (submitted ${startStamp(Date.parse(e.submittedAt) || null)})`)).join("\n");
+	return `<td class="num" data-tip="${esc(lines)}">${startStamp(starts.length ? Math.max(...starts) : null)}</td>`;
 }
 
 function armCell(a, p) {
@@ -758,10 +801,18 @@ function taskRow(a, p) {
 		<td class="num">${fmtNum(p.meanSteps)}</td>
 		<td class="num">${p.meanElapsedSec != null ? fmtDur(p.meanElapsedSec) : "–"}</td>
 		<td class="num">${fmtK(p.meanOutputTokens)}</td>
-		<td class="num">${p.usd ? fmtMoney(p.usd) : p.unpriced ? "?×" + p.unpriced : "–"}</td>${runsCell(p, key)}${treeCell(p, key)}</tr>` + (openRows[key] ? detailRowHtml(a, p, key) : "");
+		<td class="num">${p.usd ? fmtMoney(p.usd) : p.unpriced ? "?×" + p.unpriced : "–"}</td>${startedCell(p)}${runsCell(p, key)}${treeCell(p, key)}</tr>` + (openRows[key] ? detailRowHtml(a, p, key) : "");
 }
 
-function exploreRow(a, p) {
+// The explore GROUP-HEADER row. Its discovery numbers are MEDIANS (x̃) across the arm's
+// collected passes (task columns stay means x̄ for report parity via the shared rollup());
+// they live in ONE cell spanning the five task-metric columns, since the board's single
+// sticky header is task-shaped and explore medians must never sit under "Steps"/"Tokens"
+// labels. Each segment carries the tooltip its old column header + cell held — with the
+// headers gone, the segment tip is the only place the column semantics survive. Name,
+// Perceives, Acts, Task("Explore"), Model, Runs and Map stay real cells so they align
+// with the task rows beneath. `first` marks the group's first row for .gsep air.
+function exploreRow(a, p, first) {
 	const key = rowId(a, p);
 	const ex = p.explore || {};
 	// A vision-only pass (--no-ax) has no element list to count against, so its tallies are
@@ -770,15 +821,22 @@ function exploreRow(a, p) {
 	const declared = a.flags && a.flags.includes("--no-ax")
 		? ` <span data-tip="${esc(DECLARED_TIP)}">⚠</span>`
 		: "";
-	const controls = ex.controlsSeen != null
-		? `<span data-tip="seen ${ex.controlsSeen} · actuated ${ex.controlsActuated} · dismissed ${ex.controlsDismissed}">${ex.controlsSeen} / ${ex.controlsActuated} / ${ex.controlsDismissed}</span>${declared}`
-		: "–";
-	return `<tr class="mrow exp-row" data-toggle="${esc(key)}">${armCell(a, p)}
-		<td class="num"><span data-tip="${esc(ex.elapsed ? "elapsed " + ex.elapsed : "")}">${fmtNum(ex.actions)}</span></td>
-		<td class="num">${controls}</td>
-		<td class="num">${fmtNum(ex.surfaces)}</td>
-		<td class="num"><span data-tip="${ex.graphEdges != null ? ex.graphEdges + " edges" : ""}">${fmtNum(ex.graphNodes)}</span></td>
-		<td class="num">${fmtNum(ex.scopeAmbiguities)}</td>${runsCell(p, key)}${treeCell(p, key)}</tr>` + (openRows[key] ? detailRowHtml(a, p, key) : "");
+	const seg = (label, value, tip) => `<span data-tip="${esc(tip)}"><span class="k">${label}</span>${value}</span>`;
+	const summary = [
+		seg("Actions x̃", fmtNum(ex.actions),
+			"actions the pass took" + (ex.elapsed ? "\nelapsed " + ex.elapsed : "") + "\n" + MED_TIP),
+		seg("Controls", ex.controlsSeen != null ? `${ex.controlsSeen}/${ex.controlsActuated}/${ex.controlsDismissed}` : "–",
+			(ex.controlsSeen != null ? `seen ${ex.controlsSeen} · actuated ${ex.controlsActuated} · dismissed ${ex.controlsDismissed}\n` : "")
+			+ "of every control the pass observed (seen), how many it operated (actuated) vs swept off the frontier without operating (dismissed) — the pass ends when the frontier empties, and dismissing is a legitimate way to empty it\n" + MED_TIP) + declared,
+		seg("Surfaces", fmtNum(ex.surfaces),
+			"stamp coverage: distinct screens/panels/tabs/dialogs controls were SEEN on during the pass — what you navigate BETWEEN; controls live ON them. The distilled appmap graph (the map column) typically keeps fewer surface nodes than this\n" + MED_TIP),
+		seg("Nodes", fmtNum(ex.graphNodes),
+			"appmap graph nodes" + (ex.graphEdges != null ? "\n" + ex.graphEdges + " edges" : "") + "\n" + MED_TIP),
+		seg("Ambig", fmtNum(ex.scopeAmbiguities),
+			"settings editable at two scopes under one identity (same settingKey, different scope) — the wrong-scope trap; each gets a prompt warning\n" + MED_TIP),
+	].join(" · ");
+	return `<tr class="mrow exp-row${first ? " gsep" : ""}" data-toggle="${esc(key)}">${armCell(a, p)}
+		<td class="exp-sum" colspan="5">${summary}</td>${startedCell(p)}${runsCell(p, key)}${treeCell(p, key)}</tr>` + (openRows[key] ? detailRowHtml(a, p, key) : "");
 }
 
 /* ---- row detail: appmap + path ------------------------------------------------------- */
@@ -831,7 +889,7 @@ function statsStrip(a, e) {
 // button (openTree); detailBody/mapTree remain below as code for other views.
 function detailRowHtml(a, p, key) {
 	const sel = selJob(p, key);
-	if (!sel) return `<tr class="detail-row"><td colspan="12"><div class="empty">nothing submitted yet</div></td></tr>`;
+	if (!sel) return `<tr class="detail-row"><td colspan="13"><div class="empty">nothing submitted yet</div></td></tr>`;
 	const e = p.entries.find((x) => x.jobId === sel) || {};
 	// The detail is still fetched: the ⤢ modal reads its graph, and its payload carries the
 	// run log's own task — the prompt fallback for arms that carry none (replays).
@@ -843,7 +901,7 @@ function detailRowHtml(a, p, key) {
 		: a.kind === "replay" ? (d && d.task ? `<span class="k">Replay — recipe task</span>${esc(d.task)}` : `<span class="meta">Replay — recipe task not collected yet</span>`)
 		: d && d.task ? `<span class="k">Prompt</span>${esc(d.task)}`
 		: `<span class="meta">no task prompt recorded</span>`;
-	return `<tr class="detail-row"><td colspan="12">${statsStrip(a, e)}<div class="d-prompt">${prompt}</div>
+	return `<tr class="detail-row"><td colspan="13">${statsStrip(a, e)}<div class="d-prompt">${prompt}</div>
 		<div class="logwrap" data-logjob="${esc(sel)}" data-loghost="${esc(e.host || "")}"></div></td></tr>`;
 }
 
@@ -1166,19 +1224,29 @@ function mountLogPanes() {
 	}
 }
 
-// The board reads as a drain timeline: within each section, rows whose runs FINISHED come
-// first in finish order, rows still in flight follow in start order — so the newest start
-// sits at the bottom and the next collect lands where the eye already is.
+// The board reads as a drain timeline in three bands: FINISHED rows first (oldest finish
+// first), then RUNNING (oldest start first), then QUEUED and anything else non-terminal
+// (oldest submit first) — queued sits strictly below running, so an early-SUBMITTED job
+// still waiting in line never sorts above a run that is actually going. Oldest→newest
+// within every band, so the next collect lands where the eye already is. The same bands
+// order the chips inside a row's Runs cell (runsCell).
+function entryBand(e) {
+	return e.collected ? 0 : e.status === "running" ? 1 : 2;
+}
+
 function entryTime(e) {
 	if (e.collected) return Date.parse(e.endedAt || e.submittedAt) || 0;
+	// A running entry's start is derived (receivedAt - elapsed); submit time is the fallback.
 	if (e.status === "running" && e.elapsedSec != null) return receivedAt - e.elapsedSec * 1000;
 	return Date.parse(e.submittedAt) || Infinity;
 }
 
 function rowKey(p) {
-	const done = p.entries.filter((e) => e.collected);
-	// [group, time]: finished rows (group 0) by first finish, the rest (group 1) by first start.
-	return done.length ? [0, Math.min(...done.map(entryTime))] : [1, Math.min(...p.entries.map(entryTime))];
+	// [band, time]: the row takes its BEST entry's band (one finished run puts the row in
+	// the finished band), timed by the earliest entry within that band only — a pass's
+	// queued retry must not drag its running sibling's sort time around.
+	const band = Math.min(...p.entries.map(entryBand));
+	return [band, Math.min(...p.entries.filter((e) => entryBand(e) === band).map(entryTime))];
 }
 
 function timelineRows(arms) {
@@ -1187,8 +1255,8 @@ function timelineRows(arms) {
 		.sort((x, y) => x.k[0] - y.k[0] || x.k[1] - y.k[1]);
 }
 
-// The board is grouped by LINEAGE, not phase: each explore arm heads a group (its row keeps
-// the explore column set — it IS the group header, carrying its own discovery metrics), and
+// The board is grouped by LINEAGE, not phase: each explore arm heads a group (its row IS
+// the group header, carrying its own discovery metrics in a spanning summary cell), and
 // beneath it sit the task/replay arms that consumed its map (groundedBy on the wire — the
 // same resolution orchestrate applies), in drain-timeline order. Ungrounded (NO_GROUNDING)
 // arms close the board under "No Explore Pass". Phases interleave inside a group, hence the
@@ -1205,15 +1273,15 @@ function renderBoard(progress) {
 		if (a.groundedBy) (deps[a.groundedBy] = deps[a.groundedBy] || []).push(a);
 		else ungrounded.push(a);
 	}
-	// gsep only spaces the group's first header row — TASK_HEAD inside a group stays tight.
-	const gsep = (head) => head.replace("<tr>", '<tr class="gsep">');
-	let html = "<table>";
+	// ONE sticky header row for the whole board (thead so it sticks above the body rows);
+	// group air comes from .gsep on each group's first explore row, not from header rows.
+	let html = "<table><thead>" + TASK_HEAD + "</thead><tbody>";
 	const seen = new Set();
 	for (const e of arms.filter((a) => a.kind === "explore" && a.passes.length)) {
 		seen.add(e.id);
-		html += gsep(EXPLORE_HEAD) + timelineRows([e]).map(({ a, p }) => exploreRow(a, p)).join("");
+		html += timelineRows([e]).map(({ a, p }, i) => exploreRow(a, p, i === 0)).join("");
 		const d = deps[e.id] || [];
-		if (d.length) html += TASK_HEAD + timelineRows(d).map(({ a, p }) => taskRow(a, p)).join("");
+		if (d.length) html += timelineRows(d).map(({ a, p }) => taskRow(a, p)).join("");
 	}
 	// Grounded arms whose explore pass has nothing submitted (or names an arm outside the
 	// matrix): still shown, under a placeholder header naming the missing lineage — a run
@@ -1221,16 +1289,16 @@ function renderBoard(progress) {
 	for (const gid of Object.keys(deps)) {
 		if (seen.has(gid)) continue;
 		const ex = state.arms.find((x) => x.id === gid);
-		html += `<tr class="phase-h"><td colspan="12">${esc(gid)} — ${ex ? "grounding pass not yet submitted" : "not in the matrix"}</td></tr>`;
-		html += TASK_HEAD + timelineRows(deps[gid]).map(({ a, p }) => taskRow(a, p)).join("");
+		html += `<tr class="phase-h"><td colspan="13">${esc(gid)} — ${ex ? "grounding pass not yet submitted" : "not in the matrix"}</td></tr>`;
+		html += timelineRows(deps[gid]).map(({ a, p }) => taskRow(a, p)).join("");
 	}
 	if (ungrounded.length) {
-		html += `<tr class="phase-h"><td colspan="12">No Explore Pass</td></tr>`;
-		html += TASK_HEAD + timelineRows(ungrounded).map(({ a, p }) => taskRow(a, p)).join("");
+		html += `<tr class="phase-h"><td colspan="13">No Explore Pass</td></tr>`;
+		html += timelineRows(ungrounded).map(({ a, p }) => taskRow(a, p)).join("");
 	}
-	$("board").innerHTML = html + "</table>";
+	$("board").innerHTML = html + "</tbody></table>";
 	const scope = targetFilter === "All" ? "" : `${targetLabel(targetFilter)} only · `;
-	$("board-sub").textContent = `${scope}${progress.submitted} submitted of ${progress.planned} planned runs · ${progress.collected} collected · grouped by the explore pass that grounded them · within a group: finished first (in finish order), in-flight below (newest start last) · click an arm to see its map + path`;
+	$("board-sub").textContent = `${scope}${progress.submitted} submitted of ${progress.planned} planned runs · ${progress.collected} collected · grouped by the explore pass that grounded them · within a group: finished first, then running, then queued — oldest first in each · click an arm to see its map + path`;
 }
 
 /* ---- off-matrix strip ---------------------------------------------------------------- */
