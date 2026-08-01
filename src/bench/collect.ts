@@ -147,7 +147,12 @@ export function parseAppmapStamp(md: string): RunMetrics {
 
 		return Number.isFinite(n) ? n : undefined;
 	};
-	const controls = field("controls")?.match(/(\d+)\s*actuated\s*\/\s*(\d+)\s*dismissed\s*\/\s*(\d+)\s*seen/);
+	// Match the stamp directly, not via field(): a vision-only pass labels its tallies
+	// `controls (DECLARED):` — self-reported, no element list to count against — and the
+	// bare `controls:` lookup missed it, so the vision arm collected every metric EXCEPT
+	// its control counts. Second divergence of the same class as the provenance regex fix
+	// four lines up; tolerate the marker rather than normalise it away (it is a caveat).
+	const controls = stamp.match(/\bcontrols(?:\s*\(DECLARED\))?:\s*(\d+)\s*actuated\s*\/\s*(\d+)\s*dismissed\s*\/\s*(\d+)\s*seen/);
 
 	return {
 		...(num("actions") !== undefined ? { exploreActions: num("actions") } : {}),
