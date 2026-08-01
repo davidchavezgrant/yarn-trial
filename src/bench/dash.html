@@ -572,7 +572,15 @@ function memorizeLive() {
 }
 
 function statusChip(e, rowKey, selected) {
-	const color = e.status === "running" ? SERIES[0] : e.status === "queued" ? "#898781" :
+	// Awaiting-collect is amber ONLY while the outcome is unknown. The runner registry's
+	// verdict may already be on this page via the dropdown's log meta (logPanes) — a run it
+	// graded failed/orphaned must dot red NOW, not after a collect pass. (Once the fleet
+	// poll's `recent` field reaches the runners, dead runs arrive as first-class failed/
+	// crashed statuses and this fallback goes quiet.)
+	const pane = logPanes[e.jobId + "@" + e.host];
+	const dead = e.status === "awaiting-collect" && pane && (pane.state === "failed" || pane.state === "orphaned");
+	const color = dead ? STATUS.critical :
+		e.status === "running" ? SERIES[0] : e.status === "queued" ? "#898781" :
 		e.status === "awaiting-collect" ? STATUS.warning : OUTCOME_COLORS[e.status] || "#898781";
 	// Chips are minimal on purpose: dot + Status + elapsed — per-run detail lives in the
 	// tooltip and the row dropdown, not on the chip line. The elapsed ticks while Running
@@ -603,7 +611,9 @@ function statusChip(e, rowKey, selected) {
 	// a not-yet-started entry shows its submit time instead.
 	const st = entryStart(e);
 	const when = st != null ? `\nstarted ${startStamp(st)}` : e.submittedAt ? `\nsubmitted ${startStamp(Date.parse(e.submittedAt) || null)}` : "";
-	return `<span class="chip${selected ? " sel" : ""}"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${esc(when)}${e.note ? "\n" + esc(e.note) : ""}\nclick to view on the map${esc(econ)}">` +
+	// logPanes-fallback note: name the registry verdict, or the red dot reads as a collected result.
+	const registry = dead ? `\nregistry: ${pane.state}${pane.exitCode != null ? ` (exit ${pane.exitCode})` : ""} — not yet collected` : "";
+	return `<span class="chip${selected ? " sel" : ""}"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${esc(when)}${e.note ? "\n" + esc(e.note) : ""}${esc(registry)}\nclick to view on the map${esc(econ)}">` +
 		`<span class="dot" style="background:${color}"></span>${label}${esc(judge)}</span>`;
 }
 
