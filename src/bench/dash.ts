@@ -791,8 +791,6 @@ export function narratorPrompt(
  * pins armTitle's own output, which is why the rename lives here and not in matrix.ts.
  */
 const ARM_TITLE_COPY: Record<string, string> = {
-	"grounding pass": "Explore",
-	"grounding pass (web)": "Web Explore",
 	"grounded task": "Explored Task",
 	"ungrounded task": "Unexplored Task",
 	"human-notes task": "Curated-Recipe Task",
@@ -802,7 +800,26 @@ const ARM_TITLE_COPY: Record<string, string> = {
 	"recipe replay (no rescue)": "Recipe Replay (No Rescue)",
 };
 
+/**
+ * Explore variants name their perception CONDITION ("Element-Only Explore") — a bare
+ * "Explore" was redundant with the Task cell, which already reads "Explore" on these rows
+ * (David, 2026-08-01). Never the backend: Acts carries that, and folding actuation into
+ * the label is how "vision-only explore (AX)" got misread as vision + AX on 2026-07-31.
+ * Derived from the dispatch object, same rule as armTitle — new cells name themselves.
+ */
+function exploreTitle(arm: Arm): string {
+	const d = arm.dispatch;
+	const base = d.noAx ? "Vision-Only Explore"
+		: d.axdomOff && d.noVision ? "Bare-Tree Explore"
+		: d.axdomOff ? "No-Sidecar Explore"
+		: d.noVision ? "Element-Only Explore"
+		: "Baseline Explore";
+
+	return base + (d.url ? " (Web)" : "");
+}
+
 function displayTitle(arm: Arm): string {
+	if (arm.kind === "explore") return (arm.dispatch.record ? "Filmed " : "") + exploreTitle(arm);
 	const t = armTitle(arm);
 	const filmed = t.startsWith("filmed ");
 	const base = filmed ? t.slice("filmed ".length) : t;
