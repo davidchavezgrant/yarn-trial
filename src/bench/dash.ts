@@ -9,7 +9,7 @@ import { readJournal } from "../core/journal.js";
 import type { FleetRow } from "../remote/control/fleet.js";
 import type { EngineHandle } from "../remote/liveview.js";
 import { readJob as readLocalJob, readLog } from "../remote/runner/jobs.js";
-import { ARCHIVE_DIR, LIVE_DIR, RUN_FILES, appSlug, dataRoot, outDir, runFile } from "../paths.js";
+import { ARCHIVE_DIR, LIVE_DIR, OLD_ARCHIVE_DIR, OLD_LIVE_DIR, RUN_FILES, appSlug, dataRoot, outDir, runFile } from "../paths.js";
 import { appmapSlug } from "../core/target.js";
 import { archiveDirFor } from "./collect.js";
 import { estimateCost } from "./cost.js";
@@ -30,15 +30,16 @@ import { judgeDisagreements, modelPasses, passLabel, rollup } from "./report.js"
  *    shows up instantly),
  *  - the fleet (the same `fleetStatus()` ssh fan-out the fleet panel uses, polled),
  *  - `collect()`, OPT-IN via `--collect`. The default posture is a PURE READER (David,
- *    2026-08-01): the runner owns ./out/live — the canonical store, with ./out/archive as
- *    its hard-linked backup — and the dash writes nothing except the narrator's note (see
- *    narrate()). When armed, collect is idempotent and its writes are atomic BY DESIGN
- *    (collect.ts) — a manual collect racing this loop converges on the same bytes.
- *    `--no-collect`, the old opt-out, is still accepted as a harmless no-op.
+ *    2026-08-01): the runner owns ./out/bench/live — the canonical store, with
+ *    ./out/bench/archive as its hard-linked backup — and the dash writes nothing except the
+ *    narrator's note (see narrate()). When armed, collect is idempotent and its writes are
+ *    atomic BY DESIGN (collect.ts) — a manual collect racing this loop converges on the same
+ *    bytes. `--no-collect`, the old opt-out, is still accepted as a harmless no-op.
  *
- * Every dash read of generated data resolves out/live → out/archive → the legacy location
- * (fromStore below; paths.ts's runFile is the same rule specialised to per-run artifacts),
- * so the dash follows the data wherever the writer currently puts it.
+ * Every dash read of generated data resolves out/bench/live → out/bench/archive → the store's
+ * pre-bench homes (out/live, out/archive) → the legacy location (fromStore below; paths.ts's
+ * runFile is the same rule specialised to per-run artifacts), so the dash follows the data
+ * wherever the writer currently puts it.
  *
  * Everything derived (rollups, cost, judge tallies) reuses the report's own exported math —
  * the dashboard must never disagree with the report over the same manifest.
@@ -462,11 +463,12 @@ export function narratorDigest(state: DashState): Record<string, unknown> {
  * through here. (Per-run artifacts — run logs, journals, console logs — go through paths.ts's
  * runFile, which applies the identical rule with the pre-consolidation filename mapping.)
  *
- * The runner saves all live data under ./out/live — the dash's canonical READ-ONLY store —
- * with ./out/archive as a hard-linked backup. Bench manifests have NOT moved yet (manifest.ts
- * still writes out/bench/<date>/), so today the third candidate is where they actually are;
- * the live-first order is what lets the dash follow the data the day the writer moves it,
- * and what keeps `--date` working against old backups meanwhile.
+ * The runner saves all live data under ./out/bench/live — the dash's canonical READ-ONLY
+ * store — with ./out/bench/archive as a hard-linked backup. The next two candidates are the
+ * store's pre-bench homes (./out/live, ./out/archive — data landed there the night before the
+ * final location was decided), then the legacy out/bench/<date> manifests, then the out root
+ * itself. The live-first order is what lets the dash follow the data the day the writer moves
+ * it, and what keeps `--date` working against old backups meanwhile.
  *
  * Returns the LAST candidate when the artifact exists nowhere, so error messages and the
  * watcher name where the data is expected to appear rather than where it last wasn't.
@@ -476,7 +478,14 @@ export function storeRoot(relParts: string[], outRoot = outDir()): string {
 	// everything above it. `out/bench` is the legacy location AND the parent of the two current
 	// ones — order matters, not containment: live and archive are tried first, so a date present
 	// in both resolves to live.
-	const roots = [path.join(outRoot, LIVE_DIR), path.join(outRoot, ARCHIVE_DIR), path.join(outRoot, "bench"), outRoot];
+	const roots = [
+		path.join(outRoot, LIVE_DIR),
+		path.join(outRoot, ARCHIVE_DIR),
+		path.join(outRoot, OLD_LIVE_DIR),
+		path.join(outRoot, OLD_ARCHIVE_DIR),
+		path.join(outRoot, "bench"),
+		outRoot,
+	];
 
 	return roots.find((r) => fs.existsSync(path.join(r, ...relParts))) ?? (roots[roots.length - 1] as string);
 }
@@ -499,24 +508,31 @@ const readStoredManifest = (date: string): Manifest => readManifest(date, storeR
  * Headings are machine-written by narrate() (`## <ISO> — N collected (<model>)`), so parsing
  * the last one back is exact, not heuristic.
  */
-/** Where the narrator's event log lives: INSIDE the store, by David's explicit exception. */
-export const narrativeLogPath = (outRoot?: string): string => path.join(outRoot ?? path.join(dataRoot(), "out"), "live", "narrative.jsonl");
+/** Where the narrator's event log APPENDS: inside the store, by David's explicit exception. */
+export const narrativeLogPath = (outRoot?: string): string => path.join(outRoot ?? outDir(), LIVE_DIR, "narrative.jsonl");
+
+/** The event log's pre-bench home (out/live/narrative.jsonl) — read-only; appends go above. */
+export const legacyNarrativeLogPath = (outRoot?: string): string => path.join(outRoot ?? outDir(), OLD_LIVE_DIR, "narrative.jsonl");
 
 function readPersistedNarrative(date: string): Narrative | undefined {
 	// The event log first: one JSON object per line, append-only. The newest parseable
 	// line wins — a torn final line (reader racing the append) falls back to the one before.
-	try {
-		const lines = fs.readFileSync(narrativeLogPath(), "utf8").trimEnd().split("\n");
-		for (let i = lines.length - 1; i >= 0; i--) {
-			try {
-				const ev = JSON.parse(lines[i] as string);
-				if (ev?.text && ev?.t) return { updatedAt: String(ev.t), text: String(ev.text), model: String(ev.model ?? "?") };
-			} catch {
-				// torn or foreign line — keep walking back
+	// Canonical home first, then the pre-bench file — events already landed there the night
+	// the store lived at out/live, and moving the append target must not orphan them.
+	for (const logFile of [narrativeLogPath(), legacyNarrativeLogPath()]) {
+		try {
+			const lines = fs.readFileSync(logFile, "utf8").trimEnd().split("\n");
+			for (let i = lines.length - 1; i >= 0; i--) {
+				try {
+					const ev = JSON.parse(lines[i] as string);
+					if (ev?.text && ev?.t) return { updatedAt: String(ev.t), text: String(ev.text), model: String(ev.model ?? "?") };
+				} catch {
+					// torn or foreign line — keep walking back
+				}
 			}
+		} catch {
+			// this event log does not exist — try the next home, then the legacy markdown
 		}
-	} catch {
-		// no event log yet — try the legacy markdown home below
 	}
 	let raw: string;
 	try {
@@ -725,7 +741,7 @@ export interface DashDetail {
 	/** The run log's own task string — the page's prompt fallback for arms carrying none (replays). */
 	task?: string;
 	graph?: { nodes: any[]; edges: any[]; home?: string; gated?: string[] };
-	/** Where the graph came from — archived arm map, live docs/appmaps, or nothing. */
+	/** Where the graph came from — the run dir's own copy, archived arm map, live docs/appmaps, or nothing. */
 	graphSource?: string;
 	steps: DetailStep[];
 	/** settingKeys the run's journal recorded as actually mutated. */
@@ -849,7 +865,12 @@ const readJsonFile = (file: string): Record<string, any> | undefined => {
 	}
 };
 
-/** The archived graph for an explore arm's pass, else the live docs/appmaps copy. */
+/**
+ * A run's appmap graph: the run directory's OWN copy first, then the bench-archived per-arm
+ * copy, then the live docs/appmaps map. Existing maps STAY where they are (David, 2026-08-01)
+ * — the run-dir copy applies to new runs whose explore pass filed `appmap.json` beside its
+ * run log; everything older is served from its current home by the later candidates.
+ */
 function resolveGraph(
 	entry: ManifestEntry,
 	exploreArmId: string,
@@ -857,6 +878,11 @@ function resolveGraph(
 	benchRoot: string,
 	dataDir: string,
 ): { graph?: DashDetail["graph"]; source?: string } {
+	// The run's own copy — explore passes save RUN_FILES.appmapGraph inside their run dir, and
+	// runFile walks out/bench/live → out/bench/archive → the pre-bench out/live and out/archive
+	// homes. Task runs carry no appmap of their own and fall through to the arm-keyed copies.
+	const own = readJsonFile(runFile(entry.jobId, RUN_FILES.appmapGraph, path.join(dataDir, "out")));
+	if (own?.nodes) return { graph: shapeGraph(own), source: `${entry.jobId}/${RUN_FILES.appmapGraph} (run dir)` };
 	const archive = archiveDirFor(benchRoot, { ...entry, armId: exploreArmId });
 	try {
 		const file = fs.readdirSync(archive).find((f) => f.endsWith(".json"));
@@ -911,8 +937,9 @@ function shapeGraph(g: Record<string, any>): NonNullable<DashDetail["graph"]> {
 /** Everything the board's dropdown needs for one run: the map, the walk, the mutations. */
 export function buildDetail(jobId: string, manifest: Manifest, opts: { dataDir?: string; benchRoot?: string } = {}): DashDetail {
 	const dataDir = opts.dataDir ?? dataRoot();
-	// Store-resolved (live → archive → out/bench), off dataDir so tests stay hermetic —
-	// this is where archiveDirFor finds the pass-archived appmap graphs.
+	// Store-resolved (out/bench/live → out/bench/archive → pre-bench out/live and out/archive
+	// → legacy out/bench), off dataDir so tests stay hermetic — this is where archiveDirFor
+	// finds the pass-archived appmap graphs.
 	const benchRoot = opts.benchRoot ?? fromStore([manifest.date], path.join(dataDir, "out"));
 	const entry = manifest.entries.find((e) => e.jobId === jobId);
 	if (!entry) return { jobId, armId: "?", steps: [], mutatedKeys: [], note: "no manifest entry for this job" };
@@ -1044,13 +1071,14 @@ export interface DashOptions {
  */
 export function defaultDashDate(root?: string): string {
 	const outRoot = root ?? outDir();
-	// Date-dir discovery sweeps every store location (out/bench/live, out/bench/archive, and the
-	// legacy out/bench); each candidate date is then judged on the SAME manifest the dash would
-	// actually read — fromStore's live-first resolution — so discovery and the later reads can
-	// never disagree about which copy counts. The date regex is what keeps the sweep of the
-	// legacy root from picking up its own `live`/`archive` children as passes.
+	// Date-dir discovery sweeps every store location (out/bench/live, out/bench/archive, the
+	// pre-bench out/live and out/archive homes, and the legacy out/bench); each candidate date
+	// is then judged on the SAME manifest the dash would actually read — fromStore's live-first
+	// resolution — so discovery and the later reads can never disagree about which copy counts.
+	// The date regex is what keeps the sweep of the legacy root from picking up its own
+	// `live`/`archive` children as passes.
 	const dates = new Set<string>();
-	for (const r of [path.join(outRoot, LIVE_DIR), path.join(outRoot, ARCHIVE_DIR), path.join(outRoot, "bench")]) {
+	for (const r of [path.join(outRoot, LIVE_DIR), path.join(outRoot, ARCHIVE_DIR), path.join(outRoot, OLD_LIVE_DIR), path.join(outRoot, OLD_ARCHIVE_DIR), path.join(outRoot, "bench")]) {
 		try {
 			for (const d of fs.readdirSync(r)) if (/^\d{4}-\d{2}-\d{2}$/.test(d)) dates.add(d);
 		} catch {
@@ -1083,7 +1111,7 @@ export function parseDashArgs(args: string[]): DashOptions {
 	return {
 		port: Number(flag("--port") ?? process.env.DASH_PORT ?? 4642),
 		date: flag("--date") ?? defaultDashDate(),
-		// READ-ONLY by default (David, 2026-08-01): out/live is the runner's store and the
+		// READ-ONLY by default (David, 2026-08-01): out/bench/live is the runner's store and the
 		// dash is a reader over it — `--collect` arms the collect loop explicitly. The old
 		// opt-out `--no-collect` is deliberately still accepted (as a no-op): launchers and
 		// muscle memory that pass it must keep meaning what they always meant, a pure reader.
@@ -1244,7 +1272,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			narrative = { updatedAt: new Date().toISOString(), text, model };
 			// THE ONE SANCTIONED WRITE (per David, 2026-08-01, amended same day): the dash is
 			// otherwise a pure reader, but the narrator writes INTO the store by explicit
-			// exception — out/live/narrative.jsonl, IMMUTABLY: one JSON event per line,
+			// exception — out/bench/live/narrative.jsonl, IMMUTABLY: one JSON event per line,
 			// append-only, never rewritten. An event log rather than a mutated file means the
 			// full findings history survives verbatim (the GUI shows the newest; the file is
 			// the record), and a reader racing an append at worst sees one torn tail line,
@@ -1316,7 +1344,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		let app: string | undefined;
 		let elapsedSec: number | undefined;
 		try {
-			// A run IS a directory under out/live now, so "what is this laptop doing" reads the
+			// A run IS a directory under out/bench/live now, so "what is this laptop doing" reads the
 			// directory names directly instead of stripping suffixes off whichever file happened
 			// to be touched most recently.
 			const liveDir = path.join(dataRoot(), "out", LIVE_DIR);
@@ -1334,7 +1362,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 				elapsedSec = Math.max(0, Math.round((now - (fresh.st.birthtimeMs || fresh.st.mtimeMs)) / 1000));
 			}
 		} catch {
-			// No artifacts yet (or out/live missing) — the row still reports a busy laptop.
+			// No artifacts yet (or out/bench/live missing) — the row still reports a busy laptop.
 		}
 
 		return {
@@ -1743,8 +1771,9 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	/**
 	 * GET /api/logs?job=<id>&host=<name>&offset=<n>[&meta=1] — the run-log pane's feed.
 	 *
-	 * Local first: a pulled/collected run's log already sits on disk — out/live/<job>/log.txt
-	 * canonically, out/archive or the legacy out/jobs tree for older runs (runFile resolves) —
+	 * Local first: a pulled/collected run's log already sits on disk — out/bench/live/<job>/log.txt
+	 * canonically, out/bench/archive, the pre-bench out/live and out/archive homes, or the
+	 * legacy out/jobs tree for older runs (runFile resolves) —
 	 * and needs no ssh (job.json beside it answers what meta=1 would have asked the
 	 * runner for). Otherwise ONE single-shot `runnerctl logs` — no follow key, the client's
 	 * 2.5s poll IS the follow — parsed by parseLogFrames because lastFrame() would keep only

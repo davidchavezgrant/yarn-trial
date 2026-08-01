@@ -159,7 +159,7 @@ export interface DispatchAccepted {
 	pid?: number;
 	/**
 	 * Paths relative to the data root, which is the same key on both machines — `pull` writes
-	 * them under the local root unchanged, so `out/live/<id>/run.json` means one file wherever you
+	 * them under the local root unchanged, so `out/bench/live/<id>/run.json` means one file wherever you
 	 * are reading it from.
 	 */
 	artifacts: JobArtifacts;
@@ -660,7 +660,7 @@ interface Source {
 function sourcesFor(job: JobRecord): Source[] {
 	const a = job.artifacts ?? ({} as JobArtifacts);
 	// ONE directory, because that is now what a run IS (paths.ts): job.json, the console log,
-	// the run log, the journal, the step frames and the recording all live under out/live/<id>.
+	// the run log, the journal, the step frames and the recording all live under out/bench/live/<id>.
 	//
 	// This used to be a five-way fan-out of declared and DERIVED paths, and the derived ones
 	// were where it broke: step frames had to be inferred from the run log's existence because

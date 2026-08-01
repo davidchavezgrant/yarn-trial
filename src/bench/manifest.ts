@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { archiveDir, backupTree, liveDir, outDir } from "../paths.js";
+import { archiveDir, backupTree, liveDir, OLD_ARCHIVE_DIR, OLD_LIVE_DIR, outDir } from "../paths.js";
 import type { Phase } from "./matrix.js";
 
 /**
@@ -13,8 +13,8 @@ import type { Phase } from "./matrix.js";
  * write discipline as writeJob in src/remote/runner/jobs.ts: sibling temp file + rename,
  * cleaned up on failure, so a poll mid-write reads the previous manifest, never half of one.
  *
- * One manifest per benchmark day (out/bench/<UTC-date>/manifest.json): re-running a phase
- * appends samples to the same file, and a fresh benchmark on another day starts clean
+ * One manifest per benchmark day (out/bench/live/<UTC-date>/manifest.json): re-running a
+ * phase appends samples to the same file, and a fresh benchmark on another day starts clean
  * without archaeology.
  */
 
@@ -156,9 +156,9 @@ export const utcDate = (now = new Date()): string => now.toISOString().slice(0, 
  *
  * Beside the runs it indexes, because it IS their index and the two were separated only by
  * history. `root` is an OUT-ROOT VARIANT, not the out dir: the default is out/bench/live, and
- * the dashboard passes out/bench/archive or a plain out/ when reading a pass that exists only in
- * one of those (see storeRoot in dash.ts). One reader opens a live pass, a backed-up pass and a
- * pre-2026-08-01 pass with the same call.
+ * the dashboard passes out/bench/archive, the pre-bench out/live or out/archive, or the legacy
+ * out/bench when reading a pass that exists only in one of those (see storeRoot in dash.ts).
+ * One reader opens a live pass, a backed-up pass and a pre-2026-08-01 pass with the same call.
  *
  * A pass is keyed by DATE and a run by stamp, so the two share this directory without colliding
  * — `2026-08-01` next to `2026-08-01T03-07-52-979-yarn`. Neither is mistaken for the other:
@@ -168,7 +168,7 @@ export const utcDate = (now = new Date()): string => now.toISOString().slice(0, 
 export const benchDir = (date = utcDate(), root = liveDir()): string => path.join(root, date);
 
 /**
- * Hard-link the day's manifest family into out/archive/bench/<date>/, the same backup a run
+ * Hard-link the day's manifest family into out/bench/archive/<date>/, the same backup a run
  * gets when it terminates.
  *
  * Called from collect, which is the point at which the manifest has just been told something
@@ -185,11 +185,15 @@ export function archiveBench(date = utcDate(), outRoot = outDir()): string {
 export const manifestPath = (date = utcDate(), root = liveDir()): string => path.join(benchDir(date, root), "manifest.json");
 
 export function readManifest(date = utcDate(), root = liveDir()): Manifest {
-	// Live, then the backup, then the pre-2026-08-01 location — the same three-step fallback
-	// runFile does for run artifacts, and for the same reason: a layout change must not make a
-	// finished pass unreadable. An explicit non-default `root` is honoured as given, because the
-	// dashboard has already resolved which root holds the pass it wants.
-	const candidates = root === liveDir() ? [root, archiveDir(), outDir()] : [root];
+	// Live, then the backup, then the store's pre-bench homes (out/live, out/archive — a few
+	// hours of passes landed there), then the legacy out/bench/<date> layout — the same fallback
+	// walk runFile does for run artifacts, and for the same reason: a layout change must not make
+	// a finished pass unreadable. An explicit non-default `root` is honoured as given, because
+	// the dashboard has already resolved which root holds the pass it wants.
+	const candidates =
+		root === liveDir()
+			? [root, archiveDir(), path.join(outDir(), OLD_LIVE_DIR), path.join(outDir(), OLD_ARCHIVE_DIR), path.join(outDir(), "bench")]
+			: [root];
 	for (const r of candidates) {
 		try {
 			const m = JSON.parse(fs.readFileSync(manifestPath(date, r), "utf8")) as Manifest;

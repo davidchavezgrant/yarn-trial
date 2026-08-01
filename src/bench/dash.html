@@ -43,8 +43,13 @@
 	.hero .tile { text-align: right; }
 	.hero .v { font-size: 19px; color: var(--ink); font-weight: 600; }
 	.hero .k { font-size: 11px; color: var(--muted); }
-	#conn { width: 8px; height: 8px; border-radius: 50%; background: var(--critical); display: inline-block; margin-right: 6px; }
+	/* Three visible truths, not two: green = a data frame arrived recently; amber = the socket
+	   LOOKS open but nothing has arrived past the heartbeat budget (wedged link); red = the
+	   browser itself reported the stream down, or it never connected. Tooltip carries the
+	   last-update time. */
+	#conn { width: 8px; height: 8px; border-radius: 50%; background: var(--critical); display: inline-block; margin-right: 6px; cursor: help; }
 	#conn.ok { background: var(--good); }
+	#conn.stale { background: var(--warning); }
 	.meta { font-size: 11px; color: var(--muted); }
 	main { padding: 16px 20px 60px; display: grid; gap: 16px; }
 	.card {
@@ -868,13 +873,33 @@ const detailInflight = {};
 const openRows = {}; // rowId -> true (first collected run) | a specific jobId
 let prevOpenSurfs = new Set();
 
+function isCollected(job) {
+	for (const a of state.arms) for (const p of a.passes) for (const e of p.entries)
+		if (e.jobId === job) return e.collected === true;
+
+	return false;
+}
+
+// The cache used to be write-once for the life of the page, which went stale two ways: a
+// detail fetched while its run was still in flight ("run log not on this machine yet") kept
+// that emptiness forever after the run collected, and a transient fetch failure was cached
+// as permanent. Swept on every SSE push (before render, so the same push repaints fresh).
+function sweepDetailCache() {
+	for (const k of Object.keys(detailCache))
+		if (detailCache[k]._preCollect && isCollected(k)) delete detailCache[k];
+}
+
 function fetchDetail(job) {
+	// A cached FAILURE retries (at most every 10s — render cadence calls this repeatedly);
+	// a cached success stays until the collect sweep retires it.
+	const c = detailCache[job];
+	if (c && c._failedAt && Date.now() - c._failedAt > 10000) delete detailCache[job];
 	if (detailCache[job] || detailInflight[job]) return;
 	detailInflight[job] = true;
 	fetch("/api/detail?job=" + encodeURIComponent(job))
 		.then((r) => r.json())
-		.then((d) => { detailCache[job] = d; })
-		.catch(() => { detailCache[job] = { steps: [], mutatedKeys: [], note: "failed to load detail" }; })
+		.then((d) => { d._preCollect = !(state && isCollected(job)); detailCache[job] = d; })
+		.catch(() => { detailCache[job] = { steps: [], mutatedKeys: [], note: "failed to load detail", _failedAt: Date.now(), _preCollect: true }; })
 		.finally(() => {
 			delete detailInflight[job];
 			render();
@@ -1482,7 +1507,38 @@ function renderEvents() {
 	if (!state.events.length) return;
 	const el = $("events");
 	el.classList.remove("empty");
+	// Newest-first list, rebuilt per push: a reader parked mid-scroll must not have their line
+	// yanked as new rows prepend, so the reading position is restored by the height the new
+	// rows added. Parked at the top (the common case) stays at the top, showing the newest.
+	const atTop = el.scrollTop <= 4;
+	const oldTop = el.scrollTop, oldH = el.scrollHeight;
 	el.innerHTML = state.events.slice().reverse().map((e) => `<div><span class="t">${hhmm(e.t)}</span>${esc(e.line)}</div>`).join("");
+	if (!atTop) el.scrollTop = oldTop + (el.scrollHeight - oldH);
+}
+
+/**
+ * One failed section must not freeze every section after it: render() used to be a bare call
+ * chain, so a single malformed datum (or missing element) in one renderer silently killed the
+ * rest — half the page held its last good paint FOREVER while the stream stayed live, because
+ * every subsequent push re-threw at the same place. Each section now renders inside safe():
+ * a failure logs the section name + error to the console and drops a small ⚠ marker into the
+ * section's own container. No marker for #fleet or the log panes: the fleet reconciler owns
+ * its container's children (a foreign first child trips its placeholder-wipe branch, which
+ * would destroy a streaming peek panel), and log panes have no single container.
+ */
+function safe(name, elId, fn) {
+	try {
+		fn();
+		const done = elId ? $(elId) : null;
+		const m = done && done.querySelector(":scope > .render-err");
+		if (m) m.remove();
+	} catch (err) {
+		console.error(`dash: ${name} failed to render — section holds its last good paint`, err);
+		const el = elId ? $(elId) : null;
+		if (el && !el.querySelector(":scope > .render-err"))
+			el.insertAdjacentHTML("afterbegin",
+				`<div class="warn render-err" data-tip="${esc(String((err && err.message) || err))}">⚠ ${esc(name)} failed to render — holding last good paint (details in the console)</div>`);
+	}
 }
 
 function render() {
@@ -1493,18 +1549,38 @@ function render() {
 	if (targetFilter !== "All" && !targetKeys().includes(targetFilter)) targetFilter = "All";
 	// One aggregate for everything scope-aware: hero tiles, board sub, cost, judge. The
 	// fleet, off-matrix strip, narrative and events stay global — they are not arm-scoped.
-	const vs = visibleStats();
+	// The filtered recompute can trip on a malformed datum; the "All" path only aliases
+	// server-built fields (it cannot throw on non-null state), so it is the safe fallback.
+	let vs;
+	try {
+		vs = visibleStats();
+	} catch (err) {
+		console.error("dash: filtered aggregates failed — falling back to All", err);
+		targetFilter = "All";
+		vs = visibleStats();
+	}
 	const p = vs.progress;
-	$("h-submitted").textContent = `${p.submitted} / ${p.planned}`;
-	$("h-live").textContent = `${p.running} · ${p.queued}`;
-	$("h-collected").textContent = String(p.collected);
-	$("h-success").textContent = `${p.successes} OK`;
-	$("metaline").textContent = `${state.date} · Fleet ${state.fleet.polledAt ? hhmm(state.fleet.polledAt) : "–"} · ${state.autoCollect ? "Auto-collect on" : "Collect off (pure reader)"} · Updated ${hhmm(state.generatedAt)}`;
-	renderFleet(); renderTargetPicker(); renderBoard(p); renderOffMatrix(); renderExplore(); renderOutcomes();
-	groundingChart("chart-steps", (x) => x.meanSteps, fmtNum);
-	groundingChart("chart-tokens", (x) => x.meanOutputTokens, fmtK);
-	renderAttention(); renderCost(vs.cost, vs.costSeries); renderJudge(vs.judge); renderNarrative(); renderEvents();
-	mountLogPanes(); // re-attach log panes into the fresh DOM (their state lives in logPanes)
+	safe("hero", null, () => {
+		$("h-submitted").textContent = `${p.submitted} / ${p.planned}`;
+		$("h-live").textContent = `${p.running} · ${p.queued}`;
+		$("h-collected").textContent = String(p.collected);
+		$("h-success").textContent = `${p.successes} OK`;
+		$("metaline").textContent = `${state.date} · Fleet ${state.fleet.polledAt ? hhmm(state.fleet.polledAt) : "–"} · ${state.autoCollect ? "Auto-collect on" : "Collect off (pure reader)"} · Updated ${hhmm(state.generatedAt)}`;
+	});
+	safe("fleet", null, renderFleet);
+	safe("scope picker", "target-picker", renderTargetPicker);
+	safe("board", "board", () => renderBoard(p));
+	safe("off-matrix strip", "offmatrix", renderOffMatrix);
+	safe("discovery chart", "chart-explore", renderExplore);
+	safe("outcomes chart", "chart-outcomes", renderOutcomes);
+	safe("steps chart", "chart-steps", () => groundingChart("chart-steps", (x) => x.meanSteps, fmtNum));
+	safe("tokens chart", "chart-tokens", () => groundingChart("chart-tokens", (x) => x.meanOutputTokens, fmtK));
+	safe("attention chart", "chart-attention", renderAttention);
+	safe("cost", "chart-cost", () => renderCost(vs.cost, vs.costSeries));
+	safe("judge", "judge", () => renderJudge(vs.judge));
+	safe("narrative", "narrative", renderNarrative);
+	safe("events", "events", renderEvents);
+	safe("log panes", null, mountLogPanes); // re-attach log panes into the fresh DOM (their state lives in logPanes)
 }
 
 /* ---- wiring -------------------------------------------------------------------------- */
@@ -1744,23 +1820,67 @@ $("fleet").addEventListener("toggle", (ev) => {
 $("tm-close").addEventListener("click", () => $("treeModal").classList.remove("on"));
 document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") $("treeModal").classList.remove("on"); });
 
-const es = new EventSource("/events");
+/* ---- SSE connection + liveness ---------------------------------------------------------- */
+// The #conn dot tells three truths (green live / amber stale / red down), because green used
+// to mean only "a message arrived at least once": the server's keepalives were SSE COMMENTS
+// (": ping"), which never fire onmessage, so a silently dead link (half-open TCP after sleep,
+// a wedged tunnel) kept the dot green indefinitely. The server now heartbeats a REAL
+// {"ev":"hb"} data frame (dash.ts SSE_HEARTBEAT_MS, 15s) alongside the ~20s fleet-poll state
+// pushes, and the watchdog below treats >45s of frame silence (~3 missed beats) as stale.
+const hhmmss = (t) => { const d = new Date(t); return [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, "0")).join(":"); };
+var lastMsgAt = 0; // any REAL frame (state, hb, reload) — SSE comments don't count, correctly
+var esErrored = false;
+var es = null;
+
+// Absolute time on the tip, not "Ns ago" — a static relative time lies within seconds.
+function setConn(mode, tip) {
+	const el = $("conn");
+	el.classList.toggle("ok", mode === "ok");
+	el.classList.toggle("stale", mode === "stale");
+	el.dataset.tip = tip;
+}
+setConn("down", "connecting…");
+
 // --dev hot reload, page half. Two boundaries reload the page: an explicit {reload:true}
 // push (the server watched dash.html change), and reconnect-after-error — the EventSource
 // auto-reconnects when a tsx-watch restart drops the stream, and this page's JS may be
 // stale by then. Reloading on those boundaries is what makes --dev hot for the page,
 // not just the server.
-let esErrored = false;
-es.onmessage = (ev) => {
-	const d = JSON.parse(ev.data);
-	if (d && d.reload === true) { location.reload(); return; } // never falls through to render with a non-state object
-	state = d;
-	receivedAt = Date.now();
-	$("conn").classList.add("ok");
-	render();
-};
-es.onopen = () => { if (esErrored) location.reload(); };
-es.onerror = () => { esErrored = true; $("conn").classList.remove("ok"); };
+function connectES() {
+	es = new EventSource("/events");
+	es.onmessage = (ev) => {
+		const d = JSON.parse(ev.data);
+		lastMsgAt = Date.now();
+		setConn("ok", `stream live — last update ${hhmmss(lastMsgAt)}`);
+		if (d && d.reload === true) { location.reload(); return; } // never falls through to render with a non-state object
+		if (d && d.ev === "hb") return; // liveness only — never touches state or receivedAt (the elapsed tickers' base)
+		state = d;
+		receivedAt = Date.now();
+		sweepDetailCache(); // BEFORE render, so this same push repaints refetched details
+		render();
+	};
+	es.onopen = () => { if (esErrored) location.reload(); };
+	es.onerror = () => { esErrored = true; setConn("down", `stream down — browser retrying; last update ${lastMsgAt ? hhmmss(lastMsgAt) : "never"}`); };
+}
+connectES();
+
+// Staleness watchdog (same idiom as the peek panel's): EventSource's own retry only engages
+// when the browser NOTICES the drop — a half-open socket keeps readyState OPEN forever with
+// no error event, wedging the auto-retry silently. On >45s of frame silence: mark the dot
+// amber and REPLACE the EventSource outright (close() fires no event, so swapping the object
+// is the only cure). Re-forced at most once per 45s; a dead server then surfaces as onerror
+// → red, and the hot-reload boundary above still handles the server coming back.
+var lastForcedReconnect = 0;
+setInterval(() => {
+	if (!lastMsgAt || esErrored) return; // never connected, or browser already reporting down — red either way
+	if (Date.now() - lastMsgAt <= 45000) return;
+	setConn("stale", `stale — nothing since ${hhmmss(lastMsgAt)}; reconnecting`);
+	if (Date.now() - lastForcedReconnect > 45000) {
+		lastForcedReconnect = Date.now();
+		try { es.close(); } catch {}
+		connectES();
+	}
+}, 5000);
 
 // Boot-time resume: an armed peek survives page reloads AND tsx-watch restarts. A reload
 // within the server's 30s idle linger rejoins the live session with zero tunnel/engine

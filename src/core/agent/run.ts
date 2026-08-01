@@ -26,6 +26,7 @@ import {
 	resetToHome,
 	runKey,
 	scopeWarnings,
+	teeConsole,
 	UNREADY_EXIT,
 	verificationTallies,
 	VISION_ONLY_RULES,
@@ -102,8 +103,12 @@ export async function main(): Promise<void> {
 	// duplicate of a different run and its real numbers were lost.
 	const stamp = runKey("", app);
 	// Everything this run produces goes in ONE directory (paths.ts): log, journal, step frames,
-	// recording. It moves to out/archive/<stamp>/ when the run ends.
+	// recording. It gains a hard-linked backup at out/bench/archive/<stamp>/ when the run ends.
 	fs.mkdirSync(runDir(stamp), { recursive: true });
+	// Console output belongs in that directory too. On the fleet the runner already redirects
+	// the child's stdio into log.txt; teeConsole detects that by file identity and stands down,
+	// so this line is what gives LOCAL runs (CLI, RunController) the same artifact.
+	teeConsole(stamp);
 	const runLog = runPath(stamp, RUN_FILES.log);
 	// Step screenshots live under the run's own stamp. The shared OUT/agent-step-N.png
 	// paths were overwritten by every later run, which is how the 43px-offset forensics
@@ -851,13 +856,13 @@ export async function main(): Promise<void> {
 		if (outcome) writeRunLog(outcome);
 		// Back the whole run directory up, last, so the backup includes the log just written and
 		// the assembled mp4 above it. Hard-linked, so it costs nothing and survives the live copy
-		// being removed — which is the point: a failed run gets dropped from out/live and re-run,
+		// being removed — which is the point: a failed run gets dropped from out/bench/live and re-run,
 		// and its evidence has to outlive that. Never fatal; a run that finished must not be
 		// reported as crashed because a backup could not be taken.
 		try {
 			archiveRun(stamp);
 		} catch (err) {
-			console.log(`backup: could not copy ${stamp} to out/archive — ${err instanceof Error ? err.message : String(err)}`);
+			console.log(`backup: could not copy ${stamp} to out/bench/archive — ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
 

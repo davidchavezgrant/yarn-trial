@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { buildDetail, buildState, defaultDashDate, type FleetView, fromStore, groundingArmId, loadEnvFallback, matchPath, parseDashArgs, parseEnvLine, parseLogFrames, rankExplore } from "../src/bench/dash.js";
+import { buildDetail, buildState, defaultDashDate, type FleetView, fromStore, groundingArmId, legacyNarrativeLogPath, loadEnvFallback, matchPath, narrativeLogPath, parseDashArgs, parseEnvLine, parseLogFrames, rankExplore } from "../src/bench/dash.js";
 import type { Manifest, ManifestEntry } from "../src/bench/manifest.js";
 import { armById } from "../src/bench/matrix.js";
 
@@ -538,9 +538,11 @@ test("LoadEnvFallback__DoesNothing__When__EnvironmentAlreadyHoldsAKey", () => {
 
 /*
  * The store adapter. The runner saves all live data under out/bench/live (canonical, read-only to
- * the dash) with out/bench/archive as a hard-linked backup; anything older sits at its legacy path
- * (out/bench, out/jobs, out/runs). Every dash read resolves live → archive → legacy, so
- * these pin the precedence with real directories the way the buildDetail fixtures do.
+ * the dash) with out/bench/archive as a hard-linked backup; the store's pre-bench homes (out/live,
+ * out/archive) still hold what landed there the night before the final location was decided; and
+ * anything older sits at its legacy path (out/bench, out/jobs, out/runs). Every dash read resolves
+ * out/bench/live → out/bench/archive → out/live → out/archive → legacy, so these pin the
+ * precedence with real directories the way the buildDetail fixtures do.
  */
 
 // A pass is addressed by DATE; the store roots supply everything above it.
@@ -573,6 +575,36 @@ test("FromStore__FallsBackToArchiveThenLegacy__When__LiveIsAbsent", () => {
 	} finally {
 		fs.rmSync(out, { recursive: true, force: true });
 	}
+});
+
+test("FromStore__WalksTheFullPrecedenceChain__When__EveryLocationHoldsTheDate", () => {
+	// Built bottom-up: each planting must steal resolution from everything below it, which pins
+	// the entire order out/bench/live → out/bench/archive → out/live → out/archive → out/bench →
+	// out in one pass.
+	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-store-"));
+	try {
+		plant(out, REL);
+		assert.equal(fromStore(REL, out), path.join(out, ...REL));
+		plant(out, ["bench", ...REL]);
+		assert.equal(fromStore(REL, out), path.join(out, "bench", ...REL));
+		plant(out, ["archive", ...REL]);
+		assert.equal(fromStore(REL, out), path.join(out, "archive", ...REL));
+		plant(out, ["live", ...REL]);
+		assert.equal(fromStore(REL, out), path.join(out, "live", ...REL));
+		plant(out, ["bench", "archive", ...REL]);
+		assert.equal(fromStore(REL, out), path.join(out, "bench", "archive", ...REL));
+		plant(out, ["bench", "live", ...REL]);
+		assert.equal(fromStore(REL, out), path.join(out, "bench", "live", ...REL));
+	} finally {
+		fs.rmSync(out, { recursive: true, force: true });
+	}
+});
+
+test("NarrativeLogPath__AppendsUnderTheBenchStore__When__ReadsStillCoverThePreBenchFile", () => {
+	// Appends moved with the store; the pre-bench file stays readable because events already
+	// landed there the night the store lived at out/live.
+	assert.equal(narrativeLogPath("/x/out"), path.join("/x/out", "bench", "live", "narrative.jsonl"));
+	assert.equal(legacyNarrativeLogPath("/x/out"), path.join("/x/out", "live", "narrative.jsonl"));
 });
 
 test("FromStore__NamesTheLegacyPath__When__ArtifactExistsNowhere", () => {
@@ -617,6 +649,29 @@ test("BuildDetail__ReadsRunLog__When__RunLandedInTheLiveStore", () => {
 		assert.equal(d.steps.length, 3);
 		assert.equal(d.steps[2]?.nodeId, "brand-kit/screen-clips/cursor-style");
 		assert.equal(d.task, "show me how to change the cursor type");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("BuildDetail__PrefersTheRunDirsOwnAppmap__When__TheRunFolderHoldsOne", () => {
+	// New explore passes file appmap.json beside their run log; that copy outranks the arm-keyed
+	// bench archive and docs/appmaps because it is the record of what THIS run produced. Old maps
+	// stay where they are (David, 2026-08-01) — the later candidates keep serving them.
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dash-detail-own-"));
+	try {
+		fs.mkdirSync(path.join(dir, "docs", "appmaps"), { recursive: true });
+		fs.writeFileSync(path.join(dir, "docs", "appmaps", "yarn.json"), JSON.stringify(GRAPH));
+		fs.mkdirSync(path.join(dir, "out", "bench", "live", "job-o"), { recursive: true });
+		fs.writeFileSync(path.join(dir, "out", "bench", "live", "job-o", "appmap.json"), JSON.stringify(GRAPH));
+		fs.writeFileSync(
+			path.join(dir, "out", "bench", "live", "job-o", "run.json"),
+			JSON.stringify({ steps: [rawStep(0, "Brand Kit")] }),
+		);
+		const m = manifest(entry({ jobId: "job-o", state: "done", collected: true }));
+		const d = buildDetail("job-o", m, { dataDir: dir, benchRoot: path.join(dir, "bench") });
+		assert.equal(d.graphSource, "job-o/appmap.json (run dir)");
+		assert.equal(d.steps[0]?.edgeTo, "brand-kit");
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}

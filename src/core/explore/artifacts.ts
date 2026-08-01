@@ -202,6 +202,6 @@ export const writeArtifacts = (p: Pass, out: FinishInput, stopped: StopReason, s
 	try {
 		archiveRun(p.stamp);
 	} catch (err) {
-		console.log(`backup: could not copy ${p.stamp} to out/archive — ${err instanceof Error ? err.message : String(err)}`);
+		console.log(`backup: could not copy ${p.stamp} to out/bench/archive — ${err instanceof Error ? err.message : String(err)}`);
 	}
 };

@@ -19,7 +19,7 @@ import { type Mutation, readJournal } from "./journal.js";
 import { collapseJournal, runTeardown } from "./teardown.js";
 import { startOverlay } from "./overlay.js";
 import { webTarget } from "./target.js";
-import { ARCHIVE_DIR, LIVE_DIR, RUN_FILES, runFile } from "../paths.js";
+import { ARCHIVE_DIR, LIVE_DIR, OLD_ARCHIVE_DIR, OLD_LIVE_DIR, RUN_FILES, runFile } from "../paths.js";
 
 /**
  * Replay a run's mutation journal after the run itself has gone.
@@ -130,8 +130,9 @@ export function exitCodeFor(summary: { attempted: number; failed: number }): num
 }
 
 /**
- * Whether a stamp names a run that EXISTS — a directory under out/live (or out/archive), or,
- * for runs written before the layout consolidated, a `<stamp>.`-prefixed file under out/runs.
+ * Whether a stamp names a run that EXISTS — a directory under out/bench/live (or
+ * out/bench/archive, or the store's pre-bench out/live and out/archive homes), or, for runs
+ * written before the layout consolidated, a `<stamp>.`-prefixed file under out/runs.
  *
  * An empty journal used to be the end of the story: a typo'd or truncated stamp built a path
  * to a file that never existed, read as [], and the CLI printed "nothing to clean up" with
@@ -177,9 +178,16 @@ async function main(): Promise<void> {
 				return [];
 			}
 		};
-		// Every place a run can be: canonical, backed up, and the pre-consolidation tree.
+		// Every place a run can be: canonical, backed up, the pre-bench homes, and the
+		// pre-consolidation tree.
 		const live = listing(`${OUT}/${LIVE_DIR}`);
-		const names = [...live, ...listing(`${OUT}/${ARCHIVE_DIR}`), ...listing(`${OUT}/runs`)];
+		const names = [
+			...live,
+			...listing(`${OUT}/${ARCHIVE_DIR}`),
+			...listing(`${OUT}/${OLD_LIVE_DIR}`),
+			...listing(`${OUT}/${OLD_ARCHIVE_DIR}`),
+			...listing(`${OUT}/runs`),
+		];
 		if (stampArtifacts(names, stamp).length === 0) {
 			console.error(`no run matches stamp ${stamp} under ${OUT}/${LIVE_DIR} — check the stamp (a prefix or job id is not enough).`);
 			const recent = live.sort().slice(-5);

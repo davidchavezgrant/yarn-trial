@@ -104,6 +104,45 @@ test("runFile__FallsBackThroughArchiveToTheOldLayout__When__TheLiveCopyIsGone", 
 	});
 });
 
+test("runFile__FindsThePreBenchHomes__When__ARunLandedThereBeforeTheMove", () => {
+	// The consolidated store spent its first hours at out/live + out/archive before moving under
+	// out/bench/. Runs landed there — and un-synced fleet runners keep pulling artifacts into
+	// those trees — so reads must still resolve them; only writes moved.
+	withOut((root) => {
+		fs.mkdirSync(path.join(root, "live", "old-home"), { recursive: true });
+		fs.writeFileSync(path.join(root, "live", "old-home", RUN_FILES.log), '{"app":"Yarn"}');
+		assert.equal(runFile("old-home", RUN_FILES.log, root), path.join(root, "live", "old-home", RUN_FILES.log));
+
+		// The pre-bench backup answers once its live sibling is gone.
+		fs.mkdirSync(path.join(root, "archive", "old-home"), { recursive: true });
+		fs.writeFileSync(path.join(root, "archive", "old-home", RUN_FILES.log), '{"app":"Yarn"}');
+		fs.rmSync(path.join(root, "live", "old-home"), { recursive: true, force: true });
+		assert.equal(runFile("old-home", RUN_FILES.log, root), path.join(root, "archive", "old-home", RUN_FILES.log));
+
+		// The canonical store outranks both pre-bench homes.
+		makeRun(root, "old-home");
+		assert.equal(runFile("old-home", RUN_FILES.log, root), path.join(runDir("old-home", root), RUN_FILES.log));
+	});
+});
+
+test("listRuns__LabelsPreBenchLeftovers__When__TheOldStoreStillHoldsRuns", () => {
+	// Leftovers stay on the inventory (labeled) so they are not forgotten, but drop refuses them
+	// by name — the CLI operates on the canonical location only.
+	withOut((root) => {
+		makeRun(root, "run-new");
+		fs.mkdirSync(path.join(root, "live", "run-old"), { recursive: true });
+		fs.writeFileSync(path.join(root, "live", "run-old", RUN_FILES.log), JSON.stringify({ app: "Yarn", success: true }));
+
+		const rows = listRuns(root);
+		assert.deepEqual(rows.map((r) => [r.key, r.legacy === true]), [["run-new", false], ["run-old", true]]);
+
+		const res = dropRun("run-old", root);
+		assert.equal(res.dropped, false);
+		assert.match(res.reason ?? "", /leftover/);
+		assert.ok(fs.existsSync(path.join(root, "live", "run-old")), "drop must not touch the pre-bench tree");
+	});
+});
+
 test("runRel__StaysPosix__When__BuildingAWirePath", () => {
 	// Job records cross to another machine and are joined against ITS data root, so these are
 	// posix strings by contract — path.join would emit backslashes on a non-posix host.

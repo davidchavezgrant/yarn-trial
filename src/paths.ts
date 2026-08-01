@@ -116,6 +116,16 @@ export function outDir(): string {
 export const LIVE_DIR = "bench/live";
 export const ARCHIVE_DIR = "bench/archive";
 
+/**
+ * The same consolidated layout's PREVIOUS homes — `out/live` and `out/archive`, where the
+ * store lived for the hours between the per-run consolidation and David's final decision to
+ * house it under `out/bench/`. Runs landed there that night, and a fleet Mac running
+ * un-synced code keeps writing job records whose rel paths say `out/live/<id>/…` until a
+ * provision sync + runner restart. READS resolve these; nothing writes to them any more.
+ */
+export const OLD_LIVE_DIR = "live";
+export const OLD_ARCHIVE_DIR = "archive";
+
 /** The canonical names inside a run directory. Legacy locations are resolved by `runFile`. */
 export const RUN_FILES = {
 	log: "run.json",
@@ -165,36 +175,46 @@ export const archiveRunDir = (key: string, root = outDir()): string => path.join
 export const runPath = (key: string, name: string, root = outDir()): string => path.join(runDir(key, root), name);
 
 /**
- * Where a READER finds one: live, then the archive, then the pre-2026-08-01 scattered layout.
+ * Where a READER finds one: live, then the archive, then the same layout's pre-`bench/` homes
+ * (`out/live/<key>`, `out/archive/<key>`), then the pre-consolidation scattered layout.
  *
- * The legacy fallback exists because runs recorded before the move are still in `out/runs/` and
- * inside archived benchmark passes, and the gallery, the offline judge and `cleanup` all have to
- * keep opening them — a layout change is not a reason to make last week's evidence unreadable.
- * Nothing writes there any more, so that tree is a fixed historical set rather than a second
- * layout to maintain.
+ * The old-home fallback exists because runs landed under `out/live`/`out/archive` during the
+ * hours the consolidated store lived there, and un-synced fleet runners keep reporting rel
+ * paths that pull artifacts into those trees. The scattered-layout fallback exists because
+ * runs recorded before the move are still in `out/runs/` and inside archived benchmark
+ * passes, and the gallery, the offline judge and `cleanup` all have to keep opening them — a
+ * layout change is not a reason to make last week's evidence unreadable. Nothing writes to
+ * any fallback location any more, so those trees are fixed historical sets rather than second
+ * layouts to maintain.
  *
  * Returns the live path when the artifact is nowhere, so an error message names where it was
  * supposed to be rather than where it last wasn't.
  */
 export function runFile(key: string, name: string, root = outDir()): string {
-	const live = path.join(runDir(key, root), name);
-	if (fs.existsSync(live)) return live;
-	const archived = path.join(archiveRunDir(key, root), name);
-	if (fs.existsSync(archived)) return archived;
+	for (const dir of [runDir(key, root), archiveRunDir(key, root), path.join(root, OLD_LIVE_DIR, key), path.join(root, OLD_ARCHIVE_DIR, key)]) {
+		const candidate = path.join(dir, name);
+		if (fs.existsSync(candidate)) return candidate;
+	}
 	const old = legacyRunPath(key, name, root);
 
-	return old && fs.existsSync(old) ? old : live;
-}
-
-/** The run's directory wherever it currently is — live while in flight, archive once finished. */
-export function resolveRunDir(key: string, root = outDir()): string {
-	const live = runDir(key, root);
-
-	return fs.existsSync(live) ? live : archiveRunDir(key, root);
+	return old && fs.existsSync(old) ? old : path.join(runDir(key, root), name);
 }
 
 /**
- * Back a finished run up: `out/live/<key>` gains a second name at `out/archive/<key>`.
+ * The run's directory wherever it currently is — live while in flight, archive once finished,
+ * the pre-`bench/` homes for runs stranded there. Defaults to the archive when the run is
+ * nowhere, preserving the pre-fallback contract.
+ */
+export function resolveRunDir(key: string, root = outDir()): string {
+	for (const dir of [runDir(key, root), archiveRunDir(key, root), path.join(root, OLD_LIVE_DIR, key), path.join(root, OLD_ARCHIVE_DIR, key)]) {
+		if (fs.existsSync(dir)) return dir;
+	}
+
+	return archiveRunDir(key, root);
+}
+
+/**
+ * Back a finished run up: `out/bench/live/<key>` gains a second name at `out/bench/archive/<key>`.
  *
  * The live copy STAYS — it is the canonical record everything reads. This only guards against
  * losing it.

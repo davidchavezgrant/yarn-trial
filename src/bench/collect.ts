@@ -42,7 +42,7 @@ const mean = (steps: Array<Record<string, any>>, field: string): number | undefi
 	return vals.length ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10 : undefined;
 };
 
-/** Metrics off a task or replay run log (out/live/<stamp>/run.json). Absent fields stay absent. */
+/** Metrics off a task or replay run log (out/bench/live/<stamp>/run.json). Absent fields stay absent. */
 export function parseRunMetrics(runLog: Record<string, any>): RunMetrics {
 	const usage = runLog.usage ?? {};
 	const steps: Array<Record<string, any>> = Array.isArray(runLog.steps) ? runLog.steps : [];
@@ -301,7 +301,7 @@ export async function collect(opts: CollectOptions = {}): Promise<CollectOutcome
 	try {
 		archiveBench(date, outRoot);
 	} catch (err) {
-		log(`backup: could not copy the manifest to out/archive — ${err instanceof Error ? err.message : String(err)}`);
+		log(`backup: could not copy the manifest to out/bench/archive — ${err instanceof Error ? err.message : String(err)}`);
 	}
 
 	return { manifest, collected, pending, reportPath };

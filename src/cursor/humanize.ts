@@ -7,7 +7,7 @@
  *
  *   npm run humanize -- <stamp> [--no-video]
  *
- * Emits out/live/<stamp>/recording/motion-track.json (the handoff format for Yarn's own cursor
+ * Emits out/bench/live/<stamp>/recording/motion-track.json (the handoff format for Yarn's own cursor
  * renderer) and, unless --no-video, humanized.mp4 alongside it.
  */
 

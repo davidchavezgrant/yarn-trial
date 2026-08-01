@@ -13,6 +13,7 @@ import {
 	OUT,
 	resetToHome,
 	runKey,
+	teeConsole,
 } from "./harness.js";
 import { readJournal } from "./journal.js";
 import { startOverlay } from "./overlay.js";
@@ -122,6 +123,9 @@ async function main(): Promise<void> {
 	// job id must be the key the run log and journal land under — the same contract task and
 	// explore runs already honour (see src/core/harness/run.ts).
 	const stamp = runKey("replay-", recipe.slug);
+	// A replay is a run: its console output lands in the run folder like any other artifact.
+	// The tee stands down under the runner, which already redirects stdio into this file.
+	teeConsole(stamp);
 	const journalPath = runPath(stamp, RUN_FILES.journal);
 
 	console.log(`=== replay: ${recipe.task} (${recipe.app}, ${recipe.steps.length} steps, from ${recipe.compiledFrom}) ===`);
@@ -239,7 +243,7 @@ async function main(): Promise<void> {
 		try {
 			archiveRun(stamp);
 		} catch (err) {
-			console.log(`backup: could not copy ${stamp} to out/archive — ${err instanceof Error ? err.message : String(err)}`);
+			console.log(`backup: could not copy ${stamp} to out/bench/archive — ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
 	process.exit(exitCode);

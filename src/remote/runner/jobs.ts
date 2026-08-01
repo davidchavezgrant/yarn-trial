@@ -49,17 +49,17 @@ export type JobState = "queued" | "running" | "done" | "failed" | "orphaned" | "
 export interface JobArtifacts {
 	/** Combined stdout+stderr of the child. Always present; the child owns this file. */
 	log: string;
-	/** `out/live/<id>/run.json`, written by agent.ts (task) or recipe-cli.ts (replay). */
+	/** `out/bench/live/<id>/run.json`, written by agent.ts (task) or recipe-cli.ts (replay). */
 	runLog?: string;
 	/**
-	 * `out/live/<id>/journal.jsonl`, the mutation journal a replay appends as it detects
+	 * `out/bench/live/<id>/journal.jsonl`, the mutation journal a replay appends as it detects
 	 * changes. Listed for replay jobs because the journal is what `npm run cleanup` replays
 	 * after a crash — a pull that left it on the Mac would bring home a run log that says what
 	 * happened and nothing that says what to undo. Absent from the disk when the replay
 	 * changed nothing, which `pull` reports as `missing` rather than failed.
 	 */
 	journal?: string;
-	/** `out/live/<id>/recording/window.mp4`. Only when the run was submitted with `record`. */
+	/** `out/bench/live/<id>/recording/window.mp4`. Only when the run was submitted with `record`. */
 	recording?: string;
 	/** `docs/appmaps/<slug>.md`, overwritten by a finished grounding pass. Explore only. */
 	appmap?: string;
@@ -167,7 +167,7 @@ const SAFE_ID = /^[A-Za-z0-9._-]+$/;
 
 /**
  * The job id IS the run stamp, and since 2026-08-01 every artifact it names lives inside the
- * single directory `out/live/<id>/` rather than three sibling trees to correlate by timestamp
+ * single directory `out/bench/live/<id>/` rather than three sibling trees to correlate by timestamp
  * proximity. The shapes here reproduce exactly what the two scripts build today —
  * `<stamp>-<slug>` for a task run, and explore's `explore-` prefix, which is why `kind`
  * is an input. Both honour `RUN_STAMP` so the child lands on the id we minted.
@@ -191,7 +191,7 @@ export function mintJobId(kind: JobKind, app: string): string {
 }
 
 /**
- * The registry IS the live run directory: `out/live/<id>/job.json`.
+ * The registry IS the live run directory: `out/bench/live/<id>/job.json`.
  *
  * Formerly `out/jobs/`, a fourth tree keyed by the same string as the run log, the recording
  * and the step frames. Folding it in means a job's record and the artifacts it describes are
