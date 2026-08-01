@@ -842,6 +842,8 @@ const USAGE = `usage: dispatch <host|auto> "<task>" "<App>" [--record] [--no-vis
 
 Submits the run to a Mac in the fleet, streams its log, and pulls the artifacts back.
 Ctrl-C detaches; the run keeps going and \`follow\` re-attaches to it.
+\`--no-follow\` (any submit form) skips the stream entirely: submit, print the job id, exit —
+for callers whose own lifetime is capped and must not hold a 40-minute run's leash.
 
 \`explore\`, \`replay\`, \`follow\` and \`pull\` in the second position are subcommands, so a task
 whose text is exactly one of those four words has to be dispatched through the API instead.`;
@@ -935,6 +937,18 @@ async function main(argv: string[]): Promise<number> {
 	}
 	console.error(`${result.jobId} on ${result.host.name}`);
 	for (const note of dispatchNotes(result)) console.error(note);
+
+	// --no-follow: submit-only is a first-class invocation, not a Ctrl-C habit. The job was
+	// always runner-owned and durable; what kept dying was the CALLER — an agent session's
+	// foreground tool call is killed at its 600s cap, and on 2026-08-01 that turned into a
+	// cleanup reflex stopping healthy 40-minute explores at the 10-minute mark on every Mac.
+	// A watcher's death must never imply the run's; this flag makes the decoupled posture
+	// the invocation itself.
+	if (argv.includes("--no-follow")) {
+		console.error(`submitted — not following. Attach: ./run dispatch ${result.host.name} follow ${result.jobId}; artifacts when done: ./run dispatch ${result.host.name} pull ${result.jobId}`);
+
+		return 0;
+	}
 
 	return attach(result.host.name, result.jobId, 0);
 }
