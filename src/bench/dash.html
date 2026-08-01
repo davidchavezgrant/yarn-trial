@@ -187,6 +187,12 @@
 	</section>
 
 	<section class="card">
+		<h2>Findings so far</h2>
+		<div class="sub" id="narrative-sub">model-written commentary on the live rollups — verify against the report before quoting anywhere</div>
+		<div id="narrative" class="empty">the narrator writes its first note once something collects</div>
+	</section>
+
+	<section class="card">
 		<h2>Events</h2>
 		<div id="events" class="empty">nothing yet</div>
 	</section>
@@ -429,28 +435,22 @@ const EXPLORE_HEAD = "<tr>" + th("name", NAME_TIP) +
 	th("map", "the appmap this pass produced, as a full node-link tree — edge thickness = traversal heat across collected runs") + "</tr>";
 
 // Friendly names are DERIVED from the arm's structure (kind + flags + phase), not
-// hand-mapped per id, so new matrix cells name themselves. The id stays as subtext —
-// it is the key the report and the manifest speak.
+// hand-mapped per id, so new matrix cells name themselves. The id stays in the hover —
+// it is the key the report and the manifest speak. Perception and actuation are NOT in
+// the name: they are their own columns ("vision-only explore (AX)" folded two axes into
+// one confusing label — it meant sees-pixels-only, acts-via-AX).
 function displayName(a) {
 	const f = a.flags || "";
-	const backend = f.includes("--backend cdp") ? "CDP" : "AX";
-	if (a.kind === "explore") {
-		const what = f.includes("--no-ax") ? "vision-only explore" : f.includes("--url") ? "web explore" : "explore";
-		return `${what} (${backend})`;
-	}
+	if (a.kind === "explore") return f.includes("--url") ? "web explore" : "explore";
 	const head = a.kind === "replay" ? "recipe replay"
 		: f.includes("USE_RECIPE") ? "curated-recipe task"
 		: f.includes("NO_GROUNDING") ? "ungrounded task" : "grounded task";
-	const mods = [backend];
-	if (f.includes("--no-ax")) mods.push("vision-only");
+	const mods = [];
 	if (f.includes("APPMAP_VARIANT=vision")) mods.push("vision map");
-	if (f.includes("AXDOM=0")) mods.push("axdom off");
-	if (f.includes("--no-vision")) mods.push("no vision");
-	if (f.includes("--url")) mods.push("web");
 	if (f.includes("--no-rescue")) mods.push("no rescue");
 	if (a.phase === 4) mods.push("2nd task");
 	if (a.phase === 5) mods.push("filmed");
-	return `${head} (${mods.join(", ")})`;
+	return mods.length ? `${head} (${mods.join(", ")})` : head;
 }
 
 const normModel = (m) => m.replace(/^[a-z-]+[:/]/i, "").replace(/:[a-z-]+$/i, "");
@@ -487,6 +487,8 @@ function armCell(a, p, key) {
 			? `<td class="task" data-tip="grounding pass — no task prompt. The objective is coverage: operate every safe control until the frontier of un-operated controls empties, then write the appmap (docs/appmaps/)">Explore</td>`
 			: `<td class="task">–</td>`;
 	return `<td class="arm" data-tip="${esc(tip)}"><span class="dn">${esc(displayName(a))}</span><div class="chips">${p.entries.map((e) => statusChip(e, key, e.jobId === sel)).join("")}</div></td>
+		<td class="num">${esc(a.perception || "–")}</td>
+		<td class="num">${esc(a.actuation || "–")}</td>
 		<td class="target">${esc(a.url ? a.url.replace(/^https?:\/\//, "") : a.app)}</td>
 		${taskCell}
 		${modelCell(p)}`;
@@ -545,7 +547,7 @@ function detailRowHtml(a, p, key) {
 	if (!sel) body = `<div class="empty">nothing submitted yet</div>`;
 	else if (!detailCache[sel]) { fetchDetail(sel); body = `<div class="empty">loading ${esc(sel)}…</div>`; }
 	else body = detailBody(detailCache[sel]);
-	return `<tr class="detail-row"><td colspan="10">${body}</td></tr>`;
+	return `<tr class="detail-row"><td colspan="12">${body}</td></tr>`;
 }
 
 function detailBody(d) {
@@ -738,7 +740,7 @@ function renderBoard() {
 	for (const ph of phases) {
 		const arms = state.arms.filter((a) => a.phase === ph && a.kind !== "compile" && a.passes.length);
 		if (!arms.length) continue;
-		html += `<tr class="phase-h"><td colspan="10">phase ${ph}</td></tr>`;
+		html += `<tr class="phase-h"><td colspan="12">phase ${ph}</td></tr>`;
 		const explores = arms.filter((a) => a.kind === "explore");
 		const tasks = arms.filter((a) => a.kind !== "explore");
 		if (explores.length) html += EXPLORE_HEAD + timelineRows(explores).map(({ a, p }) => exploreRow(a, p)).join("");
@@ -830,6 +832,16 @@ function renderJudge() {
 	$("judge").innerHTML = html;
 }
 
+function renderNarrative() {
+	if (!state.narrative) return;
+	const el = $("narrative");
+	el.classList.remove("empty");
+	el.style.whiteSpace = "pre-wrap";
+	el.style.maxWidth = "90ch";
+	el.textContent = state.narrative.text;
+	$("narrative-sub").textContent = `written ${hhmm(state.narrative.updatedAt)} by ${state.narrative.model} from the live rollups — verify against the report before quoting anywhere`;
+}
+
 function renderEvents() {
 	if (!state.events.length) return;
 	const el = $("events");
@@ -847,7 +859,7 @@ function render() {
 	renderFleet(); renderBoard(); renderExplore(); renderOutcomes();
 	groundingChart("chart-steps", (x) => x.meanSteps, fmtNum);
 	groundingChart("chart-tokens", (x) => x.meanOutputTokens, fmtK);
-	renderAttention(); renderCost(); renderJudge(); renderEvents();
+	renderAttention(); renderCost(); renderJudge(); renderNarrative(); renderEvents();
 }
 
 /* ---- wiring -------------------------------------------------------------------------- */
