@@ -207,7 +207,6 @@ test("MatchPath__LeavesStepUnanchored__When__NothingMatches", () => {
 test("GroundingArmId__PicksTheMapTheArmConsumed__When__TaskArm", () => {
 	assert.equal(groundingArmId(armById("p2-cdp-grounded")!), "p1-explore-cdp");
 	assert.equal(groundingArmId(armById("p2-ax-grounded")!), "p1-explore-ax");
-	assert.equal(groundingArmId(armById("p2-web-grounded")!), "p1-explore-web-cdp");
 	assert.equal(groundingArmId(armById("p2-vision-only-grounded-visionmap")!), "p1-explore-vision");
 });
 

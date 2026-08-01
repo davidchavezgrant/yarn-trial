@@ -70,3 +70,15 @@ In one pass each, CDP was not leaner than AX, using 1.6× more calls, 1.7× more
 ## 2026-08-01T01:10:15.597Z — 4 collected (gpt-5.6-sol)
 
 In one pass per arm, removing vision made AX see 2.6× more controls but actuate 8% fewer per action, cutting conversion from 11.0% to 4.9%. No-vision used 17% more calls and 26% more output tokens per action, despite taking 11% less time per action. Surface coverage was nearly unchanged at 0.97×, while no-vision produced 15% more graph nodes but 16% fewer edges.
+
+## 2026-08-01T01:41:04.826Z — 4 collected (gpt-5.6-sol)
+
+In single passes, CDP exposed 4.7× more controls and 2.0× more surfaces than AX, but achieved only 0.25× the seen-to-actuated conversion and had 15× more scope ambiguities. CDP’s actuations per action were 1.35× higher, yet it used 1.64× more calls, 1.69× more output tokens, and 1.47× more time per action. CDP produced 1.26× more nodes but 0.95× as many edges, yielding 0.75× AX’s edges per node. In the target-confounded Notion pass, CDP sustained 0.97× Yarn’s actuations per action with 0.66× the calls, 0.61× the tokens, and 0.11× the ambiguities per action.
+
+## 2026-08-01T01:41:28.082Z — 4 collected (gpt-5.6-sol)
+
+In one AX pass per arm, removing vision exposed 2.56× more controls but actuated only 1.13× more, cutting seen-to-actuated conversion to 0.44×. No-vision used 1.17× more calls and 1.26× more output tokens per action, while taking 0.89× the time per action. It produced 1.15× more graph nodes but 0.84× as many edges, reducing edge density to 0.73×, with essentially unchanged surface coverage and scope ambiguity.
+
+## 2026-08-01T01:41:45.740Z — 4 collected (gpt-5.6-sol)
+
+In one pass per backend, CDP needed 0.89× as many actions but 1.47× the time, 1.64× the calls, and 1.69× the output tokens per action as AX. CDP saw 4.75× more controls and 2.03× more surfaces but actuated only 1.20× more controls, cutting seen-to-actuated conversion to 0.25× AX’s. Its map had 1.26× the nodes but 0.95× the edges, yielding 0.75× AX’s edge density, while scope ambiguities rose 15×.

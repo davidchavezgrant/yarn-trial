@@ -83,11 +83,64 @@ export function frontierCredit(ledger: FrontierLedger, action: any, before: Obse
 	return [...hits];
 }
 
+/**
+ * A cohort this size sharing one role on one surface is a VALUE LIST — fonts, colours,
+ * timezones, languages, emoji — not a panel of distinct settings. Operating one member
+ * teaches the interaction for all of them; operating 1,500 teaches nothing extra.
+ *
+ * 25 because real settings panels rarely field that many identical-role controls, while
+ * value lists routinely field hundreds. Tunable, and deliberately a blunt instrument: the
+ * alternative is app-specific knowledge, which nothing in this file is allowed to have.
+ */
+const COLLAPSE_MIN = Number(process.env.EXPLORE_COLLAPSE_MIN ?? 25);
+
+/** Group key for the collapse: same role, same surface. Name is what varies within a value list. */
+const cohortKey = (e: InteractiveElement): string => `${e.role}|${e.surface}`;
+
+/**
+ * Controls still owed an action — with large same-role cohorts retired as a UNIT once any
+ * one member has been operated or dismissed.
+ *
+ * Without this, a value list poisons the frontier: Yarn's font picker put ~1,500 entries on
+ * it, DISMISS_CAP forced them to be retired 20 at a time, and the pass spent 13 of its 118
+ * actions (11%) on bookkeeping — refreshing, re-navigating, and reopening the picker purely
+ * to dismiss its contents under a named surface. It learned nothing in those 13 actions.
+ *
+ * The trade is explicit: operating ONE font now retires the cohort, so a pass could skip a
+ * genuinely distinct control that happens to share a role and surface with 24 others. That
+ * is a real cost, accepted because the alternative is measurably worse — and because the
+ * cohort is reported in the summary, so a retirement is visible rather than silent.
+ */
 export function frontierRemaining(ledger: FrontierLedger): InteractiveElement[] {
+	const retired = (k: string): boolean => ledger.actuated.has(k) || ledger.dismissed.has(k);
+	// A cohort counts as handled the moment any member is.
+	const handledCohorts = new Set<string>();
+	for (const [k, e] of ledger.seen) if (retired(k)) handledCohorts.add(cohortKey(e));
+
+	const cohortSize = new Map<string, number>();
+	for (const [, e] of ledger.seen) cohortSize.set(cohortKey(e), (cohortSize.get(cohortKey(e)) ?? 0) + 1);
+
 	return [...ledger.seen]
-		.filter(([k]) => !ledger.actuated.has(k) && !ledger.dismissed.has(k))
+		.filter(([k, e]) => {
+			if (retired(k)) return false;
+			const key = cohortKey(e);
+
+			return !((cohortSize.get(key) ?? 0) >= COLLAPSE_MIN && handledCohorts.has(key));
+		})
 		.map(([, e]) => e)
 		.sort((a, b) => a.surface.localeCompare(b.surface) || a.name.localeCompare(b.name));
+}
+
+/** Cohorts retired as a unit, for the summary — a collapse must be visible, not silent. */
+export function collapsedCohorts(ledger: FrontierLedger): Array<{ role: string; surface: string; size: number }> {
+	const size = new Map<string, number>();
+	for (const [, e] of ledger.seen) size.set(cohortKey(e), (size.get(cohortKey(e)) ?? 0) + 1);
+	const handled = new Set<string>();
+	for (const [k, e] of ledger.seen) if (ledger.actuated.has(k) || ledger.dismissed.has(k)) handled.add(cohortKey(e));
+
+	return [...size]
+		.filter(([key, n]) => n >= COLLAPSE_MIN && handled.has(key))
+		.map(([key, n]) => ({ role: key.split("|")[0] ?? "", surface: key.split("|")[1] ?? "", size: n }));
 }
 
 /**
@@ -167,7 +220,13 @@ export function frontierDismiss(
 /** The frontier as the model sees it: grouped by surface, capped, unnamed entries counted. */
 export function frontierSummary(ledger: FrontierLedger, maxSurfaces = 12, maxPerSurface = 14): string {
 	const rest = frontierRemaining(ledger);
-	if (rest.length === 0) return "The frontier is empty: every interactive control seen so far has been operated or dismissed.";
+	// Named, not silent: a pass that operated one font and saw 1,500 entries vanish should be
+	// told why, or the frontier looks like it is lying to it.
+	const collapsed = collapsedCohorts(ledger);
+	const note = collapsed.length
+		? `\n(${collapsed.map((c) => `${c.size} similar "${c.role}" controls in ${c.surface}`).join("; ")} — retired as a group because you operated one. Value lists are mapped by their interaction, not by exhausting them.)`
+		: "";
+	if (rest.length === 0) return `The frontier is empty: every interactive control seen so far has been operated or dismissed.${note}`;
 
 	const bySurface = new Map<string, InteractiveElement[]>();
 	for (const e of rest) bySurface.set(e.surface, [...(bySurface.get(e.surface) ?? []), e]);
@@ -184,7 +243,7 @@ export function frontierSummary(ledger: FrontierLedger, maxSurfaces = 12, maxPer
 	});
 	const hidden = groups.length > maxSurfaces ? `\n  ...and ${groups.length - maxSurfaces} more surface(s).` : "";
 
-	return `${rest.length} control(s) seen but never operated, across ${groups.length} surface(s):\n${lines.join("\n")}${hidden}`;
+	return `${rest.length} control(s) seen but never operated, across ${groups.length} surface(s):\n${lines.join("\n")}${hidden}${note}`;
 }
 
 /**

@@ -10,7 +10,6 @@
 |---|---|---|---|---|---|---|---|---|---|
 | p1-explore-ax | (default) | AX tree + DOM attrs + screenshots | --backend ax | 133 | 28m | 229 | 35004 | ?×1 | 46/373/418 | 31 | 156 | 57 | 1 |
 | p1-explore-cdp | (default) | DOM + screenshots | --backend cdp | 118 | 36m | 333 | 52608 | ?×1 | 55/1933/1985 | 63 | 196 | 54 | 15 |
-| p1-explore-web-cdp | (default) | DOM + screenshots | --backend cdp --url https://app.notion.com | 369 | 1h14m | 689 | 99773 | ?×1 | 167/1075/1238 | 119 | 471 | 170 | 5 |
 | p1-explore-no-vision | (default) | AX tree + DOM attrs | --backend ax --no-vision | 163 | 30m | 328 | 54149 | ?×1 | 52/1021/1070 | 30 | 180 | 48 | 1 |
 | p1-explore-vision | (default) | screenshots only | --backend ax --no-ax | — | — | — | — | — | — | — | — | — | — |
 
@@ -35,8 +34,6 @@
 | p2-vision-only-grounded-axmap | (default) | --backend ax --no-ax | 0/3 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
 | p2-vision-only-grounded-visionmap | (default) | --backend ax --no-ax APPMAP_VARIANT=vision | 0/3 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
 | p2-vision-only-curated | (default) | --backend ax --no-ax USE_RECIPE=1 | 0/3 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
-| p2-web-ungrounded | (default) | --backend cdp --url https://app.notion.com NO_GROUNDING=1 | 0/2 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
-| p2-web-grounded | (default) | --backend cdp --url https://app.notion.com | 0/2 | — | — | — | — | — | — | — | 0 | 0 | — | — | — | — | 0 |
 
 ## Phase 2 — generalization (Notion Calendar)
 
@@ -122,7 +119,6 @@ _No run has judge metrics yet — run `./run bench judge` after runs land, then 
 
 - **p1-explore-ax**: `explore-2026-07-31T22-41-01-629-yarn` (mac2)
 - **p1-explore-cdp**: `explore-2026-07-31T21-59-02-351-yarn` (mac2)
-- **p1-explore-web-cdp**: `explore-2026-07-31T21-59-06-554-https-app.notion.com` (mac3)
 - **p1-explore-no-vision**: `explore-2026-08-01T00-18-28-757-yarn` (mac3)
 - **p1-explore-vision**: `explore-2026-08-01T01-04-43-906-yarn` (mac2, uncollected)
 

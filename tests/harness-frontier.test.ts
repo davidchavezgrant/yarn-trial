@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import {
+import { collapsedCohorts, frontierKey,
 	frontierCredit,
 	frontierDismiss,
 	frontierIngest,
@@ -210,3 +210,44 @@ test("mergeGraph__DeduplicatesEdge__When__SameTraversalRecordedTwice", () => {
 
 const ref = (r: string, role: string, frame: string, name?: string) => ({ ref: r, role, name, frame });
 
+
+test("frontierRemaining__RetiresAValueListAsAUnit__When__OneMemberIsOperated", () => {
+	// Yarn's font picker put ~1,500 entries on the frontier. DISMISS_CAP forced them to be
+	// retired 20 at a time, and the pass spent 13 of its 118 actions (11%) refreshing,
+	// re-navigating and reopening the picker purely to dismiss its contents under a named
+	// surface — learning nothing in any of them.
+	const led = newFrontier();
+	const fonts = Array.from({ length: 60 }, (_, i) => ({ role: "AXStaticText", name: `Font ${i}`, surface: "Font picker", handle: i, x: 0, y: i, w: 10, h: 10 }) as any);
+	frontierIngest(led, { interactive: fonts } as any);
+	assert.equal(frontierRemaining(led).length, 60);
+
+	// Operating ONE teaches the interaction for all of them.
+	led.actuated.add(frontierKey(fonts[0]));
+	assert.equal(frontierRemaining(led).length, 0, "the cohort retires together");
+	// And the collapse is reported rather than silent — a frontier that empties inexplicably
+	// looks like it is lying.
+	assert.deepEqual(collapsedCohorts(led), [{ role: "AXStaticText", surface: "Font picker", size: 60 }]);
+	assert.match(frontierSummary(led), /retired as a group because you operated one/);
+});
+
+test("frontierRemaining__LeavesSmallGroupsAlone__When__TheyAreDistinctControls", () => {
+	// The trade is explicit and bounded: a real settings panel rarely fields 25 identical-role
+	// controls, so below the threshold every control is still owed its own action.
+	const led = newFrontier();
+	const toggles = Array.from({ length: 6 }, (_, i) => ({ role: "AXCheckBox", name: `Setting ${i}`, surface: "Screen Clips", handle: i, x: 0, y: i, w: 10, h: 10 }) as any);
+	frontierIngest(led, { interactive: toggles } as any);
+	led.actuated.add(frontierKey(toggles[0]));
+	assert.equal(frontierRemaining(led).length, 5, "small cohorts are not collapsed");
+	assert.deepEqual(collapsedCohorts(led), []);
+});
+
+test("frontierRemaining__KeepsCohortsSeparate__When__TheyShareARoleOnDifferentSurfaces", () => {
+	// Surface is half the cohort identity: a font list in Brand Kit and one in the editor are
+	// different lists, and operating in one says nothing about the other.
+	const led = newFrontier();
+	const mk = (surface: string) => Array.from({ length: 40 }, (_, i) => ({ role: "AXStaticText", name: `Font ${i}`, surface, handle: i, x: 0, y: i, w: 10, h: 10 }) as any);
+	const brand = mk("Brand Kit font picker");
+	frontierIngest(led, { interactive: [...brand, ...mk("Editor font picker")] } as any);
+	led.actuated.add(frontierKey(brand[0]));
+	assert.equal(frontierRemaining(led).length, 40, "only the operated surface's cohort retires");
+});

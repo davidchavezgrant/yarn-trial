@@ -170,15 +170,23 @@ const PHASE1: Arm[] = [
 		dispatch: { backend },
 		informs: "controls seen/actuated/dismissed, obs latency, pass duration, map size, scope ambiguities",
 	})),
-	{
-		id: "p1-explore-web-cdp",
-		phase: 1,
-		kind: "explore",
-		app: WEB_EXPLORE_URL,
-		n: 1,
-		dispatch: { backend: "cdp", url: WEB_EXPLORE_URL },
-		informs: "grounding a real web app: controls seen/actuated, pass duration and cost on a target far larger than Yarn",
-	},
+	/**
+	 * ~~p1-explore-web-cdp (Notion)~~ — DROPPED 2026-08-01 (David's call, on time).
+	 *
+	 * The prompt and frontier fixes require re-running every grounding pass, and this was the
+	 * longest run in the matrix by a wide margin: 1h14m and $24.45 against ~30m and ~$14 for a
+	 * Yarn pass. On the critical path that is the whole re-run again.
+	 *
+	 * Its DATA IS KEPT rather than discarded — docs/appmaps/web-app.notion.com.cdp.* and the
+	 * archived stamp — because it already answered the question nothing else can: what it
+	 * costs to map an unfamiliar large app cold. Yarn cannot answer that; the pipeline has
+	 * been tuned against it for days. Report it as a one-off spot check, never in the same
+	 * table as the Yarn arms — the two differ in app, scale and maturity at once, so any delta
+	 * between them is uninterpretable (David's point, and he was right).
+	 *
+	 * Restoring it means restoring the phase-2 web arms with it, or the explore grounds nothing.
+	 */
+
 	/**
 	 * The element-only GROUNDING pass — the mirror of the vision-only one below.
 	 *
@@ -298,18 +306,9 @@ const PHASE2_SLICES: Arm[] = [
  * the phase-1 pass over it has no precedent for duration or cost — the 40min/96-action Yarn
  * figure is not a prediction, and EXPLORE_MAX_ACTIONS is the cap if one is wanted.
  */
-const PHASE2_WEB: Arm[] = [
-	task("p2-web-ungrounded", { backend: "cdp", url: WEB_EXPLORE_URL, noGrounding: true }, "does the ungrounded floor transfer to a second, larger app", {
-		app: WEB_EXPLORE_URL,
-		task: WEB_TASK,
-		n: 2,
-	}),
-	task("p2-web-grounded", { backend: "cdp", url: WEB_EXPLORE_URL }, "does grounding's lift transfer to a second, larger app", {
-		app: WEB_EXPLORE_URL,
-		task: WEB_TASK,
-		n: 2,
-	}),
-];
+// ~~PHASE2_WEB~~ — dropped with the web explore above. Two arms, n=2 each, that grounded on
+// the Notion map; without the explore they have nothing to ground on, and with it they were
+// the second-longest runs in the matrix. Restore both together or neither.
 
 /**
  * ~~Phase 2 generalization slice (Notion Calendar, the native app)~~ — DROPPED 2026-07-31.
@@ -453,7 +452,7 @@ const PHASE5: Arm[] = [
 	})),
 ];
 
-export const MATRIX: readonly Arm[] = [...PHASE1, ...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE2_WEB, ...PHASE3, ...PHASE4, ...PHASE5];
+export const MATRIX: readonly Arm[] = [...PHASE1, ...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE3, ...PHASE4, ...PHASE5];
 
 export const phaseArms = (phase: Phase): Arm[] => MATRIX.filter((a) => a.phase === phase);
 

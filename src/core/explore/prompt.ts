@@ -40,7 +40,8 @@ Safety rules (absolute):
 - So: PRESS create controls. Give the thing a distinctive scratch name, call "claim" the instant it exists, and explore what opened. That is what scratch is FOR — not only for mapping delete flows. A pass that creates five or six scratch objects while opening five or six real surfaces has done its job; the objects are reported for cleanup, and a handful is normal, not a mess.
 - The prohibition is on the USER'S content and on anything that leaves the machine — never delete, rename, move or overwrite something that was already there; never send, share, publish, purchase or change an account. Creating your own scratch and operating THAT is always allowed.
 - Opening panels, tabs, menus, and pickers is fine. Close what you open (escape, foreground) before moving on.
-- Leave it in the state you found it.
+- SETTINGS YOU CHANGE ARE PUT BACK AUTOMATICALLY after the pass — the harness records every value you alter and restores it. So flipping a toggle, choosing a dropdown option, picking a font or a colour is FREE, and refusing to is how a map ends up listing controls without saying what they do. Change them, see what happens, record it, move on.
+- Leave the USER'S CONTENT as you found it — their documents, drafts and projects. That is not the same as leaving the app untouched: settings are reverted for you, and scratch you create is yours.
 ${vocab.cautions ? `\n${vocab.cautions}\n` : ""}${
 	descent
 		? `
@@ -51,7 +52,6 @@ A destructive feature hides its richest surface behind its opening press: clicki
 - When you press a control whose label reads reversible-destructive (delete, remove, discard, reset, archive, export, clear), the HARNESS takes over: it reads whatever dialog or sheet appears, records it, and presses Escape ITSELF to close it without committing. You do not press anything inside that dialog — you will get a fresh observation after the Escape. Just choose to press the opening control when mapping such a flow, then continue.
 - Controls that commit OFF the machine (send, share, publish, invite, purchase, sign out, account changes) are refused outright and never opened — reading their boundary would mean crossing it. Record and dismiss those.
 - To map a delete/archive flow safely on real content, use the same trick: create a throwaway object, claim it, then descend ITS destructive menu. Scratch you claimed is yours to destroy; the user's content is not.
-- Settings you toggle while mapping are put back automatically after the pass, so a reversible toggle is fine to flip.
 `
 		: ""
 }${rules}
@@ -81,7 +81,7 @@ ${
 
 So you have two ways to shrink it, and both are legitimate:
 - Operate the control (this is the default: it is how surfaces get discovered — opening one panel adds everything inside it to the frontier).
-- Call "dismiss" for controls you have deliberately decided not to operate — content rather than navigation (list rows, transcript chunks, individual documents), destructive things, or anything that would leave the app changed. Dismiss by surface to clear a whole panel of repetitive items at once. Dismissals are recorded and published with the map, so give a real reason; they are the honest way to say "I chose not to", which silence is not.
+- Call "dismiss" for controls you have deliberately decided not to operate — content rather than navigation (list rows, transcript chunks, individual documents), or things that would touch the USER'S content or leave the machine. "It would change something" is NOT a reason: settings are reverted automatically and scratch is yours, so a control skipped on those grounds is a hole in the map. Dismiss by surface to clear a whole panel of repetitive items at once. Dismissals are recorded and published with the map, so give a real reason; they are the honest way to say "I chose not to", which silence is not.
 
 Dismissal is bounded on purpose: a single call that does not name a specific surface may retire at most ${DISMISS_CAP} controls, because one sentence cannot honestly justify a hundred unrelated decisions. Scattered top-level controls must be dismissed in groups small enough to each have a real reason — or opened. A named panel of repetitive rows is exempt.
 
