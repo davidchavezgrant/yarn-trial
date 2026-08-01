@@ -138,7 +138,12 @@ export function dispatchOptionsFor(arm: Arm, recipe?: string, model?: string): D
 		// The one env arm has a first-class wire field now: the runner validates the variant
 		// and sets APPMAP_VARIANT on the child. Anything else in arm.env has no wire lane and
 		// would silently not reach the run — refuse loudly at plan time, not here.
-		...(arm.env?.APPMAP_VARIANT === "vision" ? { appmapVariant: "vision" as const } : {}),
+		// Forward whatever the arm declared. Restricting this to "vision" meant
+		// APPMAP_VARIANT=novision never crossed the wire: p2-ax-grounded-no-vision and
+		// p2-cdp-grounded-no-vision silently read the WITH-screenshots maps, the two
+		// element-only grounding passes had no consumer at all, and `bench plan` printed
+		// "crosses the wire as appmapVariant" — a claim that was false.
+		...(arm.env?.APPMAP_VARIANT ? { appmapVariant: arm.env.APPMAP_VARIANT as "vision" | "novision" } : {}),
 	};
 }
 

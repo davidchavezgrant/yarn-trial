@@ -5,7 +5,7 @@ import { readJournal } from "../core/journal.js";
 import { appSlug, dataRoot as dataRootDir, outDir } from "../paths.js";
 import { appmapSlug } from "../core/target.js";
 import type { JobRecord } from "../remote/runner/jobs.js";
-import { armById } from "./matrix.js";
+import { type Arm, armAppmapSlug, armById } from "./matrix.js";
 import { benchDir, type Manifest, type ManifestEntry, readManifest, type RunMetrics, updateEntry, utcDate, writeManifest } from "./manifest.js";
 import { writeReport } from "./report.js";
 
@@ -268,7 +268,7 @@ export async function collect(opts: CollectOptions = {}): Promise<CollectOutcome
 			continue;
 		}
 
-		const next = collectEntry(entry, job, dataDir, state, benchDir(date, outRoot));
+		const next = groundingChecked(collectEntry(entry, job, dataDir, state, benchDir(date, outRoot)));
 		manifest = updateEntry(manifest, next);
 		writeManifest(manifest, outRoot);
 		collected.push(entry.jobId);
@@ -300,6 +300,44 @@ export function archiveDirFor(benchRoot: string, entry: ManifestEntry): string {
 	// reason for repeating. The repeats exist to give the backend comparison an error bar;
 	// an archive that holds one of two is worse than not repeating, because it looks complete.
 	return path.join(benchRoot, "appmaps", model, entry.armId, entry.jobId);
+}
+
+/**
+ * Did this run actually get the grounding its arm declares? Recorded provenance vs intent.
+ *
+ * `loadGrounding` returns provenance "none" for a missing map, so an arm whose map never
+ * reached the Mac it landed on runs UNGROUNDED and reports a plausible, slightly-worse number
+ * under a grounded label. The field has been written since the collector was built and read
+ * by NOTHING — the matrix delegated the check to a human remembering to look at it.
+ *
+ * This is the cheapest detector for a whole class of defect rather than one bug: a map that
+ * was not synced to the host, a variant that never crossed the wire, a slug that named a
+ * sibling's file, a tier that silently fell back. Each of those produces a number; this turns
+ * every one of them into a red row instead.
+ *
+ * Advisory on the entry, not a hard refusal: the run happened and its artifacts are real, and
+ * a collector that discarded them would lose the evidence needed to diagnose the mismatch.
+ */
+export function expectedProvenance(arm: Arm): RunMetrics["provenance"] {
+	if (arm.dispatch.noGrounding) return "none";
+	if (arm.dispatch.useRecipe) return "curated";
+
+	return arm.env?.APPMAP_VARIANT === "vision" ? "explore-vision" : "explore";
+}
+
+function groundingChecked(entry: ManifestEntry): ManifestEntry {
+	const arm = armById(entry.armId);
+	// Only task-shaped runs load grounding; an explore pass HAS no provenance of its own, and
+	// a run that never produced a log has a more basic problem already recorded.
+	if (!arm || arm.kind !== "task" || !entry.metrics || entry.metrics.provenance === undefined) return entry;
+	const want = expectedProvenance(arm);
+	if (entry.metrics.provenance === want) return entry;
+
+	return {
+		...entry,
+		metrics: { ...entry.metrics, failureKind: "grounding-mismatch" },
+		note: `${entry.note ? `${entry.note}; ` : ""}GROUNDING MISMATCH: arm declares ${want}, run reports ${entry.metrics.provenance} — this run did not get the grounding its row claims`,
+	};
 }
 
 /** Consecutive identical failures on one host before it is called poisoned. */
@@ -381,7 +419,11 @@ function collectEntry(entry: ManifestEntry, job: JobRecord | undefined, dataDir:
 		// running pre-unification code recorded `https-app.notion.com.md` for a pass that wrote
 		// `web-app.notion.com.md`, and honoring the stale record over the shared derivation
 		// re-froze empty metrics on every re-collect. The record wins only when its file is there.
-		const derived = path.join(dataDir, `docs/appmaps/${appmapSlug(arm.app, { visionOnly: Boolean(arm.dispatch.noAx), noVision: Boolean(arm.dispatch.noVision), ...(arm.dispatch.backend ? { backend: arm.dispatch.backend } : {}) })}.md`);
+		// armAppmapSlug, not a hand-assembled call: this one omitted axdomOff, so
+		// p1-explore-ax-noaxdom was graded against p1-explore-ax's map — the existsSync guard
+		// passing precisely BECAUSE the sibling's file was sitting there. The two arms would
+		// have reported byte-identical numbers and the sidecar would have looked worthless.
+		const derived = path.join(dataDir, `docs/appmaps/${armAppmapSlug(arm)}.md`);
 		const recorded = job?.artifacts?.appmap ? path.join(dataDir, job.artifacts.appmap) : undefined;
 		const md = recorded && fs.existsSync(recorded) ? recorded : derived;
 		const recordedGraph = job?.artifacts?.appmapGraph ? path.join(dataDir, job.artifacts.appmapGraph) : undefined;

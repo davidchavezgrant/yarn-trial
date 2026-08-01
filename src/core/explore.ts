@@ -167,12 +167,17 @@ async function main(): Promise<void> {
 			console.log(`  cp ${p.salvageGraphPath} ${p.graphPath}`);
 		}
 	} finally {
-		// Put the app back BEFORE closing the backends — teardown needs one of them. Only under
-		// descent: a refuse-everything pass mutates nothing to restore, and its journal is empty
-		// anyway. Wrapped so a teardown failure never buries the map the pass already wrote,
-		// exactly as the task agent guards its own cleanup. Teardown takes exactly one of
-		// driver/cdp, so it restores through whichever backend drove the pass.
-		if (DESCENT_ON) {
+		// Put the app back BEFORE closing the backends — teardown needs one of them. Wrapped so
+		// a teardown failure never buries the map the pass already wrote, exactly as the task
+		// agent guards its own cleanup. Teardown takes exactly one of driver/cdp, so it
+		// restores through whichever backend drove the pass.
+		//
+		// No longer gated on descent. The old reasoning — "a refuse-everything pass mutates
+		// nothing to restore, and its journal is empty anyway" — stopped being true the moment
+		// the prompt started telling the pass that changing settings is free BECAUSE they are
+		// restored. It is now the mechanism that makes that promise honest, and an empty
+		// journal makes it a no-op anyway.
+		{
 			try {
 				const journal = readJournal(p.journalPath);
 				const settings = journal.filter((m) => m.kind === "setting");

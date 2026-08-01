@@ -652,6 +652,33 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 			}
 		}
 
+		/**
+		 * Journal what this action CHANGED, on every action — not only under descent.
+		 *
+		 * The prompt tells the pass "settings you change are put back automatically after the
+		 * pass … picking a font or a colour is FREE", which is the single line most
+		 * responsible for unblocking exploration. It was a LIE: detectMutation was reached
+		 * only from the descent boundary path, descent defaults to off, and every Yarn pass
+		 * ran with `descent: off` — so no journal existed and teardown had nothing to restore.
+		 * Seven completed passes of 71-163 actions each left zero journals on disk.
+		 *
+		 * That is worse than not making the promise. The passes ran on different Macs, so each
+		 * one left that box's Yarn with whatever brand defaults it last clicked, unrecorded —
+		 * and phase 2 then measures "change the cursor type" against an app state a previous
+		 * pass silently mutated, possibly including the target setting itself.
+		 *
+		 * Detection is a value diff across the two observations rather than the model's
+		 * account of what it did, for the same reason verification is: a pass that reports its
+		 * own side effects can only restore the ones it noticed having.
+		 */
+		if (!isError) {
+			const mutation = detectMutation(input.action, preObs, obs, accumulatedGraph(p), p.actions);
+			if (mutation) {
+				appendMutation(p.journalPath, mutation);
+				console.log(`    journaled: "${mutation.control}"${mutation.surface ? ` in ${mutation.surface}` : ""} ${JSON.stringify(mutation.before ?? "")} -> ${JSON.stringify(mutation.after ?? "")}`);
+			}
+		}
+
 		if (obs.appContent === 0) {
 			// AX tree collapsed (e.g. a modal/other window took over). Acting now means
 			// acting blind — stop rather than let the model flail against a menu bar.

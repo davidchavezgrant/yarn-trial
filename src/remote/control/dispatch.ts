@@ -104,7 +104,7 @@ export interface DispatchOptions {
 	/** `APPMAP_VARIANT=vision` on the child: ground from the `<slug>.vision.*` map. A dedicated
 	 *  option rather than a generic env dict — arbitrary env crossing the wire is a surface
 	 *  nothing needs, and a named field is one the runner can validate. */
-	appmapVariant?: "vision";
+	appmapVariant?: "vision" | "novision";
 	/** `AGENT_MODEL=<id>` on the child: which model runs the loop (task/explore/replay alike).
 	 *  Absent = the child's own default (makeClient). The benchmark's model dimension. */
 	model?: string;

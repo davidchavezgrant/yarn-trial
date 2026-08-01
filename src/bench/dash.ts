@@ -8,10 +8,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { readJournal } from "../core/journal.js";
 import type { FleetRow } from "../remote/control/fleet.js";
 import type { EngineHandle } from "../remote/liveview.js";
+import { logPath as jobLogPath, readJob as readLocalJob, readLog } from "../remote/runner/jobs.js";
 import { appSlug, dataRoot } from "../paths.js";
 import { appmapSlug } from "../core/target.js";
 import { archiveDirFor } from "./collect.js";
-import { estimateCost, rollupCost, usd } from "./cost.js";
+import { estimateCost } from "./cost.js";
 import { type Arm, armAppmapSlug, armById, armTitle, flagsLine, MATRIX, perceptionLine, type Phase } from "./matrix.js";
 import { benchDir, type Manifest, type ManifestEntry, readManifest, utcDate } from "./manifest.js";
 import { judgeDisagreements, modelPasses, passLabel, rollup } from "./report.js";
@@ -98,6 +99,8 @@ export interface PassView {
 	successes: number;
 	usd: number;
 	unpriced: number;
+	/** Of the priced runs, how many were priced by ASSUMING the pass's default-model rates. */
+	assumed: number;
 	meanSteps?: number;
 	meanElapsedSec?: number;
 	meanModelCalls?: number;
@@ -149,6 +152,15 @@ export interface ArmView {
 	task?: string;
 	/** Web arms: the URL the run pointed at (off the dispatch flags). */
 	url?: string;
+	/**
+	 * The phase-1 explore arm whose map this task/replay arm consumed (groundingArmId — the
+	 * same resolution orchestrate applies), so the board can nest arms under their lineage.
+	 * Absent on ungrounded (NO_GROUNDING) arms and on explore/compile arms. Curated
+	 * (USE_RECIPE) arms are still grounded — they carry it and nest.
+	 */
+	groundedBy?: string;
+	/** What the arm points at — the dispatch URL for web arms, else the app. The picker's key. */
+	targetKey: string;
 	informs?: string;
 	passes: PassView[];
 }
@@ -166,7 +178,13 @@ export interface DashState {
 	progress: { planned: number; submitted: number; collected: number; running: number; queued: number; successes: number };
 	fleet: FleetView;
 	arms: ArmView[];
-	cost: { totalUsd: number; unpriced: number; passes: Array<{ pass: string; usd: number; priced: number; unpriced: number }> };
+	cost: {
+		totalUsd: number;
+		unpriced: number;
+		/** Runs priced by falling back to default-model rates (tokens recorded, no model id). */
+		assumedRuns: number;
+		passes: Array<{ pass: string; usd: number; priced: number; unpriced: number; assumed: number }>;
+	};
 	/** Cumulative dollars in collection-time order — the "what has this cost so far" line. */
 	costSeries: Array<{ t: string; jobId: string; cumulativeUsd: number }>;
 	judge: {
@@ -230,11 +248,38 @@ function entryView(e: ManifestEntry, fleet: FleetView): EntryView {
 	return { jobId: e.jobId, host: e.host, submittedAt: e.submittedAt, collected: false, ...liveFor(e, fleet) };
 }
 
-function passView(arm: Arm, model: string | undefined, entries: ManifestEntry[], fleet: FleetView): PassView {
+/**
+ * Price one collected entry the way the report does (the run log's model first, the
+ * manifest's dispatch model second), then RETRY at `entry.model ?? defaultModel` rates when
+ * the run recorded tokens but no rate card matched. Explore stamps record tokens with no
+ * model id, so before this every explore pass read as "unpriced" and the hero showed
+ * "$0.00 +5?" — noise, per David; price them at the published default rates instead.
+ * `assumed: true` marks the retry so totals can say "priced at default-model rates" rather
+ * than pretend the card was known. A tokenless artifact never retries: it would "price" to
+ * $0.00 and pad the assumed count without informing anyone.
+ */
+export function priceWithFallback(e: ManifestEntry, defaultModel?: string): { usd?: number; assumed: boolean } {
+	const m = e.metrics;
+	if (!m) return { assumed: false };
+	const direct = estimateCost(m, m.model ?? e.model);
+	if (direct !== undefined) return { usd: direct, assumed: false };
+	if (m.inputTokens === undefined && m.outputTokens === undefined && m.cacheReadTokens === undefined && m.cacheCreationTokens === undefined)
+		return { assumed: false };
+	const assumed = estimateCost(m, e.model ?? defaultModel);
+
+	return assumed !== undefined ? { usd: assumed, assumed: true } : { assumed: false };
+}
+
+function passView(arm: Arm, model: string | undefined, entries: ManifestEntry[], fleet: FleetView, defaultModel?: string): PassView {
 	const r = rollup(arm, entries);
 	const first = r.collected[0]?.metrics;
 
 	const ranModels = [...new Set(r.collected.map((e) => e.metrics?.model).filter((m): m is string => typeof m === "string"))];
+
+	// Post-adjust the report's cost rollup rather than editing report.ts: rollup() prices
+	// per-entry metrics.model only, so it cannot see the manifest's dispatch model or the
+	// default-model fallback. Recomputed here with the same estimateCost, superset semantics.
+	const priced = r.collected.map((e) => priceWithFallback(e, defaultModel));
 
 	return {
 		model: passLabel(model),
@@ -242,8 +287,9 @@ function passView(arm: Arm, model: string | undefined, entries: ManifestEntry[],
 		submitted: entries.length,
 		collected: r.collected.length,
 		successes: r.successes,
-		usd: r.cost.usd,
-		unpriced: r.cost.unpriced,
+		usd: priced.reduce((s, p) => s + (p.usd ?? 0), 0),
+		unpriced: priced.filter((p) => p.usd === undefined).length,
+		assumed: priced.filter((p) => p.assumed).length,
 		...(r.meanSteps !== undefined ? { meanSteps: r.meanSteps } : {}),
 		...(r.meanElapsedSec !== undefined ? { meanElapsedSec: r.meanElapsedSec } : {}),
 		...(r.meanModelCalls !== undefined ? { meanModelCalls: r.meanModelCalls } : {}),
@@ -402,9 +448,15 @@ export function buildState(manifest: Manifest, fleet: FleetView, events: DashEve
 		actuation: (arm.dispatch.backend ?? "ax").toUpperCase(),
 		...(arm.task ? { task: arm.task } : {}),
 		...(arm.dispatch.url ? { url: arm.dispatch.url } : {}),
+		// Lineage off the dispatch object, never the rendered flags string (same rule as
+		// armTitle): a task/replay arm without noGrounding consumed SOME explore map.
+		...((arm.kind === "task" || arm.kind === "replay") && !arm.dispatch.noGrounding
+			? { groundedBy: groundingArmId(arm) }
+			: {}),
+		targetKey: arm.dispatch.url ?? arm.app,
 		...(arm.informs ? { informs: arm.informs } : {}),
 		passes: modelPasses(manifest, arm.id)
-			.map((model) => passView(arm, model, manifest.entries.filter((e) => e.armId === arm.id && e.model === model), fleet))
+			.map((model) => passView(arm, model, manifest.entries.filter((e) => e.armId === arm.id && e.model === model), fleet, defaultModel))
 			.filter((p) => p.submitted > 0),
 	}));
 
@@ -412,19 +464,28 @@ export function buildState(manifest: Manifest, fleet: FleetView, events: DashEve
 	const collectedEntries = manifest.entries.filter((e) => e.collected);
 
 	// Per model pass, same grouping as the report's cost section: only dollars are summed.
+	// priceWithFallback, not bare rollupCost: runs with tokens but no model id (explore
+	// stamps) price at default-model rates and are COUNTED as assumed, not unpriced.
 	const byPass = new Map<string, ManifestEntry[]>();
 	for (const e of collectedEntries) byPass.set(passLabel(e.model), [...(byPass.get(passLabel(e.model)) ?? []), e]);
 	const passes = [...byPass].map(([pass, entries]) => {
-		const c = rollupCost(entries.map((e) => ({ ...e.metrics, ...(e.metrics?.model ? { model: e.metrics.model } : e.model ? { model: e.model } : {}) })));
+		const priced = entries.map((e) => priceWithFallback(e, defaultModel));
 
-		return { pass, usd: c.usd, priced: c.priced, unpriced: c.unpriced };
+		return {
+			pass,
+			usd: priced.reduce((s, p) => s + (p.usd ?? 0), 0),
+			priced: priced.filter((p) => p.usd !== undefined).length,
+			unpriced: priced.filter((p) => p.usd === undefined).length,
+			assumed: priced.filter((p) => p.assumed).length,
+		};
 	});
 
 	// Cumulative cost in the order runs ENDED (submit time as the fallback for artifacts
-	// without job timing) — the line an operator reads as "spend so far".
+	// without job timing) — the line an operator reads as "spend so far". Same fallback
+	// pricing as the totals, or the line and the hero would disagree over the same runs.
 	let cumulative = 0;
 	const costSeries = collectedEntries
-		.map((e) => ({ e, t: e.metrics?.endedAt ?? e.metrics?.startedAt ?? e.submittedAt, cost: e.metrics ? estimateCost(e.metrics, e.metrics.model ?? e.model) : undefined }))
+		.map((e) => ({ e, t: e.metrics?.endedAt ?? e.metrics?.startedAt ?? e.submittedAt, cost: priceWithFallback(e, defaultModel).usd }))
 		.filter((x) => x.cost !== undefined)
 		.sort((a, b) => a.t.localeCompare(b.t))
 		.map((x) => ({ t: x.t, jobId: x.e.jobId, cumulativeUsd: (cumulative += x.cost as number) }));
@@ -451,7 +512,12 @@ export function buildState(manifest: Manifest, fleet: FleetView, events: DashEve
 		},
 		fleet,
 		arms,
-		cost: { totalUsd: passes.reduce((s, p) => s + p.usd, 0), unpriced: passes.reduce((s, p) => s + p.unpriced, 0), passes },
+		cost: {
+			totalUsd: passes.reduce((s, p) => s + p.usd, 0),
+			unpriced: passes.reduce((s, p) => s + p.unpriced, 0),
+			assumedRuns: passes.reduce((s, p) => s + p.assumed, 0),
+			passes,
+		},
 		costSeries,
 		judge: {
 			judged: judged.length,
@@ -490,6 +556,8 @@ export interface DetailStep {
 export interface DashDetail {
 	jobId: string;
 	armId: string;
+	/** The run log's own task string — the page's prompt fallback for arms carrying none (replays). */
+	task?: string;
 	graph?: { nodes: any[]; edges: any[]; home?: string; gated?: string[] };
 	/** Where the graph came from — archived arm map, live docs/appmaps, or nothing. */
 	graphSource?: string;
@@ -685,10 +753,12 @@ export function buildDetail(jobId: string, manifest: Manifest, opts: { dataDir?:
 	if (flagsLine(arm).includes("NO_GROUNDING")) notes.push("unexplored run — the agent never saw this map; the walk is reconstructed for comparison");
 
 	let steps: DetailStep[] = [];
+	let task: string | undefined;
 	if (arm.kind !== "explore") {
 		const runLog = readJsonFile(path.join(dataDir, "out", "runs", `${jobId}.json`));
 		const rawSteps: Array<Record<string, any>> = Array.isArray(runLog?.steps) ? runLog.steps : [];
 		if (!runLog) notes.push("run log not on this machine yet — collect pulls it when the run lands");
+		if (typeof runLog?.task === "string") task = runLog.task;
 		steps = graph ? matchPath(graph, rawSteps) : rawSteps.map((s) => ({ ...stepLabel(s.action ?? {}, s), index: s.index, verified: s.verified === true }));
 	}
 
@@ -704,6 +774,7 @@ export function buildDetail(jobId: string, manifest: Manifest, opts: { dataDir?:
 	return {
 		jobId,
 		armId: entry.armId,
+		...(task ? { task } : {}),
 		...(graph ? { graph } : {}),
 		...(source ? { graphSource: source } : {}),
 		steps,
@@ -717,6 +788,63 @@ export function buildDetail(jobId: string, manifest: Manifest, opts: { dataDir?:
 
 const FLEET_POLL_SEC = Number(process.env.DASH_FLEET_SEC ?? 20);
 const COLLECT_SEC = Number(process.env.DASH_COLLECT_SEC ?? 60);
+
+/** /api/logs job ids become path segments locally and a spec field remotely — same shape jobs.ts pins. */
+const LOG_JOB_RE = /^[A-Za-z0-9._-]+$/;
+/** A first read (offset 0) of a huge log forwards only this much tail — the pane wants recent lines, not 10MB. */
+const LOG_TAIL_BYTES = 64 * 1024;
+
+/** Everything one single-shot `runnerctl logs` reply folds down to for the /api/logs response. */
+export interface LogFrames {
+	/** All chunk payloads, decoded and re-joined as ONE base64 string (see the buffer note below). */
+	chunkB64: string;
+	nextOffset: number;
+	/** The terminal frame's job state; "unknown" when no terminal frame arrived (truncated stream). */
+	state: string;
+	exitCode: number | null;
+	/** A `{ok:false}` frame's message — the runner refusing, not ssh failing. */
+	error?: string;
+}
+
+/**
+ * Parse EVERY stdout NDJSON line of a `runnerctl logs` reply. ssh.ts's lastFrame() is wrong
+ * here by design — it keeps only the final parseable object, which for this stream is the
+ * terminal `{done:true}` frame, silently dropping every chunk frame before it.
+ *
+ * Chunks accumulate as BUFFERS and re-encode once: two base64 payloads joined as text are
+ * not valid base64 (padding lands mid-stream), and decoding per-chunk to a string would
+ * corrupt a multi-byte character straddling a chunk boundary — the same reason the runner
+ * framed them as base64 in the first place.
+ */
+export function parseLogFrames(stdout: string): LogFrames {
+	const chunks: Buffer[] = [];
+	let nextOffset = 0;
+	let state = "unknown";
+	let exitCode: number | null = null;
+	let error: string | undefined;
+	for (const line of stdout.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed.startsWith("{")) continue;
+		let frame: Record<string, any>;
+		try {
+			frame = JSON.parse(trimmed);
+		} catch {
+			continue; // ssh banners and truncated interleavings are expected, never fatal
+		}
+		if (frame.ok === false) {
+			if (typeof frame.error === "string") error = frame.error;
+			continue;
+		}
+		if (typeof frame.chunk === "string") chunks.push(Buffer.from(frame.chunk, "base64"));
+		if (typeof frame.nextOffset === "number") nextOffset = frame.nextOffset;
+		if (frame.done === true) {
+			if (typeof frame.state === "string") state = frame.state;
+			exitCode = typeof frame.exitCode === "number" ? frame.exitCode : null;
+		}
+	}
+
+	return { chunkB64: Buffer.concat(chunks).toString("base64"), nextOffset, state, exitCode, ...(error ? { error } : {}) };
+}
 
 export interface DashOptions {
 	port: number;
@@ -1381,6 +1509,93 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		// Degrade silently — the dashboard still serves; edits just need a manual refresh.
 	}
 
+	/**
+	 * GET /api/logs?job=<id>&host=<name>&offset=<n>[&meta=1] — the run-log pane's feed.
+	 *
+	 * Local first: a pulled/collected run's log already sits at <dataRoot>/out/jobs/<job>/
+	 * log.txt and needs no ssh (job.json beside it answers what meta=1 would have asked the
+	 * runner for). Otherwise ONE single-shot `runnerctl logs` — no follow key, the client's
+	 * 2.5s poll IS the follow — parsed by parseLogFrames because lastFrame() would keep only
+	 * the terminal frame and drop every chunk.
+	 *
+	 * The payload stays base64 END-TO-END: offsets are byte offsets, a poll boundary can
+	 * split a UTF-8 character, and only the client's one streaming TextDecoder per pane may
+	 * reassemble it. On the first read (offset 0) only the last ~64KB is forwarded, with the
+	 * TRUE nextOffset — never seek-from-end remotely, because readLog resets fromByte>size
+	 * to 0 by design (rotation guard), so a guessed size-minus-64K offset can replay the
+	 * whole file.
+	 */
+	const logsInflight = new Set<string>();
+	const serveLogs = async (res: http.ServerResponse, params: URLSearchParams): Promise<void> => {
+		const json = (status: number, body: Record<string, unknown>): void => {
+			if (!res.headersSent) res.writeHead(status, { "content-type": "application/json" });
+			res.end(JSON.stringify(body));
+		};
+		const job = params.get("job") ?? "";
+		const hostName = params.get("host") ?? "";
+		const offset = Math.max(0, Math.floor(Number(params.get("offset")) || 0));
+		// STRICT validation before anything else: this endpoint shells ssh and the dash can sit
+		// behind an ngrok tunnel, so both identifiers are checked against fixed shapes — the
+		// job against the registry's own id alphabet, the host against the pinned inventory.
+		if (!LOG_JOB_RE.test(job)) return json(400, { error: `bad job id ${JSON.stringify(job)}` });
+		// Same idiom as the polling/collecting flags, per (host, job): a slow ssh must not
+		// stack a second ssh behind it because the page's poll cadence outpaced it.
+		const guard = `${hostName}:${job}`;
+		if (logsInflight.has(guard)) return json(429, { error: "a read for this job is already in flight" });
+		logsInflight.add(guard);
+		try {
+			const { loadHosts } = await import("../remote/control/hosts.js");
+			const host = loadHosts().hosts.find((h) => h.name === hostName);
+			if (!host) return json(400, { error: `unknown host ${JSON.stringify(hostName)}` });
+			const tail = (buf: Buffer): Buffer => (offset === 0 && buf.length > LOG_TAIL_BYTES ? buf.subarray(buf.length - LOG_TAIL_BYTES) : buf);
+
+			if (fs.existsSync(jobLogPath(job))) {
+				// Local fast path — plain fs, covers pulled/collected runs and a runner on this
+				// machine. readLog's default root is the same <dataRoot>/out/jobs tree.
+				const local = readLog(job, offset);
+				const rec = readLocalJob(job);
+
+				return json(200, {
+					jobId: job,
+					host: hostName,
+					chunkB64: tail(local.bytes).toString("base64"),
+					nextOffset: local.nextOffset,
+					live: rec?.state === "running" || rec?.state === "queued",
+					state: rec?.state ?? "unknown",
+					exitCode: rec?.exitCode ?? null,
+					...(params.get("meta") === "1" && rec ? { task: rec.task, app: rec.app, kind: rec.kind } : {}),
+				});
+			}
+
+			const { runSsh, runnerArgv, lastFrame, firstLine } = await import("../remote/control/ssh.js");
+			const r = await runSsh(host, runnerArgv("logs", { jobId: job, fromByte: offset }), { timeoutMs: 10_000 });
+			const frames = parseLogFrames(r.stdout);
+			if (frames.error) return json(502, { error: frames.error });
+			if (r.code !== 0 && !r.stdout.trim()) return json(502, { error: firstLine(r.stderr) || `ssh exited ${r.code}` });
+
+			let meta: { task?: string; app?: string; kind?: string } = {};
+			if (params.get("meta") === "1") {
+				const rec = lastFrame((await runSsh(host, runnerArgv("job", { jobId: job }), { timeoutMs: 10_000 })).stdout)?.job;
+				if (rec) meta = { task: rec.task, app: rec.app, kind: rec.kind };
+			}
+
+			return json(200, {
+				jobId: job,
+				host: hostName,
+				chunkB64: tail(Buffer.from(frames.chunkB64, "base64")).toString("base64"),
+				nextOffset: frames.nextOffset,
+				live: frames.state === "running" || frames.state === "queued",
+				state: frames.state,
+				exitCode: frames.exitCode,
+				...meta,
+			});
+		} catch (e) {
+			json(500, { error: (e as Error).message });
+		} finally {
+			logsInflight.delete(guard);
+		}
+	};
+
 	const server = http.createServer((req, res) => {
 		const url = req.url ?? "/";
 		if (url === "/" || url === "/index.html") {
@@ -1393,6 +1608,9 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			const job = new URL(url, "http://localhost").searchParams.get("job") ?? "";
 			res.writeHead(200, { "content-type": "application/json" });
 			res.end(JSON.stringify(buildDetail(job, manifest)));
+		} else if (url.startsWith("/api/logs")) {
+			// Async by necessity (ssh); serveLogs answers every path itself, including throws.
+			void serveLogs(res, new URL(url, "http://localhost").searchParams);
 		} else if (url === "/events") {
 			res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
 			res.write(`data: ${JSON.stringify(currentState())}\n\n`);

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { buildDetail, buildState, type FleetView, groundingArmId, loadEnvFallback, matchPath, parseEnvLine } from "../src/bench/dash.js";
+import { buildDetail, buildState, type FleetView, groundingArmId, loadEnvFallback, matchPath, parseEnvLine, parseLogFrames } from "../src/bench/dash.js";
 import type { Manifest, ManifestEntry } from "../src/bench/manifest.js";
 import { armById } from "../src/bench/matrix.js";
 
@@ -117,6 +117,47 @@ test("BuildState__AccumulatesCostSeries__When__RunsEndInOrder", () => {
 	assert.ok(Math.abs(s.costSeries[1]!.cumulativeUsd - 7.5) < 1e-9);
 });
 
+test("BuildState__PricesTokensAtDefaultRates__When__RunRecordedNoModel", () => {
+	// Explore stamps record tokens but no model id — these used to count "unpriced" and the
+	// hero read "$0.00 +N?". With a default model known they price at its published card,
+	// counted separately as ASSUMED so the total never pretends the card was recorded.
+	const s = buildState(
+		manifest(entry({ jobId: "job-noid", state: "done", collected: true, metrics: { success: true, outputTokens: 100_000, endedAt: "2026-07-31T20:10:00.000Z" } })),
+		fleet([]),
+		[],
+		true,
+		"claude-opus-5",
+	);
+	// claude-opus-5 output $25/M → 0.1M out = $2.50.
+	assert.ok(Math.abs(s.cost.totalUsd - 2.5) < 1e-9);
+	assert.equal(s.cost.assumedRuns, 1);
+	assert.equal(s.cost.unpriced, 0);
+	assert.equal(s.cost.passes[0]?.assumed, 1);
+	assert.equal(s.cost.passes[0]?.priced, 1);
+	// The arm's pass rollup and the spend-so-far line must agree with the hero over the same run.
+	const p = armView(s, "p2-ax-grounded")?.passes[0];
+	assert.ok(Math.abs((p?.usd ?? 0) - 2.5) < 1e-9);
+	assert.equal(p?.unpriced, 0);
+	assert.equal(p?.assumed, 1);
+	assert.deepEqual(s.costSeries.map((x) => x.jobId), ["job-noid"]);
+});
+
+test("BuildState__LeavesRunUnpriced__When__ModelIsUnknownAndNoDefaultExists", () => {
+	// An unknown model id must NOT price against a near-miss card, and with no default model
+	// there is nothing honest to assume — the run stays visibly unpriced.
+	const s = buildState(
+		manifest(entry({ jobId: "job-azure", state: "done", collected: true, metrics: { success: true, model: "azure-mystery", outputTokens: 100_000 } })),
+		fleet([]),
+		[],
+		true,
+	);
+	assert.equal(s.cost.totalUsd, 0);
+	assert.equal(s.cost.unpriced, 1);
+	assert.equal(s.cost.assumedRuns, 0);
+	assert.equal(s.costSeries.length, 0);
+	assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.unpriced, 1);
+});
+
 test("BuildState__ReportsDisagreement__When__SelfReportContradictsJudge", () => {
 	const s = buildState(
 		manifest(entry({ jobId: "job-lie", state: "done", collected: true, metrics: { success: true, judgeTrajectory: "FAIL", judgeScope: "document" } })),
@@ -148,6 +189,25 @@ test("BuildState__CarriesExploreStamp__When__ArmIsExplore", () => {
 	assert.equal(p?.explore?.controlsActuated, 47);
 	assert.equal(p?.explore?.controlsSeen, 396);
 	assert.equal(p?.explore?.scopeAmbiguities, 10);
+});
+
+test("BuildState__ExposesLineageAndTargetKey__When__ArmsRideTheWire", () => {
+	// The board nests task/replay arms under the explore pass that grounded them, and the
+	// scope picker keys off targetKey — both must ride the wire for every arm.
+	const s = buildState(manifest(), fleet([]), [], false);
+	const byId = (id: string) => s.arms.find((a) => a.id === id);
+	assert.equal(byId("p2-ax-grounded")?.groundedBy, "p1-explore-ax");
+	assert.equal(byId("p2-cdp-grounded")?.groundedBy, "p1-explore-cdp");
+	// Curated (USE_RECIPE) arms are grounded — they nest too.
+	assert.equal(byId("p2-ax-curated")?.groundedBy, "p1-explore-ax");
+	// Replays consume the same lineage as the run they were compiled from.
+	assert.equal(byId("p3-replay-cdp")?.groundedBy, "p1-explore-cdp");
+	// Ungrounded arms and explore/compile arms carry no lineage.
+	assert.equal(byId("p2-ax-ungrounded")?.groundedBy, undefined);
+	assert.equal(byId("p1-explore-ax")?.groundedBy, undefined);
+	assert.equal(byId("p3-compile-ax")?.groundedBy, undefined);
+	assert.ok(s.arms.every((a) => typeof a.targetKey === "string" && a.targetKey.length > 0));
+	assert.equal(byId("p2-ax-grounded")?.targetKey, "Yarn");
 });
 
 test("BuildState__OmitsArmPasses__When__NothingSubmitted", () => {
@@ -218,13 +278,15 @@ test("BuildDetail__WalksRunThroughLiveMap__When__NoArchiveExists", () => {
 		fs.writeFileSync(path.join(dir, "docs", "appmaps", "yarn.json"), JSON.stringify(GRAPH));
 		fs.writeFileSync(
 			path.join(dir, "out", "runs", "job-d.json"),
-			JSON.stringify({ steps: [rawStep(0, "Brand Kit"), rawStep(1, "Screen Clips"), rawStep(2, "Cursor Style")] }),
+			JSON.stringify({ task: "show me how to change the cursor type", steps: [rawStep(0, "Brand Kit"), rawStep(1, "Screen Clips"), rawStep(2, "Cursor Style")] }),
 		);
 		const m = manifest(entry({ jobId: "job-d", state: "done", collected: true }));
 		const d = buildDetail("job-d", m, { dataDir: dir, benchRoot: path.join(dir, "bench") });
 		assert.equal(d.graphSource, "docs/appmaps/yarn.json (live)");
 		assert.equal(d.steps.length, 3);
 		assert.equal(d.steps[2]?.nodeId, "brand-kit/screen-clips/cursor-style");
+		// The run log's task rides the detail — the page's prompt fallback for replay rows.
+		assert.equal(d.task, "show me how to change the cursor type");
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
@@ -273,6 +335,70 @@ test("BuildDetail__QualifiesBareGatedIds__When__AppmapRecordsThemUnpathed", () =
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+/*
+ * /api/logs frame parsing. The runner's `logs` reply is NDJSON — zero or more chunk frames
+ * then one terminal frame — and ssh.ts's lastFrame() keeps only the LAST parseable object,
+ * which here would silently drop every chunk. parseLogFrames is the pure fold the endpoint
+ * forwards.
+ */
+
+const b64 = (s: string): string => Buffer.from(s, "utf8").toString("base64");
+
+test("ParseLogFrames__AccumulatesChunksAndTerminalState__When__StreamHasChunksAndDone", () => {
+	const stdout = [
+		JSON.stringify({ ok: true, jobId: "j", chunk: b64("hello "), nextOffset: 6 }),
+		JSON.stringify({ ok: true, jobId: "j", chunk: b64("world"), nextOffset: 11 }),
+		JSON.stringify({ ok: true, jobId: "j", done: true, nextOffset: 11, state: "running", exitCode: null }),
+	].join("\n");
+	const f = parseLogFrames(stdout);
+	assert.equal(Buffer.from(f.chunkB64, "base64").toString("utf8"), "hello world");
+	assert.equal(f.nextOffset, 11);
+	assert.equal(f.state, "running");
+	assert.equal(f.exitCode, null);
+	assert.equal(f.error, undefined);
+});
+
+test("ParseLogFrames__ReturnsEmptyChunk__When__StreamIsDoneOnly", () => {
+	const f = parseLogFrames(`${JSON.stringify({ ok: true, jobId: "j", done: true, nextOffset: 42, state: "done", exitCode: 0 })}\n`);
+	assert.equal(f.chunkB64, "");
+	assert.equal(f.nextOffset, 42);
+	assert.equal(f.state, "done");
+	assert.equal(f.exitCode, 0);
+});
+
+test("ParseLogFrames__ReportsError__When__RunnerRefused", () => {
+	const f = parseLogFrames(JSON.stringify({ ok: false, error: "no jobs on this host" }));
+	assert.equal(f.error, "no jobs on this host");
+	assert.equal(f.chunkB64, "");
+	assert.equal(f.state, "unknown");
+});
+
+test("ParseLogFrames__IgnoresGarbageLines__When__BannersAndPartialJsonInterleave", () => {
+	const stdout = [
+		"Warning: Permanently added 'mac2' (ED25519) to the list of known hosts.",
+		"{not json at all",
+		JSON.stringify({ ok: true, jobId: "j", chunk: b64("data"), nextOffset: 4 }),
+		"",
+		JSON.stringify({ ok: true, jobId: "j", done: true, nextOffset: 4, state: "failed", exitCode: 1 }),
+	].join("\n");
+	const f = parseLogFrames(stdout);
+	assert.equal(Buffer.from(f.chunkB64, "base64").toString("utf8"), "data");
+	assert.equal(f.state, "failed");
+	assert.equal(f.exitCode, 1);
+});
+
+test("ParseLogFrames__ReassemblesBytes__When__ChunkBoundarySplitsAUtf8Character", () => {
+	// Base64 strings must never be joined as text (padding lands mid-stream) — the parser
+	// concatenates BUFFERS, so a two-byte character split across chunks survives intact.
+	const e = Buffer.from("é", "utf8");
+	const stdout = [
+		JSON.stringify({ ok: true, chunk: e.subarray(0, 1).toString("base64"), nextOffset: 1 }),
+		JSON.stringify({ ok: true, chunk: e.subarray(1).toString("base64"), nextOffset: 2 }),
+		JSON.stringify({ ok: true, done: true, nextOffset: 2, state: "running", exitCode: null }),
+	].join("\n");
+	assert.equal(Buffer.from(parseLogFrames(stdout).chunkB64, "base64").toString("utf8"), "é");
 });
 
 /*

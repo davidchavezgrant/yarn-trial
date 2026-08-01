@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { auditTaskPrompt } from "../src/core/harness.js";
 import type { JobRecord } from "../src/remote/runner/jobs.js";
-import {
+import { expectedProvenance,
 	archiveDirFor,
 	collect,
 	failureKind,
@@ -1035,4 +1035,27 @@ test("MATRIX__ConsumesEveryMapItProduces__When__ExploresAndTaskArmsArePaired", (
 		if (read.has(armAppmapSlug(e)) || e.comparisonOnly) continue;
 		assert.fail(`${e.id} writes ${armAppmapSlug(e)}, which nothing reads — wire a consumer or mark it comparisonOnly`);
 	}
+});
+
+test("groundingChecked__FlagsARunThatDidNotGetItsDeclaredGrounding__When__ProvenanceDisagrees", () => {
+	// provenance has been recorded since the collector was built and read by NOTHING; the
+	// matrix delegated the check to a human remembering to look. It is the cheapest detector
+	// for a whole class: a map that never synced to the host, a variant that never crossed the
+	// wire, a slug naming a sibling's file. Each produces a plausible number under a confident
+	// label, and loadGrounding turns a missing map into provenance "none" without complaint.
+	const grounded = MATRIX.find((a) => a.id === "p2-ax-grounded")!;
+	const ungrounded = MATRIX.find((a) => a.id === "p2-ax-ungrounded")!;
+	const curated = MATRIX.find((a) => a.id === "p2-ax-curated")!;
+	const visionmap = MATRIX.find((a) => a.id === "p2-vision-only-grounded-visionmap")!;
+
+	assert.equal(expectedProvenance(grounded), "explore");
+	assert.equal(expectedProvenance(ungrounded), "none");
+	assert.equal(expectedProvenance(curated), "curated");
+	// The arm that explicitly selects the vision tier must expect the vision stamp, or the
+	// check would fire on every correct run of it.
+	assert.equal(expectedProvenance(visionmap), "explore-vision");
+
+	// And every arm in the matrix resolves to something — an unhandled combination would make
+	// the detector itself the source of false positives.
+	for (const a of MATRIX.filter((x) => x.kind === "task")) assert.ok(expectedProvenance(a), a.id);
 });

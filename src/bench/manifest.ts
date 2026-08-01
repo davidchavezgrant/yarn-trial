@@ -65,7 +65,14 @@ export interface RunMetrics {
 	 * operator), `crashed` (terminal with no run log, an orphan, or a kill signal).
 	 * Absent on successes.
 	 */
-	failureKind?: "unready" | "gave-up" | "hinted-refused" | "stopped" | "crashed";
+	/**
+	 * "grounding-mismatch" is not a run failure — the run completed. It means the run did not
+	 * receive the grounding its arm declares (a map that never reached the host, a variant
+	 * that never crossed the wire, a slug naming a sibling's file), so its number is real but
+	 * mislabelled. Kept in the same field because it disqualifies a row from its arm's
+	 * average exactly as a failure does.
+	 */
+	failureKind?: "unready" | "gave-up" | "hinted-refused" | "stopped" | "crashed" | "grounding-mismatch";
 	/**
 	 * The attention question, per run: mean interactive elements per pre-action observation,
 	 * and mean element-list lines actually rendered into the prompt (0 on vision-only arms).

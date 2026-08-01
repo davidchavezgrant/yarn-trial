@@ -74,6 +74,19 @@
 	td.arm { color: var(--ink); white-space: nowrap; }
 	td.flags { color: var(--muted); font-family: ui-monospace, monospace; font-size: 11px; }
 	.phase-h td { color: var(--muted); font-size: 11px; letter-spacing: .05em; text-transform: uppercase; padding-top: 12px; border-bottom: none; }
+	/* Lineage groups: extra air above each group's first header row — the explore row IS the
+	   group header, so a title row would only repeat what that row already says. */
+	tr.gsep th { padding-top: 16px; }
+	/* Phase badge on task/replay rows: phases interleave inside a lineage group, so each row
+	   carries its own. */
+	.pbadge {
+		font-size: 9px; border: 1px solid var(--border); border-radius: 7px; padding: 0 4px;
+		margin-left: 6px; color: var(--muted); letter-spacing: .04em; vertical-align: 1px;
+	}
+	/* App scope picker: reuses the chip idiom; the selected chip borrows .chip.sel's border. */
+	#target-picker { display: flex; gap: 4px; flex-wrap: wrap; margin: 2px 0 8px; }
+	#target-picker .chip { cursor: pointer; }
+	#target-picker .chip.sel { color: var(--ink); }
 	.chip {
 		display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border);
 		border-radius: 10px; padding: 1px 8px; margin: 1px 3px 1px 0; font-size: 11px; white-space: nowrap;
@@ -90,7 +103,7 @@
 	td.arm .dn { color: var(--ink); }
 	td.arm .chips { margin-top: 3px; }
 	td.treecell { text-align: center; white-space: nowrap; }
-	td.task, td.target { color: var(--muted); max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	td.task { color: var(--muted); max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 	/* row detail: the appmap + the run's path through it */
 	.detail-row > td { background: rgba(255, 255, 255, 0.02); }
@@ -123,6 +136,18 @@
 		display: inline-block; min-width: 13px; text-align: center; background: var(--s1);
 		color: #fff; border-radius: 8px; font-size: 10px; padding: 0 4px; margin-left: 5px; vertical-align: 1px;
 	}
+	/* run log pane — one component, two mounts (matrix row dropdown + fleet under-peek) */
+	.d-prompt { color: var(--ink); font-size: 12px; white-space: pre-wrap; max-width: 110ch; margin: 8px 0 2px; }
+	.d-prompt .k { color: var(--muted); font-size: 10px; margin-right: 8px; text-transform: uppercase; letter-spacing: .05em; }
+	.logwrap { margin: 6px 0 10px; }
+	.logbar { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; flex-wrap: wrap; }
+	.logpane {
+		background: #0a0a0a; border: 1px solid var(--border); border-radius: 6px;
+		padding: 8px 10px; font-family: ui-monospace, monospace; font-size: 11px; line-height: 1.45;
+		white-space: pre-wrap; overflow-wrap: anywhere; max-height: 340px; overflow-y: auto; color: var(--ink-2);
+	}
+	.hostlogs { margin-top: 6px; }
+	.hostlogs > summary { cursor: pointer; font-size: 11px; color: var(--muted); }
 	.btnv {
 		background: none; border: 1px solid var(--border); color: var(--ink-2);
 		border-radius: 6px; padding: 2px 10px; font-size: 11px; cursor: pointer; font: inherit;
@@ -201,6 +226,9 @@
 
 	<section class="card">
 		<h2>Matrix</h2>
+		<!-- App scope picker: filters the WHOLE page (board, charts, hero tiles), not just the
+		     board. Derived from the data — every distinct targetKey on the wire gets a chip. -->
+		<div id="target-picker"></div>
 		<div class="sub" id="board-sub"></div>
 		<div id="offmatrix"></div>
 		<div class="scroll" id="board"></div>
@@ -269,6 +297,91 @@ const statusLabel = (s) => String(s).split("-").map((w) => w ? w[0].toUpperCase(
 // can inject a synthetic state and call render() by hand.
 var state = null;
 var receivedAt = 0;
+
+/* ---- app scope filter ---------------------------------------------------------------- */
+// One filter for the whole page: board groups, every chart, and the hero tiles all read
+// visibleArms()/visibleStats(). The chip list derives from the wire's targetKey per arm —
+// no app names live in this file. sessionStorage, NOT localStorage: per-tab, dies with the
+// tab (same idiom as peekHost).
+var targetFilter = sessionStorage.getItem("dashTarget") || "All";
+
+const targetLabel = (k) => k.replace(/^https?:\/\//, "");
+
+function targetKeys() {
+	const keys = [];
+	for (const a of state.arms) if (a.targetKey && !keys.includes(a.targetKey)) keys.push(a.targetKey);
+	return keys;
+}
+
+function visibleArms() {
+	return targetFilter === "All" ? state.arms : state.arms.filter((a) => a.targetKey === targetFilter);
+}
+
+/**
+ * The aggregates the hero tiles, cost card and judge card render. With "All" selected the
+ * server's own numbers pass through VERBATIM — the page must not disagree with the report
+ * over the same manifest — and a filter recomputes the same shapes over the visible arms.
+ */
+function visibleStats() {
+	if (targetFilter === "All")
+		return { progress: state.progress, cost: state.cost, costSeries: state.costSeries, judge: state.judge };
+	const arms = visibleArms();
+	const entries = arms.flatMap((a) => a.passes.flatMap((p) => p.entries));
+	const progress = {
+		planned: arms.reduce((s, a) => s + a.n, 0),
+		submitted: entries.length,
+		collected: entries.filter((e) => e.collected).length,
+		running: entries.filter((e) => e.status === "running").length,
+		queued: entries.filter((e) => e.status === "queued").length,
+		successes: entries.filter((e) => e.success === true).length,
+	};
+	// Same per-model-pass grouping as the server's cost section: only dollars are summed.
+	const byPass = {};
+	for (const a of arms) for (const p of a.passes) {
+		const b = byPass[p.model] = byPass[p.model] || { pass: p.model, usd: 0, priced: 0, unpriced: 0, assumed: 0 };
+		b.usd += p.usd; b.priced += p.collected - p.unpriced; b.unpriced += p.unpriced; b.assumed += p.assumed;
+	}
+	const passes = Object.values(byPass).filter((p) => p.priced || p.unpriced);
+	const cost = {
+		totalUsd: passes.reduce((s, p) => s + p.usd, 0),
+		unpriced: passes.reduce((s, p) => s + p.unpriced, 0),
+		assumedRuns: passes.reduce((s, p) => s + p.assumed, 0),
+		passes,
+	};
+	// Rebuild the cumulative line FROM the server's series: successive deltas recover each
+	// run's exact cost, so the filtered line re-accumulates the report's numbers rather than
+	// re-deriving cost math client-side.
+	const jobs = new Set(entries.map((e) => e.jobId));
+	let cum = 0;
+	const costSeries = state.costSeries
+		.map((pt, i) => ({ t: pt.t, jobId: pt.jobId, delta: pt.cumulativeUsd - (i ? state.costSeries[i - 1].cumulativeUsd : 0) }))
+		.filter((pt) => jobs.has(pt.jobId))
+		.map((pt) => ({ t: pt.t, jobId: pt.jobId, cumulativeUsd: (cum += pt.delta) }));
+	// Judge: per-entry verdicts ride the wire, so the tallies filter exactly; disagreements
+	// filter by armId (they carry it for precisely this kind of grouping).
+	const judged = entries.filter((e) => e.judgeTrajectory != null);
+	const tally = (pick) => ({
+		pass: judged.filter((e) => pick(e) === "PASS").length,
+		fail: judged.filter((e) => pick(e) === "FAIL").length,
+		unproven: judged.filter((e) => pick(e) === "UNPROVEN").length,
+	});
+	const armIds = new Set(arms.map((a) => a.id));
+	const judge = {
+		judged: judged.length,
+		trajectory: tally((e) => e.judgeTrajectory),
+		visual: tally((e) => e.judgeVisual),
+		disagreements: state.judge.disagreements.filter((d) => armIds.has(d.armId)),
+	};
+	return { progress, cost, costSeries, judge };
+}
+
+function renderTargetPicker() {
+	const keys = targetKeys();
+	$("target-picker").innerHTML = ["All", ...keys].map((k) => {
+		const tip = k === "All" ? "every arm in the matrix" : `only arms targeting ${targetLabel(k)} — filters the board, every chart and the hero tiles`;
+		return `<span class="chip${k === targetFilter ? " sel" : ""}" data-target="${esc(k)}" data-tip="${esc(tip)}">${esc(targetLabel(k))}</span>`;
+	}).join("");
+}
 
 /* ---- svg chart helpers ------------------------------------------------------------- */
 
@@ -429,13 +542,20 @@ function renderFleet() {
 		const queue = r.queue && r.queue.length
 			? `<div class="q">Queue: ${r.queue.map((q) => esc(armOf(q.jobId) || q.app || q.jobId)).join(" → ")}</div>` : "";
 		const tcc = r.tccOk === false ? `<div class="warn">No TCC grants</div>` : "";
+		// Minimal live-log disclosure under a busy card: the #host-logs-<name> + data-job
+		// element is the pane filler's mount contract (a parallel shell providing the same
+		// element binds identically — mountLogPanes scans by that shape, not this markup).
+		const logs = r.state === "busy" && r.jobId
+			? `<details class="hostlogs" data-hostlogs="${esc(r.name)}"${openHostLogs.has(r.name) ? " open" : ""}><summary>Logs</summary>
+			   <div id="host-logs-${esc(r.name)}" data-job="${esc(r.jobId)}"></div></details>`
+			: "";
 		// A peeked host that flips unreachable must keep its stop button.
 		const peekBtn = (r.reachable || peekState.host === r.name)
 			? `<button class="btnv" data-peek="${esc(r.name)}" data-tip="view-only live stream of this Mac's Chromium target (CDP screencast over the ssh tunnel) — one host at a time">${peekState.host === r.name ? "⏹ Stop" : "▶ Peek"}</button>`
 			: "";
 		return `<div class="host"><div class="row"><span class="dot" style="background:${color}"></span><span class="name">${esc(r.name)}</span>
 			<span class="meta">${esc(statusLabel(r.reachable ? r.state : "unreachable"))}${r.operator ? " · " + esc(r.operator) : ""}</span>${peekBtn}</div>
-			${busy}${queue}${tcc}${r.reason ? `<div class="q">${esc(r.reason)}</div>` : ""}</div>`;
+			${busy}${queue}${logs}${tcc}${r.reason ? `<div class="q">${esc(r.reason)}</div>` : ""}</div>`;
 	}).join("");
 }
 
@@ -452,10 +572,11 @@ function armOf(jobId) {
 // a column.
 const th = (label, tip) => `<th${tip ? ` data-tip="${esc(tip)}"` : ""}>${label}</th>`;
 const NAME_TIP = "hover for the arm id, flags and the decision this cell informs · click to expand the appmap and the run's path · click a run chip to view that run";
+// No target column: the app scope picker above the board carries the target, and inside a
+// lineage group every row shares the group's target anyway.
 const TASK_HEAD = "<tr>" + th("Name", NAME_TIP) +
 	th("Perceives", "what the agent SEES: AX tree or DOM elements, plus vision — or pixels only") +
 	th("Acts", "what injects the input: AX (cua driver) or CDP") +
-	th("Target", "app or site the run drives") +
 	th("Task", "the goal-only prompt the run was given") + th("Model", "what actually ran, off the run logs") +
 	th("OK", "succeeded / collected") +
 	th("Steps", "mean actions per run") + th("Time", "mean wall-clock per run") +
@@ -464,7 +585,6 @@ const TASK_HEAD = "<tr>" + th("Name", NAME_TIP) +
 const EXPLORE_HEAD = "<tr>" + th("Name", NAME_TIP) +
 	th("Perceives", "what the pass SEES while exploring: AX tree or DOM elements, plus vision — or pixels only") +
 	th("Acts", "what injects the input: AX (cua driver) or CDP") +
-	th("Target", "app or site the pass explored") +
 	th("Task") + th("Model", "what actually ran, off the run logs") +
 	th("Actions", "actions the pass took (elapsed on hover)") +
 	th("Controls Seen / Act / Dism", "of every control the pass observed (seen), how many it operated (actuated) vs swept off the frontier without operating (dismissed) — the pass ends when the frontier empties, and dismissing is a legitimate way to empty it") +
@@ -517,10 +637,14 @@ function armCell(a, p, key) {
 		: a.kind === "explore"
 			? `<td class="task" data-tip="Explore pass — no task prompt. The objective is coverage: operate every safe control until the frontier of un-operated controls empties, then write the appmap (docs/appmaps/)">Explore</td>`
 			: `<td class="task">–</td>`;
-	return `<td class="arm" data-tip="${esc(tip)}"><span class="dn">${esc(displayName(a))}</span><div class="chips">${p.entries.map((e) => statusChip(e, key, e.jobId === sel)).join("")}</div></td>
+	// Phase badge on task/replay rows only: lineage groups interleave phases 2–5, so the row
+	// says which phase it belongs to. Explore group headers are all phase 1 — no badge.
+	const badge = a.kind !== "explore"
+		? `<span class="pbadge" data-tip="phase ${a.phase} arm — lineage groups interleave phases">P${a.phase}</span>`
+		: "";
+	return `<td class="arm" data-tip="${esc(tip)}"><span class="dn">${esc(displayName(a))}</span>${badge}<div class="chips">${p.entries.map((e) => statusChip(e, key, e.jobId === sel)).join("")}</div></td>
 		<td class="num">${esc(a.perception || "–")}</td>
 		<td class="num">${esc(a.actuation || "–")}</td>
-		<td class="target">${esc(a.url ? a.url.replace(/^https?:\/\//, "") : a.app)}</td>
 		${taskCell}
 		${modelCell(p)}`;
 }
@@ -578,13 +702,33 @@ function fetchDetail(job) {
 
 // No run-selector tabs here: the chips under the arm's name are the selector, and the
 // displayed run's chip is the highlighted one.
+// The dropdown is the run's live console: the prompt it was given in plaintext, then the
+// log pane as bytes land. The map tree lives wholly behind the row's ⤢ button (openTree);
+// detailBody/mapTree remain below as code for other views.
 function detailRowHtml(a, p, key) {
 	const sel = selJob(p, key);
+<<<<<<< ours
 	let body;
 	if (!sel) body = `<div class="empty">nothing submitted yet</div>`;
 	else if (!detailCache[sel]) { fetchDetail(sel); body = `<div class="empty">loading ${esc(sel)}…</div>`; }
 	else body = detailBody(detailCache[sel]);
-	return `<tr class="detail-row"><td colspan="12">${body}</td></tr>`;
+	return `<tr class="detail-row"><td colspan="11">${body}</td></tr>`;
+=======
+	if (!sel) return `<tr class="detail-row"><td colspan="12"><div class="empty">nothing submitted yet</div></td></tr>`;
+	const e = p.entries.find((x) => x.jobId === sel) || {};
+	// The detail is still fetched: the ⤢ modal reads its graph, and its payload carries the
+	// run log's own task — the prompt fallback for arms that carry none (replays).
+	if (!detailCache[sel]) fetchDetail(sel);
+	const d = detailCache[sel];
+	const prompt =
+		a.kind === "explore" ? `<span class="meta">Explore pass — no task prompt</span>`
+		: a.task ? `<span class="k">Prompt</span>${esc(a.task)}`
+		: a.kind === "replay" ? (d && d.task ? `<span class="k">Replay — recipe task</span>${esc(d.task)}` : `<span class="meta">Replay — recipe task not collected yet</span>`)
+		: d && d.task ? `<span class="k">Prompt</span>${esc(d.task)}`
+		: `<span class="meta">no task prompt recorded</span>`;
+	return `<tr class="detail-row"><td colspan="12"><div class="d-prompt">${prompt}</div>
+		<div class="logwrap" data-logjob="${esc(sel)}" data-loghost="${esc(e.host || "")}"></div></td></tr>`;
+>>>>>>> theirs
 }
 
 function detailBody(d) {
@@ -772,6 +916,136 @@ function requestTree(job) {
 	else { pendingTree = job; fetchDetail(job); }
 }
 
+/* ---- live run logs: one pane component, two mounts ------------------------------------ */
+// Pane state lives OUTSIDE the DOM because every SSE push rebuilds the board's and fleet's
+// innerHTML: the accumulated decoded text, the byte offset, and the ONE streaming
+// TextDecoder per open pane — byte offsets can split a UTF-8 character across polls, so
+// every chunk must flow through the same stateful decoder. Keyed job@host; a pane whose
+// mount left the page is disposed, so reopening restarts cleanly from offset 0.
+
+const logPanes = {};
+const openHostLogs = new Set(); // fleet <details> open-state, preserved across re-renders
+
+// Both mount families, one contract: the dropdown's own [data-logjob]/[data-loghost] div,
+// and #host-logs-<name>[data-job] under fleet cards (rendered here, or by any parallel
+// shell providing the same element — the filler binds by shape, not by who rendered it).
+// offsetParent nulls out inside a closed <details>: closed = not open = no poll.
+function logMounts() {
+	const out = [];
+	document.querySelectorAll("[data-logjob]").forEach((el) => {
+		out.push({ el, job: el.dataset.logjob, host: el.dataset.loghost || "" });
+	});
+	document.querySelectorAll('[id^="host-logs-"][data-job]').forEach((el) => {
+		if (el.offsetParent === null) return;
+		out.push({ el, job: el.dataset.job, host: el.id.slice("host-logs-".length) });
+	});
+	return out;
+}
+
+function paneFor(job, host) {
+	const k = job + "@" + host;
+	if (!logPanes[k]) logPanes[k] = {
+		job, host, text: "", offset: 0,
+		decoder: new TextDecoder("utf-8"),
+		state: null, exitCode: null, task: null,
+		sawLive: false, finalQueued: false, done: false, inflight: false,
+		error: null,
+		stick: true, // stick-to-bottom unless the user scrolled up; scrolling back down re-sticks
+	};
+	return logPanes[k];
+}
+
+function b64bytes(b64) {
+	const bin = atob(b64);
+	const out = new Uint8Array(bin.length);
+	for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+	return out;
+}
+
+function logChip(pane) {
+	if (!pane.state && pane.error) return `<span class="chip"><span class="dot" style="background:${STATUS.critical}"></span>${esc(pane.error)}</span>`;
+	if (!pane.state) return `<span class="chip"><span class="dot" style="background:#898781"></span>loading…</span>`;
+	if (pane.state === "running") return `<span class="chip"><span class="dot" style="background:${SERIES[0]}"></span>Running</span>`;
+	if (pane.state === "queued") return `<span class="chip"><span class="dot" style="background:#898781"></span>Queued</span>`;
+	// done → "Done exit 0"; failed/orphaned/stopped keep their name — collapsing them into
+	// "Done" would assert an exit nobody observed. statusLabel: the same render-time Title
+	// Caser every other label goes through.
+	const name = pane.state === "done" ? "Done" : statusLabel(pane.state);
+	const color = pane.exitCode === 0 ? STATUS.good : STATUS.critical;
+	return `<span class="chip"><span class="dot" style="background:${color}"></span>${esc(name)}${pane.exitCode != null ? " exit " + pane.exitCode : ""}</span>`;
+}
+
+function paintPane(pane) {
+	for (const m of logMounts()) {
+		if (m.job !== pane.job || m.host !== pane.host) continue;
+		let pre = m.el.querySelector(".logpane");
+		if (!pre) {
+			m.el.innerHTML = `<div class="logbar"></div><div class="logpane"></div>`;
+			pre = m.el.querySelector(".logpane");
+			pre.addEventListener("scroll", () => { pane.stick = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8; });
+		}
+		m.el.querySelector(".logbar").innerHTML = logChip(pane)
+			+ `<span class="meta">${esc(pane.job)}${pane.task ? " · " + esc(pane.task) : ""}${pane.state && !pane.text ? " · log empty so far" : ""}</span>`
+			+ (pane.error && pane.state ? `<span class="warn">${esc(pane.error)}</span>` : "");
+		// Append only the delta: replacing textContent wholesale each paint would reset the
+		// scroll position a user parked mid-log.
+		const have = Number(pre.dataset.len || 0);
+		if (have > pane.text.length) pre.textContent = pane.text;
+		else if (have < pane.text.length) pre.appendChild(document.createTextNode(pane.text.slice(have)));
+		pre.dataset.len = String(pane.text.length);
+		if (pane.stick) pre.scrollTop = pre.scrollHeight;
+	}
+}
+
+function pollPane(pane) {
+	if (pane.inflight || pane.done) return;
+	pane.inflight = true;
+	const wantMeta = pane.offset === 0;
+	fetch(`/api/logs?job=${encodeURIComponent(pane.job)}&host=${encodeURIComponent(pane.host)}&offset=${pane.offset}${wantMeta ? "&meta=1" : ""}`)
+		.then(async (r) => ({ status: r.status, d: await r.json().catch(() => ({})) }))
+		.then(({ status, d }) => {
+			if (status === 429) return; // the server's per-(host,job) guard — wait for the next tick
+			if (status !== 200) {
+				pane.error = d.error || "HTTP " + status;
+				if (status === 400) pane.done = true; // bad job / unknown host is permanent
+				return;
+			}
+			pane.error = null;
+			if (d.chunkB64) pane.text += pane.decoder.decode(b64bytes(d.chunkB64), { stream: true });
+			if (typeof d.nextOffset === "number") pane.offset = d.nextOffset;
+			if (d.state) pane.state = d.state;
+			if (d.exitCode != null) pane.exitCode = d.exitCode;
+			if (d.task && !pane.task) pane.task = d.task;
+			if (d.live) pane.sawLive = true;
+			// Live flipped false mid-watch: bytes can land between the read and the state
+			// change, so exactly ONE more poll runs before the pane stops for good. A run
+			// that was never live arrived complete on its first read.
+			else if (pane.sawLive && !pane.finalQueued) pane.finalQueued = true;
+			else pane.done = true;
+		})
+		.catch((e) => { pane.error = String((e && e.message) || e); })
+		.finally(() => { pane.inflight = false; paintPane(pane); });
+}
+
+// One cadence for every open pane; a pane whose mount is gone is disposed here.
+setInterval(() => {
+	const mounted = new Set(logMounts().map((m) => m.job + "@" + m.host));
+	for (const k of Object.keys(logPanes)) {
+		if (!mounted.has(k)) { delete logPanes[k]; continue; }
+		pollPane(logPanes[k]);
+	}
+}, 2500);
+
+// After each render (innerHTML replaced everything): rebuild pane DOM in place and give a
+// brand-new pane its first fetch immediately rather than at the next 2.5s tick.
+function mountLogPanes() {
+	for (const m of logMounts()) {
+		const pane = paneFor(m.job, m.host);
+		paintPane(pane);
+		if (!pane.state && !pane.inflight && !pane.done) pollPane(pane);
+	}
+}
+
 // The board reads as a drain timeline: within each section, rows whose runs FINISHED come
 // first in finish order, rows still in flight follow in start order — so the newest start
 // sits at the bottom and the next collect lands where the eye already is.
@@ -793,23 +1067,50 @@ function timelineRows(arms) {
 		.sort((x, y) => x.k[0] - y.k[0] || x.k[1] - y.k[1]);
 }
 
-function renderBoard() {
+// The board is grouped by LINEAGE, not phase: each explore arm heads a group (its row keeps
+// the explore column set — it IS the group header, carrying its own discovery metrics), and
+// beneath it sit the task/replay arms that consumed its map (groundedBy on the wire — the
+// same resolution orchestrate applies), in drain-timeline order. Ungrounded (NO_GROUNDING)
+// arms close the board under "No Explore Pass". Phases interleave inside a group, hence the
+// per-row phase badge.
+function renderBoard(progress) {
 	// Snapshot which map surfaces are open BEFORE the re-render wipes them, so a push
 	// doesn't collapse the tree someone is reading.
 	prevOpenSurfs = new Set([...document.querySelectorAll(".surf[open]")].map((el) => el.dataset.sid));
-	const phases = [...new Set(state.arms.map((a) => a.phase))].sort();
+	const arms = visibleArms().filter((a) => a.kind !== "compile");
+	const deps = {};
+	const ungrounded = [];
+	for (const a of arms) {
+		if (a.kind === "explore" || !a.passes.length) continue;
+		if (a.groundedBy) (deps[a.groundedBy] = deps[a.groundedBy] || []).push(a);
+		else ungrounded.push(a);
+	}
+	// gsep only spaces the group's first header row — TASK_HEAD inside a group stays tight.
+	const gsep = (head) => head.replace("<tr>", '<tr class="gsep">');
 	let html = "<table>";
-	for (const ph of phases) {
-		const arms = state.arms.filter((a) => a.phase === ph && a.kind !== "compile" && a.passes.length);
-		if (!arms.length) continue;
-		html += `<tr class="phase-h"><td colspan="12">Phase ${ph}</td></tr>`;
-		const explores = arms.filter((a) => a.kind === "explore");
-		const tasks = arms.filter((a) => a.kind !== "explore");
-		if (explores.length) html += EXPLORE_HEAD + timelineRows(explores).map(({ a, p }) => exploreRow(a, p)).join("");
-		if (tasks.length) html += TASK_HEAD + timelineRows(tasks).map(({ a, p }) => taskRow(a, p)).join("");
+	const seen = new Set();
+	for (const e of arms.filter((a) => a.kind === "explore" && a.passes.length)) {
+		seen.add(e.id);
+		html += gsep(EXPLORE_HEAD) + timelineRows([e]).map(({ a, p }) => exploreRow(a, p)).join("");
+		const d = deps[e.id] || [];
+		if (d.length) html += TASK_HEAD + timelineRows(d).map(({ a, p }) => taskRow(a, p)).join("");
+	}
+	// Grounded arms whose explore pass has nothing submitted (or names an arm outside the
+	// matrix): still shown, under a placeholder header naming the missing lineage — a run
+	// must never vanish from the board because its grounding hasn't landed.
+	for (const gid of Object.keys(deps)) {
+		if (seen.has(gid)) continue;
+		const ex = state.arms.find((x) => x.id === gid);
+		html += `<tr class="phase-h"><td colspan="11">${esc(gid)} — ${ex ? "grounding pass not yet submitted" : "not in the matrix"}</td></tr>`;
+		html += TASK_HEAD + timelineRows(deps[gid]).map(({ a, p }) => taskRow(a, p)).join("");
+	}
+	if (ungrounded.length) {
+		html += `<tr class="phase-h"><td colspan="11">No Explore Pass</td></tr>`;
+		html += TASK_HEAD + timelineRows(ungrounded).map(({ a, p }) => taskRow(a, p)).join("");
 	}
 	$("board").innerHTML = html + "</table>";
-	$("board-sub").textContent = `${state.progress.submitted} submitted of ${state.progress.planned} planned runs · ${state.progress.collected} collected · finished first (in finish order), in-flight below (newest start last) · click an arm to see its map + path`;
+	const scope = targetFilter === "All" ? "" : `${targetLabel(targetFilter)} only · `;
+	$("board-sub").textContent = `${scope}${progress.submitted} submitted of ${progress.planned} planned runs · ${progress.collected} collected · grouped by the explore pass that grounded them · within a group: finished first (in finish order), in-flight below (newest start last) · click an arm to see its map + path`;
 }
 
 /* ---- off-matrix strip ---------------------------------------------------------------- */
@@ -819,6 +1120,8 @@ function renderBoard() {
 // from the matrix, which read as a missing row. Surface exactly those here: any fleet
 // jobId (busy or queued) that no manifest entry claims.
 function offMatrixJobs() {
+	// ALL arms, never visibleArms(): a filtered-out matrix job must not get re-labeled
+	// "off-matrix" just because the picker is scoped to a different target.
 	const known = new Set();
 	for (const a of state.arms) for (const p of a.passes) for (const e of p.entries) known.add(e.jobId);
 	const jobs = [];
@@ -842,7 +1145,7 @@ function renderOffMatrix() {
 }
 
 function renderExplore() {
-	const arms = state.arms.filter((a) => a.phase === 1 && a.passes.some((p) => p.explore && p.explore.controlsSeen != null));
+	const arms = visibleArms().filter((a) => a.phase === 1 && a.passes.some((p) => p.explore && p.explore.controlsSeen != null));
 	if (!arms.length) { $("chart-explore").innerHTML = `<div class="empty">waiting for a collected explore…</div>`; return; }
 	// Funnel order (seen ≥ actuated+dismissed); colors follow the series, not the position.
 	// Group labels mirror the board's "perceives" column; web arms append "(web)" so the
@@ -871,7 +1174,7 @@ function renderExplore() {
 
 function renderOutcomes() {
 	const rows = [];
-	for (const a of state.arms) {
+	for (const a of visibleArms()) {
 		if (a.kind !== "task" && a.kind !== "replay") continue;
 		for (const p of a.passes) {
 			if (!p.submitted) continue;
@@ -896,7 +1199,7 @@ function renderOutcomes() {
 
 function groundingChart(el, pick, fmt) {
 	const cell = (backend, grounded) => {
-		const arm = state.arms.find((a) => a.id === `p2-${backend}-${grounded ? "grounded" : "ungrounded"}`);
+		const arm = visibleArms().find((a) => a.id === `p2-${backend}-${grounded ? "grounded" : "ungrounded"}`);
 		const p = arm && arm.passes[0];
 		return p && p.collected ? pick(p) : null;
 	};
@@ -906,25 +1209,29 @@ function groundingChart(el, pick, fmt) {
 }
 
 function renderAttention() {
-	const arms = state.arms.filter((a) => /^p2-(ax|cdp)-(un)?grounded$/.test(a.id) && a.passes.some((p) => p.meanObsNodes != null));
+	const arms = visibleArms().filter((a) => /^p2-(ax|cdp)-(un)?grounded$/.test(a.id) && a.passes.some((p) => p.meanObsNodes != null));
 	if (!arms.length) { $("chart-attention").innerHTML = `<div class="empty">waiting for phase-2 runs…</div>`; return; }
 	const groups = arms.map((a) => ({ label: a.id.replace("p2-", ""), values: [a.passes[0].meanObsNodes, a.passes[0].meanShownLines] }));
 	$("chart-attention").innerHTML = vBars(groups, [{ name: "Observed Nodes", color: SERIES[0] }, { name: "Shown to Model", color: SERIES[1] }]);
 }
 
-function renderCost() {
-	const c = state.cost;
+function renderCost(c, series) {
+	// Runs with tokens but no recorded model id (explore stamps) price at default-model
+	// rates and count as `assumedRuns`; only runs with no card even after that fallback
+	// keep the "+N?" marker — so the hero reads as a dollar figure, not noise.
 	$("h-cost").textContent = fmtMoney(c.totalUsd) + (c.unpriced ? ` +${c.unpriced}?` : "");
-	$("cost-sub").textContent = c.passes.map((p) => `${p.pass}: ${fmtMoney(p.usd)} over ${p.priced} run(s)${p.unpriced ? ` (+${p.unpriced} unpriced)` : ""}`).join(" · ") || "published-rate estimates, not an invoice";
-	if (!state.costSeries.length) { $("chart-cost").innerHTML = `<div class="empty">no priced runs collected yet</div>`; return; }
+	$("h-cost").title = (c.assumedRuns ? `${c.assumedRuns} run(s) recorded tokens but no model id — priced at the default model's published rates${state.defaultModel ? ` (${state.defaultModel})` : ""}. ` : "")
+		+ (c.unpriced ? `+${c.unpriced}? = run(s) with no rate card even at the fallback. ` : "")
+		+ "Published-rate estimates, not an invoice.";
+	$("cost-sub").textContent = c.passes.map((p) => `${p.pass}: ${fmtMoney(p.usd)} over ${p.priced} run(s)${p.assumed ? ` (${p.assumed} at default-model rates)` : ""}${p.unpriced ? ` (+${p.unpriced} unpriced)` : ""}`).join(" · ") || "published-rate estimates, not an invoice";
+	if (!series.length) { $("chart-cost").innerHTML = `<div class="empty">no priced runs collected yet</div>`; return; }
 	$("chart-cost").innerHTML = stepLine(
-		state.costSeries.map((p) => ({ x: hhmm(p.t), y: p.cumulativeUsd, label: `${p.jobId}\n${hhmm(p.t)} — cumulative ${fmtMoney(p.cumulativeUsd)}` })),
+		series.map((p) => ({ x: hhmm(p.t), y: p.cumulativeUsd, label: `${p.jobId}\n${hhmm(p.t)} — cumulative ${fmtMoney(p.cumulativeUsd)}` })),
 		SERIES[0], { fmtY: fmtMoney },
 	);
 }
 
-function renderJudge() {
-	const j = state.judge;
+function renderJudge(j) {
 	if (!j.judged) { $("judge").innerHTML = `<div class="empty">no judged runs yet — the dash folds verdicts in after \`bench judge\` + collect</div>`; return; }
 	const line = (name, t) => `<div class="row" style="gap:14px"><span style="min-width:70px" class="num">${name}</span>
 		<span class="chip"><span class="dot" style="background:${STATUS.good}"></span>PASS ${t.pass}</span>
@@ -957,19 +1264,40 @@ function renderEvents() {
 
 function render() {
 	if (!state) return;
-	const p = state.progress;
+	// A stored selection the data no longer contains must not blank the page — fall back to
+	// All BEFORE anything reads the filter (leave storage alone; the key may return on the
+	// next manifest).
+	if (targetFilter !== "All" && !targetKeys().includes(targetFilter)) targetFilter = "All";
+	// One aggregate for everything scope-aware: hero tiles, board sub, cost, judge. The
+	// fleet, off-matrix strip, narrative and events stay global — they are not arm-scoped.
+	const vs = visibleStats();
+	const p = vs.progress;
 	$("h-submitted").textContent = `${p.submitted} / ${p.planned}`;
 	$("h-live").textContent = `${p.running} · ${p.queued}`;
 	$("h-collected").textContent = String(p.collected);
 	$("h-success").textContent = `${p.successes} OK`;
 	$("metaline").textContent = `${state.date} · Fleet ${state.fleet.polledAt ? hhmm(state.fleet.polledAt) : "–"} · ${state.autoCollect ? "Auto-collect on" : "Collect off (pure reader)"} · Updated ${hhmm(state.generatedAt)}`;
-	renderFleet(); renderBoard(); renderOffMatrix(); renderExplore(); renderOutcomes();
+	renderFleet(); renderTargetPicker(); renderBoard(p); renderOffMatrix(); renderExplore(); renderOutcomes();
 	groundingChart("chart-steps", (x) => x.meanSteps, fmtNum);
 	groundingChart("chart-tokens", (x) => x.meanOutputTokens, fmtK);
+<<<<<<< ours
+	renderAttention(); renderCost(vs.cost, vs.costSeries); renderJudge(vs.judge); renderNarrative(); renderEvents();
+=======
 	renderAttention(); renderCost(); renderJudge(); renderNarrative(); renderEvents();
+	mountLogPanes(); // re-attach log panes into the fresh DOM (their state lives in logPanes)
+>>>>>>> theirs
 }
 
 /* ---- wiring -------------------------------------------------------------------------- */
+
+// Scope chips, delegated once (the picker's innerHTML is replaced on every push too).
+$("target-picker").addEventListener("click", (ev) => {
+	const t = ev.target.closest("[data-target]");
+	if (!t) return;
+	targetFilter = t.dataset.target;
+	sessionStorage.setItem("dashTarget", targetFilter);
+	render();
+});
 
 // Row expansion + run selection, delegated once — the board's innerHTML is replaced on
 // every push, so handlers must live on the container, not the rows.
@@ -1118,6 +1446,15 @@ $("fleet").addEventListener("click", (ev) => {
 	const pk = ev.target.closest("[data-peek]");
 	if (pk) togglePeek(pk.dataset.peek);
 });
+
+// Fleet log disclosures: capture phase because `toggle` does not bubble. The open-state set
+// is what re-renders read, so an open pane survives every SSE push.
+$("fleet").addEventListener("toggle", (ev) => {
+	const d = ev.target;
+	if (!d.dataset || !d.dataset.hostlogs) return;
+	if (d.open) openHostLogs.add(d.dataset.hostlogs); else openHostLogs.delete(d.dataset.hostlogs);
+	mountLogPanes();
+}, true);
 
 // The panel owns its own buttons — it lives outside the re-rendered fleet region.
 $("peek-holder").addEventListener("click", (ev) => {

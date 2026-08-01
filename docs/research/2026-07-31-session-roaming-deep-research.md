@@ -186,6 +186,43 @@ Three sharp edges, all measured:
 paired with a non-default `--user-data-dir`. Our persistent-profile Chrome already satisfies
 this, but it is now load-bearing rather than incidental.
 
+### 3b′. The generality of CDP is on the wrong axis — and Yarn falls through it
+
+CDP is general across **encryption schemes** (it reads the browser's already-decrypted view, so
+OSCrypt, DPAPI and App-Bound Encryption are all irrelevant to it) but **not general across where
+an app keeps its session.** It reaches only the web-storage layer — cookies, localStorage,
+IndexedDB. An app whose session lives in a file it manages itself, in Electron `safeStorage`, or
+in the login keychain is entirely outside CDP's view. Electron standardizes the *rendering
+engine*, not the *storage location*, so "CDP transfer for any Electron app" is false — it covers
+exactly the subclass "session lives in web storage."
+
+**Yarn is the counterexample, verified.** Its cookie jar holds two cookies, both LogRocket
+analytics (`_lr_tabs_…`, `_lr_hb_…`), non-HttpOnly, unrelated to auth. Yarn has **zero auth
+cookies**; its entire session is the JWT in `config.json`. A CDP capture against Yarn would
+faithfully return two analytics cookies and silently miss the session — the exact "looks like
+success" failure mode. So the §7 recommendation "adopt CDP for web targets" is correct *and*
+scoped: for Yarn itself the right primitive is copy-the-176-byte-file, and the general answer
+across all storage strategies is the machine clone (§5), not CDP.
+
+Storage strategy → is there a general data-level move:
+
+| Where the session lives | General mechanism? |
+|---|---|
+| Cookie jar | **CDP transfer** — yes, encryption-agnostic |
+| localStorage / IndexedDB | CDP + script injection — yes, with the origin-visit caveat |
+| A file the app manages (**Yarn's `config.json`**) | No — "which file" is per-app |
+| Electron `safeStorage` (Keychain-backed) | No — decrypted only in main-process memory, invisible to CDP |
+| Login keychain directly | No |
+
+Two things that look like they rescue generality and don't: `--inspect` exposes the Electron
+*main* process, where a `safeStorage` token is briefly plaintext — but reading it needs the
+app's internal variable names (per-app) and hardened builds disable the inspector. And
+capture-at-auth (watch the network response as the human signs in) *is* general on the capture
+side — you see the token in flight regardless of final storage — but **replay** still needs to
+know where to inject it, which is per-app again. Capture generalizes; replay doesn't. The only
+mechanism general across every Electron storage strategy is the machine clone, because it moves
+the session in the app's native format without knowing where it is (§5).
+
 ### 3c. What `storageState` silently loses
 
 - **sessionStorage** — never collected; actively cleared on restore.
@@ -337,6 +374,95 @@ Scope is iCloud and the data-protection keychain — it does not touch TCC, the 
 a plaintext file token. For Yarn's JWT this is a non-event. For an app storing its session in
 the SEP-backed keychain, the VM route degrades to per-box sign-in for that app. **Keep
 `signin`/`liveview`.**
+
+### 5.5 On MacStadium: Orka is the managed version of this route (thread opened 2026-07-31, OPEN)
+
+The fleet is hosted on **MacStadium**, which changes the build. MacStadium's own product,
+**Orka** (Orchestration with Kubernetes for Apple), is the productized version of exactly the
+golden-image clone route above — image-based macOS VM deployment on Apple silicon, on hardware
+already being paid for. So the §5c stack ("build it with Tart + Orchard") is reordered:
+**evaluate Orka as primary; Tart-on-bare-metal is the fallback.**
+
+Reframe of Agent C's earlier Orka rejection ("demands a Kubernetes cluster for 3 Macs"): that
+was scored for *self-hosting a fleet from scratch*, where Orka's K8s overhead loses to plain
+Tart. On MacStadium the calculus inverts — the K8s layer is *managed*, and Orka is the native
+way to deploy from an image. The thing that made Orka not worth it is the thing MacStadium runs
+for you.
+
+**Provider and orchestration are separable — this contains the risk.** MacStadium also rents
+dedicated *bare-metal* Macs. If Orka's API disappoints, run Tart/Orchard on MacStadium bare
+metal: same golden-image workflow, same already-paid hardware, open-source tooling you control.
+So "is Orka good enough" is a *which-orchestrator* question, never a *does-the-route-work* one.
+
+**What the two API surfaces are (a live confusion to resolve):** `api.macstadium.com` is very
+likely the thin **account/portal API** (billing, IP allocation) — not the orchestration layer.
+Orka's control plane is a **separate, Kubernetes-shaped API** served inside the customer's Orka
+environment, with a CLI (`orka`/`orka3`) and, historically, a published Terraform provider (the
+signal that it's genuinely automatable). The four operations the productization needs — capture
+image, deploy VM (returns SSH/VNC), delete, list — map onto Orka's resource model. A tell worth
+noting: `hosts.json` already speaks SSH:22 + VNC:5900, the exact access shape Orka hands back
+for a deployed VM.
+
+**OPEN verify-items (none of these are settled — do not treat as decided):**
+
+1. **Does Orka image capture preserve SIP-disabled state and the guest `TCC.db`?** This is the
+   make-or-break, and it is exactly what disqualified AWS EC2 Mac ("SIP configurations do not
+   transfer to snapshots or AMIs"). Orka images are full VM disk images and SIP/boot-policy +
+   TCC.db live on the guest disk, so *in principle* they should travel — unverified for Orka's
+   2026 pipeline. Ask MacStadium directly.
+2. **Are the current three Macs Orka VMs or dedicated bare-metal hosts?** `hosts.json` is
+   consistent with either and it changes the next step. If they are already Orka VMs, the
+   golden-image workflow is a snapshot-and-redeploy away and part of `LIMITATIONS.md` §12's
+   per-machine pain may already be soluble.
+3. **Is the Orka API good enough to drive a warm pool?** The afternoon test that settles it:
+   script `capture image → deploy VM → SSH in → delete` end to end. If it flows, the queue
+   design (§5.6) drops on top; if it fights, go Tart-on-bare-metal.
+4. Confirm `api.macstadium.com` is account-only vs. the Orka control plane (item above).
+
+Confidence note: the account-API-vs-Orka-API *split* is a stable architectural fact; the Orka
+*specifics* (current endpoints, whether capture preserves SIP/TCC, API ergonomics) are from
+prior knowledge that may be stale and were **not** web-verifiable in this pass (search budget
+exhausted). Treat §5.5 as a scoped investigation plan, not findings.
+
+### 5.6 Cold start is a utilization tax, not user latency — and the queue we need mostly exists
+
+The instinct "fire onto a queue, boot the VM, return the result async" is correct and, for the
+base case, sufficient with no cleverness. Runs here are non-interactive (Jasper: 30-min runs are
+fine; Auto-Time compresses the final video), so a 60–90s boot prepended to a multi-minute run
+and delivered async is invisible. The queue absorbs it by construction. Do not optimize what no
+one waits on.
+
+What cold start *actually* costs is **VM-slot utilization**, not wall-clock-to-first-frame.
+Apple's 2-VMs-per-host cap makes slots the scarce resource; on MacStadium that ceiling is
+elastic (rent more hosts) rather than a hard 6, so it becomes a cost dial. Every second a slot
+spends booting is a second it is not generating a demo.
+
+Mitigation ladder, by leverage:
+
+1. **Cloning is already free** (`clonefile()` / Orka image deploy is the cheap part) — the cost
+   is boot-to-**ready**, and most of *that* is the app launching and reaching signed-in home,
+   which we already gate on (`waitForHome`). Optimize that segment, not the disk copy.
+2. **Warm pool** — hold N VMs pre-deployed at the home screen, hand one out, destroy-and-replace
+   after. On Orka this is just holding deployed VMs; on Tart it is a pool of booted clones. The
+   pool must be *fresh clones replenished in the background*, because cold start and cleanliness
+   are the same coin (a run should start from clean golden state — the whole teardown concern).
+3. **Suspend/resume from a memory snapshot** — resume lands at the already-signed-in home screen
+   in seconds and costs disk rather than a live slot (strictly better than warm-idle). **OPEN:**
+   whether Tart/Virtualization.framework exposes save/restore for *macOS guests* specifically,
+   and whether Orka exposes it at all, is unverified — macOS-guest save/restore has historically
+   had more restrictions than Linux-guest. Verify before designing around it.
+
+Freshness has a *session* dimension too: a long-suspended warm VM resumes with the session it
+froze with. Yarn's token has no `exp`, so this is a non-issue for Yarn; for any rotating/expiring
+session, a stale warm VM can resume already logged out — so pool freshness must account for
+session lifetime, not just idle time.
+
+**Most of the queue is already built.** `src/remote/` has a durable job queue, a liveness-based
+per-machine lease (one run per slot), and `dispatch auto` queuing on the shortest line. The VM
+delta is that the lease manages a *VM lifecycle* (deploy/suspend/destroy via Orka or Tart)
+rather than assuming a persistent Mac. Client submits → orchestrator hands a warm/deployed VM or
+boots a clone → run proceeds → artifact returns async. That extends the existing dispatch layer,
+it does not replace it.
 
 ---
 

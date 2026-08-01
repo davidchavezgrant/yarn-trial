@@ -746,8 +746,12 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		// Same fixed-vocabulary rule for the appmap variant — it becomes an env value, and the
 		// only variant that exists is the vision map. A typo'd variant would silently ground the
 		// run from the ELEMENT map while the manifest recorded a vision arm.
-		if (params.appmapVariant !== undefined && params.appmapVariant !== "vision")
-			return { ok: false, error: `appmapVariant must be "vision", got ${JSON.stringify(params.appmapVariant)}` };
+		// Both grounding tiers an explore pass can write. The allowlist stays an allowlist —
+		// this value becomes an env var on the child, so an unbounded string here is an
+		// injection lane — but it was too narrow: "novision" was rejected, and the caller
+		// dropped it before it ever got here, so two arms read the wrong map in silence.
+		if (params.appmapVariant !== undefined && params.appmapVariant !== "vision" && params.appmapVariant !== "novision")
+			return { ok: false, error: `appmapVariant must be "vision" or "novision", got ${JSON.stringify(params.appmapVariant)}` };
 		const appmapVariant = params.appmapVariant as "vision" | undefined;
 
 		// A model id becomes an env VALUE, never argv — but it still gets a shape check, so a

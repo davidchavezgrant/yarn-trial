@@ -125,7 +125,7 @@ export interface JobRecord {
 	/** Web target: `--url <url>` on the child argv. The app field stays the display label. */
 	url?: string;
 	/** `APPMAP_VARIANT=vision` in the child's environment: ground from the vision-variant map. */
-	appmapVariant?: "vision";
+	appmapVariant?: "vision" | "novision";
 	/** `AGENT_MODEL=<id>` in the child's environment. Absent = the child's default model. */
 	model?: string;
 	/** Step budget override for the child run (AGENT_STEPS). */
@@ -154,7 +154,7 @@ export interface JobInit {
 	recipe?: string;
 	noRescue?: boolean;
 	url?: string;
-	appmapVariant?: "vision";
+	appmapVariant?: "vision" | "novision";
 	model?: string;
 	/** Step budget override for the child run (AGENT_STEPS). */
 	steps?: number;
@@ -274,7 +274,14 @@ function artifactsFor(id: string, init: JobInit): JobArtifacts {
 		// ONE derivation, shared with the pass that writes the file (explore/state.ts) and every
 		// reader that looks for it — see appmapSlug's header for the four-way divergence this
 		// replaced, and why each divergence surfaced as "no appmap" for a map that existed.
-		const slug = appmapSlug(init.url ?? init.app, { visionOnly: Boolean(init.noAx), noVision: Boolean(init.noVision), ...(init.backend ? { backend: init.backend } : {}) });
+		// axdomOff included: without it p1-explore-ax-noaxdom's record named yarn.ax — its
+		// SIBLING'S map — and collect's existsSync guard passed because that file exists.
+		const slug = appmapSlug(init.url ?? init.app, {
+			visionOnly: Boolean(init.noAx),
+			noVision: Boolean(init.noVision),
+			axdomOff: Boolean(init.axdomOff),
+			...(init.backend ? { backend: init.backend } : {}),
+		});
 
 		return {
 			log,
