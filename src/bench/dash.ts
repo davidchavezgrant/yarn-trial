@@ -204,7 +204,7 @@ export interface ArmView {
 	/**
 	 * The two axes an arm's cryptic name used to fold together ("vision-only explore (AX)"
 	 * = sees pixels only, acts via AX). Same semantics as matrix.ts's perceptionLine, with
-	 * the element channel named per backend (AX tree vs DOM).
+	 * the element channel named per backend (AX vs DOM).
 	 */
 	perception: string;
 	actuation: string;
@@ -1267,9 +1267,9 @@ export function buildState(manifest: Manifest, fleet: FleetView, events: DashEve
 		n: arm.n,
 		flags: flagsLine(arm),
 		app: arm.app,
-		// "vision", not perceptionLine's "screenshots" — the user-facing word (David,
-		// 2026-07-31); the report keeps matrix.ts's own wording.
-		perception: perceptionLine(arm).replace(/screenshots/g, "vision"),
+		// perceptionLine speaks the user-facing modality words directly ("AX", "DOM",
+		// "Vision") since the 2026-08-01 terminology pass — no display-side rewrite.
+		perception: perceptionLine(arm),
 		actuation: (arm.dispatch.backend ?? "ax").toUpperCase(),
 		...(arm.task ? { task: arm.task } : {}),
 		...(arm.dispatch.url ? { url: arm.dispatch.url } : {}),
@@ -2832,8 +2832,11 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			// A capture error before the first frame is a failed attach: no Screen Recording
 			// grant, no window to follow, or the engine binary is missing. Drop and re-enter
 			// waiting — the CDP reprobe resumes, and the sentinel re-requests SCK after the
-			// threshold if CDP still never appears.
-			if (ev?.ev === "error" && !p.gotFrame && (ev.kind === "no-screen-recording" || ev.kind === "no-window" || ev.kind === "capture-failed" || ev.kind === "engine-spawn-failed")) {
+			// threshold if CDP still never appears. "spawn-failed" is the load-bearing one: the
+			// native binary never started (ENOENT on an unbuilt fleet Mac) and, per liveview.ts,
+			// fires NO onExit — so this branch is the ONLY recovery, and it must match the kind
+			// spawnEngine actually emits ("spawn-failed", not "engine-spawn-failed").
+			if (ev?.ev === "error" && !p.gotFrame && (ev.kind === "no-screen-recording" || ev.kind === "no-window" || ev.kind === "capture-failed" || ev.kind === "spawn-failed")) {
 				engine.close();
 				if (p.engine === engine) {
 					p.engine = undefined;
