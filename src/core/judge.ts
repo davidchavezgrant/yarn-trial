@@ -93,8 +93,10 @@ export function resolveRunLog(stamp: string): { logPath: string; log: RunLogShap
 /**
  * The step screenshots this run's log can actually vouch for.
  *
- * A screenshotFile is trusted ONLY when its path contains a per-run steps directory
- * ("-steps/"). Bare shared filenames like "agent-step-7.png" are stale BY CONSTRUCTION:
+ * A screenshotFile is trusted ONLY when its path names a per-run steps directory —
+ * `live/<stamp>/steps/` since 2026-08-01, `<stamp>-steps/` before it, and both must keep
+ * working or every run recorded under the old layout silently loses its VISUAL channel.
+ * Bare shared filenames like "agent-step-7.png" are stale BY CONSTRUCTION:
  * every subsequent run rewrites those paths, so nothing can prove the pixels belong to this
  * run — and in practice it happened, a July 29 run's "step 7" resolved to a July 30 run's
  * frame. Grading a run against another run's pixels is the exact confident-wrong verdict
@@ -105,7 +107,7 @@ export function resolveRunLog(stamp: string): { logPath: string; log: RunLogShap
  */
 export function trustedFrames(log: RunLogShape): { frames: Array<{ step: number; path: string }>; stale: boolean } {
 	const withShots = (log.steps ?? []).filter((s) => s.screenshotFile);
-	const trusted = withShots.filter((s) => s.screenshotFile!.includes("-steps/"));
+	const trusted = withShots.filter((s) => /(^|\/)steps\/|-steps\//.test(s.screenshotFile!));
 	const frames = trusted
 		.map((s) => ({ step: s.index, path: path.resolve(outDir(), s.screenshotFile!) }))
 		.filter((f) => fs.existsSync(f.path));

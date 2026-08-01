@@ -4,6 +4,7 @@ import { checkHome, findScopeAmbiguities, gatedSection, recoverLeakedGraph } fro
 import type { AppMap } from "../../types.js";
 import { DESCENT_ON } from "./config.js";
 import { type FinishInput, merge, type Pass, type StopReason } from "./state.js";
+import { archiveRun } from "../../paths.js";
 
 /**
  * Machine-readable stamp distinguishing autonomous exploration output from
@@ -178,5 +179,14 @@ export const writeArtifacts = (p: Pass, out: FinishInput, stopped: StopReason, s
 		console.log(`scope ambiguities found (${ambiguities.length}) — the task agent will be warned about these:`);
 		for (const a of ambiguities)
 			console.log(`  · ${a.settingKey}: ${a.nodes.map((n) => `${n.id} [${n.scope}]`).join(" vs ")}`);
+	}
+	// A 40-minute grounding pass is the most expensive artifact this system produces and the
+	// least reproducible. Back its directory up here, at the one point that runs on every
+	// finish — including the salvage path, where the map was too small to commit and the
+	// checkpoint is the only surviving record of the work.
+	try {
+		archiveRun(p.stamp);
+	} catch (err) {
+		console.log(`backup: could not copy ${p.stamp} to out/archive — ${err instanceof Error ? err.message : String(err)}`);
 	}
 };

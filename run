@@ -74,6 +74,11 @@ ${b}ground & replay${n}
   recipe replay <file|stamp>             replay it — zero model calls unless a step breaks
   appmaps [--sync] [--app <name>]        which Mac holds which grounding; --sync converges the fleet
 
+${b}run data${n}  (out/live is canonical; out/archive is a hard-linked backup)
+  runs list                              every run in out/live, with size and backup state
+  runs drop <stamp>                      remove one from out/live, keeping its backup — then re-run it
+  runs purge [--yes]                     clear out/live, keeping every backup
+
 ${b}fleet${n}
   hosts                                  show the fleet and which Macs are free
   dispatch auto "<task>" "App"           run on a free Mac, follow it, pull artifacts back
@@ -142,6 +147,14 @@ explore)
 	assert_no_run_in_flight
 	shift
 	exec npx tsx src/core/explore.ts "$@"
+	;;
+
+runs)
+	# No key, no driver, no fleet: pure local file management. Deliberately NOT gated by
+	# assert_no_run_in_flight — `runs list` is exactly what you want while something is running,
+	# and `purge` does its own in-flight check (it can see run logs; the lease cannot).
+	shift
+	exec npx tsx src/core/runs-cli.ts "$@"
 	;;
 
 recipe)

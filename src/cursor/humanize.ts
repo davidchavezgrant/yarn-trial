@@ -7,7 +7,7 @@
  *
  *   npm run humanize -- <stamp> [--no-video]
  *
- * Emits out/recording/<stamp>/motion-track.json (the handoff format for Yarn's own cursor
+ * Emits out/live/<stamp>/recording/motion-track.json (the handoff format for Yarn's own cursor
  * renderer) and, unless --no-video, humanized.mp4 alongside it.
  */
 
@@ -18,6 +18,7 @@ import { parseArgs } from "node:util";
 import type { MotionConstants, MotionSegmentLibrary } from "./motion-types.js";
 import { renderTrack } from "./render.js";
 import { buildTrack, readTrajectory, type RunLogStep, type TrajectoryTurn } from "./track.js";
+import { RUN_FILES, runFile } from "../paths.js";
 
 const OUT = `${process.cwd()}/out`;
 const DATA = `${process.cwd()}/data`;
@@ -114,9 +115,9 @@ function main(): void {
 		process.exit(1);
 	}
 
-	const recordingDir = path.join(OUT, "recording", stamp);
+	const recordingDir = runFile(stamp, RUN_FILES.recording);
 	const framesDir = path.join(recordingDir, "frames");
-	const runLogPath = path.join(OUT, "runs", `${stamp}.json`);
+	const runLogPath = runFile(stamp, RUN_FILES.log);
 	if (!fs.existsSync(recordingDir)) {
 		console.error(`no recording at ${recordingDir}`);
 		process.exit(1);

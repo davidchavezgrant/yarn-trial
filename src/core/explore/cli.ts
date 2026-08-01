@@ -1,4 +1,4 @@
-import { parseTarget, type Target, targetLabel } from "../target.js";
+import { electronTarget, parseTarget, type Target, targetLabel } from "../target.js";
 
 /**
  * Why a --no-ax combination is refused, or undefined when it is allowed. Pure, so the
@@ -43,6 +43,11 @@ export const parseCli = (
 	// parseTarget returns the FALLBACK name for an app run, not the positional, so the slug
 	// below would stamp this pass's output to "notion-calendar" no matter which app was named —
 	// overwriting another app's committed map. Rebuild the target from the resolved name.
+	// electronTarget on the cdp path, matching agent/cli.ts:73. Without cdpAttach the CDP
+	// backend never launches the app with a debug port — it only probes 9222 and fails — so
+	// an explore worked ONLY while some earlier flagged run had left the app running. Cold
+	// start removed that accident and the cdp arms began failing immediately with "no CDP
+	// endpoint at http://127.0.0.1:9222".
 	if (target.kind === "app") target = { kind: "app", name: app };
 	// `buildRunArgs` keeps the label in positional 0 for a web target too, so that guidance
 	// stays where every caller already puts it. Drop it here rather than teaching the guidance
@@ -54,6 +59,13 @@ export const parseCli = (
 	// A web target defaults to cdp: it observes the page rather than the window, so the
 	// browser's own tab strip, omnibox and menu bar never reach the frontier.
 	const backendKind = backendIdx >= 0 ? (argv[backendIdx + 1] ?? "ax") : target.kind === "web" ? "cdp" : "ax";
+	// electronTarget on the cdp path, matching agent/cli.ts:73. Without cdpAttach the CDP
+	// backend never launches the app with a debug port — it only probes 9222 and fails — so an
+	// explore worked ONLY while some earlier flagged run had left the app running with one.
+	// Cold start removed that accident and the cdp arms failed instantly with "no CDP endpoint
+	// at http://127.0.0.1:9222". Placed after backendKind is resolved, which is why it is not
+	// beside the name rebuild above.
+	if (target.kind === "app" && backendKind === "cdp") target = electronTarget(app);
 	if (!["ax", "cdp"].includes(backendKind)) {
 		console.error('usage: tsx src/core/explore.ts ["App Name" | --url <https://…>] ["guidance"] [--backend ax|cdp] [--no-vision] [--no-ax]');
 		console.error("--backend cdp explores over CDP directly (playwright-core) with NO cua in the loop; web targets get their own Chrome, Electron targets need --remote-debugging-port.");

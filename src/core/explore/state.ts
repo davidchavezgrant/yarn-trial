@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import fs from "node:fs";
 import { failedProvider, mergeGraph, newDeclaredLedger, newFrontier, OUT, runKey } from "../harness.js";
-import { appmapsDir } from "../../paths.js";
+import { RUN_FILES, appmapsDir, runDir, runPath } from "../../paths.js";
 import { appmapSlug, type Target, targetSlug } from "../target.js";
 import type { AppMap, AppMapEdge, AppMapHome, AppMapNode, GatedBoundary } from "../../types.js";
 
@@ -21,8 +21,7 @@ export const newPass = (target: Target, app: string, backendKind: string, vision
 	const outPath = `${appmapsDir()}/${slug}.md`;
 	const graphPath = `${appmapsDir()}/${slug}.json`;
 	fs.mkdirSync(appmapsDir(), { recursive: true });
-	fs.mkdirSync(`${OUT}/runs`, { recursive: true });
-
+	
 	// Declared out here, not in the try, because the salvage path in the catch needs them:
 	// the transcript IS the pass's memory, and a throw must not put it out of reach.
 	const messages: Anthropic.MessageParam[] = [];
@@ -58,14 +57,15 @@ export const newPass = (target: Target, app: string, backendKind: string, vision
 	 * loss it is meant to prevent. Promote a checkpoint by hand if a run is killed.
 	 */
 	const stamp = runKey("explore-", app);
-	const checkpointPath = `${OUT}/runs/${stamp}.checkpoint.json`;
+	fs.mkdirSync(runDir(stamp), { recursive: true });
+	const checkpointPath = runPath(stamp, RUN_FILES.checkpoint);
 	// Where a pass that must not replace the committed map writes instead — the checkpoint's
 	// naming family, promoted by hand. See the demotion decision in writeArtifacts.
-	const salvageProsePath = `${OUT}/runs/${stamp}.salvage.md`;
-	const salvageGraphPath = `${OUT}/runs/${stamp}.salvage.json`;
+	const salvageProsePath = runPath(stamp, RUN_FILES.salvageProse);
+	const salvageGraphPath = runPath(stamp, RUN_FILES.salvageGraph);
 	// Descent's mutation journal, shared with the task agent's format so `npm run cleanup` can
 	// replay a crashed descent; `claimed` mirrors the agent's ledger.
-	const journalPath = `${OUT}/runs/${stamp}.journal.jsonl`;
+	const journalPath = runPath(stamp, RUN_FILES.journal);
 	const claimed: Array<{ kind: string; name: string; note?: string; step: number }> = [];
 
 	return {

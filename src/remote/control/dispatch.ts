@@ -4,7 +4,7 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
 import { compileRecipe, readRecipe, recipeFileFor } from "../../core/recipe.js";
-import { dataRoot, recipesDir } from "../../paths.js";
+import { LIVE_DIR, RUN_FILES, dataRoot, recipesDir, runFile, runRel } from "../../paths.js";
 import { EXIT_REFUSED as CTL_REFUSED, EXIT_UNREACHABLE as CTL_UNREACHABLE } from "../runner/ctl.js";
 import type { JobArtifacts, JobKind, JobRecord } from "../runner/jobs.js";
 import { autoSync, autoSyncRecipes, type SyncOptions } from "./appmaps.js";
@@ -159,7 +159,7 @@ export interface DispatchAccepted {
 	pid?: number;
 	/**
 	 * Paths relative to the data root, which is the same key on both machines — `pull` writes
-	 * them under the local root unchanged, so `out/runs/<id>.json` means one file wherever you
+	 * them under the local root unchanged, so `out/live/<id>/run.json` means one file wherever you
 	 * are reading it from.
 	 */
 	artifacts: JobArtifacts;
@@ -659,27 +659,34 @@ interface Source {
 
 function sourcesFor(job: JobRecord): Source[] {
 	const a = job.artifacts ?? ({} as JobArtifacts);
-	// The whole job directory, not just log.txt: job.json is the record of what was asked for
-	// and what it exited with, and reading a pulled log without it is guesswork.
-	const out: Source[] = [{ key: "job", rel: `out/jobs/${job.id}`, dir: true }];
-	if (a.runLog) {
-		out.push({ key: "runLog", rel: a.runLog, dir: false });
-		// The run's step frames, DERIVED like appmapGraph rather than declared, so records
-		// written before this line still pull them: run.ts always writes them to
-		// `out/runs/<stamp>-steps/`, and the stamp IS the job id.
-		//
-		// Without this every fleet run reached the offline judge with no trustworthy frames —
-		// it believes a screenshot path only when it names a per-run `-steps/` directory
-		// (judge.ts), precisely so one run cannot grade another's pixels — so VISUAL came back
-		// UNAVAILABLE for the whole matrix and half the judge's signal was silently blank.
-		out.push({ key: "stepFrames", rel: `out/runs/${job.id}-steps`, dir: true });
+	// ONE directory, because that is now what a run IS (paths.ts): job.json, the console log,
+	// the run log, the journal, the step frames and the recording all live under out/live/<id>.
+	//
+	// This used to be a five-way fan-out of declared and DERIVED paths, and the derived ones
+	// were where it broke: step frames had to be inferred from the run log's existence because
+	// no artifact field named them, and for a while nothing inferred them at all. The offline
+	// judge trusts a screenshot only when its path names a per-run steps directory, precisely
+	// so one run cannot grade another's pixels — so a whole matrix came back VISUAL UNAVAILABLE
+	// with half the judge's signal silently blank. A directory cannot forget its own contents.
+	const out: Source[] = [{ key: "run", rel: runRel(job.id), dir: true }];
+	// The pre-consolidation trees, for records written before 2026-08-01. A job record outlives
+	// a layout change — one dispatched before the move and pulled after it must still bring its
+	// artifacts home — and the record itself says which layout it belongs to: `log` is the one
+	// field every kind of job declares, so where IT points is what the rest followed.
+	//
+	// Derived rather than declared is what made this fragile before: step frames had no artifact
+	// field at all and were inferred from the run log's existence, and for a while nothing
+	// inferred them, which blanked the offline judge's VISUAL channel across a whole matrix.
+	if (!(a.log ?? "").startsWith(`out/${LIVE_DIR}/`)) {
+		out.push({ key: "job", rel: `out/jobs/${job.id}`, dir: true });
+		if (a.runLog) {
+			out.push({ key: "runLog", rel: a.runLog, dir: false });
+			out.push({ key: "stepFrames", rel: `out/runs/${job.id}-steps`, dir: true });
+		}
+		if (a.journal) out.push({ key: "journal", rel: a.journal, dir: false });
+		if (a.checkpoint) out.push({ key: "checkpoint", rel: a.checkpoint, dir: false });
+		if (a.recording) out.push({ key: "recording", rel: path.posix.dirname(a.recording), dir: true });
 	}
-	// A replay's mutation journal. Absent from the disk when the replay changed nothing, which
-	// classifyRsync reads as `missing` — the ordinary per-file outcome, not a failed pull.
-	if (a.journal) out.push({ key: "journal", rel: a.journal, dir: false });
-	if (a.checkpoint) out.push({ key: "checkpoint", rel: a.checkpoint, dir: false });
-	// `recording` is minted as `out/recording/<id>/window.mp4` (jobs.ts), so dirname is safe.
-	if (a.recording) out.push({ key: "recording", rel: path.posix.dirname(a.recording), dir: true });
 	if (a.appmap) {
 		out.push({ key: "appmap", rel: a.appmap, dir: false });
 		// The graph half of the appmap is written by the same pass but is absent from
@@ -821,7 +828,7 @@ function resolveReplayArg(arg: string): { app: string; recipe: string } {
 	let file: string | undefined;
 	if (fs.existsSync(arg)) file = arg;
 	else {
-		const logPath = path.join(dataRoot(), "out", "runs", `${arg}.json`);
+		const logPath = runFile(arg, RUN_FILES.log, path.join(dataRoot(), "out"));
 		if (fs.existsSync(logPath)) {
 			const runLog = JSON.parse(fs.readFileSync(logPath, "utf8"));
 			const candidate = recipeFileFor(recipesDir(), compileRecipe(runLog, arg).slug, runLog.task);

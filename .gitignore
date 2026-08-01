@@ -8,6 +8,22 @@ out/
 # out/recording and out/runs.
 !out/bench/
 !out/bench/**
+# out/bench-backup: snapshots of benchmark passes that were killed and re-run. "We started over"
+# is the moment the previous attempt's numbers stop being reproducible, and a superseded pass is
+# still the only evidence of what the code did before the fix that superseded it.
+!out/bench-backup/
+!out/bench-backup/**
+#
+# NOTE on how these exceptions actually work: `out/` above excludes the DIRECTORY, and git does
+# not descend into an excluded directory, so none of the `!out/...` lines are ever evaluated for
+# an untracked file. They document intent; the tracked files under out/bench and out/bench-backup
+# were force-added (`git add -f`) and stay tracked because gitignore does not apply to files git
+# already knows about. Adding a NEW result file needs `-f` too.
+#
+# DELIBERATELY NOT TRACKED: out/live (the canonical run record) and out/archive (its hard-linked
+# backup). Both contain step frames and recordings — gigabytes of PNGs and mp4s per pass. Git is
+# not the backup mechanism for those; out/archive is. What goes in git is the small curated
+# distillate: manifests, per-arm appmaps, the measured cost figures.
 .env
 .playwright-mcp/
 .DS_Store

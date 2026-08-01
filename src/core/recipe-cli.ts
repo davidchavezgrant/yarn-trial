@@ -19,7 +19,7 @@ import { startOverlay } from "./overlay.js";
 import { compileRecipe, readRecipe, type Recipe, RecipeCompileError, recipeFileFor } from "./recipe.js";
 import { modelRescue, replayRecipe } from "./replay.js";
 import { runTeardown } from "./teardown.js";
-import { recipesDir } from "../paths.js";
+import { RUN_FILES, archiveRun, recipesDir, runDir, runFile, runPath } from "../paths.js";
 import { parseTarget } from "./target.js";
 
 /**
@@ -53,7 +53,7 @@ function usage(): never {
 }
 
 export function compileFromStamp(stamp: string): { recipe: Recipe; path: string } {
-	const logPath = `${OUT}/runs/${stamp}.json`;
+	const logPath = runFile(stamp, RUN_FILES.log);
 	if (!fs.existsSync(logPath)) throw new RecipeCompileError(`no run log at ${logPath}`);
 	const recipe = compileRecipe(JSON.parse(fs.readFileSync(logPath, "utf8")), stamp);
 	if (recipe.hintedPrompt)
@@ -70,7 +70,7 @@ export function compileFromStamp(stamp: string): { recipe: Recipe; path: string 
 /** replay <arg> accepts a recipe file path or a run stamp (resolved to its compiled file). */
 function recipeFor(arg: string): Recipe {
 	if (fs.existsSync(arg)) return readRecipe(arg);
-	const logPath = `${OUT}/runs/${arg}.json`;
+	const logPath = runFile(arg, RUN_FILES.log);
 	if (fs.existsSync(logPath)) {
 		const runLog = JSON.parse(fs.readFileSync(logPath, "utf8"));
 		const path = recipeFileFor(recipesDir(), compileRecipe(runLog, arg).slug, runLog.task);
@@ -113,7 +113,7 @@ async function main(): Promise<void> {
 	// job id must be the key the run log and journal land under — the same contract task and
 	// explore runs already honour (see src/core/harness/run.ts).
 	const stamp = runKey("replay-", recipe.slug);
-	const journalPath = `${OUT}/runs/${stamp}.journal.jsonl`;
+	const journalPath = runPath(stamp, RUN_FILES.journal);
 
 	console.log(`=== replay: ${recipe.task} (${recipe.app}, ${recipe.steps.length} steps, from ${recipe.compiledFrom}) ===`);
 	// wantCdp is the replay's actual delivery, whatever the recipe says: a cdp replay keeps
@@ -171,9 +171,9 @@ async function main(): Promise<void> {
 
 		// The replay writes a run log of the same shape as a live run — one writer, in this
 		// function, fields derived in one place (the a86cafc lesson).
-		fs.mkdirSync(`${OUT}/runs`, { recursive: true });
+		fs.mkdirSync(runDir(stamp), { recursive: true });
 		fs.writeFileSync(
-			`${OUT}/runs/${stamp}.json`,
+			runPath(stamp, RUN_FILES.log),
 			`${JSON.stringify(
 				{
 					task: recipe.task,
@@ -220,6 +220,13 @@ async function main(): Promise<void> {
 		await driver?.close();
 		await cdp?.close();
 		overlay.stop();
+		// Same contract as a live run: the run directory gets a hard-linked backup at the end,
+		// and a backup that fails does not turn a finished replay into a crashed one.
+		try {
+			archiveRun(stamp);
+		} catch (err) {
+			console.log(`backup: could not copy ${stamp} to out/archive — ${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
 	process.exit(exitCode);
 }

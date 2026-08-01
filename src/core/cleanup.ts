@@ -19,6 +19,7 @@ import { type Mutation, readJournal } from "./journal.js";
 import { collapseJournal, runTeardown } from "./teardown.js";
 import { startOverlay } from "./overlay.js";
 import { webTarget } from "./target.js";
+import { ARCHIVE_DIR, LIVE_DIR, RUN_FILES, runFile } from "../paths.js";
 
 /**
  * Replay a run's mutation journal after the run itself has gone.
@@ -129,7 +130,8 @@ export function exitCodeFor(summary: { attempted: number; failed: number }): num
 }
 
 /**
- * Artifacts in out/runs that belong to this exact stamp — run log, journal, receipts.
+ * Whether a stamp names a run that EXISTS — a directory under out/live (or out/archive), or,
+ * for runs written before the layout consolidated, a `<stamp>.`-prefixed file under out/runs.
  *
  * An empty journal used to be the end of the story: a typo'd or truncated stamp built a path
  * to a file that never existed, read as [], and the CLI printed "nothing to clean up" with
@@ -138,7 +140,7 @@ export function exitCodeFor(summary: { attempted: number; failed: number }): num
  * while reporting success. Prefixes deliberately do NOT count: they name a different run.
  */
 export function stampArtifacts(names: string[], stamp: string): string[] {
-	return names.filter((n) => n.startsWith(`${stamp}.`));
+	return names.filter((n) => n === stamp || n.startsWith(`${stamp}.`));
 }
 
 async function main(): Promise<void> {
@@ -162,24 +164,26 @@ async function main(): Promise<void> {
 		process.exit(1);
 	}
 
-	const journalPath = `${OUT}/runs/${stamp}.journal.jsonl`;
+	const journalPath = runFile(stamp, RUN_FILES.journal);
 	const journal = readJournal(journalPath);
 	if (journal.length === 0) {
 		// "Nothing to clean" is only a truthful answer for a run that EXISTS. A stamp nothing
 		// matches is a typo or a job id, and exiting 0 on it reports a cleanup that never
 		// looked at anything.
-		let names: string[] = [];
-		try {
-			names = fs.readdirSync(`${OUT}/runs`);
-		} catch {}
+		const listing = (dir: string): string[] => {
+			try {
+				return fs.readdirSync(dir);
+			} catch {
+				return [];
+			}
+		};
+		// Every place a run can be: canonical, backed up, and the pre-consolidation tree.
+		const live = listing(`${OUT}/${LIVE_DIR}`);
+		const names = [...live, ...listing(`${OUT}/${ARCHIVE_DIR}`), ...listing(`${OUT}/runs`)];
 		if (stampArtifacts(names, stamp).length === 0) {
-			console.error(`no run artifacts match stamp ${stamp} under ${OUT}/runs — check the stamp (a prefix or job id is not enough).`);
-			const recent = names
-				.filter((n) => n.endsWith(".journal.jsonl"))
-				.sort()
-				.slice(-5)
-				.map((n) => n.replace(/\.journal\.jsonl$/, ""));
-			if (recent.length) console.error(`recent journals:\n  ${recent.join("\n  ")}`);
+			console.error(`no run matches stamp ${stamp} under ${OUT}/${LIVE_DIR} — check the stamp (a prefix or job id is not enough).`);
+			const recent = live.sort().slice(-5);
+			if (recent.length) console.error(`recent runs:\n  ${recent.join("\n  ")}`);
 			process.exit(1);
 		}
 		// Not an error. Most runs change nothing worth journalling, and a caller sweeping a
@@ -196,7 +200,7 @@ async function main(): Promise<void> {
 
 	// The run log is absent exactly when this CLI is most needed — a run killed before it
 	// could write one. --app covers it; the stamp suffix covers the common case.
-	const runLogApp: string | undefined = readJsonOr<any>(`${OUT}/runs/${stamp}.json`, undefined)?.app;
+	const runLogApp: string | undefined = readJsonOr<any>(runFile(stamp, RUN_FILES.log), undefined)?.app;
 	const app = appForStamp(stamp, runLogApp, appOverride);
 
 	console.log(`=== cleanup: ${stamp} (${app}) ===`);

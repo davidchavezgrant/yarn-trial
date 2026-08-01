@@ -9,7 +9,7 @@ import { readJournal } from "../core/journal.js";
 import type { FleetRow } from "../remote/control/fleet.js";
 import type { EngineHandle } from "../remote/liveview.js";
 import { logPath as jobLogPath, readJob as readLocalJob, readLog } from "../remote/runner/jobs.js";
-import { appSlug, dataRoot } from "../paths.js";
+import { LIVE_DIR, RUN_FILES, appSlug, dataRoot, runFile } from "../paths.js";
 import { appmapSlug } from "../core/target.js";
 import { archiveDirFor } from "./collect.js";
 import { estimateCost } from "./cost.js";
@@ -691,7 +691,7 @@ function heatFor(
 		if (!e.collected || e.model !== model) continue;
 		const a = armById(e.armId);
 		if (!a || a.kind === "explore" || a.kind === "compile" || groundingArmId(a) !== exploreArmId) continue;
-		const runLog = readJsonFile(path.join(dataDir, "out", "runs", `${e.jobId}.json`));
+		const runLog = readJsonFile(runFile(e.jobId, RUN_FILES.log, path.join(dataDir, "out")));
 		const rawSteps = Array.isArray(runLog?.steps) ? runLog.steps : [];
 		if (!rawSteps.length) continue;
 		out.runs++;
@@ -868,7 +868,7 @@ export function buildDetail(jobId: string, manifest: Manifest, opts: { dataDir?:
 	let steps: DetailStep[] = [];
 	let task: string | undefined;
 	if (arm.kind !== "explore") {
-		const runLog = readJsonFile(path.join(dataDir, "out", "runs", `${jobId}.json`));
+		const runLog = readJsonFile(runFile(jobId, RUN_FILES.log, path.join(dataDir, "out")));
 		const rawSteps: Array<Record<string, any>> = Array.isArray(runLog?.steps) ? runLog.steps : [];
 		if (!runLog) notes.push("run log not on this machine yet — collect pulls it when the run lands");
 		if (typeof runLog?.task === "string") task = runLog.task;
@@ -877,7 +877,7 @@ export function buildDetail(jobId: string, manifest: Manifest, opts: { dataDir?:
 
 	const mutatedKeys = [
 		...new Set(
-			readJournal(path.join(dataDir, "out", "runs", `${jobId}.journal.jsonl`))
+			readJournal(runFile(jobId, RUN_FILES.journal, path.join(dataDir, "out")))
 				.filter((m) => m.kind === "setting")
 				.map((m) => (m as Record<string, any>).settingKey)
 				.filter((k): k is string => typeof k === "string"),
@@ -1208,22 +1208,25 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		let app: string | undefined;
 		let elapsedSec: number | undefined;
 		try {
-			const runsDir = path.join(dataRoot(), "out", "runs");
+			// A run IS a directory under out/live now, so "what is this laptop doing" reads the
+			// directory names directly instead of stripping suffixes off whichever file happened
+			// to be touched most recently.
+			const liveDir = path.join(dataRoot(), "out", LIVE_DIR);
 			const now = Date.now();
-			const fresh = fs.readdirSync(runsDir)
-				.filter((f) => f.endsWith(".json") && !f.endsWith(".judge.json"))
-				.map((f) => ({ f, st: fs.statSync(path.join(runsDir, f)) }))
-				.filter((e) => e.st.isFile() && now - e.st.mtimeMs < 15 * 60 * 1000)
+			const fresh = fs.readdirSync(liveDir, { withFileTypes: true })
+				.filter((d) => d.isDirectory())
+				.map((d) => ({ f: d.name, st: fs.statSync(path.join(liveDir, d.name)) }))
+				.filter((e) => now - e.st.mtimeMs < 15 * 60 * 1000)
 				.sort((a, b) => b.st.mtimeMs - a.st.mtimeMs)[0];
 			if (fresh) {
-				jobId = fresh.f.replace(/(?:\.checkpoint)?\.json$/, "");
+				jobId = fresh.f;
 				// Stems read `[explore-]<stamp>-<app-slug>` — the slug is the best-effort app.
 				app = /^(?:explore-)?\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}-(.+)$/.exec(jobId)?.[1];
 				// birthtime is 0 on filesystems that do not track it — fall back to mtime.
 				elapsedSec = Math.max(0, Math.round((now - (fresh.st.birthtimeMs || fresh.st.mtimeMs)) / 1000));
 			}
 		} catch {
-			// No artifacts yet (or out/runs missing) — the row still reports a busy laptop.
+			// No artifacts yet (or out/live missing) — the row still reports a busy laptop.
 		}
 
 		return {
@@ -1626,7 +1629,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	/**
 	 * GET /api/logs?job=<id>&host=<name>&offset=<n>[&meta=1] — the run-log pane's feed.
 	 *
-	 * Local first: a pulled/collected run's log already sits at <dataRoot>/out/jobs/<job>/
+	 * Local first: a pulled/collected run's log already sits at <dataRoot>/out/live/<job>/
 	 * log.txt and needs no ssh (job.json beside it answers what meta=1 would have asked the
 	 * runner for). Otherwise ONE single-shot `runnerctl logs` — no follow key, the client's
 	 * 2.5s poll IS the follow — parsed by parseLogFrames because lastFrame() would keep only
@@ -1665,7 +1668,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			// otherwise 400 on inventory lookup while the log sits right here on disk.
 			if (fs.existsSync(jobLogPath(job))) {
 				// Local fast path — plain fs, covers pulled/collected runs and a runner on this
-				// machine. readLog's default root is the same <dataRoot>/out/jobs tree.
+				// machine. readLog's default root is the same <dataRoot>/out/live tree.
 				const local = readLog(job, offset);
 				const rec = readLocalJob(job);
 

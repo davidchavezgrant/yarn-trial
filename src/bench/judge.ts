@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { judgeRun } from "../core/judge.js";
-import { dataRoot as dataRootDir, outDir } from "../paths.js";
+import { RUN_FILES, dataRoot as dataRootDir, outDir, runFile } from "../paths.js";
 import { armById } from "./matrix.js";
 import { readManifest, utcDate } from "./manifest.js";
 
@@ -87,9 +87,9 @@ export async function judgeBench(opts?: {
 		const arm = armById(entry.armId);
 		if (arm?.kind !== "task" && arm?.kind !== "replay") continue;
 		if (!TERMINAL.has(entry.state)) continue;
-		if (!fs.existsSync(path.join(dataDir, `out/runs/${entry.jobId}.json`))) continue;
+		if (!fs.existsSync(runFile(entry.jobId, RUN_FILES.log, path.join(dataDir, "out")))) continue;
 
-		if (fs.existsSync(path.join(dataDir, `out/runs/${entry.jobId}.judge.json`))) {
+		if (fs.existsSync(runFile(entry.jobId, RUN_FILES.judge, path.join(dataDir, "out")))) {
 			outcome.skipped.push(entry.jobId);
 			log(`… ${entry.armId} ${entry.jobId}: already judged — skipping`);
 			continue;
@@ -99,7 +99,7 @@ export async function judgeBench(opts?: {
 			await judge(entry.jobId);
 			outcome.judged.push(entry.jobId);
 			log(`✓ ${entry.armId} ${entry.jobId}: judged`);
-			if (opts?.cross && !fs.existsSync(path.join(dataDir, `out/runs/${entry.jobId}.judge.cross.json`))) {
+			if (opts?.cross && !fs.existsSync(runFile(entry.jobId, RUN_FILES.judgeCross, path.join(dataDir, "out")))) {
 				// A failed cross-judge must not undo a successful primary judgement: the run
 				// stays judged, and the missing second opinion surfaces as an absent artifact
 				// rather than as a run that looks ungraded.

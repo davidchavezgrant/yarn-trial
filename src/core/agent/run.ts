@@ -33,7 +33,7 @@ import {
 import type { HomeResetResult, ObservationBundle } from "../harness.js";
 import { readJournal } from "../journal.js";
 import { startOverlay } from "../overlay.js";
-import { relToData } from "../../paths.js";
+import { LIVE_DIR, RUN_FILES, archiveRun, relToData, runDir, runPath } from "../../paths.js";
 import { targetSlug, targetVocabulary } from "../target.js";
 import { runTeardown } from "../teardown.js";
 import type { Expectation, StepRecord } from "../../types.js";
@@ -101,12 +101,14 @@ export async function main(): Promise<void> {
 	// A/B artifacts, which is how out/ab-grounded-script.json ended up a mislabeled
 	// duplicate of a different run and its real numbers were lost.
 	const stamp = runKey("", app);
-	fs.mkdirSync(`${OUT}/runs`, { recursive: true });
-	const runLog = `${OUT}/runs/${stamp}.json`;
+	// Everything this run produces goes in ONE directory (paths.ts): log, journal, step frames,
+	// recording. It moves to out/archive/<stamp>/ when the run ends.
+	fs.mkdirSync(runDir(stamp), { recursive: true });
+	const runLog = runPath(stamp, RUN_FILES.log);
 	// Step screenshots live under the run's own stamp. The shared OUT/agent-step-N.png
 	// paths were overwritten by every later run, which is how the 43px-offset forensics
 	// ended up reading another run's pixels (docs/research/2026-07-31-library-page-ax-offset.md).
-	const stepsDir = `runs/${stamp}-steps`;
+	const stepsDir = `${LIVE_DIR}/${stamp}/${RUN_FILES.steps}`;
 	fs.mkdirSync(`${OUT}/${stepsDir}`, { recursive: true });
 	const sync: DriverSync = { busy: false, lastActionAt: 0 };
 	let homeReset: string = noReset ? "skipped" : "pending";
@@ -145,7 +147,7 @@ export async function main(): Promise<void> {
 	// because the case this most needs to survive is the one where there is no run log: a
 	// crash mid-task leaves the app dirty, and the journal on disk is what lets
 	// `npm run cleanup -- <stamp>` put it back without a human reconstructing what happened.
-	const journalPath = `${OUT}/runs/${stamp}.journal.jsonl`;
+	const journalPath = runPath(stamp, RUN_FILES.journal);
 	const claimed: Array<{ kind: string; name: string; note?: string; step: number }> = [];
 	// Restore steps live apart from `records` so verificationTallies() keeps reporting the
 	// TASK's numbers. Folding them in would let a run improve its own verification rate by
@@ -224,7 +226,7 @@ export async function main(): Promise<void> {
 	// the driver, so frames land in the model-thinking gaps.
 	// Per-run directory, sharing the run log's stamp: the video and the log that proves
 	// what it shows stay paired, and a recorded A/B no longer overwrites its own evidence.
-	const recordingDir = `${OUT}/recording/${stamp}`;
+	const recordingDir = runPath(stamp, RUN_FILES.recording);
 	const framesDir = `${recordingDir}/frames`;
 	const videoPath = `${recordingDir}/window.mp4`;
 	const rec = newRecording();
@@ -845,6 +847,16 @@ export async function main(): Promise<void> {
 				};
 		}
 		if (outcome) writeRunLog(outcome);
+		// Back the whole run directory up, last, so the backup includes the log just written and
+		// the assembled mp4 above it. Hard-linked, so it costs nothing and survives the live copy
+		// being removed — which is the point: a failed run gets dropped from out/live and re-run,
+		// and its evidence has to outlive that. Never fatal; a run that finished must not be
+		// reported as crashed because a backup could not be taken.
+		try {
+			archiveRun(stamp);
+		} catch (err) {
+			console.log(`backup: could not copy ${stamp} to out/archive — ${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
 
 	if (aborted !== undefined) throw aborted;

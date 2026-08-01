@@ -90,6 +90,149 @@ export function outDir(): string {
 }
 
 /**
+ * ONE DIRECTORY PER RUN — `out/live/<runKey>/`.
+ *
+ * A run's artifacts used to be scattered across three sibling trees keyed by the same string:
+ * `out/runs/<key>.json` (plus `.journal.jsonl`, `.judge.json`, `-steps/`), `out/recording/<key>/`
+ * and `out/jobs/<key>/`. The key correlated them, so nothing was ever LOST — but four different
+ * questions ("what did this run produce", "is it safe to delete", "did it get archived", "pull
+ * it off the Mac") each needed the same five-way fan-out, and each one was a place to forget a
+ * branch. The fleet pull forgot `-steps/` for long enough that the offline judge returned VISUAL
+ * UNAVAILABLE for an entire matrix.
+ *
+ * Consolidating is what makes the backup honest: preserving a finished run is one directory,
+ * not a list of globs that has to stay in sync with everything that writes.
+ *
+ * `out/live` IS THE CANONICAL RECORD — of runs in flight and of every run that has finished. The
+ * dashboard, the offline judge, `cleanup` and `humanize` all read it, and nothing moves out of
+ * it. `out/archive/<key>/` is a BACKUP taken when a run terminates: a second name for the same
+ * bytes, so that losing the live tree (the purges during the 2026-08-01 false starts came close
+ * to taking the July 31 results with them) does not lose the results.
+ */
+export const LIVE_DIR = "live";
+export const ARCHIVE_DIR = "archive";
+
+/** The canonical names inside a run directory. Legacy locations are resolved by `runFile`. */
+export const RUN_FILES = {
+	log: "run.json",
+	journal: "journal.jsonl",
+	judge: "judge.json",
+	judgeCross: "judge.cross.json",
+	checkpoint: "checkpoint.json",
+	salvageProse: "salvage.md",
+	salvageGraph: "salvage.json",
+	console: "log.txt",
+	steps: "steps",
+	recording: "recording",
+} as const;
+
+/** Repo-relative (posix) — the form job records use, because they are read on another machine. */
+export const runRel = (key: string, ...parts: string[]): string => ["out", LIVE_DIR, key, ...parts].join("/");
+
+export const runDir = (key: string, root = outDir()): string => path.join(root, LIVE_DIR, key);
+export const archiveRunDir = (key: string, root = outDir()): string => path.join(root, ARCHIVE_DIR, key);
+
+/** Where a WRITER puts an artifact: always live, never the archive. */
+export const runPath = (key: string, name: string, root = outDir()): string => path.join(runDir(key, root), name);
+
+/**
+ * Where a READER finds one: live, then the archive, then the pre-2026-08-01 scattered layout.
+ *
+ * The legacy fallback exists because runs recorded before the move are still in `out/runs/` and
+ * inside archived benchmark passes, and the gallery, the offline judge and `cleanup` all have to
+ * keep opening them — a layout change is not a reason to make last week's evidence unreadable.
+ * Nothing writes there any more, so that tree is a fixed historical set rather than a second
+ * layout to maintain.
+ *
+ * Returns the live path when the artifact is nowhere, so an error message names where it was
+ * supposed to be rather than where it last wasn't.
+ */
+export function runFile(key: string, name: string, root = outDir()): string {
+	const live = path.join(runDir(key, root), name);
+	if (fs.existsSync(live)) return live;
+	const archived = path.join(archiveRunDir(key, root), name);
+	if (fs.existsSync(archived)) return archived;
+	const old = legacyRunPath(key, name, root);
+
+	return old && fs.existsSync(old) ? old : live;
+}
+
+/** The run's directory wherever it currently is — live while in flight, archive once finished. */
+export function resolveRunDir(key: string, root = outDir()): string {
+	const live = runDir(key, root);
+
+	return fs.existsSync(live) ? live : archiveRunDir(key, root);
+}
+
+/**
+ * Back a finished run up: `out/live/<key>` gains a second name at `out/archive/<key>`.
+ *
+ * The live copy STAYS — it is the canonical record everything reads. This only guards against
+ * losing it.
+ *
+ * HARD LINKS, not a byte copy, and the reason is size. One recorded run's `recording/frames/` is
+ * a four-figure count of window PNGs; across a matrix of this size a literal second copy is tens
+ * of gigabytes to defend against one specific accident. A hard link is a second directory entry
+ * pointing at the same inode: it costs nothing, and — this is the part that matters — it SURVIVES
+ * deletion of the live name, because the file is only released when its last name goes. That is
+ * exactly the failure being defended against.
+ *
+ * What it does not defend against is in-place modification, since both names are one file. That
+ * is acceptable here and only here: a run's artifacts are written once, when the run ends, and
+ * nothing edits them afterwards. `copyFileSync` is the fallback for the cases a link cannot cover
+ * (a different filesystem, a filesystem without them), so the guarantee degrades to a real copy
+ * rather than to nothing.
+ *
+ * Re-callable: an already-backed-up file is left alone rather than throwing, because both the run
+ * itself and a later `pull` of the same key may reasonably try.
+ */
+export function archiveRun(key: string, root = outDir()): string | undefined {
+	const from = runDir(key, root);
+	const to = archiveRunDir(key, root);
+	if (!fs.existsSync(from)) return undefined;
+	linkTree(from, to);
+
+	return to;
+}
+
+function linkTree(from: string, to: string): void {
+	fs.mkdirSync(to, { recursive: true });
+	for (const ent of fs.readdirSync(from, { withFileTypes: true })) {
+		const src = path.join(from, ent.name);
+		const dst = path.join(to, ent.name);
+		if (ent.isDirectory()) {
+			linkTree(src, dst);
+			continue;
+		}
+		if (!ent.isFile() || fs.existsSync(dst)) continue;
+		try {
+			fs.linkSync(src, dst);
+		} catch {
+			// EXDEV (another filesystem) or a filesystem with no hard links. A real copy is the
+			// correct answer there — slower and larger, but the backup still exists.
+			try {
+				fs.copyFileSync(src, dst);
+			} catch {
+				// One unreadable file must not abandon the rest of the run's backup.
+			}
+		}
+	}
+}
+
+/** The pre-consolidation location of one artifact, or undefined if it had none. */
+export function legacyRunPath(key: string, name: string, root = outDir()): string | undefined {
+	if (name === RUN_FILES.log) return path.join(root, "runs", `${key}.json`);
+	if (name === RUN_FILES.steps) return path.join(root, "runs", `${key}-steps`);
+	if (name === RUN_FILES.recording) return path.join(root, "recording", key);
+	if (name === RUN_FILES.console) return path.join(root, "jobs", key, "log.txt");
+	// journal.jsonl / judge.json / judge.cross.json / checkpoint.json / salvage.* all shared the
+	// `out/runs/<key>.<suffix>` shape, so one rule covers them.
+	if (/^(journal|judge|judge\.cross|checkpoint|salvage)\./.test(name)) return path.join(root, "runs", `${key}.${name}`);
+
+	return undefined;
+}
+
+/**
  * Explorer output. Writable because `explore` generates it, and separate from recipes
  * because the provenance split between them is load-bearing: stamped appmaps are machine
  * output, recipes are curated by hand, and conflating the two is what made an earlier

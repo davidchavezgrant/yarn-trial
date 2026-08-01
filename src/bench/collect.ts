@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { findScopeAmbiguities } from "../core/harness.js";
 import { readJournal } from "../core/journal.js";
-import { appSlug, dataRoot as dataRootDir, outDir } from "../paths.js";
+import { RUN_FILES, appSlug, dataRoot as dataRootDir, outDir, runFile } from "../paths.js";
 import { appmapSlug } from "../core/target.js";
 import type { JobRecord } from "../remote/runner/jobs.js";
 import { type Arm, armAppmapSlug, armById } from "./matrix.js";
@@ -42,7 +42,7 @@ const mean = (steps: Array<Record<string, any>>, field: string): number | undefi
 	return vals.length ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10 : undefined;
 };
 
-/** Metrics off a task or replay run log (out/runs/<stamp>.json). Absent fields stay absent. */
+/** Metrics off a task or replay run log (out/live/<stamp>/run.json). Absent fields stay absent. */
 export function parseRunMetrics(runLog: Record<string, any>): RunMetrics {
 	const usage = runLog.usage ?? {};
 	const steps: Array<Record<string, any>> = Array.isArray(runLog.steps) ? runLog.steps : [];
@@ -325,7 +325,7 @@ async function humanizePulled(entry: ManifestEntry, job: Record<string, any> | u
 	// Only filmed runs have a recording to draw on; the arm's own flag is the authority
 	// because a job record can predate the flag being persisted.
 	if (!armById(entry.armId)?.dispatch.record && !job?.artifacts?.recording) return;
-	const dir = path.join(dataDir, "out", "recording", entry.jobId);
+	const dir = runFile(entry.jobId, RUN_FILES.recording, path.join(dataDir, "out"));
 	if (!fs.existsSync(path.join(dir, "frames"))) return;
 	// humanize.ts writes humanized.mp4 beside the raw window.mp4; present means done.
 	if (fs.existsSync(path.join(dir, "humanized.mp4"))) return;
@@ -487,7 +487,7 @@ function collectEntry(entry: ManifestEntry, job: JobRecord | undefined, dataDir:
 			}
 		}
 	} else {
-		const runLog = readJson(path.join(dataDir, job?.artifacts?.runLog ?? `out/runs/${entry.jobId}.json`));
+		const runLog = readJson(job?.artifacts?.runLog ? path.join(dataDir, job.artifacts.runLog) : runFile(entry.jobId, RUN_FILES.log, path.join(dataDir, "out")));
 		if (runLog) metrics = { ...metrics, ...parseRunMetrics(runLog) };
 		else {
 			// A terminal job with no run log is itself the datum — the run died before writing
@@ -500,9 +500,9 @@ function collectEntry(entry: ManifestEntry, job: JobRecord | undefined, dataDir:
 		// A missing judge artifact is NOT a note: judging is optional and may run after this
 		// collect — the step is batched between pull and report, and collect is re-run as the
 		// queue drains, so a later pass folds the verdict in when it lands.
-		const judgeReport = readJson(path.join(dataDir, `out/runs/${entry.jobId}.judge.json`));
+		const judgeReport = readJson(runFile(entry.jobId, RUN_FILES.judge, path.join(dataDir, "out")));
 		if (judgeReport) metrics = { ...metrics, ...parseJudgeMetrics(judgeReport) };
-		const scopes = journalScopes(path.join(dataDir, `out/runs/${entry.jobId}.journal.jsonl`));
+		const scopes = journalScopes(runFile(entry.jobId, RUN_FILES.journal, path.join(dataDir, "out")));
 		if (scopes.length) metrics = { ...metrics, mutationScopes: scopes };
 	}
 

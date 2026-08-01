@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { appSlug } from "../../paths.js";
+import { LIVE_DIR, RUN_FILES, appSlug, archiveRunDir, runRel } from "../../paths.js";
 import { appmapSlug } from "../../core/target.js";
 import { mintRunKey } from "../../core/harness/run.js";
 import { readJsonOr } from "../../fsutil.js";
@@ -49,17 +49,17 @@ export type JobState = "queued" | "running" | "done" | "failed" | "orphaned" | "
 export interface JobArtifacts {
 	/** Combined stdout+stderr of the child. Always present; the child owns this file. */
 	log: string;
-	/** `out/runs/<id>.json`, written by agent.ts (task) or recipe-cli.ts (replay). */
+	/** `out/live/<id>/run.json`, written by agent.ts (task) or recipe-cli.ts (replay). */
 	runLog?: string;
 	/**
-	 * `out/runs/<id>.journal.jsonl`, the mutation journal a replay appends as it detects
+	 * `out/live/<id>/journal.jsonl`, the mutation journal a replay appends as it detects
 	 * changes. Listed for replay jobs because the journal is what `npm run cleanup` replays
 	 * after a crash — a pull that left it on the Mac would bring home a run log that says what
 	 * happened and nothing that says what to undo. Absent from the disk when the replay
 	 * changed nothing, which `pull` reports as `missing` rather than failed.
 	 */
 	journal?: string;
-	/** `out/recording/<id>/window.mp4`. Only when the run was submitted with `record`. */
+	/** `out/live/<id>/recording/window.mp4`. Only when the run was submitted with `record`. */
 	recording?: string;
 	/** `docs/appmaps/<slug>.md`, overwritten by a finished grounding pass. Explore only. */
 	appmap?: string;
@@ -166,8 +166,8 @@ export interface JobInit {
 const SAFE_ID = /^[A-Za-z0-9._-]+$/;
 
 /**
- * The job id IS the run stamp, so `out/jobs/<id>/`, `out/runs/<id>.json` and
- * `out/recording/<id>/` are one key rather than three things to correlate by timestamp
+ * The job id IS the run stamp, and since 2026-08-01 every artifact it names lives inside the
+ * single directory `out/live/<id>/` rather than three sibling trees to correlate by timestamp
  * proximity. The shapes here reproduce exactly what the two scripts build today —
  * `<stamp>-<slug>` for a task run, and explore's `explore-` prefix, which is why `kind`
  * is an input. Both honour `RUN_STAMP` so the child lands on the id we minted.
@@ -190,8 +190,19 @@ export function mintJobId(kind: JobKind, app: string): string {
 	return SAFE_ID.test(id) ? id : id.replace(/[^A-Za-z0-9._-]/g, "") || mintRunKey(prefix, "app");
 }
 
+/**
+ * The registry IS the live run directory: `out/live/<id>/job.json`.
+ *
+ * Formerly `out/jobs/`, a fourth tree keyed by the same string as the run log, the recording
+ * and the step frames. Folding it in means a job's record and the artifacts it describes are
+ * one directory — see paths.ts for why that consolidation happened.
+ *
+ * Enumeration therefore covers live runs only. That is the correct scope for a scheduler: an
+ * archived run is finished, cannot hold a lease and cannot be reaped. Readers that need a
+ * finished job's record or console log resolve the archive explicitly, below.
+ */
 export function jobsDir(): string {
-	return `${outDir()}/jobs`;
+	return path.join(outDir(), LIVE_DIR);
 }
 
 export function jobDir(id: string, root = jobsDir()): string {
@@ -199,7 +210,7 @@ export function jobDir(id: string, root = jobsDir()): string {
 }
 
 export function logPath(id: string, root = jobsDir()): string {
-	return path.join(root, id, "log.txt");
+	return path.join(root, id, RUN_FILES.console);
 }
 
 /**
@@ -269,7 +280,7 @@ export function createJob(init: JobInit, root = jobsDir()): JobRecord {
 }
 
 function artifactsFor(id: string, init: JobInit): JobArtifacts {
-	const log = `out/jobs/${id}/log.txt`;
+	const log = runRel(id, RUN_FILES.console);
 	if (init.kind === "explore") {
 		// ONE derivation, shared with the pass that writes the file (explore/state.ts) and every
 		// reader that looks for it — see appmapSlug's header for the four-way divergence this
@@ -287,7 +298,7 @@ function artifactsFor(id: string, init: JobInit): JobArtifacts {
 			log,
 			appmap: `docs/appmaps/${slug}.md`,
 			appmapGraph: `docs/appmaps/${slug}.json`,
-			checkpoint: `out/runs/${id}.checkpoint.json`,
+			checkpoint: runRel(id, RUN_FILES.checkpoint),
 		};
 	}
 	// recipe-cli.ts writes exactly these two under the run key: the run log always, the
@@ -295,14 +306,14 @@ function artifactsFor(id: string, init: JobInit): JobArtifacts {
 	if (init.kind === "replay")
 		return {
 			log,
-			runLog: `out/runs/${id}.json`,
-			journal: `out/runs/${id}.journal.jsonl`,
+			runLog: runRel(id, RUN_FILES.log),
+			journal: runRel(id, RUN_FILES.journal),
 		};
 
 	return {
 		log,
-		runLog: `out/runs/${id}.json`,
-		...(init.record ? { recording: `out/recording/${id}/window.mp4` } : {}),
+		runLog: runRel(id, RUN_FILES.log),
+		...(init.record ? { recording: runRel(id, RUN_FILES.recording, "window.mp4") } : {}),
 	};
 }
 
@@ -328,7 +339,7 @@ export function writeJob(rec: JobRecord, root = jobsDir()): void {
 
 export function readJob(id: string, root = jobsDir()): JobRecord | undefined {
 	if (!SAFE_ID.test(id)) return undefined;
-	const rec = readJsonOr<JobRecord | undefined>(path.join(jobDir(id, root), "job.json"), undefined);
+	const rec = readJsonOr<JobRecord | undefined>(path.join(jobDir(id, root), "job.json"), undefined) ?? readJsonOr<JobRecord | undefined>(path.join(archiveRunDir(id), "job.json"), undefined);
 
 	return rec && typeof rec.id === "string" ? rec : undefined;
 }
@@ -423,7 +434,10 @@ export function readLog(id: string, fromByte = 0, root = jobsDir()): { bytes: Bu
 	if (!SAFE_ID.test(id)) return { bytes: Buffer.alloc(0), nextOffset: from };
 	let fd: number | undefined;
 	try {
-		fd = fs.openSync(logPath(id, root), "r");
+		// Live first, then the archive: on the operator's laptop `pull` archives the run as soon
+		// as its artifacts land, and the gallery still has to be able to open its console log.
+		const live = logPath(id, root);
+		fd = fs.openSync(fs.existsSync(live) ? live : path.join(archiveRunDir(id), RUN_FILES.console), "r");
 		const size = fs.fstatSync(fd).size;
 		// A truncated or rotated file would leave us reading past the end; restart from 0
 		// rather than returning a permanently empty stream.

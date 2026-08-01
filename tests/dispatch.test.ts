@@ -538,9 +538,9 @@ function jobFrame(over: Record<string, unknown> = {}): SshResult {
 			pid: 91,
 			startedAt: "2026-07-30T12:00:00.000Z",
 			artifacts: {
-				log: "out/jobs/2026-07-30T12-00-00-yarn/log.txt",
-				runLog: "out/runs/2026-07-30T12-00-00-yarn.json",
-				recording: "out/recording/2026-07-30T12-00-00-yarn/window.mp4",
+				log: "out/live/2026-07-30T12-00-00-yarn/log.txt",
+				runLog: "out/live/2026-07-30T12-00-00-yarn/run.json",
+				recording: "out/live/2026-07-30T12-00-00-yarn/recording/window.mp4",
 			},
 			...over,
 		},
@@ -548,9 +548,11 @@ function jobFrame(over: Record<string, unknown> = {}): SshResult {
 }
 
 test("pull__WritesUnderTheSameKey__When__JobProducedArtifacts", async () => {
-	// The job id IS the artifact key, on both machines. A pull that renamed anything would
-	// break the correlation between out/runs/<id>.json, out/recording/<id>/ and out/jobs/<id>/
-	// that every other tool in the repo relies on.
+	// The job id IS the artifact key, on both machines, and since the 2026-08-01 consolidation
+	// it names ONE directory rather than three siblings to keep correlated. That is the whole
+	// point of the change: the previous shape needed a five-way fan-out of declared and derived
+	// paths, and the derived branch (step frames) went missing long enough to blank the offline
+	// judge's VISUAL channel for an entire matrix. A directory cannot forget its own contents.
 	const dest = tempDir("yarn-dispatch-");
 	try {
 		const run: SshRunner = async (_h, argv) => (subcommand(argv) === "job" ? jobFrame() : ok({ dataRoot: "/Users/administrator/yarn-trial" }));
@@ -567,20 +569,10 @@ test("pull__WritesUnderTheSameKey__When__JobProducedArtifacts", async () => {
 		});
 
 		assert.equal(result.ok, true);
-		// stepFrames rides with every runLog: the offline judge trusts a screenshot path only
-		// when it names a per-run `-steps/` dir, so a fleet run that left its frames behind
-		// graded VISUAL as UNAVAILABLE — half the judge's signal, silently blank.
-		assert.deepEqual(result.artifacts.map((a) => a.key), ["job", "runLog", "stepFrames", "recording"]);
-		assert.equal(result.artifacts.find((a) => a.key === "stepFrames")?.rel, "out/runs/2026-07-30T12-00-00-yarn-steps");
-		assert.deepEqual(
-			result.artifacts.map((a) => a.rel),
-			[
-				"out/jobs/2026-07-30T12-00-00-yarn",
-				"out/runs/2026-07-30T12-00-00-yarn.json",
-				"out/runs/2026-07-30T12-00-00-yarn-steps",
-				"out/recording/2026-07-30T12-00-00-yarn",
-			],
-		);
+		// One source, and it is a directory — the run log, the console log, the step frames the
+		// judge needs and the recording all ride inside it with no path to forget.
+		assert.deepEqual(result.artifacts.map((a) => a.key), ["run"]);
+		assert.deepEqual(result.artifacts.map((a) => a.rel), ["out/live/2026-07-30T12-00-00-yarn"]);
 		for (const a of result.artifacts) assert.equal(a.local.startsWith(dest), true, `${a.local} landed outside the data root`);
 
 		for (const argv of invocations) {
@@ -594,17 +586,21 @@ test("pull__WritesUnderTheSameKey__When__JobProducedArtifacts", async () => {
 			assert.match(shell, /StrictHostKeyChecking=yes/);
 			assert.match(shell, /IdentitiesOnly=yes/);
 		}
-		// Directories are pulled as directories; the run log is one file.
-		assert.equal(invocations[0][invocations[0].length - 2], "administrator@10.0.0.1:/Users/administrator/yarn-trial/out/jobs/2026-07-30T12-00-00-yarn/");
-		assert.equal(invocations[1][invocations[1].length - 2], "administrator@10.0.0.1:/Users/administrator/yarn-trial/out/runs/2026-07-30T12-00-00-yarn.json");
+		// Pulled as a directory — the trailing slash is what makes rsync copy the CONTENTS into
+		// the matching local directory rather than nesting it one level deeper.
+		assert.equal(invocations[0][invocations[0].length - 2], "administrator@10.0.0.1:/Users/administrator/yarn-trial/out/live/2026-07-30T12-00-00-yarn/");
 	} finally {
 		fs.rmSync(dest, { recursive: true, force: true });
 	}
 });
 
 test("pull__FetchesBothAppmapHalves__When__JobWasAGroundingPass", async () => {
-	// JobArtifacts records the prose appmap only, but explore writes a .json graph beside it
-	// and that is what scopeWarnings() reads. Leaving it on the colo Mac lands an appmap whose
+	// The appmap is the one artifact that does NOT live in the run directory: it is a durable
+	// input at a stable path, keyed by app rather than by run, and every later task run reads
+	// it from there. So it stays a separate pull source even after the consolidation.
+	//
+	// JobArtifacts records the prose half only, but explore writes a .json graph beside it and
+	// that is what scopeWarnings() reads. Leaving it on the colo Mac lands an appmap whose
 	// scope-collision warnings are silently off — the failure that lets an agent change a
 	// per-document override instead of the brand default.
 	const dest = tempDir("yarn-dispatch-");
@@ -614,7 +610,7 @@ test("pull__FetchesBothAppmapHalves__When__JobWasAGroundingPass", async () => {
 				? jobFrame({
 						id: "explore-2026-07-30T12-00-00-yarn",
 						kind: "explore",
-						artifacts: { log: "out/jobs/explore-2026-07-30T12-00-00-yarn/log.txt", appmap: "docs/appmaps/yarn.md", checkpoint: "out/runs/explore-2026-07-30T12-00-00-yarn.checkpoint.json" },
+						artifacts: { log: "out/live/explore-2026-07-30T12-00-00-yarn/log.txt", appmap: "docs/appmaps/yarn.md", checkpoint: "out/live/explore-2026-07-30T12-00-00-yarn/checkpoint.json" },
 					})
 				: ok({ dataRoot: "/Users/administrator/yarn-trial" });
 
@@ -624,7 +620,7 @@ test("pull__FetchesBothAppmapHalves__When__JobWasAGroundingPass", async () => {
 			rsync: async (_f, argv) => (argv.some((a) => a.endsWith("yarn.json")) ? { code: 23, stdout: "", stderr: 'rsync: link_stat "/Users/administrator/yarn-trial/docs/appmaps/yarn.json" failed: No such file or directory (2)\n' } : { code: 0, stdout: "", stderr: "" }),
 		});
 
-		assert.deepEqual(result.artifacts.map((a) => a.key), ["job", "checkpoint", "appmap", "appmapGraph"]);
+		assert.deepEqual(result.artifacts.map((a) => a.key), ["run", "appmap", "appmapGraph"]);
 		assert.equal(result.artifacts.find((a) => a.key === "appmapGraph")?.rel, "docs/appmaps/yarn.json");
 		// An absent source is a fact about the run, not a broken pull: a task run has no
 		// appmap and an explore run has no run log, every single time.
@@ -635,9 +631,15 @@ test("pull__FetchesBothAppmapHalves__When__JobWasAGroundingPass", async () => {
 	}
 });
 
-test("pull__FetchesTheJournal__When__TheJobWasAReplay", async () => {
-	// The journal is what `npm run cleanup` replays after a crashed replay; leaving it on the
-	// Mac brings home a run log that says what happened and nothing that says what to undo.
+test("pull__FetchesTheOldScatteredPaths__When__TheRecordPredatesTheConsolidation", async () => {
+	// A job record outlives a layout change. This one was written before 2026-08-01, when a run
+	// was three sibling trees, and pulling it must still bring every piece home — the journal
+	// especially, since that is what `npm run cleanup` replays after a crashed replay; leaving
+	// it on the Mac brings home a run log that says what happened and nothing that says what to
+	// undo.
+	//
+	// The record says which layout it belongs to: `log` is the field every job kind declares,
+	// and here it points outside out/live, so the derived legacy sources come along too.
 	const dest = tempDir("yarn-dispatch-");
 	try {
 		const run: SshRunner = async (_h, argv) =>
@@ -660,7 +662,7 @@ test("pull__FetchesTheJournal__When__TheJobWasAReplay", async () => {
 			rsync: async (_f, argv) => (argv.some((a) => a.endsWith(".journal.jsonl")) ? { code: 23, stdout: "", stderr: 'rsync: link_stat "...journal.jsonl" failed: No such file or directory (2)\n' } : { code: 0, stdout: "", stderr: "" }),
 		});
 
-		assert.deepEqual(result.artifacts.map((a) => a.key), ["job", "runLog", "stepFrames", "journal"]);
+		assert.deepEqual(result.artifacts.map((a) => a.key), ["run", "job", "runLog", "stepFrames", "journal"]);
 		assert.equal(result.artifacts.find((a) => a.key === "journal")?.rel, "out/runs/replay-2026-07-31T12-00-00-000-yarn.journal.jsonl");
 		assert.equal(result.artifacts.find((a) => a.key === "journal")?.state, "missing");
 		assert.equal(result.ok, true);
