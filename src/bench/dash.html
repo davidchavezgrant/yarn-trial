@@ -550,6 +550,27 @@ function stepLine(points, color, opts = {}) {
 
 /* ---- sections ----------------------------------------------------------------------- */
 
+// The wire speaks a run's start and elapsed only while it RUNS (the fleet poll) and again
+// once it is COLLECTED (the run log); in the awaiting-collect window between, both vanish —
+// which used to erase a finished run's start time and duration from the board until collect.
+// Remember the last live values per job (sessionStorage: per-tab, dies with the tab — same
+// idiom as the target picker) and serve them while the wire is quiet. Collected values
+// always win. The start is pinned at first sighting: re-deriving it every push from the
+// ticking elapsed would make a supposedly fixed timestamp drift.
+const LIVE_MEM_KEY = "bench-live-mem";
+const liveMem = (() => { try { return JSON.parse(sessionStorage.getItem(LIVE_MEM_KEY)) || {}; } catch { return {}; } })();
+function memorizeLive() {
+	let dirty = false;
+	for (const a of state.arms) for (const p of a.passes) for (const e of p.entries) {
+		if (e.status !== "running" || e.elapsedSec == null) continue;
+		const m = liveMem[e.jobId] || (liveMem[e.jobId] = {});
+		if (m.start == null) m.start = receivedAt - e.elapsedSec * 1000;
+		m.elapsed = e.elapsedSec;
+		dirty = true;
+	}
+	if (dirty) { try { sessionStorage.setItem(LIVE_MEM_KEY, JSON.stringify(liveMem)); } catch {} }
+}
+
 function statusChip(e, rowKey, selected) {
 	const color = e.status === "running" ? SERIES[0] : e.status === "queued" ? "#898781" :
 		e.status === "awaiting-collect" ? STATUS.warning : OUTCOME_COLORS[e.status] || "#898781";
@@ -559,7 +580,7 @@ function statusChip(e, rowKey, selected) {
 	// "Running 22m43s" that jumps every 20s reads as frozen) and FREEZES at the run's final
 	// duration once it finishes: how long a run took must not vanish the moment it lands.
 	// Queued chips show no time — nothing has started.
-	const took = e.elapsedSec != null ? e.elapsedSec : e.runSec;
+	const took = e.elapsedSec != null ? e.elapsedSec : e.runSec != null ? e.runSec : (liveMem[e.jobId] || {}).elapsed;
 	let label = e.status === "running"
 		? `Running ${elapsedSpan(e.elapsedSec)}`
 		: esc(statusLabel(e.status)) + (e.status !== "queued" && took != null ? " " + fmtDur(took) : "");
@@ -781,6 +802,11 @@ function entryStart(e) {
 		return Date.parse(e.submittedAt) || null;
 	}
 	if (e.status === "running" && e.elapsedSec != null) return receivedAt - e.elapsedSec * 1000;
+	// Finished-but-uncollected (or a blipped poll): the remembered live start keeps the
+	// Started column steady across the run's transitions instead of blinking to "–".
+	const m = liveMem[e.jobId];
+	if (m && m.start != null) return m.start;
+
 	return null;
 }
 
@@ -803,10 +829,11 @@ const shortJob = (id) => String(id).length > 14 ? String(id).slice(0, 14) + "…
 function startedCell(p) {
 	const starts = p.entries.map(entryStart).filter((t) => t != null);
 	const lines = p.entries.map((e) => {
-		const dur = e.elapsedSec != null ? e.elapsedSec : e.runSec;
+		const dur = e.elapsedSec != null ? e.elapsedSec : e.runSec != null ? e.runSec : (liveMem[e.jobId] || {}).elapsed;
+		const st = entryStart(e);
 		return shortJob(e.jobId) + " — " +
 			(e.collected ? "finished " + startStamp(Date.parse(e.endedAt || e.submittedAt) || null) + (dur != null ? ` — took ${fmtDur(dur)}` : "")
-			: e.status === "running" ? "started " + startStamp(entryStart(e))
+			: st != null ? "started " + startStamp(st) + (e.status !== "running" && dur != null ? ` — ran ${fmtDur(dur)}` : "")
 			: `${e.status} (submitted ${startStamp(Date.parse(e.submittedAt) || null)})`);
 	}).join("\n");
 	return `<td class="num" data-tip="${esc(lines)}">${startStamp(starts.length ? Math.max(...starts) : null)}</td>`;
@@ -1313,18 +1340,26 @@ function mountLogPanes() {
 	}
 }
 
-// The board reads as a drain timeline in three bands: FINISHED rows first (oldest finish
-// first), then RUNNING (oldest start first), then QUEUED and anything else non-terminal
-// (oldest submit first) — queued sits strictly below running, so an early-SUBMITTED job
-// still waiting in line never sorts above a run that is actually going. Oldest→newest
-// within every band, so the next collect lands where the eye already is. The same bands
-// order the chips inside a row's Runs cell (runsCell).
+// The board reads as a drain timeline in three bands — the canonical order (David,
+// 2026-08-01): COMPLETED runs first (failed or not, collected or still awaiting collect —
+// completion is about the RUN having ended, not about our having pulled it), then
+// IN-FLIGHT (oldest start first), then QUEUED and anything else non-terminal (oldest
+// submit first) — queued sits strictly below running, so an early-SUBMITTED job still
+// waiting in line never sorts above a run that is actually going. Oldest→newest within
+// every band, so the next collect lands where the eye already is. The same bands order
+// the chips inside a row's Runs cell (runsCell).
 function entryBand(e) {
-	return e.collected ? 0 : e.status === "running" ? 1 : 2;
+	return e.collected || e.status === "awaiting-collect" ? 0 : e.status === "running" ? 1 : 2;
 }
 
 function entryTime(e) {
 	if (e.collected) return Date.parse(e.endedAt || e.submittedAt) || 0;
+	// Awaiting-collect: finished on its host but no endedAt on the wire yet — approximate
+	// the finish from the remembered live start + elapsed so it sorts near its real end.
+	if (e.status === "awaiting-collect") {
+		const m = liveMem[e.jobId];
+		if (m && m.start != null) return m.start + (m.elapsed || 0) * 1000;
+	}
 	// A running entry's start is derived (receivedAt - elapsed); submit time is the fallback.
 	if (e.status === "running" && e.elapsedSec != null) return receivedAt - e.elapsedSec * 1000;
 	return Date.parse(e.submittedAt) || Infinity;
@@ -1592,6 +1627,7 @@ function safe(name, elId, fn) {
 
 function render() {
 	if (!state) return;
+	memorizeLive();
 	// A stored selection the data no longer contains must not blank the page — fall back to
 	// Normalize BEFORE anything reads the filter (leave storage alone; the key may return
 	// on the next manifest) — currentTarget() resolves "" to the first real target.
