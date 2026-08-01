@@ -601,11 +601,13 @@ function heatFor(
 /**
  * Which phase-1 explore produced the map a task arm ran against. Mirrors how orchestrate
  * grounds the arms: web arms read the web explore, APPMAP_VARIANT=vision reads the
- * vision-only pass, otherwise the arm's own backend's map.
+ * vision-only pass, APPMAP_VARIANT=novision the element-only pass, otherwise the arm's
+ * own backend's map.
  */
 export function groundingArmId(arm: Arm): string {
 	if (arm.dispatch.url || arm.id.startsWith("p2-web")) return "p1-explore-web-cdp";
 	if (arm.env?.APPMAP_VARIANT === "vision") return "p1-explore-vision";
+	if (arm.env?.APPMAP_VARIANT === "novision") return "p1-explore-no-vision";
 	if (arm.dispatch.backend === "cdp") return "p1-explore-cdp";
 
 	return "p1-explore-ax";
