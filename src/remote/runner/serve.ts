@@ -210,6 +210,13 @@ export function unsafeRelPath(p: string): string | undefined {
 /** Fixed port for the liveview server, so the runner and the operator's `ssh -L` agree without a round trip. */
 const LIVEVIEW_PORT = 7682;
 /**
+ * Fixed port for the dash's view-only peek capture — SEPARATE from LIVEVIEW_PORT so a sign-in
+ * and a peek of the same Mac never collide (an operator can sign into mac2 while the dash
+ * window-captures mac2's ax run). Same reasoning as LIVEVIEW_PORT: a constant both ends agree
+ * on with no round trip.
+ */
+const PEEK_CAPTURE_PORT = 7683;
+/**
  * Hard ceiling on a liveview server's life. The runner spawns it DETACHED — nothing else reaps it
  * — so a sign-in walked away from must not leave a capture-capable, injectable server listening.
  * Generous: an SSO round trip with MFA on a phone is minutes, and this is the same 20-minute
@@ -559,6 +566,40 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 
 			return false;
 		});
+
+	/** The peek-capture server this runner last spawned — same tracking as liveviewPid. */
+	let peekCapturePid: number | undefined;
+
+	/**
+	 * Free the peek-capture port — same shape as freeLiveviewPort (tracked pid first, lsof sweep
+	 * for an orphan from a prior incarnation), on the peek-capture constant. Not injected: no
+	 * test drives the preemption path, and the port is ours so whatever answers is ours to end.
+	 */
+	const freePeekCapturePort = async (): Promise<boolean> => {
+		const pids = new Set<number>();
+		if (peekCapturePid && pidAlive(peekCapturePid)) pids.add(peekCapturePid);
+		peekCapturePid = undefined;
+		const swept = await new Promise<string>((resolve) =>
+			execFile("lsof", ["-ti", `tcp:${PEEK_CAPTURE_PORT}`], { timeout: 5000 }, (_err, stdout) => resolve(stdout ?? "")),
+		);
+		for (const lin of swept.split("\n")) {
+			const pid = Number(lin.trim());
+			if (Number.isInteger(pid) && pid > 0 && pid !== process.pid) pids.add(pid);
+		}
+		for (const pid of pids) {
+			try {
+				process.kill(pid, "SIGTERM");
+			} catch {
+				// Already gone, or not ours to signal — the port poll below is the verdict.
+			}
+		}
+		for (let i = 0; i < 16; i++) {
+			if (!(await portInUse(PEEK_CAPTURE_PORT))) return true;
+			await new Promise((r) => setTimeout(r, 250));
+		}
+
+		return false;
+	};
 
 	/**
 	 * End the liveview engine on request — the "operator backed out" half of preemption. The
@@ -1185,6 +1226,66 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 	}
 
 	/**
+	 * View-only ScreenCaptureKit stream of this Mac's frontmost window, for the dash's preview
+	 * wall — the fallback for a run the CDP peek can never see (an ax arm opens no debug port
+	 * ever; a hardened Electron target strips it). The dash tunnels to the returned port and
+	 * relays the JPEG frames into its panel (connectLiveviewClient).
+	 *
+	 * WHY THIS IS NOT the `liveview` verb: liveview is sign-in. It swaps the profile, foregrounds
+	 * the app, and REFUSES while a job holds the lease ("a login stream would capture over their
+	 * recording"). A peek is the opposite on every count — it watches a BUSY host, must not
+	 * disturb the run, and needs no operator identity:
+	 *  - NO lease check: a run holding the lease is exactly what the wall wants to show, and SCK
+	 *    read-only capture never touches the app, its input, or the driver's own recording.
+	 *  - NO profile swap, NO foreground: nothing about the running app changes.
+	 *  - NO --app: full-window streaming, follow-frontmost — not the constrained web-area crop
+	 *    the sign-in mode uses.
+	 * The token gates the WS and LIVEVIEW_VIEW_ONLY makes the server drop any inbound input frame,
+	 * so even a token holder cannot drive the machine through it.
+	 *
+	 * Last request wins (like liveview): a server left over from a dropped dash tunnel — its WS
+	 * closed but the 30s idle timer not yet fired — holds the port; preempt it so a re-arming
+	 * wall reconnects at once rather than after the idle reap.
+	 */
+	async function peekCapture(): Promise<RunnerResponse> {
+		if (await portInUse(PEEK_CAPTURE_PORT)) {
+			log(`peek-capture: preempting the server holding port ${PEEK_CAPTURE_PORT}`);
+			if (!(await freePeekCapturePort()))
+				return { ok: false, error: `could not free the peek-capture port ${PEEK_CAPTURE_PORT} — the old server did not exit` };
+		}
+
+		const token = randomBytes(18).toString("base64url");
+		const cmd = resolveRunCommand("src/remote/liveview-cli.ts");
+		try {
+			peekCapturePid = spawnRun(
+				{ command: cmd.command, args: [...cmd.args] },
+				{
+					logFile: logPath("peek-capture", root),
+					cwd: resourcesRoot(),
+					env: {
+						...childEnv({ runnerDir, stamp: "peek-capture" }),
+						PORT: String(PEEK_CAPTURE_PORT),
+						LIVEVIEW_TOKEN: token,
+						// Window capture — the whole reason this path exists over CDP.
+						LIVEVIEW_TRANSPORT: "sck",
+						// The server drops inbound input frames: a view-only wall never drives a run.
+						LIVEVIEW_VIEW_ONLY: "1",
+						LIVEVIEW_MAX_LIFETIME_MS: String(LIVEVIEW_MAX_LIFETIME_MS),
+						LIVEVIEW_IDLE_AFTER_CLOSE_MS: String(LIVEVIEW_IDLE_AFTER_CLOSE_MS),
+						LIVEVIEW_FPS: String(LIVEVIEW_FPS),
+						// No LIVEVIEW_APP: full-window follow-frontmost, never the sign-in crop.
+					},
+				},
+			).pid;
+		} catch (e) {
+			return { ok: false, error: `could not start the peek-capture server: ${(e as Error).message}` };
+		}
+		log(`peek-capture: view-only SCK server started on port ${PEEK_CAPTURE_PORT}`);
+
+		return { ok: true, port: PEEK_CAPTURE_PORT, token, transport: "sck", maxLifetimeSec: LIVEVIEW_MAX_LIFETIME_MS / 1000 };
+	}
+
+	/**
 	 * Sign an app out for one operator on this Mac: quit it and delete THEIR data — the live
 	 * copy only if owners.json says they own it, plus their parked profile. Another operator's
 	 * live session is never touched; `clearOperatorData` documents the split.
@@ -1646,7 +1747,8 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			signin: () => signin(params),
 			liveview: () => liveview(params),
 			"liveview-stop": () => liveviewStop(),
-				"peek-prep": () => peekPrep(),
+			"peek-prep": () => peekPrep(),
+			"peek-capture": () => peekCapture(),
 			ready: () => ready(params),
 			// Lowercase on the wire: `runnerArgv` only carries bare [a-z0-9-] subcommands, so the
 			// method name IS the subcommand and cannot carry a capital.

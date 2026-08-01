@@ -1,4 +1,4 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { resourcesRoot } from "../../paths.js";
@@ -215,65 +215,6 @@ function inventoryHosts(): HostEntry[] {
 	}
 }
 
-export interface VncSeedOutcome {
-	/** A team bundle exists on this machine (env override, resources root, or ~/.yarn-runner). */
-	hadBundle: boolean;
-	/** That bundle carries a vncPassword — absent means every vnc:// connection may prompt. */
-	hadPassword: boolean;
-	/** Hosts whose screen-sharing password is now (re)written in the login keychain. */
-	seeded: string[];
-}
-
-/** One async `security` invocation reduced to a boolean — the non-blocking seam. */
-export type AsyncSecurityRunner = (args: string[]) => Promise<boolean>;
-
-const runSecurityAsync: AsyncSecurityRunner = (args) =>
-	new Promise((resolve) => {
-		execFile("security", args, { timeout: 10_000 }, (err) => resolve(!err));
-	});
-
-/**
- * (Re)seed the screen-sharing keychain items from the retained team bundle — and ONLY those:
- * no identity install, no model key. Exists for callers that want passwordless vnc:// on
- * demand (the dash's peek fallback) without re-running full provisioning; `-U` makes it
- * idempotent, so calling it right before opening Screen Sharing repairs a stale or missing
- * item in the same motion.
- *
- * ASYNC on purpose: the dash calls this from its request path, and the sync `security` exec
- * (`add-internet-password` can block up to 10s on a locked keychain or a SecurityAgent
- * dialog) would freeze the single event loop that heartbeats every live peek stream — long
- * enough to trip the client's 12s staleness watchdog and drop the whole wall. It does NOT
- * share `applyVncPassword` (which stays sync for the provisioning path that has no event loop
- * to starve), but the argv it builds is identical, `trustedScreenSharingArgs` and all.
- *
- * Throws on a malformed bundle (same contract as parseCredentials) — a bundle that exists but
- * cannot be read is worth surfacing, not eating.
- */
-export async function seedVncKeychain(hosts?: HostEntry[], exec: AsyncSecurityRunner = runSecurityAsync): Promise<VncSeedOutcome> {
-	const file = findCredentials();
-	if (!file) return { hadBundle: false, hadPassword: false, seeded: [] };
-	const creds = parseCredentials(fs.readFileSync(file, "utf8"));
-	if (!creds.vncPassword) return { hadBundle: true, hadPassword: false, seeded: [] };
-
-	const trusted = trustedScreenSharingArgs();
-	const seeded: string[] = [];
-	for (const host of hosts ?? inventoryHosts()) {
-		if (!host.ssh.user) continue;
-		const ok = await exec([
-			"add-internet-password",
-			"-s", host.vnc.host,
-			"-a", host.ssh.user,
-			"-r", "vnc ",
-			"-P", String(host.vnc.port),
-			"-w", creds.vncPassword,
-			"-U",
-			...trusted,
-		]);
-		if (ok) seeded.push(host.name);
-	}
-
-	return { hadBundle: true, hadPassword: true, seeded };
-}
 
 /**
  * Install the team identity, unless this machine already has one.

@@ -65,6 +65,12 @@ export interface ServerOptions {
 	/** Called just before the server self-terminates (maxLifetime or idle). Injected for tests. */
 	onExpire?: (reason: "max-lifetime" | "idle") => void;
 	/**
+	 * View-only: drop every inbound input frame instead of forwarding it to the engine. The dash's
+	 * preview wall streams a running benchmark and must never be able to inject a click or keypress
+	 * into it — even a token holder gets pixels only. Off by default (sign-in needs input).
+	 */
+	viewOnly?: boolean;
+	/**
 	 * Engine factory — how a viewer connection gets its capture engine. Defaults to spawning
 	 * the native SCK engine; the CLI passes connectCdpEngine for Chromium targets
 	 * (LIVEVIEW_TRANSPORT=cdp). One engine per connection either way, torn down with it.
@@ -346,6 +352,10 @@ async function bridge(socket: Duplex, opts: ServerOptions): Promise<void> {
 				continue;
 			}
 			if (frame.opcode === "text") {
+				// View-only (the dash's peek wall): pixels out, nothing in. Dropping the frame
+				// here — not just declining to wire a driver — means no inbound event can reach
+				// the engine even from a token holder.
+				if (opts.viewOnly) continue;
 				try {
 					engine.send(JSON.parse(frame.payload.toString("utf8")));
 				} catch {

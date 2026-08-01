@@ -92,13 +92,6 @@
 	.peekbox[data-state="idle"] .pk-idle { display: flex; }
 	.peekbox[data-state="wait"] .pk-wait { display: flex; flex-direction: column; gap: 8px; }
 	.peekbox .pk-msg { max-width: 90%; text-align: center; }
-	/* vnc fallback offer: lives inside the wait state, shown only while the server's standing
-	   {ev:"vnc"} offer holds (frames retract it) — the button POSTs /api/vnc, the sub-line says
-	   honestly whether the connection will prompt. */
-	.peekbox .pk-vnc { display: flex; flex-direction: column; align-items: center; gap: 4px; }
-	.peekbox .pk-vnc[hidden] { display: none; }
-	.peekbox .pk-vnc-sub { font-size: 10px; color: var(--muted); max-width: 90%; text-align: center; }
-	.peekbox .pk-vnc-sub a { color: var(--muted); }
 	.spinner { width: 18px; height: 18px; border: 2px solid var(--grid); border-top-color: var(--ink-2); border-radius: 50%; animation: pk-spin .8s linear infinite; }
 	@keyframes pk-spin { to { transform: rotate(360deg); } }
 	/* The <img> exists from birth but only shows once a real frame has painted — no
@@ -1015,12 +1008,7 @@ function hostCard(name) {
 	card.innerHTML = `<div class="hostinfo"></div>
 		<div class="peekbox" data-state="idle">
 			<div class="pk-idle">Idle</div>
-			<div class="pk-wait"><div class="spinner"></div><div class="pk-msg"></div>
-				<div class="pk-vnc" hidden>
-					<button class="btnv" data-vncopen>Open Screen Sharing</button>
-					<div class="pk-vnc-sub"></div>
-				</div>
-			</div>
+			<div class="pk-wait"><div class="spinner"></div><div class="pk-msg"></div></div>
 			<img class="pk-img" alt="">
 			<button class="btnv pk-full" data-peekfull data-tip="fullscreen">⛶</button>
 			<div class="pk-cap"></div>
@@ -2324,7 +2312,6 @@ function peekStateFor(host) {
 		caption: "",      // last {ev:"window"} app · title
 		fatal: false,     // a 4400/4409 landed this busy episode — no re-arm until the row leaves busy
 		idleSince: 0,     // confirmed-idle grace clock (syncPeekArming); 0 = not counting
-		vnc: null,        // the server's standing {ev:"vnc"} fallback offer; frames retract it
 	};
 	return peekStates[host];
 }
@@ -2365,33 +2352,6 @@ function setStreaming(host, on) {
 	if (box) box.dataset.state = !ps.armed ? "idle" : on ? "live" : "wait";
 }
 
-/**
- * Paint (or clear) the vnc fallback offer on a host's panel. The sub-line is the honesty
- * line: whether the connection will prompt, from the server's keychain probe. The plain
- * vnc:// link exists for --web viewers on ANOTHER machine — their OS routes it locally,
- * where the button opens Screen Sharing on the machine running the dash.
- */
-function paintVnc(host) {
-	const el = peekCardFor(host)?.querySelector(".pk-vnc");
-	if (!el) return;
-	const d = peekStates[host]?.vnc;
-	if (!d) { el.hidden = true; return; }
-	el.hidden = false;
-	// seeded/canSeed describe the DASH SERVER's keychain and bundle — the machine the BUTTON
-	// opens Screen Sharing on. For a local operator (the normal posture) that is their own
-	// machine and the line is exact. The raw vnc:// link, by contrast, opens on the VIEWER's
-	// machine (a remote --web teammate), whose keychain the server cannot see — so the link
-	// carries its own caveat rather than borrowing the button's verdict.
-	const local = location.hostname === "localhost" || location.hostname === "127.0.0.1";
-	const buttonLine = d.seeded ? "connects without a password"
-		: d.canSeed ? "first open seeds the password from the team bundle"
-		: "may ask for the Mac's password — no team bundle on this machine";
-	const link = local
-		? ` · <a href="${esc(d.url)}">vnc link</a>`
-		: ` · <a href="${esc(d.url)}">vnc link</a> (opens from your machine — may prompt unless its own keychain is seeded)`;
-	el.querySelector(".pk-vnc-sub").innerHTML = buttonLine + link;
-}
-
 /** Repaint every card's panel from its host's peek state — called by renderFleet after reconcile. */
 function updatePeekPanels() {
 	document.querySelectorAll("#fleet .host").forEach((card) => {
@@ -2410,7 +2370,6 @@ function updatePeekPanels() {
 		} else if (img.getAttribute("src")) {
 			img.removeAttribute("src");
 		}
-		paintVnc(card.dataset.host); // same race as pk-msg: an offer can precede its card
 	});
 }
 
@@ -2479,7 +2438,6 @@ function disarmPeek(host) {
 	if (ps.lastUrl) { URL.revokeObjectURL(ps.lastUrl); ps.lastUrl = null; }
 	ps.ws = null; ps.armed = false; ps.retry = 0;
 	ps.streaming = false; ps.statusText = ""; ps.caption = "";
-	ps.vnc = null; paintVnc(host);
 	// Direct repaint so a disarm from a close handler (between renders) doesn't leave a
 	// stale frame labeled live; renderFleet's updatePeekPanels does the same idempotently.
 	const box = peekCardFor(host)?.querySelector(".peekbox");
@@ -2506,7 +2464,6 @@ function connectPeek(host) {
 		ps.retry = 0;                                         // healthy traffic resets backoff
 		if (typeof ev.data === "string") { handlePeekText(host, ev.data); return; }
 		clearPeekError(host);                                 // frames prove the attach succeeded
-		if (ps.vnc) { ps.vnc = null; paintVnc(host); }        // delivery retracts the vnc offer
 		// Binary frame = a JPEG: paint the new frame first, then revoke the replaced URL.
 		const url = URL.createObjectURL(ev.data);
 		const img = peekCardFor(host)?.querySelector(".pk-img");
@@ -2547,13 +2504,6 @@ function handlePeekText(host, raw) {
 		ps.caption = `${d.app || ""}${d.title ? " · " + d.title : ""}`.trim();
 		const cap = peekCardFor(host)?.querySelector(".pk-cap");
 		if (cap) cap.textContent = ps.caption;
-	} else if (d.ev === "vnc") {
-		// The server's standing fallback offer — CDP has delivered nothing for a while (an
-		// ax arm with no debug port, a refusing engine). Rendered as a button under the
-		// spinner; a later frame retracts it (binary path above).
-		const ps = peekStateFor(host);
-		ps.vnc = d;
-		paintVnc(host);
 	} else if (d.ev === "error") {
 		// Every non-fatal error kind self-recovers server-side (back to "waiting" / tunnel
 		// respawn), so it renders as a calm status line while the spinner keeps spinning.
@@ -2610,19 +2560,6 @@ $("fleet").addEventListener("click", (ev) => {
 	// fleet container, so its one delegated handler covers them.
 	const fs = ev.target.closest("[data-peekfull]");
 	if (fs) fs.closest(".peekbox")?.requestFullscreen?.();
-	// The vnc fallback button: POST-only action (nothing opens on a GET), response message
-	// lands on the panel's status line — including the honest "may ask for a password" case.
-	const vb = ev.target.closest("[data-vncopen]");
-	if (vb) {
-		const host = vb.closest(".host")?.dataset.host;
-		if (!host) return;
-		vb.disabled = true;
-		fetch(`/api/vnc?host=${encodeURIComponent(host)}`, { method: "POST" })
-			.then((r) => r.json())
-			.then((d) => setPeekStatus(host, d.message || d.error || "Screen Sharing requested"))
-			.catch((e) => setPeekStatus(host, `Screen Sharing failed — ${e}`))
-			.finally(() => { vb.disabled = false; });
-	}
 });
 
 // Fleet log disclosures: capture phase because `toggle` does not bubble. The open-state set
