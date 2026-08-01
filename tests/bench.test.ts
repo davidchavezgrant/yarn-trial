@@ -27,7 +27,7 @@ import {
 } from "../src/bench/manifest.js";
 import { armById, BACKENDS, MATRIX, phaseArms, phaseRunCount, perceptionLine } from "../src/bench/matrix.js";
 import type { DispatchOptions } from "../src/remote/control/dispatch.js";
-import {
+import { dateArg,
 	auditPhase,
 	dispatchOptionsFor,
 	EXIT_NEEDS_GO,
@@ -887,4 +887,19 @@ test("perceptionLine__ReportsTheEmptyCase__When__BothChannelsAreOff", () => {
 	// that quietly cannot happen teaches nothing to whoever declares the arm that tries it.
 	const both: any = { id: "x", phase: 2, kind: "task", app: "Yarn", n: 1, dispatch: { backend: "ax", noAx: true, noVision: true } };
 	assert.equal(perceptionLine(both), "perception: NOTHING");
+});
+
+test("dateArg__PinsAPassToOneManifest__When__ItWillCrossMidnight", () => {
+	// Manifests are keyed by UTC date and a phase runs for hours. On the 07-31→08-01 rollover
+	// a fresh manifest read three collected explores as unsubmitted and re-dispatched all
+	// three; they had to be stopped by hand within seconds. Phase 2 is 40 runs and will
+	// certainly cross midnight.
+	assert.equal(dateArg(["phase", "2", "--date", "2026-07-31", "--go"]), "2026-07-31");
+	assert.equal(dateArg(["phase", "2", "--go"]), undefined);
+	// A malformed value must not silently become a manifest key — that would write the pass
+	// to a file nobody looks in, which is worse than ignoring the flag.
+	for (const bad of ["yesterday", "2026-7-31", "--go", ""]) {
+		assert.equal(dateArg(["phase", "2", "--date", bad]), undefined, bad);
+	}
+	assert.equal(dateArg(["phase", "2", "--date"]), undefined, "a trailing --date has no value");
 });

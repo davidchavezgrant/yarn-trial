@@ -486,10 +486,50 @@ async function defaultCompile(): Promise<CompileFn> {
 	return (stamp) => ({ path: compileFromStamp(stamp).path });
 }
 
+/**
+ * `--date YYYY-MM-DD` — which manifest a command works against.
+ *
+ * Manifests are keyed by UTC date, and a matrix phase runs for hours. Phase 2 is 40 runs and
+ * will cross midnight, at which point a fresh manifest reads every collected arm as
+ * unsubmitted: the phase-1 gate refuses (it reads TODAY's), and re-running the phase silently
+ * re-dispatches work already done. That happened on the 07-31→08-01 rollover with phase 1 —
+ * three finished explores were re-dispatched and had to be stopped by hand within seconds.
+ *
+ * Pinning the date keeps one pass in one manifest across the boundary.
+ */
+export function dateArg(argv: string[]): string | undefined {
+	const i = argv.indexOf("--date");
+	if (i < 0) return undefined;
+	const v = argv[i + 1];
+
+	return v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined;
+}
+
+/**
+ * Warn when today's manifest is empty but yesterday's holds recent work — the signature of a
+ * pass interrupted by the UTC rollover. A warning rather than an automatic continuation:
+ * silently adopting yesterday's manifest would be the right guess most of the time and a
+ * baffling one when an operator genuinely means to start a new pass.
+ */
+function warnRollover(date: string, outRoot: string, log: (s: string) => void): void {
+	try {
+		if (readManifest(date, outRoot).entries.length) return;
+		const prev = new Date(`${date}T00:00:00Z`);
+		prev.setUTCDate(prev.getUTCDate() - 1);
+		const yday = prev.toISOString().slice(0, 10);
+		const entries = readManifest(yday, outRoot).entries;
+		if (!entries.length) return;
+		log(`NOTE: today's manifest (${date}) is empty, but ${yday} holds ${entries.length} entr(ies) — the UTC date rolled over.`);
+		log(`      A phase re-run now re-dispatches arms already collected yesterday. Continue that pass with: --date ${yday}`);
+	} catch {
+		// Advisory only.
+	}
+}
+
 const USAGE = `usage: ./run bench plan
-       ./run bench phase <1|2|3|4|5> [--model <id>] [--go] [--force]
-       ./run bench collect
-       ./run bench judge [--cross]
+       ./run bench phase <1|2|3|4|5> [--model <id>] [--date YYYY-MM-DD] [--go] [--force]
+       ./run bench collect [--date YYYY-MM-DD]
+       ./run bench judge [--cross] [--date YYYY-MM-DD]
        ./run bench truecost [--since <RFC3339>] [--bucket 1m|1h|1d]
        ./run bench challenger --model <id> [--primary <id>] [--go]
 
@@ -502,6 +542,10 @@ phase    dispatch that phase's runs to the fleet queue. WITHOUT --go: preview an
          matters: docs/appmaps/ holds one live map per app, so a pass's phase 2 must
          run before the next pass's phase 1 overwrites it (collect archives each pass's
          maps under out/bench/<date>/appmaps/<model>/).
+         --date pins the manifest a pass writes to. Manifests are keyed by UTC date and a
+         phase runs for hours, so a long pass crosses midnight and a fresh manifest then
+         reads every collected arm as unsubmitted — the gate refuses and a re-run
+         re-dispatches finished work. Pin it for anything that will not finish inside the day.
          --force skips the "phase-1 maps collected this pass" gate (phases 2 and 5).
          Phase 5 is the FILMED pass and must run last: --record injects demo conduct,
          swaps in an act tool without set_value, and changes actuation, so a filmed run
@@ -558,7 +602,10 @@ async function main(argv: string[]): Promise<number> {
 			return EXIT_REFUSED;
 		}
 
-		return runPhase(phase as Phase, { go: argv.includes("--go"), force: argv.includes("--force"), ...(model ? { model } : {}) });
+		const pinned = dateArg(argv);
+		if (!pinned) warnRollover(utcDate(), outDir(), console.log);
+
+		return runPhase(phase as Phase, { go: argv.includes("--go"), force: argv.includes("--force"), ...(model ? { model } : {}), ...(pinned ? { date: pinned } : {}) });
 	}
 	if (cmd === "challenger") {
 		const mi = argv.indexOf("--model");
@@ -570,7 +617,7 @@ async function main(argv: string[]): Promise<number> {
 		}
 		const pi = argv.indexOf("--primary");
 		const primary = pi >= 0 && argv[pi + 1] && !argv[pi + 1].startsWith("--") ? argv[pi + 1] : "azure/gpt-5.6-sol";
-		const manifest = readManifest(utcDate(), outDir());
+		const manifest = readManifest(dateArg(argv) ?? utcDate(), outDir());
 		const plan = planChallenger(manifest, primary);
 		if (!plan) {
 			console.error(`REFUSED: no collected phase-2 runs for the primary model (${primary}), so there is no winner to challenge.`);
@@ -603,7 +650,7 @@ async function main(argv: string[]): Promise<number> {
 		const startingAt = si >= 0 && argv[si + 1] ? String(argv[si + 1]) : `${utcDate()}T00:00:00Z`;
 		const bi = argv.indexOf("--bucket");
 		const bucketWidth = (bi >= 0 ? argv[bi + 1] : "1h") as "1m" | "1h" | "1d";
-		const m = readManifest(utcDate(), outDir());
+		const m = readManifest(dateArg(argv) ?? utcDate(), outDir());
 		const estimated = rollupCost(
 			m.entries
 				.filter((e) => e.collected)
@@ -621,7 +668,10 @@ async function main(argv: string[]): Promise<number> {
 		return EXIT_OK;
 	}
 	if (cmd === "collect") {
-		const outcome = await collect();
+		// The same pin as phase: collecting today's manifest for a pass pinned to yesterday
+		// would report every run as missing and pull nothing.
+		const cDate = dateArg(argv);
+		const outcome = await collect(cDate ? { date: cDate } : {});
 		console.log(`collected ${outcome.collected.length}, pending ${outcome.pending.length}${outcome.reportPath ? `; report: ${outcome.reportPath}` : ""}`);
 
 		return EXIT_OK;
@@ -629,7 +679,8 @@ async function main(argv: string[]): Promise<number> {
 	if (cmd === "judge") {
 		const cross = argv.includes("--cross");
 		const { judgeBench } = await import("./judge.js");
-		const outcome = await judgeBench({ cross });
+		const jDate = dateArg(argv);
+		const outcome = await judgeBench({ cross, ...(jDate ? { date: jDate } : {}) });
 		console.log(`judged ${outcome.judged.length}, skipped ${outcome.skipped.length}, failed ${outcome.failed.length}`);
 		for (const f of outcome.failed) console.log(`  ✗ ${f.jobId}: ${f.error}`);
 
