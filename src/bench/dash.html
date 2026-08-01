@@ -1080,8 +1080,10 @@ const MAP_TIP = "the appmap as a full node-link tree — edge thickness = traver
 // No Success column: per-run ✓/✗ is already on the Runs column's status chips — a second
 // cell saying the same thing read as a different signal.
 // Every full-width spanner (detail rows, phase separators) spans NCOLS — keep it in step
-// with TASK_HEAD when adding a column.
-const NCOLS = 17;
+// with TASK_HEAD when adding a column. 18 = the 5 identity + 5 run-lifecycle + 5 explore
+// discovery + Runs + Map + Graphs columns (the branch dropped Success but main's Graphs
+// column stayed through the merge, so the count nets to 18).
+const NCOLS = 18;
 const TASK_HEAD = "<tr>" + th("Variant", VARIANT_TIP) +
 	th("Task", "the goal-only prompt the run was given") +
 	th("Sees", "what the agent SEES: AX or DOM elements, plus Vision — or Vision only") +
