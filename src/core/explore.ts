@@ -23,7 +23,7 @@ import { runExploreLoop } from "./explore/loop.js";
 import { requestFinish } from "./explore/model.js";
 import { CLAIM_TOOL, EXTRA_TOOLS, SURVEY_TOOL, systemPrompt, VISION_ACT_TOOL } from "./explore/prompt.js";
 import { accumulatedGraph, newPass } from "./explore/state.js";
-import { LIVE_DIR, RUN_FILES } from "../paths.js";
+import { LIVE_DIR, RUN_FILES, outDir, runDir } from "../paths.js";
 
 async function main(): Promise<void> {
 	const { target, app, guidance, backendKind, vision, noAx } = parseCli();
@@ -41,6 +41,11 @@ async function main(): Promise<void> {
 		await cdp?.close();
 	});
 	const p = newPass(target, app, backendKind, vision, guidance, noAx);
+	// Create the run's directory HERE, not in newPass. Constructing a Pass is a pure description
+	// of what a run would be — tests build them by the handful — and a mkdir inside it put 21
+	// empty run directories into the real out/ during one afternoon's test runs. The pass is only
+	// a run once something is about to be written into it.
+	fs.mkdirSync(`${outDir()}/${p.stepsDir}`, { recursive: true });
 
 	try {
 		/**
@@ -194,6 +199,7 @@ async function main(): Promise<void> {
 				edges: [...p.graphEdges.values()],
 				...(p.gated.length ? { gated: p.gated } : {}),
 			};
+			fs.mkdirSync(runDir(p.stamp), { recursive: true });
 			fs.writeFileSync(p.appmapGraphPath, JSON.stringify(rawGraph, null, 2));
 			console.log(`wrote ${p.findings.length} raw findings to ${p.appmapProsePath}`);
 			console.log(`graph: ${p.appmapGraphPath} (${rawGraph.nodes.length} nodes); promote by hand if it is the better map:`);

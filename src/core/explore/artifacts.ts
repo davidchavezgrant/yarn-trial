@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import { checkHome, findScopeAmbiguities, gatedSection, recoverLeakedGraph } from "../harness.js";
 import type { AppMap } from "../../types.js";
 import { DESCENT_ON } from "./config.js";
@@ -151,6 +152,10 @@ export const writeArtifacts = (p: Pass, out: FinishInput, stopped: StopReason, s
 	// conditional step below — that path is keyed by app, so the next pass on the same variant
 	// replaces it, and before this every successful pass's map existed in exactly one overwritable
 	// place.
+	// The write site owns the directory. newPass deliberately does not create it — constructing a
+	// Pass is a description, not a run — so anything that writes into the run folder has to be
+	// able to stand alone, including the salvage path reached from a catch.
+	fs.mkdirSync(path.dirname(p.appmapProsePath), { recursive: true });
 	fs.writeFileSync(p.appmapProsePath, prose);
 	if (!demoted) fs.writeFileSync(p.outPath, prose);
 	// What to TELL the operator: the published path when it was published, the run's copy when

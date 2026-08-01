@@ -57,7 +57,6 @@ export const newPass = (target: Target, app: string, backendKind: string, vision
 	 * loss it is meant to prevent. Promote a checkpoint by hand if a run is killed.
 	 */
 	const stamp = runKey("explore-", app);
-	fs.mkdirSync(runDir(stamp), { recursive: true });
 	const checkpointPath = runPath(stamp, RUN_FILES.checkpoint);
 	// Where a pass that must not replace the committed map writes instead — the checkpoint's
 	// naming family, promoted by hand. See the demotion decision in writeArtifacts.
@@ -69,7 +68,6 @@ export const newPass = (target: Target, app: string, backendKind: string, vision
 	// pass wrote to a shared out/explore-step-N.png before this, so a second grounding pass
 	// silently overwrote the first one's frames and no pass could be reviewed after the next ran.
 	const stepsDir = `${LIVE_DIR}/${stamp}/${RUN_FILES.steps}`;
-	fs.mkdirSync(`${OUT}/${stepsDir}`, { recursive: true });
 	const appmapProsePath = runPath(stamp, RUN_FILES.appmap);
 	const appmapGraphPath = runPath(stamp, RUN_FILES.appmapGraph);
 	// Descent's mutation journal, shared with the task agent's format so `npm run cleanup` can
