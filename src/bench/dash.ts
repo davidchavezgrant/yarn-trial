@@ -127,9 +127,10 @@ export interface PassView {
 export interface ArmView {
 	id: string;
 	/**
-	 * Plain English, derived — "Grounding — screenshots only" rather than
-	 * `p1-explore-vision`. The ids say nothing about DOM attrs or screenshots, and
-	 * `p2-vision-only-grounded-visionmap` is unreadable at a glance.
+	 * Plain English, derived — "Explored Task" rather than `p2-ax-grounded`. The ids say
+	 * nothing about DOM attrs or vision, and `p2-vision-only-grounded-visionmap` is
+	 * unreadable at a glance. armTitle's wording mapped through the dash's Explore-family
+	 * copy (displayTitle below) — labels only, ids and flags keep the wire words.
 	 */
 	title: string;
 	phase: Phase;
@@ -360,16 +361,44 @@ export function narratorPrompt(digest: Record<string, unknown>, previous?: strin
 	].join("\n");
 }
 
+/**
+ * armTitle speaks the report's vocabulary (grounded/grounding); the dash renders the
+ * Explore family per David (2026-07-31) — copy only, applied at the view boundary. Arm ids,
+ * flags (NO_GROUNDING), and every data-field comparison keep the wire words; bench.test.ts
+ * pins armTitle's own output, which is why the rename lives here and not in matrix.ts.
+ */
+const ARM_TITLE_COPY: Record<string, string> = {
+	"grounding pass": "Explore",
+	"grounding pass (web)": "Web Explore",
+	"grounded task": "Explored Task",
+	"ungrounded task": "Unexplored Task",
+	"human-notes task": "Curated-Recipe Task",
+	"vision-map grounded task": "Vision-Map Explored Task",
+	"recipe compile": "Recipe Compile",
+	"recipe replay": "Recipe Replay",
+	"recipe replay (no rescue)": "Recipe Replay (No Rescue)",
+};
+
+function displayTitle(arm: Arm): string {
+	const t = armTitle(arm);
+	const filmed = t.startsWith("filmed ");
+	const base = filmed ? t.slice("filmed ".length) : t;
+
+	return (filmed ? "Filmed " : "") + (ARM_TITLE_COPY[base] ?? base);
+}
+
 export function buildState(manifest: Manifest, fleet: FleetView, events: DashEvent[], autoCollect: boolean, defaultModel?: string): DashState {
 	const arms: ArmView[] = MATRIX.map((arm) => ({
 		id: arm.id,
-		title: armTitle(arm),
+		title: displayTitle(arm),
 		phase: arm.phase,
 		kind: arm.kind,
 		n: arm.n,
 		flags: flagsLine(arm),
 		app: arm.app,
-		perception: perceptionLine(arm),
+		// "vision", not perceptionLine's "screenshots" — the user-facing word (David,
+		// 2026-07-31); the report keeps matrix.ts's own wording.
+		perception: perceptionLine(arm).replace(/screenshots/g, "vision"),
 		actuation: (arm.dispatch.backend ?? "ax").toUpperCase(),
 		...(arm.task ? { task: arm.task } : {}),
 		...(arm.dispatch.url ? { url: arm.dispatch.url } : {}),
@@ -652,8 +681,8 @@ export function buildDetail(jobId: string, manifest: Manifest, opts: { dataDir?:
 
 	const notes: string[] = [];
 	if (!graph) notes.push("no appmap graph found for this arm yet");
-	if (arm.kind === "explore") notes.push("grounding pass — the map IS the output; there is no task path");
-	if (flagsLine(arm).includes("NO_GROUNDING")) notes.push("ungrounded run — the agent never saw this map; the walk is reconstructed for comparison");
+	if (arm.kind === "explore") notes.push("Explore pass — the map IS the output; there is no task path");
+	if (flagsLine(arm).includes("NO_GROUNDING")) notes.push("unexplored run — the agent never saw this map; the walk is reconstructed for comparison");
 
 	let steps: DetailStep[] = [];
 	if (arm.kind !== "explore") {

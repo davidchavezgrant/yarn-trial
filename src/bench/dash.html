@@ -84,9 +84,12 @@
 	.num { color: var(--ink-2); }
 	tr.mrow { cursor: pointer; }
 	tr.mrow:hover td { background: rgba(255, 255, 255, 0.035); }
+	/* Explore rows: faint aqua wash so the two board sections read apart at a glance.
+	   Subtler than the hover wash, which outranks it (specificity), so hover still reads. */
+	tr.exp-row td { background: rgba(25, 158, 112, 0.05); }
 	td.arm .dn { color: var(--ink); }
 	td.arm .chips { margin-top: 3px; }
-	td.treecell { text-align: right; white-space: nowrap; }
+	td.treecell { text-align: center; white-space: nowrap; }
 	td.task, td.target { color: var(--muted); max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 	/* row detail: the appmap + the run's path through it */
@@ -171,12 +174,12 @@
 <body>
 <header>
 	<h1><span id="conn"></span>bench dash</h1>
-	<span class="meta" id="metaline">connecting…</span>
+	<span class="meta" id="metaline">Connecting…</span>
 	<div class="hero">
-		<div class="tile"><div class="v" id="h-collected">–</div><div class="k">collected / submitted</div></div>
-		<div class="tile"><div class="v" id="h-live">–</div><div class="k">running · queued</div></div>
-		<div class="tile"><div class="v" id="h-success">–</div><div class="k">successes</div></div>
-		<div class="tile"><div class="v" id="h-cost">–</div><div class="k">est. spend</div></div>
+		<div class="tile"><div class="v" id="h-submitted">–</div><div class="k">Submitted / Planned</div></div>
+		<div class="tile"><div class="v" id="h-live">–</div><div class="k">Running · Queued</div></div>
+		<div class="tile"><div class="v" id="h-collected">–</div><div class="k">Collected</div><div class="k" id="h-success"></div></div>
+		<div class="tile"><div class="v" id="h-cost">–</div><div class="k">Est. Spend</div></div>
 	</div>
 </header>
 <main>
@@ -188,7 +191,7 @@
 		<div class="peekpanel" id="peek-panel">
 			<div class="peekbar">
 				<span class="name" id="peek-host"></span>
-				<span class="meta" id="peek-status">connecting…</span>
+				<span class="meta" id="peek-status">Connecting…</span>
 				<button class="btnv" data-peekfull data-tip="fullscreen">⛶</button>
 				<button class="btnv" data-peekstop data-tip="stop peeking">✕</button>
 			</div>
@@ -204,17 +207,17 @@
 	</section>
 
 	<section class="grid2">
-		<div class="card"><h2>Phase 1 — discovery per backend</h2><div class="sub">controls seen / actuated / dismissed per explore arm — the leaner-vs-blinder question</div><div id="chart-explore"></div></div>
-		<div class="card"><h2>Task outcomes by arm</h2><div class="sub">collected runs by verdict; pending = submitted, not yet collected</div><div id="chart-outcomes"></div></div>
-		<div class="card"><h2>Grounding effect — steps x̄</h2><div class="sub">grounded vs ungrounded, per backend (phase 2 core)</div><div id="chart-steps"></div></div>
-		<div class="card"><h2>Grounding effect — output tokens x̄</h2><div class="sub">same arms, token cost of going in blind</div><div id="chart-tokens"></div></div>
-		<div class="card"><h2>Attention — offered vs shown</h2><div class="sub">mean interactive elements observed vs list lines rendered into the prompt</div><div id="chart-attention"></div></div>
-		<div class="card"><h2>Cumulative est. cost</h2><div class="sub" id="cost-sub"></div><div id="chart-cost"></div></div>
+		<div class="card"><h2>Phase 1 — Discovery per Backend</h2><div class="sub">controls seen / actuated / dismissed per Explore arm — the leaner-vs-blinder question</div><div id="chart-explore"></div></div>
+		<div class="card"><h2>Task Outcomes by Arm</h2><div class="sub">collected runs by verdict; pending = submitted, not yet collected</div><div id="chart-outcomes"></div></div>
+		<div class="card"><h2>Explore Effect — Steps x̄</h2><div class="sub">explored vs unexplored, per backend (phase 2 core)</div><div id="chart-steps"></div></div>
+		<div class="card"><h2>Explore Effect — Output Tokens x̄</h2><div class="sub">same arms, token cost of going in blind</div><div id="chart-tokens"></div></div>
+		<div class="card"><h2>Attention — Offered vs Shown</h2><div class="sub">mean interactive elements observed vs list lines rendered into the prompt</div><div id="chart-attention"></div></div>
+		<div class="card"><h2>Cumulative Est. Cost</h2><div class="sub" id="cost-sub"></div><div id="chart-cost"></div></div>
 		<div class="card"><h2>Judge</h2><div class="sub">offline adversarial re-grade; disagreements with self-report are the finding</div><div id="judge"></div></div>
 	</section>
 
 	<section class="card">
-		<h2>Findings so far</h2>
+		<h2>Findings So Far</h2>
 		<div class="sub" id="narrative-sub">model-written commentary on the live rollups — verify against the report before quoting anywhere</div>
 		<div id="narrative" class="empty">the narrator writes its first note once something collects</div>
 	</section>
@@ -227,7 +230,7 @@
 <div id="treeModal">
 	<div class="tm-bar">
 		<b id="tm-title"></b><span class="meta" id="tm-sub"></span>
-		<button class="btnv" id="tm-close" style="margin-left:auto">close ✕</button>
+		<button class="btnv" id="tm-close" style="margin-left:auto">Close ✕</button>
 	</div>
 	<div class="tm-body" id="tm-body"></div>
 </div>
@@ -251,12 +254,16 @@ const OUTCOME_COLORS = {
 };
 const fmtMoney = (n) => n < 0.01 && n > 0 ? "$" + n.toFixed(4) : "$" + n.toFixed(2);
 // Seconds stay visible past the hour mark — they are what makes a live ticker read as live.
+// Floor the seconds component everywhere: rounding rolled 59.5s over to "60s" and "1m60s".
 const fmtDur = (s) => s == null ? "–"
 	: s >= 3600 ? Math.floor(s / 3600) + "h" + String(Math.floor(s % 3600 / 60)).padStart(2, "0") + "m" + String(Math.floor(s % 60)).padStart(2, "0") + "s"
-	: s >= 60 ? Math.floor(s / 60) + "m" + String(Math.round(s % 60)).padStart(2, "0") + "s" : Math.round(s) + "s";
+	: s >= 60 ? Math.floor(s / 60) + "m" + String(Math.floor(s % 60)).padStart(2, "0") + "s" : Math.floor(s) + "s";
 const fmtNum = (n) => n == null ? "–" : Number.isInteger(n) ? String(n) : n >= 100 ? String(Math.round(n)) : n.toFixed(1);
 const fmtK = (n) => n == null ? "–" : n >= 10000 ? (n / 1000).toFixed(0) + "k" : n >= 1000 ? (n / 1000).toFixed(1) + "k" : fmtNum(n);
 const hhmm = (iso) => { const d = new Date(iso); return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); };
+// Wire values (statuses, failure kinds, fleet states) render Title Case but are COMPARED
+// lowercase everywhere — capitalize at paint time only, never in a data-field check.
+const statusLabel = (s) => String(s).split("-").map((w) => w ? w[0].toUpperCase() + w.slice(1) : w).join(" ");
 
 // var, not let: top-level var binds to window, so a debugger (or a test driving the page)
 // can inject a synthetic state and call render() by hand.
@@ -376,22 +383,16 @@ function stepLine(points, color, opts = {}) {
 function statusChip(e, rowKey, selected) {
 	const color = e.status === "running" ? SERIES[0] : e.status === "queued" ? "#898781" :
 		e.status === "awaiting-collect" ? STATUS.warning : OUTCOME_COLORS[e.status] || "#898781";
+	// Chips are minimal on purpose: dot + Status (+ the ticking elapsed while Running) —
+	// per-run detail lives in the tooltip and the row dropdown, not on the chip line.
 	// Running chips carry a js-elapsed span so the 1s ticker advances them between SSE
-	// pushes — a static "running 22m43s" that jumps every 20s reads as frozen.
+	// pushes — a static "Running 22m43s" that jumps every 20s reads as frozen.
 	let label = e.status === "running"
-		? `running ${elapsedSpan(e.elapsedSec)}`
-		: esc(e.status);
+		? `Running ${elapsedSpan(e.elapsedSec)}`
+		: esc(statusLabel(e.status));
 	if (e.status === "queued" && e.queuePosition) label += " #" + e.queuePosition;
-	if (e.stalled) label += " ⚠stalled";
-	// Collected chips answer "what did this run amount to": steps, how long it ran
-	// (job-record run time, else the run log's own clock), tokens out, and what it cost.
-	const ranFor = e.runSec ?? e.elapsedSec;
-	const extra = e.collected
-		? [e.steps != null ? `${e.steps} steps` : "", ranFor != null ? fmtDur(ranFor) : "",
-			e.outputTokens != null ? `${fmtK(e.outputTokens)} tok` : "", e.usd != null ? fmtMoney(e.usd) : ""]
-			.filter(Boolean).map((p) => ` · ${p}`).join("")
-		: "";
-	const judge = e.judgeTrajectory ? ` · judge ${e.judgeTrajectory[0]}` : "";
+	if (e.stalled) label += " ⚠ Stalled";
+	const judge = e.judgeTrajectory ? ` · Judge ${e.judgeTrajectory[0]}` : "";
 	// Tooltip economics: raw token classes are provider-shaped (Anthropic's input excludes
 	// cache reads, Azure's includes them) — shown per run, never summed across runs.
 	const tok = [
@@ -405,7 +406,7 @@ function statusChip(e, rowKey, selected) {
 		: "";
 	const open = rowKey ? ` data-row="${esc(rowKey)}" data-job="${esc(e.jobId)}"` : "";
 	return `<span class="chip${selected ? " sel" : ""}"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${e.note ? "\n" + esc(e.note) : ""}\nclick to view on the map${esc(econ)}">` +
-		`<span class="dot" style="background:${color}"></span>${esc(e.host)} · ${label}${esc(extra)}${esc(judge)}</span>`;
+		`<span class="dot" style="background:${color}"></span>${label}${esc(judge)}</span>`;
 }
 
 /** An elapsed readout the 1s ticker keeps advancing. base = seconds as of receivedAt. */
@@ -416,24 +417,24 @@ function elapsedSpan(sec) {
 function renderFleet() {
 	const f = state.fleet;
 	if (!f.rows.length) {
-		$("fleet").innerHTML = `<div class="card empty">fleet: ${esc(f.error || "no poll yet")}</div>`;
+		$("fleet").innerHTML = `<div class="card empty">Fleet: ${esc(f.error || "no poll yet")}</div>`;
 		return;
 	}
 	$("fleet").innerHTML = f.rows.map((r) => {
 		const color = !r.reachable ? STATUS.critical : r.state === "busy" ? SERIES[0] : r.state === "idle" ? STATUS.good : STATUS.warning;
 		const busy = r.state === "busy"
 			? `<div class="row"><span class="num">${esc(r.app || "?")}</span><span class="meta">${elapsedSpan(r.elapsedSec)}</span></div>
-			   <div class="q">${esc(r.jobId || "")}${r.stalled ? ' <span class="warn">⚠ stalled ' + fmtDur(r.logSilenceSec) + ' silent</span>' : ""}</div>`
+			   <div class="q">${esc(r.jobId || "")}${r.stalled ? ' <span class="warn">⚠ Stalled ' + fmtDur(r.logSilenceSec) + ' silent</span>' : ""}</div>`
 			: "";
 		const queue = r.queue && r.queue.length
-			? `<div class="q">queue: ${r.queue.map((q) => esc(armOf(q.jobId) || q.app || q.jobId)).join(" → ")}</div>` : "";
-		const tcc = r.tccOk === false ? `<div class="warn">no TCC grants</div>` : "";
+			? `<div class="q">Queue: ${r.queue.map((q) => esc(armOf(q.jobId) || q.app || q.jobId)).join(" → ")}</div>` : "";
+		const tcc = r.tccOk === false ? `<div class="warn">No TCC grants</div>` : "";
 		// A peeked host that flips unreachable must keep its stop button.
 		const peekBtn = (r.reachable || peekState.host === r.name)
-			? `<button class="btnv" data-peek="${esc(r.name)}" data-tip="view-only live stream of this Mac's Chromium target (CDP screencast over the ssh tunnel) — one host at a time">${peekState.host === r.name ? "⏹ stop" : "▶ peek"}</button>`
+			? `<button class="btnv" data-peek="${esc(r.name)}" data-tip="view-only live stream of this Mac's Chromium target (CDP screencast over the ssh tunnel) — one host at a time">${peekState.host === r.name ? "⏹ Stop" : "▶ Peek"}</button>`
 			: "";
 		return `<div class="host"><div class="row"><span class="dot" style="background:${color}"></span><span class="name">${esc(r.name)}</span>
-			<span class="meta">${esc(r.reachable ? r.state : "unreachable")}${r.operator ? " · " + esc(r.operator) : ""}</span>${peekBtn}</div>
+			<span class="meta">${esc(statusLabel(r.reachable ? r.state : "unreachable"))}${r.operator ? " · " + esc(r.operator) : ""}</span>${peekBtn}</div>
 			${busy}${queue}${tcc}${r.reason ? `<div class="q">${esc(r.reason)}</div>` : ""}</div>`;
 	}).join("");
 }
@@ -451,26 +452,26 @@ function armOf(jobId) {
 // a column.
 const th = (label, tip) => `<th${tip ? ` data-tip="${esc(tip)}"` : ""}>${label}</th>`;
 const NAME_TIP = "hover for the arm id, flags and the decision this cell informs · click to expand the appmap and the run's path · click a run chip to view that run";
-const TASK_HEAD = "<tr>" + th("name", NAME_TIP) +
-	th("perceives", "what the agent SEES: AX tree or DOM elements, plus screenshots (vision) — or pixels only") +
-	th("acts", "what injects the input: AX (cua driver) or CDP") +
-	th("target", "app or site the run drives") +
-	th("task", "the goal-only prompt the run was given") + th("model", "what actually ran, off the run logs") +
-	th("ok", "succeeded / collected") +
-	th("steps", "mean actions per run") + th("time", "mean wall-clock per run") +
-	th("out-tok", "mean output tokens per run") + th("est $", "published-rate estimate across collected runs — not an invoice") +
-	th("map", "the appmap as a full node-link tree — edge thickness = traversal heat, blue = the run's path") + "</tr>";
-const EXPLORE_HEAD = "<tr>" + th("name", NAME_TIP) +
-	th("perceives", "what the pass SEES while exploring: AX tree or DOM elements, plus screenshots — or pixels only") +
-	th("acts", "what injects the input: AX (cua driver) or CDP") +
-	th("target", "app or site the pass explored") +
-	th("task") + th("model", "what actually ran, off the run logs") +
-	th("actions", "actions the pass took (elapsed on hover)") +
-	th("controls seen / act / dism", "of every control the pass observed (seen), how many it operated (actuated) vs swept off the frontier without operating (dismissed) — the pass ends when the frontier empties, and dismissing is a legitimate way to empty it") +
-	th("surfaces", "stamp coverage: distinct screens/panels/tabs/dialogs controls were SEEN on during the pass — what you navigate BETWEEN; controls live ON them. The distilled appmap graph (the map column) typically keeps fewer surface nodes than this") +
-	th("nodes", "appmap graph nodes (edges on hover)") +
-	th("ambig", "settings editable at two scopes under one identity (same settingKey, different scope) — the wrong-scope trap; each gets a prompt warning") +
-	th("map", "the appmap this pass produced, as a full node-link tree — edge thickness = traversal heat across collected runs") + "</tr>";
+const TASK_HEAD = "<tr>" + th("Name", NAME_TIP) +
+	th("Perceives", "what the agent SEES: AX tree or DOM elements, plus vision — or pixels only") +
+	th("Acts", "what injects the input: AX (cua driver) or CDP") +
+	th("Target", "app or site the run drives") +
+	th("Task", "the goal-only prompt the run was given") + th("Model", "what actually ran, off the run logs") +
+	th("OK", "succeeded / collected") +
+	th("Steps", "mean actions per run") + th("Time", "mean wall-clock per run") +
+	th("Out-Tok", "mean output tokens per run") + th("Est $", "published-rate estimate across collected runs — not an invoice") +
+	th("Map", "the appmap as a full node-link tree — edge thickness = traversal heat, blue = the run's path") + "</tr>";
+const EXPLORE_HEAD = "<tr>" + th("Name", NAME_TIP) +
+	th("Perceives", "what the pass SEES while exploring: AX tree or DOM elements, plus vision — or pixels only") +
+	th("Acts", "what injects the input: AX (cua driver) or CDP") +
+	th("Target", "app or site the pass explored") +
+	th("Task") + th("Model", "what actually ran, off the run logs") +
+	th("Actions", "actions the pass took (elapsed on hover)") +
+	th("Controls Seen / Act / Dism", "of every control the pass observed (seen), how many it operated (actuated) vs swept off the frontier without operating (dismissed) — the pass ends when the frontier empties, and dismissing is a legitimate way to empty it") +
+	th("Surfaces", "stamp coverage: distinct screens/panels/tabs/dialogs controls were SEEN on during the pass — what you navigate BETWEEN; controls live ON them. The distilled appmap graph (the map column) typically keeps fewer surface nodes than this") +
+	th("Nodes", "appmap graph nodes (edges on hover)") +
+	th("Ambig", "settings editable at two scopes under one identity (same settingKey, different scope) — the wrong-scope trap; each gets a prompt warning") +
+	th("Map", "the appmap this pass produced, as a full node-link tree — edge thickness = traversal heat across collected runs") + "</tr>";
 
 // Friendly names are DERIVED from the arm's structure (kind + flags + phase), not
 // hand-mapped per id, so new matrix cells name themselves. The id stays in the hover —
@@ -514,7 +515,7 @@ function armCell(a, p, key) {
 	const taskCell = a.task
 		? `<td class="task" data-tip="${esc(a.task)}">${esc(a.task)}</td>`
 		: a.kind === "explore"
-			? `<td class="task" data-tip="grounding pass — no task prompt. The objective is coverage: operate every safe control until the frontier of un-operated controls empties, then write the appmap (docs/appmaps/)">Explore</td>`
+			? `<td class="task" data-tip="Explore pass — no task prompt. The objective is coverage: operate every safe control until the frontier of un-operated controls empties, then write the appmap (docs/appmaps/)">Explore</td>`
 			: `<td class="task">–</td>`;
 	return `<td class="arm" data-tip="${esc(tip)}"><span class="dn">${esc(displayName(a))}</span><div class="chips">${p.entries.map((e) => statusChip(e, key, e.jobId === sel)).join("")}</div></td>
 		<td class="num">${esc(a.perception || "–")}</td>
@@ -537,10 +538,16 @@ function taskRow(a, p) {
 function exploreRow(a, p) {
 	const key = rowId(a, p);
 	const ex = p.explore || {};
+	// A vision-only pass (--no-ax) has no element list to count against, so its tallies are
+	// self-reported — flagged so they never read as mechanically counted. Flag sniffing is
+	// display-only here; the arm's dispatch stays the authority for what actually ran.
+	const declared = a.flags && a.flags.includes("--no-ax")
+		? ` <span data-tip="DECLARED — the vision-only pass has no element list to count against, so these tallies are the model's own report; not comparable like-for-like with mechanically counted passes.">⚠</span>`
+		: "";
 	const controls = ex.controlsSeen != null
-		? `<span data-tip="seen ${ex.controlsSeen} · actuated ${ex.controlsActuated} · dismissed ${ex.controlsDismissed}">${ex.controlsSeen} / ${ex.controlsActuated} / ${ex.controlsDismissed}</span>`
+		? `<span data-tip="seen ${ex.controlsSeen} · actuated ${ex.controlsActuated} · dismissed ${ex.controlsDismissed}">${ex.controlsSeen} / ${ex.controlsActuated} / ${ex.controlsDismissed}</span>${declared}`
 		: "–";
-	return `<tr class="mrow" data-toggle="${esc(key)}">${armCell(a, p, key)}
+	return `<tr class="mrow exp-row" data-toggle="${esc(key)}">${armCell(a, p, key)}
 		<td class="num"><span data-tip="${esc(ex.elapsed ? "elapsed " + ex.elapsed : "")}">${fmtNum(ex.actions)}</span></td>
 		<td class="num">${controls}</td>
 		<td class="num">${fmtNum(ex.surfaces)}</td>
@@ -795,7 +802,7 @@ function renderBoard() {
 	for (const ph of phases) {
 		const arms = state.arms.filter((a) => a.phase === ph && a.kind !== "compile" && a.passes.length);
 		if (!arms.length) continue;
-		html += `<tr class="phase-h"><td colspan="12">phase ${ph}</td></tr>`;
+		html += `<tr class="phase-h"><td colspan="12">Phase ${ph}</td></tr>`;
 		const explores = arms.filter((a) => a.kind === "explore");
 		const tasks = arms.filter((a) => a.kind !== "explore");
 		if (explores.length) html += EXPLORE_HEAD + timelineRows(explores).map(({ a, p }) => exploreRow(a, p)).join("");
@@ -830,7 +837,7 @@ const OFFMATRIX_TIP = "the matrix shows only manifest entries; off-matrix jobs s
 function renderOffMatrix() {
 	// Empty strip = empty container: no reserved space when everything on the fleet is a cell.
 	$("offmatrix").innerHTML = offMatrixJobs().map((j) =>
-		`<div class="q" data-tip="${esc(OFFMATRIX_TIP)}">⚠ off-matrix: ${esc(j.host)} · ${esc(j.jobId)}${j.app ? ` (${esc(j.app)})` : ""} · ${j.queued ? "queued" : `running ${elapsedSpan(j.elapsedSec)}`} — dispatched outside \`bench phase\`, not a benchmark cell</div>`,
+		`<div class="q" data-tip="${esc(OFFMATRIX_TIP)}">⚠ off-matrix: ${esc(j.host)} · ${esc(j.jobId)}${j.app ? ` (${esc(j.app)})` : ""} · ${j.queued ? "Queued" : `Running ${elapsedSpan(j.elapsedSec)}`} — dispatched outside \`bench phase\`, not a benchmark cell</div>`,
 	).join("");
 }
 
@@ -847,9 +854,9 @@ function renderExplore() {
 		if (!a.perception) return a.id.replace("p1-explore-", "");
 		const full = a.url ? `${a.perception} (web)` : a.perception;
 		// Compact only when it overruns the column, and compact the LONGEST words first —
-		// the wording now comes from matrix.ts perceptionLine ("AX tree + DOM attrs +
-		// screenshots"), which is more informative and therefore longer than the old copy.
-		return full.length <= 20 ? full : full.replace(" + screenshots", "+shots").replace("AX tree", "AX").replace(" attrs", "");
+		// the wording comes from perceptionLine with "screenshots" rendered as "vision"
+		// (dash.ts), more informative and therefore longer than the old copy.
+		return full.length <= 20 ? full : full.replace(" + vision", "+vis").replace("AX tree", "AX").replace(" attrs", "");
 	};
 	const groups = arms.flatMap((a) => a.passes.filter((p) => p.explore && p.explore.controlsSeen != null).map((p) => ({
 		label: exploreLabel(a) + (p.model !== "(default)" ? " · " + p.model : ""),
@@ -858,7 +865,7 @@ function renderExplore() {
 	// seen/actuated/dismissed as green/blue/red (found / operated / skipped) — green and red
 	// are never adjacent (blue sits between) and the bars carry direct labels.
 	$("chart-explore").innerHTML = vBars(groups, [
-		{ name: "seen", color: SERIES[2] }, { name: "actuated", color: SERIES[0] }, { name: "dismissed", color: RED },
+		{ name: "Seen", color: SERIES[2] }, { name: "Actuated", color: SERIES[0] }, { name: "Dismissed", color: RED },
 	]);
 }
 
@@ -870,19 +877,21 @@ function renderOutcomes() {
 			if (!p.submitted) continue;
 			const kinds = {};
 			for (const e of p.entries) if (e.collected && !e.success) kinds[e.failureKind || "failed"] = (kinds[e.failureKind || "failed"] || 0) + 1;
+			// statusLabel on BOTH the segs and the series list below: hStack matches them by
+			// name, so the render-time casing must be applied on both sides identically.
 			rows.push({
 				label: a.id + (p.model !== "(default)" ? " · " + p.model : ""),
 				segs: [
-					{ name: "succeeded", color: OUTCOME_COLORS.succeeded, value: p.successes },
-					...Object.entries(kinds).map(([k, v]) => ({ name: k, color: OUTCOME_COLORS[k] || STATUS.critical, value: v })),
-					{ name: "pending", color: OUTCOME_COLORS.pending, value: p.submitted - p.collected },
+					{ name: statusLabel("succeeded"), color: OUTCOME_COLORS.succeeded, value: p.successes },
+					...Object.entries(kinds).map(([k, v]) => ({ name: statusLabel(k), color: OUTCOME_COLORS[k] || STATUS.critical, value: v })),
+					{ name: statusLabel("pending"), color: OUTCOME_COLORS.pending, value: p.submitted - p.collected },
 				],
 			});
 		}
 	}
 	if (!rows.length) { $("chart-outcomes").innerHTML = `<div class="empty">no task runs submitted yet</div>`; return; }
 	const names = ["succeeded", "gave-up", "unready", "hinted-refused", "stopped", "crashed", "failed", "pending"];
-	$("chart-outcomes").innerHTML = hStack(rows, names.map((n) => ({ name: n, color: OUTCOME_COLORS[n] })), { padL: 170, fmt: (v) => String(Math.round(v)) });
+	$("chart-outcomes").innerHTML = hStack(rows, names.map((n) => ({ name: statusLabel(n), color: OUTCOME_COLORS[n] })), { padL: 170, fmt: (v) => String(Math.round(v)) });
 }
 
 function groundingChart(el, pick, fmt) {
@@ -893,14 +902,14 @@ function groundingChart(el, pick, fmt) {
 	};
 	const groups = ["ax", "cdp"].map((b) => ({ label: b, values: [cell(b, true), cell(b, false)] }));
 	if (!groups.some((g) => g.values.some((v) => v != null))) { $(el).innerHTML = `<div class="empty">waiting for phase-2 core runs…</div>`; return; }
-	$(el).innerHTML = vBars(groups, [{ name: "grounded", color: SERIES[0] }, { name: "ungrounded", color: SERIES[1] }], { fmt });
+	$(el).innerHTML = vBars(groups, [{ name: "Explored", color: SERIES[0] }, { name: "Unexplored", color: SERIES[1] }], { fmt });
 }
 
 function renderAttention() {
 	const arms = state.arms.filter((a) => /^p2-(ax|cdp)-(un)?grounded$/.test(a.id) && a.passes.some((p) => p.meanObsNodes != null));
 	if (!arms.length) { $("chart-attention").innerHTML = `<div class="empty">waiting for phase-2 runs…</div>`; return; }
 	const groups = arms.map((a) => ({ label: a.id.replace("p2-", ""), values: [a.passes[0].meanObsNodes, a.passes[0].meanShownLines] }));
-	$("chart-attention").innerHTML = vBars(groups, [{ name: "observed nodes", color: SERIES[0] }, { name: "shown to model", color: SERIES[1] }]);
+	$("chart-attention").innerHTML = vBars(groups, [{ name: "Observed Nodes", color: SERIES[0] }, { name: "Shown to Model", color: SERIES[1] }]);
 }
 
 function renderCost() {
@@ -921,7 +930,7 @@ function renderJudge() {
 		<span class="chip"><span class="dot" style="background:${STATUS.good}"></span>PASS ${t.pass}</span>
 		<span class="chip"><span class="dot" style="background:${STATUS.critical}"></span>FAIL ${t.fail}</span>
 		<span class="chip"><span class="dot" style="background:${STATUS.warning}"></span>UNPROVEN ${t.unproven}</span></div>`;
-	let html = `<div class="sub">${j.judged} run(s) judged</div>` + line("trajectory", j.trajectory) + line("visual", j.visual);
+	let html = `<div class="sub">${j.judged} run(s) judged</div>` + line("Trajectory", j.trajectory) + line("Visual", j.visual);
 	html += `<div class="sub" style="margin-top:10px">disagreements</div>`;
 	html += j.disagreements.length
 		? j.disagreements.map((d) => `<div class="q">⚠ <b>${esc(d.armId)}</b> ${esc(d.jobId)}: self-report ${d.success} vs judge ${esc(d.judgeTrajectory || "?")}${d.judgeScope ? " · scope " + esc(d.judgeScope) : ""}</div>`).join("")
@@ -949,10 +958,11 @@ function renderEvents() {
 function render() {
 	if (!state) return;
 	const p = state.progress;
-	$("h-collected").textContent = `${p.collected} / ${p.submitted}`;
+	$("h-submitted").textContent = `${p.submitted} / ${p.planned}`;
 	$("h-live").textContent = `${p.running} · ${p.queued}`;
-	$("h-success").textContent = String(p.successes);
-	$("metaline").textContent = `${state.date} · fleet ${state.fleet.polledAt ? hhmm(state.fleet.polledAt) : "–"} · ${state.autoCollect ? "auto-collect on" : "collect off (pure reader)"} · updated ${hhmm(state.generatedAt)}`;
+	$("h-collected").textContent = String(p.collected);
+	$("h-success").textContent = `${p.successes} OK`;
+	$("metaline").textContent = `${state.date} · Fleet ${state.fleet.polledAt ? hhmm(state.fleet.polledAt) : "–"} · ${state.autoCollect ? "Auto-collect on" : "Collect off (pure reader)"} · Updated ${hhmm(state.generatedAt)}`;
 	renderFleet(); renderBoard(); renderOffMatrix(); renderExplore(); renderOutcomes();
 	groundingChart("chart-steps", (x) => x.meanSteps, fmtNum);
 	groundingChart("chart-tokens", (x) => x.meanOutputTokens, fmtK);
@@ -1013,7 +1023,7 @@ function connectPeek() {
 	ws.binaryType = "blob";
 	peekState.ws = ws;
 	peekState.lastMsgAt = Date.now();
-	setPeekStatus(peekState.retry ? `reconnecting (attempt ${peekState.retry + 1})…` : "connecting…");
+	setPeekStatus(peekState.retry ? `Reconnecting (attempt ${peekState.retry + 1})…` : "Connecting…");
 	ws.onmessage = (ev) => {
 		if (peekState.gen !== myGen) return;
 		peekState.lastMsgAt = Date.now();
@@ -1066,7 +1076,7 @@ function handlePeekClose(ev) {
 	if (!peekState.host) return;
 	peekState.retry++;
 	const delay = Math.min(15000, 1000 * 2 ** (peekState.retry - 1)); // 1s,2s,4s,8s,15s cap, indefinite
-	setPeekStatus(`⏳ ${ev.reason || "connection lost"} — reconnecting in ${Math.round(delay / 1000)}s (attempt ${peekState.retry})…`);
+	setPeekStatus(`⏳ ${ev.reason || "Connection lost"} — reconnecting in ${Math.round(delay / 1000)}s (attempt ${peekState.retry})…`);
 	peekState.retryTimer = setTimeout(() => { if (peekState.gen === myGen && peekState.host) connectPeek(); }, delay);
 }
 
@@ -1088,7 +1098,7 @@ function togglePeek(host) {
 	// doesn't resurrect a stale peek.
 	sessionStorage.setItem("peekHost", host);
 	showPanel();
-	setPeekStatus("connecting…");
+	setPeekStatus("Connecting…");
 	connectPeek();
 	render();                                                 // update button labels
 }
@@ -1099,7 +1109,7 @@ function togglePeek(host) {
 peekState.watchdog = setInterval(() => {
 	if (!peekState.host || !peekState.ws || peekState.ws.readyState !== WebSocket.OPEN) return;
 	if (Date.now() - peekState.lastMsgAt > 12000) {
-		setPeekStatus("⏳ stalled — no data for 12s, reconnecting…");
+		setPeekStatus("⏳ Stalled — no data for 12s, reconnecting…");
 		try { peekState.ws.close(); } catch {}                // triggers handlePeekClose → backoff loop
 	}
 }, 2000);
@@ -1140,7 +1150,7 @@ es.onerror = () => { esErrored = true; $("conn").classList.remove("ok"); };
 // within the server's 30s idle linger rejoins the live session with zero tunnel/engine
 // setup — both reload boundaries become non-events.
 const resumeHost = sessionStorage.getItem("peekHost");
-if (resumeHost) { peekState.host = resumeHost; showPanel(); setPeekStatus("resuming…"); connectPeek(); }
+if (resumeHost) { peekState.host = resumeHost; showPanel(); setPeekStatus("Resuming…"); connectPeek(); }
 
 // Elapsed tickers between pushes: every js-elapsed span (fleet cards AND matrix run chips)
 // advances from the last push's base — the page reads as live even between SSE frames.
