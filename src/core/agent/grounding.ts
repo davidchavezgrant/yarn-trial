@@ -29,6 +29,23 @@ export function loadGrounding(slug: string, backend?: string, task?: string): Gr
 	const variant = `${appmapAxdom()}${appmapVariant()}`;
 	const candidates = [...(backend ? [`${appmapsDir()}/${slug}.${backend}${variant}.md`] : []), `${appmapsDir()}/${slug}${variant}.md`];
 	const explorePath = candidates.find((c) => fs.existsSync(c)) ?? candidates[candidates.length - 1];
+	/**
+	 * Taking the plain slug when a BACKEND-specific one was asked for is legitimate (legacy and
+	 * hand-curated maps live there) and silent — which is how it becomes a footgun.
+	 *
+	 * The default backends differ between the two commands: `explore` defaults an app target to
+	 * ax, because it has no cdp→ax fallback and would hard-fail on a native app; the task agent
+	 * defaults to cdp, because it does. So the README's own sequence — `./run explore "Yarn"`
+	 * then `./run "<task>" "Yarn"` — writes `yarn.ax.*` and then looks for `yarn.cdp.*`, lands
+	 * here, and grounds the run on whatever stale plain-slug map happens to be on disk. Maps are
+	 * NOT backend-portable: ax and cdp name the same surface `editor` and `draft-editor`, and a
+	 * grounded run resolves controls by name.
+	 */
+	if (backend && explorePath !== candidates[0] && fs.existsSync(explorePath))
+		console.log(
+			`WARNING: no ${backend} appmap for ${slug} — grounding on ${explorePath.split("/").pop()}, which a different backend wrote. ` +
+				`Surface and control names are not portable across backends; run \`./run explore "<app>" --backend ${backend}\` for a matching map.`,
+		);
 	const recipePath = `${recipesDir()}/${slug}.md`;
 	const useRecipe = process.env.USE_RECIPE ? fs.existsSync(recipePath) : false;
 
