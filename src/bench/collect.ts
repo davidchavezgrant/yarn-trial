@@ -490,8 +490,11 @@ export function technicalFailure(state: string, metrics: RunMetrics, arm: Arm | 
 	if (metrics.failureKind === "crashed") return { kind: "crashed", detail: "terminal with no run log — died before writing anything measurable" };
 	// Explore arms have no run log to miss; their primary artifact is the appmap, and
 	// failureKind is not computed for them at all.
-	if (arm?.kind === "explore" && state === "failed" && notes.some((n) => n.startsWith("no appmap at")))
-		return { kind: "crashed", detail: "explore failed before committing a map — no grounding produced" };
+	// An explore arm's product is a PUBLISHED map — that is what the next phase reads. A pass that
+	// wrote only its run-local copy (demoted) or wrote nothing at all produced no grounding, and
+	// either way the sample must be retried rather than counted.
+	if (arm?.kind === "explore" && notes.some((n) => n.startsWith("no appmap at") || n.startsWith("map not published")))
+		return { kind: "crashed", detail: "explore produced no published map — nothing for a later phase to ground on" };
 
 	return undefined;
 }
@@ -537,8 +540,14 @@ export function evictFailedRun(entry: ManifestEntry, outRoot: string, log: (line
 	return { ...entry, note: entry.note ? `${entry.note}; ${why}` : why };
 }
 
-/** Metrics for one terminal entry, from whatever artifacts landed. Missing files become notes. */
-function collectEntry(entry: ManifestEntry, job: JobRecord | undefined, dataDir: string, state: string, benchRoot?: string): ManifestEntry {
+/**
+ * Metrics for one terminal entry, from whatever artifacts landed. Missing files become notes.
+ *
+ * Exported for tests: the 2026-08-01 miscount lived in the SEAM between writeArtifacts and
+ * technicalFailure, and a unit test that feeds the classifier a note directly — which the
+ * original did — passes happily while production does the wrong thing.
+ */
+export function collectEntry(entry: ManifestEntry, job: JobRecord | undefined, dataDir: string, state: string, benchRoot?: string): ManifestEntry {
 	const arm = armById(entry.armId);
 	const notes: string[] = [];
 	let metrics: RunMetrics = job ? jobTiming(job) : {};
@@ -565,6 +574,23 @@ function collectEntry(entry: ManifestEntry, job: JobRecord | undefined, dataDir:
 		const derived = path.join(dataDir, `docs/appmaps/${armAppmapSlug(arm)}.md`);
 		const recorded = job?.artifacts?.appmap ? path.join(dataDir, job.artifacts.appmap) : undefined;
 		const md = fs.existsSync(own) ? own : recorded && fs.existsSync(recorded) ? recorded : derived;
+		/**
+		 * DID IT PUBLISH? — not "is there a map", which is a different and much weaker question.
+		 *
+		 * A DEMOTED pass (one that never swept its frontier, or produced under half the committed
+		 * node count) writes its map to the RUN FOLDER and is deliberately withheld from
+		 * docs/appmaps. So `own` exists for a pass that produced nothing usable, and since `own`
+		 * is preferred above, the "no appmap at" note can no longer fire. That silenced
+		 * `technicalFailure` for exactly the runs it exists to catch: on 2026-08-01
+		 * p1-explore-no-vision and p1-explore-ax-noaxdom published nothing and were counted as
+		 * delivered samples, so re-running the phase would not have replaced them.
+		 *
+		 * Publication is what the next phase consumes, so publication is the test. Byte equality
+		 * rather than mere existence, because docs/appmaps may hold an OLDER map for this slug —
+		 * p1-explore-no-vision's target still held the previous day's file.
+		 */
+		const published = fs.existsSync(derived) && fs.existsSync(own) && fs.readFileSync(derived, "utf8") === fs.readFileSync(own, "utf8");
+		if (!published && fs.existsSync(own)) notes.push(`map not published to ${path.relative(dataDir, derived)} — pass was demoted or superseded`);
 		const ownGraph = runFile(entry.jobId, RUN_FILES.appmapGraph, dataOut);
 		const recordedGraph = job?.artifacts?.appmapGraph ? path.join(dataDir, job.artifacts.appmapGraph) : undefined;
 		const graphFile = md === own && fs.existsSync(ownGraph) ? ownGraph : recordedGraph && fs.existsSync(recordedGraph) ? recordedGraph : md.replace(/\.md$/, ".json");

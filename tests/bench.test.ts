@@ -5,14 +5,14 @@ import path from "node:path";
 import { test } from "node:test";
 import { auditTaskPrompt } from "../src/core/harness.js";
 import type { JobRecord } from "../src/remote/runner/jobs.js";
-import { archiveDirFor, collect, expectedProvenance, failureKind, jobTiming, journalScopes, parseAppmapStamp, parseGraphCounts, parseRunMetrics, poisonedHosts, technicalFailure } from "../src/bench/collect.js";
+import { archiveDirFor, collect, collectEntry, expectedProvenance, failureKind, jobTiming, journalScopes, parseAppmapStamp, parseGraphCounts, parseRunMetrics, poisonedHosts, technicalFailure } from "../src/bench/collect.js";
 import { entriesForArm, manifestPath, readManifest, recordSubmissions, submittedCount, type Manifest, type ManifestEntry, updateEntry, writeManifest } from "../src/bench/manifest.js";
 import { BACKENDS, BENCH_PRIMARY_MODEL, MATRIX, armAppmapSlug, armById, armTitle, perceptionLine, phaseArms, phaseRunCount, type Arm } from "../src/bench/matrix.js";
 import type { DispatchOptions } from "../src/remote/control/dispatch.js";
 import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, auditPhase, dateArg, dispatchOptionsFor, findCompileSource, plannedRuns, runPhase } from "../src/bench/orchestrate.js";
 import { renderReport, reportFileName, writeReport } from "../src/bench/report.js";
 import { host, withTemp, withTempAsync } from "./fixtures.js";
-import { ARCHIVE_DIR, archiveRunDir, liveDir, RUN_FILES, runDir } from "../src/paths.js";
+import { ARCHIVE_DIR, RUN_FILES, archiveRunDir, liveDir, runDir, runPath } from "../src/paths.js";
 import { phaseProgress, watchPhase } from "../src/bench/watch.js";
 
 /**
@@ -1405,4 +1405,51 @@ test("watchPhase__NeverTouchesRuns__When__ItGivesUp", async () => {
 	const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "bench", "watch.ts"), "utf8");
 	for (const forbidden of ["stopRemote", "runnerctl", "SIGTERM", "SIGINT", "kill("])
 		assert.equal(src.includes(forbidden), false, `watch.ts must never ${forbidden} — a dead watcher must not kill a run`);
+});
+
+test("technicalFailure__CatchesADemotedExplore__When__NothingWasPublished", () => {
+	// The miscount from 2026-08-01, as a test. p1-explore-no-vision and p1-explore-ax-noaxdom
+	// both published NO map — one left the previous day's file in place, the other wrote none —
+	// yet both were classified non-technical and counted as delivered samples, so re-running the
+	// phase would not have replaced them.
+	//
+	// The cause was an interaction between two changes made hours apart the same day.
+	// writeArtifacts was made to ALWAYS write the run-local appmap.md, including for a DEMOTED
+	// pass (correct: the run folder should record what the pass produced), and collect prefers
+	// that copy — which made the "no appmap at" note this classifier keyed on impossible to emit.
+	//
+	// The product of an explore arm is a PUBLISHED map, because that is what the next phase
+	// reads. So publication is the test.
+	const explore = armById("p1-explore-ax-noaxdom");
+	assert.ok(explore, "fixture arm must exist");
+	assert.equal(technicalFailure("failed", {}, explore, ["map not published to docs/appmaps/yarn.ax.noaxdom.md — pass was demoted or superseded"])?.kind, "crashed");
+	// Still catches the older shape, where nothing was written at all.
+	assert.equal(technicalFailure("failed", {}, explore, ["no appmap at docs/appmaps/yarn.ax.noaxdom.md"])?.kind, "crashed");
+	// A published pass is a result, whatever else the notes say.
+	assert.equal(technicalFailure("done", {}, explore, ["appmap archive failed: disk full"]), undefined);
+});
+
+test("collectEntry__FlagsAnUnpublishedMap__When__TheRunOnlyWroteItsOwnCopy", () => {
+	// End to end through the real collect, because the miscount lived in the SEAM between
+	// writeArtifacts and the classifier — a unit test that feeds the note directly (which the
+	// original did) passes while production silently does the wrong thing.
+	withTemp("collect-pub-", (dir) => {
+		const arm = armById("p1-explore-ax-noaxdom")!;
+		const slug = armAppmapSlug(arm);
+		const jobId = "explore-demoted";
+		const dataOut = path.join(dir, "out");
+		const stamp = "<!-- provenance: explore | app: Yarn | actions: 24 -->\n";
+
+		// The run folder holds a map (a demoted pass writes one); docs/appmaps holds an OLDER,
+		// different file for the same slug — exactly what p1-explore-no-vision left behind.
+		fs.mkdirSync(runDir(jobId, dataOut), { recursive: true });
+		fs.writeFileSync(runPath(jobId, RUN_FILES.appmap, dataOut), `${stamp}demoted pass\n`);
+		fs.mkdirSync(path.join(dir, "docs", "appmaps"), { recursive: true });
+		fs.writeFileSync(path.join(dir, "docs", "appmaps", `${slug}.md`), `${stamp}yesterday's pass\n`);
+
+		const out = collectEntry(entry(arm.id, jobId, { state: "failed" }), undefined, dir, "failed");
+		assert.ok(out.technical, "a pass whose map never reached docs/appmaps produced no grounding");
+		assert.equal(out.technical?.kind, "crashed");
+		assert.match(out.note ?? "", /map not published/);
+	});
 });
