@@ -32,6 +32,8 @@ export const provenanceHeader = (p: {
 	chapters: number;
 	gatedRead?: number;
 	gatedRefused?: number;
+	blackouts?: number;
+	relaunches?: number;
 	usage?: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number; modelCalls: number };
 }): string =>
 	`<!-- provenance: ${p.visionOnly ? "explore-vision" : "explore"} | app: ${p.app} | date: ${new Date().toISOString().slice(0, 10)} | backend: ${p.backend}${p.vision ? "" : " | vision: off"} | actions: ${p.actions} | elapsed: ${p.elapsed}` +
@@ -41,6 +43,9 @@ export const provenanceHeader = (p: {
 	` | findings: ${p.findings} | finds: ${p.findCalls}` +
 	` | controls${p.visionOnly ? " (DECLARED)" : ""}: ${p.actuated} actuated / ${p.dismissed} dismissed / ${p.seen} seen | surfaces: ${p.surfaces} | chapters: ${p.chapters} | stopped: ${p.stopped}` +
 	` | descent: ${DESCENT_ON && !p.visionOnly ? "on" : "off"} | gated: ${p.gatedRead ?? 0} read / ${p.gatedRefused ?? 0} refused` +
+	// Only when nonzero: on the overwhelming majority of passes these are 0/0 and two dead
+	// fields in every header is how a stamp becomes unreadable. Present means it happened.
+	(p.blackouts ? ` | blackouts: ${p.blackouts} | relaunches: ${p.relaunches ?? 0}` : "") +
 	`${p.guidance ? " | operator-guidance: yes" : ""}${p.salvaged ? " | salvaged: session died before finish" : ""} -->\n` +
 	(p.visionOnly
 		? // The declared frontier's known weakness, stated where the numbers are: the model
@@ -128,6 +133,8 @@ export const writeArtifacts = (p: Pass, out: FinishInput, stopped: StopReason, s
 			guidance: p.guidance,
 			salvaged,
 			usage: p.usage,
+			blackouts: p.blackouts,
+			relaunches: p.relaunches,
 			...cov,
 		}) +
 		recovered.cleaned +
@@ -145,7 +152,18 @@ export const writeArtifacts = (p: Pass, out: FinishInput, stopped: StopReason, s
 	try {
 		committedNodes = ((JSON.parse(fs.readFileSync(p.graphPath, "utf8")) as AppMap).nodes ?? []).length;
 	} catch {} // no committed map, or an unparseable one — nothing to protect
-	const modelFinished = stopped === "frontier-empty" || stopped === "frontier-conceded";
+	/**
+	 * `frontier-conceded` is a model finish but NOT a publishable one, and the distinction is the
+	 * whole reason the concede exit is safe to offer.
+	 *
+	 * Conceding sets the same "the model called finish" flag as sweeping the frontier, so a pass
+	 * that gave up at action 60 with a third of the app mapped would have published over a
+	 * complete 131-action map, counted as a delivered sample, and become what phase 2 grounds on.
+	 * Offering a graceful exit would then have quietly improved the numbers — the exact skew the
+	 * exit is supposed to avoid. What conceding buys is a clean stop reason and the findings
+	 * write-up instead of a stack trace; it does not buy publication.
+	 */
+	const modelFinished = stopped === "frontier-empty";
 	/**
 	 * A pass that was CUT SHORT publishes only if it beats half the committed map.
 	 *
@@ -164,7 +182,12 @@ export const writeArtifacts = (p: Pass, out: FinishInput, stopped: StopReason, s
 	 * signal is structural: did the pass end on its own terms, or was it cut off?
 	 */
 	const beatsBaseline = committedNodes > 0 && p.graphNodes.size * 2 >= committedNodes;
-	const demoted = salvaged || (!modelFinished && !beatsBaseline);
+	// Conceded is demoted UNCONDITIONALLY, not merely subject to the cut-short rule above. That
+	// rule can pass a big partial map when a baseline exists, and "big enough to beat half the
+	// old map" is not the question here — a pass that surrendered because the app went dark has
+	// a hole in it exactly where the app stopped answering, which is precisely the region the
+	// next run needs mapped.
+	const demoted = salvaged || stopped === "frontier-conceded" || (!modelFinished && !beatsBaseline);
 	// The run's own copy is written ALWAYS, and first: whatever this pass produced belongs with
 	// the pass, at a path nothing later can overwrite. Publishing to docs/appmaps is the separate,
 	// conditional step below — that path is keyed by app, so the next pass on the same variant

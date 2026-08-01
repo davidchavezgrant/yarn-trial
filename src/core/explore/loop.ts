@@ -42,7 +42,7 @@ import type { AppMapEdge, AppMapNode } from "../../types.js";
 import { checkpoint, hm, writeArtifacts } from "./artifacts.js";
 import { CHAPTER_OBSERVATIONS, DESCENT_ON, DISMISS_CAP, GUARD_ON, MAX_ACTIONS, SETTLE_MS } from "./config.js";
 import { requestFinish, streamCall } from "./model.js";
-import { accumulatedGraph, type FinishInput, merge, type Pass } from "./state.js";
+import { accumulatedGraph, blindAction, type FinishInput, merge, type Pass } from "./state.js";
 
 /**
  * Resolve a query-addressed action to the handle it operated, in the observation the model
@@ -76,10 +76,27 @@ export type LoopDeps = {
 	cdp: CdpBackend | undefined;
 	win: WindowRef | undefined;
 	doObserve: (name: string) => Promise<ObservationBundle>;
+	/**
+	 * Restart the target app and re-acquire the backend, returning the new window ref (ax) or
+	 * undefined (cdp, where the page IS the target). Throws if the app cannot be brought back.
+	 *
+	 * The escape hatch for a blackout the model cannot close from inside. Escape and cmd+W are
+	 * the only instruments it has, and against Yarn's recording helper neither works — the
+	 * harness has one the model doesn't: kill the process. Optional so a caller with no
+	 * relaunch story (a test, a web target) simply omits it and gets the old behaviour.
+	 */
+	recover?: () => Promise<WindowRef | undefined>;
 };
 
-export async function runExploreLoop({ p, client, model, overlay, interrupted, driver, cdp, win, doObserve }: LoopDeps): Promise<void> {
+export async function runExploreLoop({ p, client, model, overlay, interrupted, driver, cdp, win: win0, doObserve, recover }: LoopDeps): Promise<void> {
 	let blindStreak = 0;
+	// Mutable: a relaunch mints a new window, and the two toActionRequest sites below would
+	// otherwise keep addressing the dead one.
+	let win = win0;
+	// One relaunch per pass. A second blackout after a restart is the app telling us the state
+	// is reachable from its own home screen, and looping restarts would burn the action budget
+	// re-treading the same ground rather than mapping anything new.
+	const RELAUNCH_BUDGET = Number(process.env.EXPLORE_RELAUNCH_BUDGET ?? 1);
 	/**
 	 * Vision-only fork points, gathered here so the loop body reads the same in both modes.
 	 * On a vision-only pass the model's ledger is DECLARED — built from its own survey/target
@@ -789,12 +806,22 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 			 * recoverable pass. What was missing is the INFORMATION to choose. So say it plainly,
 			 * every time, and name the exit.
 			 *
-			 * A pass that then calls finish ends `frontier-conceded`, which is a model finish —
-			 * so its map publishes through the ordinary path instead of being salvaged into a run
-			 * folder nobody reads. One run had 27 findings and 86 graph nodes when it was killed.
+			 * A pass that then calls finish ends `frontier-conceded`. That is a real ending, but
+			 * NOT a publishable one — see the demotion note in artifacts.ts.
+			 *
+			 * THE ORDER MATTERS, and the first version got it wrong. The three-strike message
+			 * ("call finish NOW") was pushed and then thrown past on the same tick, so the model
+			 * had two turns to attempt recovery and zero to concede: the exit named in the text
+			 * was unreachable. Two passes on 2026-08-01 died against it, both on the identical
+			 * three actions — click record, Escape, cmd+W.
+			 *
+			 * So the ladder now spends every instrument before it gives up: the model's own moves
+			 * first, then the harness's restart, then one clear turn to finish.
 			 */
 			blindStreak++;
 			const left = 3 - blindStreak;
+			const rung = blindAction(blindStreak, p.relaunches, RELAUNCH_BUDGET, Boolean(recover));
+			const canRelaunch = rung === "relaunch";
 			p.messages.push({
 				role: "user",
 				content: [
@@ -806,11 +833,44 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 							(left > 0
 								? `You have ${left} more observation${left === 1 ? "" : "s"} to restore it: closing the offending window (Escape, cmd+W) or waiting for it to finish loading are the usual moves. ` +
 									`IF YOU CANNOT RESTORE IT, call finish now with what you have already mapped — that is a legitimate ending, it keeps your findings, and it is strictly better than being cut off. Do not keep trying past the point where you believe it will work.`
-								: `This is the last one. Call finish NOW with what you have mapped, or the pass ends with nothing published.`),
+								: canRelaunch
+									? `Your attempts have not restored it, so the harness is going to restart the app.`
+									: `This is the last one. Call finish NOW with what you have mapped, or the pass ends with nothing published.`),
 					},
 				],
 			});
-			if (blindStreak >= 3) throw new TargetNotObservableError(p.app, "no addressable elements for 3 consecutive observations");
+			if (rung !== "advise") {
+				if (rung === "relaunch") {
+					p.blackouts++;
+					// A relaunch that itself fails is fatal, and honestly so: if the app will not
+					// come back there is nothing left to explore. The catch turns the restart
+					// error into the blackout error so the salvage path reads one cause.
+					try {
+						console.log(`\n  BLACKOUT: "${p.app}" exposed nothing for 3 observations and the model could not restore it — restarting the app`);
+						win = await recover!();
+						p.relaunches++;
+					} catch (err) {
+						throw new TargetNotObservableError(p.app, `blacked out and the restart failed: ${err instanceof Error ? err.message : String(err)}`);
+					}
+					blindStreak = 0;
+					console.log(`  restarted — continuing with ${remaining().length} controls still on the frontier\n`);
+					p.messages.push({
+						role: "user",
+						content: [
+							{
+								type: "text",
+								text:
+									`The app has been restarted and is observable again. It is back at its OPENING state — whatever you had navigated to is gone, and anything you had part-way open is closed.\n\n` +
+									`Your findings and your frontier are intact, so continue mapping. Two things to carry forward: whatever you did immediately before the blackout is what caused it, so do not repeat it — record it as a finding and treat that control as explored. ` +
+									`And this is the only restart available: if the app goes dark again, call finish with what you have.`,
+							},
+						],
+					});
+				} else if (rung === "fatal") {
+					// The concede turn was offered and the model kept acting instead. Now it ends.
+					throw new TargetNotObservableError(p.app, `no addressable elements for ${blindStreak} consecutive observations`);
+				}
+			}
 		} else blindStreak = 0;
 
 		// Descent: the model pressed a reversible-labelled control ONLY so the harness could

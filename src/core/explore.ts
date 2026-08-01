@@ -10,6 +10,7 @@ import {
 	runEvent,
 	teeConsole,
 	VISION_ONLY_RULES,
+	type WindowRef,
 } from "./harness.js";
 import type { AxBackend } from "../backends/ax.js";
 import type { CdpBackend } from "../backends/cdp.js";
@@ -104,7 +105,35 @@ async function main(): Promise<void> {
 		// feed can tell a grounding pass from a task run at a glance.
 		runEvent(p.stamp, "start", { mode: "explore", app, backend: backendKind });
 
-		await runExploreLoop({ p, client, model, overlay, interrupted, driver, cdp, win: ax?.win, doObserve });
+		/**
+		 * Blackout recovery — quit the app and acquire it again from scratch.
+		 *
+		 * Reassigning `ax`/`cdp` is what makes this work: `doObserve` above reads them at CALL
+		 * time, so every later observation reaches the new backend without threading it through
+		 * the loop. The window ref is the one thing the loop holds by value, so it comes back as
+		 * the return value.
+		 *
+		 * `coldStart` is the same restart every run already opens with — see coldstart.ts for why
+		 * a kill beats a navigate-home. Passed only for APP targets: on the web the "app" is the
+		 * profile Chrome holding the signed-in session, and quitting it turns a grounding pass
+		 * into a sign-in pass. A web target simply has no relaunch rung, which is right — a page
+		 * that stops answering is not a problem a restart fixes.
+		 */
+		const recover = async (): Promise<WindowRef | undefined> => {
+			await coldStart(target, app);
+			if (cdp) {
+				await cdp.close().catch(() => {});
+				cdp = await (await import("../backends/cdp.js")).CdpBackend.acquire(target);
+
+				return undefined;
+			}
+			ax = await (await import("../backends/ax.js")).AxBackend.acquire(target, driver!, app);
+			await ax.ensureObservable();
+
+			return ax.win;
+		};
+
+		await runExploreLoop({ p, client, model, overlay, interrupted, driver, cdp, win: ax?.win, doObserve, recover: target.kind === "app" ? recover : undefined });
 	} catch (err) {
 		/**
 		 * A dead driver session must not also destroy the map.

@@ -97,6 +97,19 @@ export const newPass = (target: Target, app: string, backendKind: string, vision
 		usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, modelCalls: 0 },
 		chapters: 1,
 		refusals: 0,
+		/**
+		 * Blackouts: times the app stopped exposing ANY addressable element for the full blind
+		 * budget. Relaunches: times the harness restarted the app to get out of one.
+		 *
+		 * Recorded because the retry policy was laundering a real result. Yarn's record control
+		 * opens a native helper and the AX tree goes dark permanently — twice on 2026-08-01, same
+		 * three actions both times. A blacked-out pass was thrown out and re-run until it happened
+		 * to avoid that control, so the published numbers described "ax given it dodged the trap"
+		 * and the trap itself appeared nowhere. These two counters are what make a recovered pass
+		 * distinguishable from one that never needed recovering.
+		 */
+		blackouts: 0,
+		relaunches: 0,
 		startedAt,
 		badProviders,
 		ledger,
@@ -115,6 +128,31 @@ export const newPass = (target: Target, app: string, backendKind: string, vision
 };
 
 export type Pass = ReturnType<typeof newPass>;
+
+/** What the loop should do about an observation that exposed nothing. */
+export type BlindAction = "advise" | "relaunch" | "concede-turn" | "fatal";
+
+/**
+ * The blackout ladder, as a pure decision — extracted because this is precisely where the first
+ * version was wrong and nothing could catch it.
+ *
+ * That version pushed a "call finish NOW" message and threw on the same tick, so the model got
+ * two turns to attempt recovery and none to concede: the exit the text named was unreachable.
+ * The bug was invisible in review (the message and the throw read fine individually) and
+ * invisible in the logs (the message goes into the transcript, which is never printed). Two
+ * passes died against it. It lives here, away from the loop's driver/client scaffolding, so the
+ * ordering is asserted rather than eyeballed.
+ *
+ * Rungs, cheapest instrument first: the model's own moves, then the harness's restart (the one
+ * instrument the model does not have), then one clear turn to finish, then fatal.
+ */
+export const blindAction = (streak: number, relaunches: number, budget: number, canRecover: boolean): BlindAction => {
+	if (streak < 3) return "advise";
+	if (canRecover && relaunches < budget) return "relaunch";
+	// Exactly one turn between "we are out of options" and killing the pass. `>= 4` rather than
+	// `=== 4` so a caller that somehow skips a count still terminates.
+	return streak >= 4 ? "fatal" : "concede-turn";
+};
 
 export const noteProvider = (p: Pass, attempt: number, e: unknown): void => {
 	const provider = failedProvider(e);

@@ -475,7 +475,7 @@ test("writeArtifacts__DemotesACutShortPass__When__ThereIsNoCommittedMapToBeat", 
 	// reported `provenance: explore` over it.
 	const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "core", "explore", "artifacts.ts"), "utf8");
 	assert.match(src, /const beatsBaseline = committedNodes > 0 && p\.graphNodes\.size \* 2 >= committedNodes/, "no baseline must mean demote");
-	assert.match(src, /const demoted = salvaged \|\| \(!modelFinished && !beatsBaseline\)/);
+	assert.match(src, /const demoted = salvaged \|\| stopped === "frontier-conceded" \|\| \(!modelFinished && !beatsBaseline\)/);
 
 	// And the bar stays STRUCTURAL — did the pass end on its own terms — never a quality score.
 	// A coverage ratio counts dismissals, so the pre-fix passes that skipped 1933 of 1985
@@ -495,7 +495,14 @@ test("exploreLoop__OffersTheModelAnExit__When__TheAppStopsExposingAnything", () 
 	const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "core", "explore", "loop.ts"), "utf8");
 	assert.match(src, /observation \$\{blindStreak\} of 3/, "the model must be told the count it is being judged on");
 	assert.match(src, /call finish now with what you have already mapped/i, "the exit must be named, not implied");
-	// A pass that takes the exit ends `frontier-conceded`, which is a model finish — so its map
-	// publishes through the ordinary path instead of being salvaged into a folder nobody reads.
+	// A pass that takes the exit ends `frontier-conceded` and keeps its findings in its own run
+	// folder. It does NOT publish — see writeArtifacts and tests/explore-blackout.test.ts. The
+	// first version of this comment claimed the opposite, which would have let a pass that gave
+	// up at a third of the app become what phase 2 grounds on.
 	assert.match(src, /legitimate ending/i);
+	// The exit has to be REACHABLE, which is the part that was broken: the three-strike message
+	// was pushed and thrown past on the same tick, so the model never got a turn to take it.
+	// The ladder is asserted behaviourally on blindAction(); this pins that the loop routes
+	// through it rather than re-deriving the thresholds inline.
+	assert.match(src, /blindAction\(blindStreak, p\.relaunches, RELAUNCH_BUDGET, Boolean\(recover\)\)/);
 });
