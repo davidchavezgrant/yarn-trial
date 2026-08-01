@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { aggregateRunEvents, appendNarrativeEvent, buildDetail, buildState, type DashEvent, defaultDashDate, type FleetView, fromStore, groundingArmId, legacyNarrativeLogPath, loadEnvFallback, localRunProgress, matchPath, narrativeLogPath, type NarrativeEvent, narratorPrompt, notedRunKeys, parseDashArgs, parseEnvLine, parseLogFrames, parseRunEvents, rankExplore, readPersistedNarrative, runEventLine, type RunProgress, storeEvents, utf8Tail, watchStoreChain } from "../src/bench/dash.js";
+import { aggregateRunEvents, appendNarrativeEvent, buildDetail, buildState, type DashEvent, defaultDashDate, exploreSeries, type FleetView, fromStore, groundingArmId, legacyNarrativeLogPath, loadEnvFallback, localRunProgress, matchPath, narrativeLogPath, type NarrativeEvent, narratorPrompt, notedRunKeys, parseDashArgs, parseEnvLine, parseLogFrames, parseRunEvents, rankExplore, readPersistedNarrative, runEventLine, type RunProgress, storeEvents, utf8Tail, watchStoreChain } from "../src/bench/dash.js";
 // The submodule, not the core/harness.ts barrel: the barrel loads the Anthropic SDK and the
 // cua driver, which a unit test of a 30-line appender has no business paying for.
 import { runEvent } from "../src/core/harness/run-events.js";
@@ -1260,6 +1260,107 @@ test("AggregateRunEvents__TracksExploreHeartbeat__When__ProgressAndFinishPresent
 	assert.equal(done?.finished, "frontier-empty");
 	assert.equal(done?.actions, 47);
 	assert.equal(done?.nodes, 150);
+});
+
+test("AggregateRunEvents__CarriesActuatedAndDismissed__When__HeartbeatIsEnriched", () => {
+	// The 2026-08-01 heartbeat enrichment: actuated/dismissed ride the progress event (and
+	// every finish event) so the board can tell a pass that OPERATED its frontier from one
+	// that dismissed it en masse — `frontier` alone cannot.
+	const p = aggregateRunEvents(parseRunEvents([
+		JSON.stringify({ t: "2026-08-01T10:00:01.000Z", kind: "progress", detail: { actions: 10, frontier: 40, seen: 55, actuated: 8, dismissed: 7, nodes: 12 } }),
+		JSON.stringify({ t: "2026-08-01T10:30:00.000Z", kind: "finish", detail: { stopped: "frontier-empty", actions: 47, frontier: 0, seen: 96, actuated: 51, dismissed: 45, nodes: 150 } }),
+	].join("\n")));
+	assert.equal(p?.actuated, 51);
+	assert.equal(p?.dismissed, 45);
+	assert.equal(p?.frontier, 0);
+	assert.equal(p?.nodes, 150);
+});
+
+/*
+ * The discovery series (exploreSeries): a run's events folded into the convergence chart's
+ * data. Sparse by contract — a field is present only when its event carried it, so
+ * pre-enrichment logs still fold into a drawable series.
+ */
+
+test("ExploreSeries__FoldsEventsIntoTimeSeries__When__LogIsPreEnrichment", () => {
+	// The old event shape: progress = actions/frontier/seen only, nodes only on chapter
+	// marks, finish without counters. Every 2026-08-01 pass on disk looks like this.
+	const s = exploreSeries(parseRunEvents([
+		JSON.stringify({ t: "2026-08-01T10:00:00.000Z", kind: "start", detail: { mode: "explore", app: "Yarn" } }),
+		JSON.stringify({ t: "2026-08-01T10:02:00.000Z", kind: "progress", detail: { actions: 10, frontier: 99, seen: 170, elapsed: "2m" } }),
+		JSON.stringify({ t: "2026-08-01T10:02:30.000Z", kind: "chapter", detail: { chapter: 2, findings: 4, nodes: 7 } }),
+		JSON.stringify({ t: "2026-08-01T10:04:00.000Z", kind: "progress", detail: { actions: 20, frontier: 122, seen: 212, elapsed: "4m" } }),
+		JSON.stringify({ t: "2026-08-01T10:05:00.000Z", kind: "finish", detail: { stopped: "frontier-empty", actions: 25, nodes: 30 } }),
+	].join("\n")));
+	// start is the time origin, not a point — the series holds the four plottable events.
+	assert.equal(s.length, 4);
+	assert.deepEqual(s.map((p) => p.t), [120_000, 150_000, 240_000, 300_000]);
+	assert.equal(s[0]?.frontier, 99);
+	assert.equal(s[0]?.actuated, undefined, "pre-enrichment heartbeats carry no actuated");
+	assert.equal(s[1]?.kind, "chapter");
+	assert.equal(s[1]?.nodes, 7);
+	assert.equal(s[1]?.chapter, 2);
+	assert.equal(s[3]?.kind, "finish");
+	assert.equal(s[3]?.stopped, "frontier-empty");
+	assert.equal(s[3]?.actions, 25);
+});
+
+test("ExploreSeries__CarriesDiscoveryCounters__When__HeartbeatIsEnriched", () => {
+	const s = exploreSeries(parseRunEvents([
+		JSON.stringify({ t: "2026-08-01T10:00:00.000Z", kind: "start", detail: {} }),
+		JSON.stringify({ t: "2026-08-01T10:02:00.000Z", kind: "progress", detail: { actions: 10, frontier: 40, seen: 55, actuated: 8, dismissed: 7, nodes: 12, tokensIn: 210_000, tokensOut: 9_000, tokensCacheRead: 40_000, tokensCacheCreation: 5_000 } }),
+		// A malformed field loses itself, never the point (same posture as aggregateRunEvents).
+		JSON.stringify({ t: "2026-08-01T10:04:00.000Z", kind: "progress", detail: { actions: "twenty", frontier: 31 } }),
+	].join("\n")));
+	assert.equal(s.length, 2);
+	assert.equal(s[0]?.actuated, 8);
+	assert.equal(s[0]?.dismissed, 7);
+	assert.equal(s[0]?.nodes, 12);
+	assert.equal(s[0]?.tokensIn, 210_000);
+	assert.equal(s[0]?.tokensCacheCreation, 5_000);
+	assert.equal(s[1]?.actions, undefined);
+	assert.equal(s[1]?.frontier, 31);
+});
+
+test("ExploreSeries__ReturnsEmpty__When__EventsAreTaskShaped", () => {
+	// A task run's events are steps/verdict — nothing here plots on a discovery chart.
+	const s = exploreSeries(parseRunEvents([
+		JSON.stringify({ t: "2026-08-01T10:00:01.000Z", kind: "step", detail: { step: 1, action: "click", verified: true } }),
+		JSON.stringify({ t: "2026-08-01T10:00:06.000Z", kind: "verdict", detail: { success: true } }),
+	].join("\n")));
+	assert.deepEqual(s, []);
+	assert.deepEqual(exploreSeries([]), []);
+});
+
+test("ExploreSeries__CapturesTheFatalEndpoint__When__PassDied", () => {
+	const s = exploreSeries(parseRunEvents([
+		JSON.stringify({ t: "2026-08-01T10:00:00.000Z", kind: "progress", detail: { actions: 10, frontier: 99 } }),
+		JSON.stringify({ t: "2026-08-01T10:03:00.000Z", kind: "fatal", detail: { error: "target not observable\nsecond line of prose", actions: 139 } }),
+	].join("\n")));
+	assert.equal(s[1]?.kind, "fatal");
+	assert.equal(s[1]?.fatal, "target not observable", "the marker label wants the first line only");
+	assert.equal(s[1]?.actions, 139);
+});
+
+test("BuildDetail__CarriesTheDiscoverySeries__When__ArmIsExplore", () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dash-detail-series-"));
+	try {
+		plant(dir, ["out", "bench", "live", "job-x", "events.jsonl"], [
+			JSON.stringify({ t: "2026-08-01T10:00:00.000Z", kind: "start", detail: { mode: "explore", app: "Yarn" } }),
+			JSON.stringify({ t: "2026-08-01T10:02:00.000Z", kind: "progress", detail: { actions: 10, frontier: 99, seen: 170 } }),
+			JSON.stringify({ t: "2026-08-01T10:05:00.000Z", kind: "finish", detail: { stopped: "frontier-empty", actions: 25, nodes: 30 } }),
+		].join("\n") + "\n");
+		const m = manifest(entry({ jobId: "job-x", armId: "p1-explore-ax", state: "done", collected: true }));
+		const d = buildDetail("job-x", m, { dataDir: dir, benchRoot: path.join(dir, "bench") });
+		assert.equal(d.series?.length, 2);
+		assert.equal(d.series?.[1]?.stopped, "frontier-empty");
+		// A task arm never carries one, even with an events file in its run dir.
+		plant(dir, ["out", "bench", "live", "job-y", "events.jsonl"], JSON.stringify({ t: "2026-08-01T10:00:00.000Z", kind: "progress", detail: { actions: 10 } }) + "\n");
+		const mt = manifest(entry({ jobId: "job-y", state: "done", collected: true }));
+		assert.equal(buildDetail("job-y", mt, { dataDir: dir, benchRoot: path.join(dir, "bench") }).series, undefined);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("LocalRunProgress__ReadsTheWholeFile__When__RunDirIsInLive", () => {

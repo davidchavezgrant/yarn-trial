@@ -814,6 +814,9 @@ export interface RunProgress {
 	actions?: number;
 	frontier?: number;
 	seen?: number;
+	/** Operated / deliberately-skipped controls — absent on logs from before the heartbeat carried them (2026-08-01). */
+	actuated?: number;
+	dismissed?: number;
 	nodes?: number;
 	/** The finish event's stop reason (frontier-empty, action-ceiling, interrupted…). */
 	finished?: string;
@@ -845,6 +848,9 @@ export function aggregateRunEvents(raw: RawRunEvent[]): RunProgress | undefined 
 				if (typeof d.actions === "number") p.actions = d.actions;
 				if (typeof d.frontier === "number") p.frontier = d.frontier;
 				if (typeof d.seen === "number") p.seen = d.seen;
+				if (typeof d.actuated === "number") p.actuated = d.actuated;
+				if (typeof d.dismissed === "number") p.dismissed = d.dismissed;
+				if (typeof d.nodes === "number") p.nodes = d.nodes;
 				break;
 			}
 
@@ -857,6 +863,10 @@ export function aggregateRunEvents(raw: RawRunEvent[]): RunProgress | undefined 
 				if (typeof d.stopped === "string") p.finished = d.stopped;
 				if (typeof d.actions === "number") p.actions = d.actions;
 				if (typeof d.nodes === "number") p.nodes = d.nodes;
+				if (typeof d.frontier === "number") p.frontier = d.frontier;
+				if (typeof d.seen === "number") p.seen = d.seen;
+				if (typeof d.actuated === "number") p.actuated = d.actuated;
+				if (typeof d.dismissed === "number") p.dismissed = d.dismissed;
 				break;
 			}
 
@@ -917,6 +927,78 @@ export function localRunProgress(runKey: string, outRoot = outDir()): RunProgres
 	progressCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, progress });
 
 	return progress;
+}
+
+/* ---- discovery series: the shape of an explore pass over time ---------------------------- */
+
+/**
+ * One point of an explore pass's discovery series — a progress heartbeat, chapter mark, or
+ * the finish/fatal endpoint, positioned on a wall-clock axis. SPARSE BY CONTRACT: a field is
+ * present only when its event carried it, so logs from before the heartbeat was enriched
+ * (2026-08-01: actuated/dismissed/nodes/tokens joined actions/frontier/seen) still fold into
+ * a drawable series — the chart renders whichever metrics exist and skips the rest.
+ */
+export interface ExplorePoint {
+	/** ms since the run's first event — the chart's wall-clock x-axis. */
+	t: number;
+	kind: "progress" | "chapter" | "finish" | "fatal";
+	actions?: number;
+	frontier?: number;
+	seen?: number;
+	actuated?: number;
+	dismissed?: number;
+	nodes?: number;
+	/** Chapter ordinal — chapter marks render as context-reset ticks, not data points. */
+	chapter?: number;
+	tokensIn?: number;
+	tokensOut?: number;
+	tokensCacheRead?: number;
+	tokensCacheCreation?: number;
+	/** The finish event's stop reason / the fatal error's first line — the endpoint's label. */
+	stopped?: string;
+	fatal?: string;
+}
+
+const SERIES_NUMERIC_FIELDS = [
+	"actions",
+	"frontier",
+	"seen",
+	"actuated",
+	"dismissed",
+	"nodes",
+	"chapter",
+	"tokensIn",
+	"tokensOut",
+	"tokensCacheRead",
+	"tokensCacheCreation",
+] as const;
+
+/**
+ * Fold a run's events into its discovery series — the convergence chart's data. Same
+ * defensive posture as aggregateRunEvents (a malformed detail loses its own fields, never
+ * the series), and the same source of truth: this is a VIEW over events.jsonl, so it can
+ * be drawn for any run whose event log survives, archived and evicted runs included.
+ * Returns [] for logs with no plottable events — task runs fold to nothing here.
+ */
+export function exploreSeries(raw: RawRunEvent[]): ExplorePoint[] {
+	const base = raw.length ? Date.parse(raw[0].t) : NaN;
+	if (!Number.isFinite(base)) return [];
+	const out: ExplorePoint[] = [];
+	for (const ev of raw) {
+		if (ev.kind !== "progress" && ev.kind !== "chapter" && ev.kind !== "finish" && ev.kind !== "fatal") continue;
+		const t = Date.parse(ev.t) - base;
+		if (!Number.isFinite(t)) continue;
+		const point: ExplorePoint = { t, kind: ev.kind };
+		for (const k of SERIES_NUMERIC_FIELDS) {
+			const v = ev.detail[k];
+			if (typeof v === "number" && Number.isFinite(v)) point[k] = v;
+		}
+		if (ev.kind === "finish" && typeof ev.detail.stopped === "string") point.stopped = ev.detail.stopped;
+		if (ev.kind === "fatal" && typeof ev.detail.error === "string") point.fatal = ev.detail.error.split("\n")[0];
+		out.push(point);
+	}
+
+	return out;
 }
 
 /** The narrator's event-log filename — the pass-level file beside the manifests AND one per run dir. */
@@ -1296,6 +1378,12 @@ export interface DashDetail {
 	 * own diagnostics string. Model-written; verify before quoting.
 	 */
 	narratorNote?: { t: string; text: string; model: string };
+	/**
+	 * Explore arms only: the pass's discovery series folded off its events.jsonl — the
+	 * convergence chart's data (frontier burn-down, map growth). Absent when the event log
+	 * is not on this machine or the run predates run events.
+	 */
+	series?: ExplorePoint[];
 }
 
 function heatFor(
@@ -1521,6 +1609,18 @@ export function buildDetail(jobId: string, manifest: Manifest, opts: { dataDir?:
 	// The run's own narrator note — runFile so archived/legacy homes keep serving old notes.
 	const noteEv = lastNarrativeEvent(runFile(jobId, NARRATIVE_FILE, path.join(dataDir, "out")));
 
+	// The pass's discovery series, folded off its own events.jsonl — runFile walks live →
+	// archive → legacy, so evicted and archived passes keep their chart. Explore arms only:
+	// a task run's events are steps, and the steps table already tells that story better.
+	let series: ExplorePoint[] = [];
+	if (arm.kind === "explore") {
+		try {
+			series = exploreSeries(parseRunEvents(fs.readFileSync(runFile(jobId, RUN_FILES.events, path.join(dataDir, "out")), "utf8")));
+		} catch {
+			// No event log on this machine (pre-events run, or not pulled yet) — chart simply absent.
+		}
+	}
+
 	return {
 		jobId,
 		armId: entry.armId,
@@ -1532,6 +1632,7 @@ export function buildDetail(jobId: string, manifest: Manifest, opts: { dataDir?:
 		...(graph ? { heat: heatFor(graph, exploreArmId, entry.model, manifest, dataDir) } : {}),
 		...(notes.length ? { note: notes.join("; ") } : {}),
 		...(noteEv ? { narratorNote: { t: String(noteEv.t), text: String(noteEv.text), model: String(noteEv.model ?? "?") } } : {}),
+		...(series.length ? { series } : {}),
 	};
 }
 
