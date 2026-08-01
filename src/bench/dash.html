@@ -1062,6 +1062,12 @@ function armOf(jobId) {
 const th = (label, tip, cls) => `<th${cls ? ` class="${cls}"` : ""}${tip ? ` data-tip="${esc(tip)}"` : ""}>${label}</th>`;
 const VARIANT_TIP = "hover for the arm id, flags and the decision this cell informs · a variant with several runs splits into one line per run — click a line to open that run's dropdown (stats · prompt · live log)";
 const RUNS_TIP = "the run's status — click to open/collapse its dropdown; the line, dropdown and ⤢ map all follow this run";
+// Shared by the sticky header AND the row cells (armCell, passRows): a reader hovering a
+// value mid-board gets the term explained in place instead of traveling back up to the
+// header. One constant each so the two homes can't drift apart.
+const SEES_TIP = "what the agent SEES: AX tree or DOM elements, plus vision — or pixels only";
+const ACTS_TIP = "what injects the input: AX (macOS Accessibility, the cua driver) or CDP (Chrome DevTools Protocol)";
+const MAP_TIP = "the appmap as a full node-link tree — edge thickness = traversal heat, blue = the run's path";
 // No target column: the app scope picker above the board carries the target, and inside a
 // lineage group every row shares the group's target anyway.
 // Ordering: the two wide prose cells (Variant, Task) together at the left, then the three
@@ -1074,8 +1080,8 @@ const RUNS_TIP = "the run's status — click to open/collapse its dropdown; the 
 const NCOLS = 18;
 const TASK_HEAD = "<tr>" + th("Variant", VARIANT_TIP) +
 	th("Task", "the goal-only prompt the run was given") +
-	th("Sees", "what the agent SEES: AX tree or DOM elements, plus vision — or pixels only") +
-	th("Acts With", "what injects the input: AX (cua driver) or CDP") +
+	th("Sees", SEES_TIP) +
+	th("Acts With", ACTS_TIP) +
 	th("Model", "what actually ran, off the run logs") +
 	th("Success", "self-reported, per run: ✓ succeeded · ✗ failed · ~ = the running run's own claim off its event log (the judge's verdict lives in the Judge card)", "num-h") +
 	th("Steps", "actions the run took (hover for the verified count)", "num-h") + th("Time", "wall-clock per run — ticking while the run executes", "num-h") +
@@ -1087,7 +1093,7 @@ const TASK_HEAD = "<tr>" + th("Variant", VARIANT_TIP) +
 	th("Ambig", "explore rows — settings editable at two scopes under one identity (same settingKey, different scope) — the wrong-scope trap; each gets a prompt warning", "num-h") +
 	th("Started", "when this run began — collected runs off the run log, running runs derived from their ticking elapsed; a queued run shows – until it starts") +
 	th("Runs", RUNS_TIP) +
-	th("Map", "the appmap as a full node-link tree — edge thickness = traversal heat, blue = the run's path") + "</tr>";
+	th("Map", MAP_TIP) + "</tr>";
 
 // Friendly names are DERIVED from the arm's structure (kind + flags + phase), not
 // hand-mapped per id, so new matrix cells name themselves. The id stays in the hover —
@@ -1219,7 +1225,7 @@ function armCell(a, p, span = "") {
 		? `<td class="task"${span} data-tip="${esc(a.task)}">${esc(a.task)}</td>`
 		: a.kind === "explore"
 			? `<td class="task"${span} data-tip="Explore pass — no task prompt. The objective is coverage: operate every safe control until the frontier of un-operated controls empties, then write the appmap (docs/appmaps/)">Explore</td>`
-			: `<td class="task"${span}>–</td>`;
+			: `<td class="task"${span} data-tip="no prompt on the arm — a replay executes its compiled recipe's task (shown in the row dropdown once collected)">–</td>`;
 	// Phase badge on task/replay rows only: lineage groups interleave phases 2–5, so the row
 	// says which phase it belongs to. Explore group headers are all phase 1 — no badge.
 	const badge = a.kind !== "explore"
@@ -1227,14 +1233,14 @@ function armCell(a, p, span = "") {
 		: "";
 	return `<td class="arm"${span} data-tip="${esc(tip)}">${rankDot(a, p)}<span class="dn">${esc(displayName(a))}</span>${badge}</td>
 		${taskCell}
-		<td class="txt"${span}>${esc(a.perception || "–")}</td>
-		<td class="txt"${span}>${esc(a.actuation || "–")}</td>
+		<td class="txt"${span} data-tip="${esc(SEES_TIP)}">${esc(a.perception || "–")}</td>
+		<td class="txt"${span} data-tip="${esc(ACTS_TIP)}">${esc(a.actuation || "–")}</td>
 		${modelCell(p, span)}`;
 }
 
 // The five explore-discovery columns, dashed on task/replay rows so every row spans the
 // same 18 columns without colspan bookkeeping.
-const NO_EXPLORE_CELLS = `<td class="num">–</td>`.repeat(5);
+const NO_EXPLORE_CELLS = `<td class="num" data-tip="explore-only column — task rows have no discovery metrics">–</td>`.repeat(5);
 
 // A metric cell carrying a live value: ~ marks it approximate, .livecell tints it --running.
 const liveNumCell = (label, extraTip) =>
@@ -1248,21 +1254,21 @@ const liveNumCell = (label, extraTip) =>
 // verdict event lands; "–" until either exists.
 function successCellFor(e) {
 	if (e.collected) {
-		if (e.success === true) return `<td class="num"><span class="ok-v">✓</span></td>`;
-		if (e.success === false) return `<td class="num" data-tip="${esc(e.failureKind ? "failure: " + e.failureKind : "failed")}"><span class="bad-v">✗</span></td>`;
-		return `<td class="num">–</td>`;
+		if (e.success === true) return `<td class="num" data-tip="self-reported success — the run's own done() claim; the judge's verdict lives in the Judge card"><span class="ok-v">✓</span></td>`;
+		if (e.success === false) return `<td class="num" data-tip="${esc("self-reported failure" + (e.failureKind ? ": " + e.failureKind : "") + " — the judge's verdict lives in the Judge card")}"><span class="bad-v">✗</span></td>`;
+		return `<td class="num" data-tip="collected without a success claim — the run log carries no verdict">–</td>`;
 	}
 	const v = e.live && e.live.verdict;
-	return v ? liveNumCell(v.success ? "~✓" : "~✗", "the run's own done() claim — self-reported, pre-collect, pre-judge") : `<td class="num">–</td>`;
+	return v ? liveNumCell(v.success ? "~✓" : "~✗", "the run's own done() claim — self-reported, pre-collect, pre-judge") : `<td class="num" data-tip="no claim yet — fills when the run's own verdict event lands">–</td>`;
 }
 
 function stepsCellFor(e) {
 	if (e.steps != null)
-		return `<td class="num"${e.verifiedSteps != null ? ` data-tip="${esc(`${e.verifiedSteps} of ${e.steps} steps verified`)}"` : ""}>${fmtNum(e.steps)}</td>`;
+		return `<td class="num" data-tip="${esc("actions the run took — " + (e.verifiedSteps != null ? `${e.verifiedSteps} of ${e.steps} verified` : "no verified count recorded"))}">${fmtNum(e.steps)}</td>`;
 	const lp = !e.collected && e.live;
 	return lp && lp.steps != null
 		? liveNumCell(`~${fmtNum(lp.steps)}${lp.verified != null ? ` (${fmtNum(lp.verified)}✓)` : ""}`, "steps so far (verified in parens)")
-		: `<td class="num">–</td>`;
+		: `<td class="num" data-tip="no steps recorded yet">–</td>`;
 }
 
 // Wall-clock: the run log's duration once collected; a RUNNING run ticks live (the same
@@ -1271,7 +1277,7 @@ function stepsCellFor(e) {
 // awaiting-collect window.
 function timeCellFor(e) {
 	const took = e.collected ? (e.elapsedSec != null ? e.elapsedSec : e.runSec) : null;
-	if (took != null) return `<td class="num">${fmtDur(took)}</td>`;
+	if (took != null) return `<td class="num" data-tip="wall-clock this run took, off its run log">${fmtDur(took)}</td>`;
 	if (e.status === "running") {
 		const base = e.elapsedSec != null ? e.elapsedSec
 			: (liveMem[e.jobId] || {}).start != null ? (receivedAt - liveMem[e.jobId].start) / 1000 : null;
@@ -1280,25 +1286,25 @@ function timeCellFor(e) {
 	const mem = (liveMem[e.jobId] || {}).elapsed;
 	return !e.collected && PRE_COLLECT_TERMINAL.has(e.status) && mem != null
 		? liveNumCell(`~${fmtDur(mem)}`)
-		: `<td class="num">–</td>`;
+		: `<td class="num" data-tip="no duration yet — ticks once the run starts">–</td>`;
 }
 
 // Tokens: collected wins; an uncollected run serves its usage events' cumulative total
 // (one per model call, the newest IS the count so far) as a live stand-in.
 const tokensCellFor = (e) => e.outputTokens != null
-	? `<td class="num">${fmtK(e.outputTokens)}</td>`
+	? `<td class="num" data-tip="OUTPUT tokens the run spent — input and cache tokens live in the row dropdown's stats">${fmtK(e.outputTokens)}</td>`
 	: !e.collected && e.live && e.live.outputTokens != null
 		? liveNumCell(`~${fmtK(e.live.outputTokens)}`, "output tokens so far — cumulative, off the run's usage events")
-		: `<td class="num">–</td>`;
+		: `<td class="num" data-tip="no tokens reported yet">–</td>`;
 // Per-run cost: "?" = tokens recorded but no pricing (the report's unpriced), "–" = nothing
 // to price (queued, or a tokenless entry). A running run serves its live estimate (usd is
 // priced server-side in entryView, same estimateCost + fallbacks as collected rows).
-const costCellFor = (e) => e.usd != null ? `<td class="num">${fmtMoney(e.usd)}</td>`
+const costCellFor = (e) => e.usd != null ? `<td class="num" data-tip="published-rate estimate off this run's tokens — not an invoice">${fmtMoney(e.usd)}</td>`
 	: e.collected && e.outputTokens != null
 		? `<td class="num" data-tip="tokens recorded but no pricing for this run's model">?</td>`
 		: !e.collected && e.live && e.live.usd != null
 			? liveNumCell(`~${fmtMoney(e.live.usd)}`, "est cost so far — published rates, not an invoice")
-			: `<td class="num">–</td>`;
+			: `<td class="num" data-tip="nothing to price yet">–</td>`;
 
 // The five explore-discovery cells for ONE pass (EntryView.exploreStamp); an in-flight
 // pass serves its heartbeat counters (actions/frontier/seen/nodes — surfaces and ambig are
@@ -1320,12 +1326,14 @@ function exploreCellsFor(a, e) {
 		const declared = a.flags && a.flags.includes("--no-ax")
 			? ` <span data-tip="${esc(DECLARED_TIP)}">⚠</span>`
 			: "";
-		return num(fmtNum(st.actions))
+		return num(fmtNum(st.actions), "actions the grounding pass took — an explore's step count")
 			+ (st.controlsSeen != null
 				? num(`${controlsTriple(st.controlsActuated, st.controlsDismissed, st.controlsSeen)}${declared}`,
 					`actuated ${st.controlsActuated} · dismissed ${st.controlsDismissed} · seen ${st.controlsSeen}`)
-				: num("–"))
-			+ num(fmtNum(st.surfaces)) + num(fmtNum(st.graphNodes)) + num(fmtNum(st.scopeAmbiguities));
+				: num("–", "controls tally not in this pass's stamp"))
+			+ num(fmtNum(st.surfaces), "distinct screens/panels/tabs/dialogs controls were SEEN on — what you navigate between")
+			+ num(fmtNum(st.graphNodes), "nodes in the distilled appmap graph the pass wrote")
+			+ num(fmtNum(st.scopeAmbiguities), "settings editable at two scopes under one identity — the wrong-scope trap; each gets a prompt warning");
 	}
 	const lp = !e.collected && e.live;
 	// The heartbeat carries the full discovery counters (2026-08-01), so the live cell shows
@@ -1339,11 +1347,11 @@ function exploreCellsFor(a, e) {
 		: num("–");
 	return (lp && lp.actions != null
 			? liveNumCell(`~${fmtNum(lp.actions)}`, lp.frontier != null ? `frontier: ${fmtNum(lp.frontier)} controls left un-operated (the pass ends when this empties)` : "")
-			: num("–"))
+			: num("–", "actions — counts from the pass's heartbeat once it starts"))
 		+ controlsLive
-		+ num("–")
-		+ (lp && lp.nodes != null ? liveNumCell(`~${fmtNum(lp.nodes)}`) : num("–"))
-		+ num("–");
+		+ num("–", "surfaces — stamped when the pass finishes")
+		+ (lp && lp.nodes != null ? liveNumCell(`~${fmtNum(lp.nodes)}`) : num("–", "appmap nodes — counts from the pass's heartbeat once it starts"))
+		+ num("–", "scope ambiguities — stamped when the pass finishes");
 }
 
 // A variant with several runs SPLITS after the identity columns (David, 2026-08-01): the
@@ -1366,7 +1374,7 @@ function passRows(a, p, first, metricCells) {
 		${metricCells(e)}
 		${startedCellFor(e)}
 		<td class="runs">${statusChip(e, key, e.jobId === sel)}</td>
-		<td class="treecell"><button class="btnv" data-viewtree="${esc(e.jobId)}">⤢</button></td></tr>`).join("");
+		<td class="treecell"><button class="btnv" data-viewtree="${esc(e.jobId)}" data-tip="${esc(MAP_TIP)}">⤢</button></td></tr>`).join("");
 	return rows + (openRows[key] ? detailRowHtml(a, p, key) : "");
 }
 
@@ -1379,7 +1387,9 @@ function taskRow(a, p) {
 // field (rendering one as "0/1 ok" read as a failure) and Actions IS its step count.
 function exploreRow(a, p, first) {
 	return passRows(a, p, first, (e) =>
-		`<td class="num">–</td><td class="num">–</td>` + timeCellFor(e) + tokensCellFor(e) + costCellFor(e) + exploreCellsFor(a, e));
+		`<td class="num" data-tip="explore passes report no success — coverage is the objective (Controls, Nodes)">–</td>`
+		+ `<td class="num" data-tip="an explore's step count is its Actions column">–</td>`
+		+ timeCellFor(e) + tokensCellFor(e) + costCellFor(e) + exploreCellsFor(a, e));
 }
 
 // Compile arms (phase 3/4 recipe compiles) are local, instant file transforms recorded as
@@ -1397,13 +1407,15 @@ function compileRow(a, p) {
 	const src = p.entries[0];
 	const srcCell = src
 		? `<td class="task" data-tip="compiled from this source run's log (a compile entry's jobId is its source stamp; the recipe file path is not on the wire)">src ${esc(shortJob(src.jobId))}</td>`
-		: `<td class="task">–</td>`;
+		: `<td class="task" data-tip="compiled from a source run — none recorded yet">–</td>`;
 	// srcCell sits under Task (position 2) — it was marooned under "Acts With" when 5eade56
 	// reordered the header and only the armCell-based rows followed.
+	// All 13 metric dashes share one story — NO_EXPLORE_CELLS says "task rows", the wrong
+	// explanation on a row that IS the local file transform.
+	const dash = `<td class="num" data-tip="a compile is a local file transform — no model runs, nothing to measure">–</td>`;
 	return `<tr class="crow"><td class="arm" data-tip="${esc(tip)}"><span class="dn">${esc(displayName(a))}</span>${badge}</td>
-		${srcCell}<td class="num">–</td><td class="num">–</td><td class="num">–</td>
-		<td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num">–</td>
-		${NO_EXPLORE_CELLS}${startedCell(p)}${runsCell(p, null)}<td class="treecell"></td></tr>`;
+		${srcCell}${dash.repeat(8)}
+		${dash.repeat(5)}${startedCell(p)}${runsCell(p, null)}<td class="treecell" data-tip="no map — a compile never drives the app"></td></tr>`;
 }
 
 /* ---- row detail: appmap + path ------------------------------------------------------- */
@@ -1451,6 +1463,34 @@ function fetchDetail(job) {
 		});
 }
 
+// Term explainers for the dropdown stat keys (statsStrip + liveStrip), same delegated
+// tooltip as the board cells — "Ambig", "Tok In" and "Judge" are opaque without one.
+const STAT_TIPS = {
+	Actions: "actions the pass took — an explore's step count",
+	Time: "wall-clock for this run",
+	Seen: "every control the pass observed",
+	Actuated: "controls the pass operated",
+	Dismissed: "controls swept off the frontier without operating — a legitimate way to empty it",
+	Surfaces: "distinct screens/panels/tabs/dialogs controls were seen on",
+	Nodes: "distilled appmap graph nodes",
+	Ambig: "settings editable at two scopes under one identity — the wrong-scope trap",
+	Steps: "actions the run took",
+	Verified: "steps whose effect was verified",
+	"Tok In": "input tokens the run sent to the model",
+	Out: "output tokens the model generated",
+	"Cache-Read": "prompt tokens served from the provider's cache (cheaper than fresh input)",
+	"Cache-Write": "prompt tokens written to the provider's cache",
+	"Est Cost": "published-rate estimate off this run's tokens — not an invoice",
+	Judge: "the judge's trajectory verdict — and its visual verdict after the slash",
+	Frontier: "controls left un-operated — the pass ends when this empties",
+	Stopped: "whether the pass has declared itself finished",
+	Last: "the run's latest step",
+	Claimed: "the run's own done() claim — self-reported, pre-judge",
+	Cleanup: "the run's cleanup status",
+	Fatal: "the error that killed the run",
+};
+const statSpan = ([k, v]) => `<span><span class="k"${STAT_TIPS[k] ? ` data-tip="${esc(STAT_TIPS[k])}"` : ""}>${k}</span>${esc(String(v))}</span>`;
+
 // Per-run stats header: the SELECTED run's own numbers atop the dropdown. Explore runs show
 // their pass's exploreStamp (the row shows medians across passes); task/replay runs show the
 // run's economics. Missing values simply don't render — a running entry may show only Time.
@@ -1469,8 +1509,7 @@ function statsStrip(a, e) {
 			["Cache-Write", e.cacheCreationTokens != null ? fmtK(e.cacheCreationTokens) : null],
 			["Est Cost", e.usd != null ? fmtMoney(e.usd) : null],
 			["Judge", e.judgeTrajectory ? e.judgeTrajectory + (e.judgeVisual ? " / " + e.judgeVisual : "") : null]];
-	const cells = pairs.filter(([, v]) => v != null && v !== "–")
-		.map(([k, v]) => `<span><span class="k">${k}</span>${esc(String(v))}</span>`).join("");
+	const cells = pairs.filter(([, v]) => v != null && v !== "–").map(statSpan).join("");
 	return cells ? `<div class="d-stats">${cells}</div>` : "";
 }
 
@@ -1492,8 +1531,7 @@ function liveStrip(a, e) {
 	if (lp.verdict) pairs.push(["Claimed", (lp.verdict.success ? "success" : "failure") + (lp.verdict.summary ? " — " + lp.verdict.summary : "")]);
 	if (lp.cleanup) pairs.push(["Cleanup", lp.cleanup]);
 	if (lp.fatal) pairs.push(["Fatal", lp.fatal]);
-	const cells = pairs.filter(([, v]) => v != null && v !== "")
-		.map(([k, v]) => `<span><span class="k">${k}</span>${esc(String(v))}</span>`).join("");
+	const cells = pairs.filter(([, v]) => v != null && v !== "").map(statSpan).join("");
 	return cells
 		? `<div class="d-stats live-strip"><span class="livetag">live</span>${cells}<span class="meta">from the run's event log — provisional until collected</span></div>`
 		: "";
