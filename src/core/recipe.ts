@@ -252,7 +252,8 @@ function surfaceOf(s: StepRecord): string | undefined {
 	return s.targetSurface;
 }
 
-function slugOf(runLog: Record<string, any>, stamp: string): string {
+/** Exported for procedure.ts: both artifacts key on (app, task) and must derive the app half identically. */
+export function slugOf(runLog: Record<string, any>, stamp: string): string {
 	// The stamp always ends "-<slug>"; the run log's app name round-trips through appSlug
 	// identically, but the stamp is what the artifacts are already keyed by.
 	const m = stamp.match(/^(?:.*T[\d-]+Z?(?:-\d+)?)-(.+)$/);
@@ -260,13 +261,23 @@ function slugOf(runLog: Record<string, any>, stamp: string): string {
 	return m?.[1] ?? String(runLog.app ?? "unknown").toLowerCase().replace(/[^a-z0-9.-]+/g, "-");
 }
 
-export function recipeFileFor(dir: string, slug: string, task: string): string {
-	// One recipe per (app, task): the task string is part of the identity, hashed short so
-	// filenames stay readable and two tasks on one app never clobber each other.
+/**
+ * The task half of an artifact's identity, hashed short so filenames stay readable.
+ *
+ * Exported because procedures key on (app, task) too, and the two artifacts derived from one run
+ * must agree on which task it was — a procedure findable by a run doing a DIFFERENT task on the
+ * same app is the failure mode this identity exists to prevent.
+ */
+export function taskHash(task: string): string {
 	let h = 0;
 	for (const c of task) h = (h * 31 + c.charCodeAt(0)) | 0;
 
-	return `${dir}/${slug}.${(h >>> 0).toString(16).padStart(8, "0")}.recipe.json`;
+	return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+export function recipeFileFor(dir: string, slug: string, task: string): string {
+	// One recipe per (app, task): two tasks on one app never clobber each other.
+	return `${dir}/${slug}.${taskHash(task)}.recipe.json`;
 }
 
 export function readRecipe(path: string): Recipe {

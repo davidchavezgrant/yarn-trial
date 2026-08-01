@@ -240,7 +240,7 @@ export async function main(): Promise<void> {
 	// The backend picks the map: ax and cdp passes name the same surfaces differently, and a
 	// run resolves controls by name, so grounding on the other backend's vocabulary fails to
 	// resolve for reasons that read as backend weakness. Falls back to the plain slug.
-	const grounding = loadGrounding(slug, backendKind);
+	const grounding = loadGrounding(slug, backendKind, task);
 	// What the log records: provenance + path + content hash, not the full text — enough
 	// to pin exactly which appmap version grounded the run without bloating every log.
 	const groundingMeta: Record<string, unknown> = {
@@ -254,13 +254,29 @@ export async function main(): Promise<void> {
 	// substring check. Naming each collision explicitly gives the model something
 	// specific to act on. NO_GROUNDING drops it too, so the A/B stays honest.
 	const graph = grounding.notes ? loadAppMapGraph(slug, backendKind) : undefined;
-	const warnings = graph ? scopeWarnings(graph) : "";
+	/**
+	 * The scope-warning PROMPT SECTION is gated on the tier, not merely on the graph existing.
+	 *
+	 * The graph is explore-pass output. Injecting its collision warnings into a run grounded on
+	 * the CURATED or PROCEDURE tier would hand that arm the most correctness-relevant part of
+	 * the exploration pass while its log says it was grounded on something else — and scope
+	 * warnings are exactly what stops the wrong-scope failure the ungrounded arms all hit. The
+	 * curated arm's stated question ("explore pass vs 10 minutes of human notes") and phase 6's
+	 * ("can a write-up replace the exploration pass") are both unanswerable if the answer is
+	 * quietly folded into every arm.
+	 *
+	 * The graph itself STAYS loaded for every tier: the mutation journal reads it to label a
+	 * change's settingKey and scope, and teardown reads it to plan restores. Both are analysis
+	 * and cleanup on OUR side of the boundary — neither puts anything in front of the model.
+	 */
+	const fromExplore = grounding.provenance === "explore" || grounding.provenance === "explore-vision";
+	const warnings = graph && fromExplore ? scopeWarnings(graph) : "";
 	const ambiguities = graph ? findScopeAmbiguities(graph) : [];
 
 	if (grounding.notes) console.log(`loaded grounding notes for ${app} (provenance: ${grounding.provenance}, ${groundingMeta.path})`);
 	if (graph) {
 		groundingMeta.graph = { nodes: graph.nodes.length, edges: graph.edges.length, scopeAmbiguities: ambiguities.map((a) => a.settingKey) };
-		console.log(`loaded appmap graph: ${graph.nodes.length} nodes, ${graph.edges.length} edges`);
+		console.log(`loaded appmap graph: ${graph.nodes.length} nodes, ${graph.edges.length} edges${fromExplore ? "" : ` (journal/teardown only — scope warnings withheld from the ${grounding.provenance} tier)`}`);
 		for (const a of ambiguities)
 			console.log(`  scope ambiguity: ${a.settingKey} — ${a.nodes.map((n) => `${n.id} [${n.scope}]`).join(" vs ")}`);
 	}
@@ -325,9 +341,16 @@ export async function main(): Promise<void> {
 			!noAx,
 			record,
 		);
-		const system = grounding.notes
-			? `${basePrompt}\n\n# App grounding notes for ${app} (from a prior exploration pass — trust these to skip dead ends)\n${grounding.notes}${warnings}`
-			: basePrompt;
+		// The header names the SOURCE, because "from a prior exploration pass" is false for two
+		// of the four tiers and the model's trust in the notes should match what they are: a
+		// sweep of the app, a human's notes, or one earlier agent's successful route.
+		const groundingHeading =
+			grounding.provenance === "procedure"
+				? `# How a previous agent completed this exact task in ${app} (verified, and independently graded correct — follow it, adapting where the app differs)`
+				: grounding.provenance === "curated"
+					? `# App notes for ${app} (written by hand — accurate but not exhaustive)`
+					: `# App grounding notes for ${app} (from a prior exploration pass — trust these to skip dead ends)`;
+		const system = grounding.notes ? `${basePrompt}\n\n${groundingHeading}\n${grounding.notes}${warnings}` : basePrompt;
 		// find is CDP-only: the snapshot is complete there, so find is just search. The AX
 		// path has no need for it (get_window_state returns the whole tree).
 		const tools: Anthropic.Tool[] = cdp

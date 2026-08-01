@@ -72,6 +72,8 @@ ${b}ground & replay${n}
   explore "App" | --url <https://site>   grounding pass -> docs/appmaps/
   recipe compile <stamp>                 freeze a successful run into a replayable recipe
   recipe replay <file|stamp>             replay it — zero model calls unless a step breaks
+  procedures harvest <stamp> [--promote] judged-PASS run -> prose on how to do that task
+  procedures list|promote <stamp>         what future runs can ground on / make one loadable
   appmaps [--sync] [--app <name>]        which Mac holds which grounding; --sync converges the fleet
 
 ${b}run data${n}  (out/bench/live is canonical; out/bench/archive is a hard-linked backup)
@@ -147,6 +149,15 @@ explore)
 	assert_no_run_in_flight
 	shift
 	exec npx tsx src/core/explore.ts "$@"
+	;;
+
+procedures)
+	# Offline: reads a finished run's log + judge verdict, one model call, writes prose. Never
+	# drives an app, so no assert_no_run_in_flight — harvesting while the fleet runs is fine
+	# and is in fact the normal case.
+	have_key || die "no API key: export OPENROUTER_API_KEY or ANTHROPIC_API_KEY (or put it in .env)"
+	shift
+	exec npx tsx src/core/procedure-cli.ts "$@"
 	;;
 
 runs)

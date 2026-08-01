@@ -28,7 +28,7 @@ export type BenchBackend = "ax" | "cdp";
 export type ArmKind = "task" | "explore" | "replay" | "compile";
 import { appmapSlug } from "../core/target.js";
 
-export type Phase = 1 | 2 | 3 | 4 | 5;
+export type Phase = 1 | 2 | 3 | 4 | 5 | 6;
 
 /**
  * The dispatch knobs an arm turns, in `DispatchOptions`' exact spellings.
@@ -46,6 +46,8 @@ export interface ArmDispatch {
 	axdomOff?: boolean;
 	noGrounding?: boolean;
 	useRecipe?: boolean;
+	/** `USE_PROCEDURES=1`: ground on a procedure harvested from a judged-PASS run of THIS task. */
+	useProcedures?: boolean;
 	noRescue?: boolean;
 	/**
 	 * Film this take. Phase 5 only — a measurement arm must never set it, because recording
@@ -544,7 +546,39 @@ const PHASE5: Arm[] = [
 	})),
 ];
 
-export const MATRIX: readonly Arm[] = [...PHASE1, ...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE3, ...PHASE4, ...PHASE5];
+/**
+ * Phase 6 — procedures: can an agent's own written-up success replace the exploration pass?
+ *
+ * The question Yarn actually has to answer to ship this. Jasper's budget is ~24h to onboard a
+ * new app, and the current answer to "how" is a 40-minute frontier sweep producing a topological
+ * map. A procedure is the other possibility: run the task once however you can, have the agent
+ * write down the route that worked, and ground every later run on that. If it holds, onboarding
+ * cost collapses from a sweep to a handful of successful runs.
+ *
+ * PREREQUISITE, and it is not optional: procedures are harvested from judged-PASS phase-2 runs
+ * by `./run bench harvest`, which needs `bench judge` to have run first. There is no arm here
+ * that produces them — harvesting is an operator step, deliberately, because promoting a
+ * procedure makes it an INPUT to future runs and that should never happen as a side effect of
+ * dispatching a phase.
+ *
+ * The comparison is three-way against arms that already exist at n=3 on the same task and
+ * backend: p2-<backend>-ungrounded (nothing), p2-<backend>-grounded (the appmap), and these
+ * (a previous run's write-up). USE_PROCEDURES REPLACES the appmap rather than adding to it —
+ * stacking them would measure neither.
+ */
+const PHASE6: Arm[] = BACKENDS.map((backend): Arm => ({
+	id: `p6-${backend}-procedure`,
+	phase: 6,
+	kind: "task",
+	app: BENCH_APP,
+	task: CANONICAL_TASK,
+	n: 3,
+	dispatch: { backend, useProcedures: true },
+	sourceArm: `p2-${backend}-grounded`,
+	informs: "can a harvested procedure replace the appmap? actions/tokens vs grounded and ungrounded on the same task",
+}));
+
+export const MATRIX: readonly Arm[] = [...PHASE1, ...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE3, ...PHASE4, ...PHASE5, ...PHASE6];
 
 export const phaseArms = (phase: Phase): Arm[] => MATRIX.filter((a) => a.phase === phase);
 
@@ -638,6 +672,7 @@ export function flagsLine(arm: Arm): string {
 	if (d.axdomOff) parts.push("AXDOM=0");
 	if (d.noGrounding) parts.push("NO_GROUNDING=1");
 	if (d.useRecipe) parts.push("USE_RECIPE=1");
+	if (d.useProcedures) parts.push("USE_PROCEDURES=1");
 	if (d.noRescue) parts.push("--no-rescue");
 	for (const [k, v] of Object.entries(arm.env ?? {})) parts.push(`${k}=${v}`);
 

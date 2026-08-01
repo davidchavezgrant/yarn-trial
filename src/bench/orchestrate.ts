@@ -472,8 +472,15 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 export function printPlan(log: (line: string) => void = console.log): void {
 	const total = MATRIX.reduce((sum, a) => sum + a.n, 0);
 	log(`benchmark matrix — ${MATRIX.length} arms, ${total} runs (dom cut; Notion Calendar slice cut, vision-only tier completed 2026-07-31 — reasons in matrix.ts)`);
-	for (const phase of [1, 2, 3, 4, 5] as Phase[]) {
-		const note = phase === 4 ? " (optional)" : phase === 5 ? " (filmed takes — run last; --record changes the action space)" : "";
+	for (const phase of [1, 2, 3, 4, 5, 6] as Phase[]) {
+		const note =
+			phase === 4
+				? " (optional)"
+				: phase === 5
+					? " (filmed takes — run last; --record changes the action space)"
+					: phase === 6
+						? " (procedures — needs `bench judge` then `bench harvest` first, and each procedure promoted)"
+						: "";
 		log(`\nphase ${phase} — ${phaseRunCount(phase)} runs${note}`);
 		for (const arm of phaseArms(phase)) {
 			log(`  ${arm.id}  n=${arm.n}  ${arm.kind}  "${arm.app}"  ${flagsLine(arm)}`);
@@ -546,9 +553,10 @@ function warnRollover(date: string, outRoot: string, log: (s: string) => void): 
 }
 
 const USAGE = `usage: ./run bench plan
-       ./run bench phase <1|2|3|4|5> [--model <id>] [--date YYYY-MM-DD] [--host <mac>] [--go] [--force]
+       ./run bench phase <1|2|3|4|5|6> [--model <id>] [--date YYYY-MM-DD] [--host <mac>] [--go] [--force]
        ./run bench collect [--date YYYY-MM-DD]
        ./run bench judge [--cross] [--date YYYY-MM-DD]
+       ./run bench harvest [--date YYYY-MM-DD]
        ./run bench truecost [--since <RFC3339>] [--bucket 1m|1h|1d]
        ./run bench challenger --model <id> [--primary <id>] [--go]
 
@@ -600,7 +608,12 @@ judge    grades collected runs with the offline adversarial judge. --cross adds 
          the primary contestant. Agreement makes a verdict solid; disagreement is the finding.
          Base judge is pinned to
          azure/gpt-5.6-sol; JUDGE_MODEL overrides); idempotent — skips runs already
-         judged. Run after runs land, before reading the report's Judge section.`;
+         judged. Run after runs land, before reading the report's Judge section.
+harvest  turns judged-PASS phase-2 runs into procedures — prose describing the route that
+         worked, for a later agent to ground on. Refuses any run the judge did not pass, so
+         run \`bench judge\` first. Writes into each run's own folder; promoting one into
+         docs/procedures/ (\`./run procedures promote <stamp>\`) is a SEPARATE, deliberate step,
+         because that is what makes it an input to phase 6.`;
 
 async function main(argv: string[]): Promise<number> {
 	const cmd = argv[0];
@@ -611,7 +624,7 @@ async function main(argv: string[]): Promise<number> {
 	}
 	if (cmd === "phase") {
 		const phase = Number(argv[1]);
-		if (![1, 2, 3, 4, 5].includes(phase)) {
+		if (![1, 2, 3, 4, 5, 6].includes(phase)) {
 			console.error(USAGE);
 
 			return EXIT_REFUSED;
@@ -710,6 +723,20 @@ async function main(argv: string[]): Promise<number> {
 
 		// Advisory step: per-entry failures are reported above, not fatal — a re-run judges
 		// only what failed or landed since.
+		return EXIT_OK;
+	}
+	if (cmd === "harvest") {
+		const { harvestBench } = await import("./harvest.js");
+		const hDate = dateArg(argv);
+		const outcome = await harvestBench({ ...(hDate ? { date: hDate } : {}) });
+		console.log(
+			`harvested ${outcome.harvested.length}, skipped ${outcome.skipped.length}, refused ${outcome.refused.length}, failed ${outcome.failed.length}`,
+		);
+		// Refusals print as findings, not errors: "which runs were not good enough to teach
+		// from" is the phase-6 datum most likely to be interesting.
+		for (const r of outcome.refused) console.log(`  – ${r.jobId}: ${r.reason}`);
+		for (const f of outcome.failed) console.log(`  ✗ ${f.jobId}: ${f.error}`);
+
 		return EXIT_OK;
 	}
 	console.error(USAGE);

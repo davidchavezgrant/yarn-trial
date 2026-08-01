@@ -591,6 +591,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 						...(rec.axdomOff ? { AXDOM: "0" } : {}),
 						...(rec.noGrounding ? { NO_GROUNDING: "1" } : {}),
 						...(rec.useRecipe ? { USE_RECIPE: "1" } : {}),
+						...(rec.useProcedures ? { USE_PROCEDURES: "1" } : {}),
 						...(rec.appmapVariant ? { APPMAP_VARIANT: rec.appmapVariant } : {}),
 						...(rec.model ? { AGENT_MODEL: rec.model } : {}),
 						...(rec.steps ? { AGENT_STEPS: String(rec.steps) } : {}),

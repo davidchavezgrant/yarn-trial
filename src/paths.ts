@@ -153,6 +153,17 @@ export const RUN_FILES = {
 	 */
 	recipe: "recipe.json",
 	/**
+	 * Task-level procedural knowledge harvested FROM this run: prose describing how to accomplish
+	 * the goal in this app, written for a future agent to read.
+	 *
+	 * Distinct from both neighbours. `appmap.md` is topology — where things are, task-agnostic,
+	 * and it never says which route to take. `recipe.json` is a frozen click sequence replayed by
+	 * machine with exact (name, surface, role) resolution, so a renamed control is an error rather
+	 * than an adaptation. This is the middle tier: how to do this CLASS of task, prose a model can
+	 * adapt when the control moved or the value differs.
+	 */
+	procedure: "procedure.md",
+	/**
 	 * The standalone cleanup CLI's receipt (src/core/cleanup.ts): what it planned per journal
 	 * entry and what came of the attempt. An ordinary run folds this into run.json
 	 * (`cleanupReport`); the crashed run the CLI exists for has no run log to fold into, and
@@ -307,6 +318,19 @@ export function appmapsDir(): string {
 /** Curated, hand-written, read-only at runtime. */
 export function recipesDir(): string {
 	return `${resourcesRoot()}/docs/recipes`;
+}
+
+/**
+ * Harvested procedures — machine output, like docs/appmaps and unlike docs/recipes.
+ *
+ * A SEPARATE directory from recipes, not a filename convention inside it, because the two are
+ * different classes of input and this project has already been burned once by letting curated
+ * and generated grounding share a home: appmaps that were partly hand-written made a measurement
+ * report recipe-following as autonomous grounding. `dataRoot`, not `resourcesRoot`, because
+ * unlike recipes these are written at runtime.
+ */
+export function proceduresDir(): string {
+	return `${dataRoot()}/docs/procedures`;
 }
 
 /** Compiled sidecars that ship with the code (`native/axdom`, `native/liveview`). */

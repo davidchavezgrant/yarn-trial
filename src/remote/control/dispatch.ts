@@ -92,6 +92,8 @@ export interface DispatchOptions {
 	/** `NO_GROUNDING=1`: the ungrounded arm — the child ignores its appmap. */
 	noGrounding?: boolean;
 	/** `USE_RECIPE=1`: ground from the curated docs/recipes/<app>.md notes instead. */
+	/** `USE_PROCEDURES=1`: ground on a harvested procedure for this exact task. */
+	useProcedures?: boolean;
 	useRecipe?: boolean;
 	/** Step budget override for the child run (AGENT_STEPS on the runner). */
 	steps?: number;
@@ -236,6 +238,7 @@ export async function dispatch(opts: DispatchOptions): Promise<DispatchResult> {
 		axdomOff: Boolean(opts.axdomOff),
 		noGrounding: Boolean(opts.noGrounding),
 		useRecipe: Boolean(opts.useRecipe),
+		useProcedures: Boolean(opts.useProcedures),
 		noRescue: Boolean(opts.noRescue),
 		...(opts.backend ? { backend: opts.backend } : {}),
 		// The path is data-root-relative — the one key both machines share. The runner owns
@@ -884,6 +887,7 @@ async function main(argv: string[]): Promise<number> {
 			// The curated-recipe grounding tier (docs/recipes/<app>.md), same knob the bench
 			// arms use — app method knowledge belongs there, never in the task prompt.
 			useRecipe: argv.includes("--use-recipe"),
+			useProcedures: argv.includes("--use-procedures"),
 			// --steps N: budget override for runs whose recovery overhead outgrows the
 			// default 15 (validated to 1..100 on the runner).
 			...(argv.includes("--steps") ? { steps: Number(argv[argv.indexOf("--steps") + 1]) || undefined } : {}),

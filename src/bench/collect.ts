@@ -378,6 +378,7 @@ async function humanizePulled(entry: ManifestEntry, job: Record<string, any> | u
  */
 export function expectedProvenance(arm: Arm): RunMetrics["provenance"] {
 	if (arm.dispatch.noGrounding) return "none";
+	if (arm.dispatch.useProcedures) return "procedure";
 	if (arm.dispatch.useRecipe) return "curated";
 
 	return arm.env?.APPMAP_VARIANT === "vision" ? "explore-vision" : "explore";
