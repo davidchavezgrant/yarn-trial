@@ -1092,3 +1092,23 @@ test("MATRIX__PairsEveryPerceptionFloorWithAnUngroundedArm__When__AConditionIsMe
 	assert.ok(min, "no minimum-context ungrounded arm — nothing establishes the matrix floor");
 	assert.equal(perceptionLine(min), "AX tree (no DOM attrs)");
 });
+
+test("MATRIX__FilmsEveryMeasuredConfig__When__PhaseFiveIsDerived", () => {
+	// "Recordings of everything" is a coverage claim, so it should be a test rather than a
+	// habit. Phase 5 derives from the phase-2 arms, so the guarantee holds automatically —
+	// but only while nothing is added to phase 2 outside the derived set, which is exactly
+	// the mistake a future edit would make.
+	const measured = MATRIX.filter((a) => a.phase === 2 && a.kind === "task");
+	const filmed = MATRIX.filter((a) => a.phase === 5 && a.kind === "task");
+	const shape = (a: Arm) => JSON.stringify({ ...a.dispatch, record: undefined, env: a.env ?? null });
+
+	assert.equal(filmed.length, measured.length, "every measured config needs a filmed twin");
+	const filmedShapes = new Set(filmed.map(shape));
+	for (const m of measured) assert.ok(filmedShapes.has(shape(m)), `${m.id} is measured but never filmed`);
+	// Including the floor and the minimum-context pair — the reorder question (does demo
+	// conduct break this config?) applies hardest where the config is already marginal.
+	for (const id of ["p2-min-context-ungrounded", "p2-vision-only-ungrounded"]) {
+		const m = MATRIX.find((a) => a.id === id);
+		assert.ok(m && filmedShapes.has(shape(m)), `${id} has no filmed twin`);
+	}
+});

@@ -269,6 +269,7 @@ export async function collect(opts: CollectOptions = {}): Promise<CollectOutcome
 		}
 
 		const next = groundingChecked(collectEntry(entry, job, dataDir, state, benchDir(date, outRoot)));
+		await humanizePulled(entry, job, dataDir, log);
 		manifest = updateEntry(manifest, next);
 		writeManifest(manifest, outRoot);
 		collected.push(entry.jobId);
@@ -300,6 +301,43 @@ export function archiveDirFor(benchRoot: string, entry: ManifestEntry): string {
 	// reason for repeating. The repeats exist to give the backend comparison an error bar;
 	// an archive that holds one of two is worse than not repeating, because it looks complete.
 	return path.join(benchRoot, "appmaps", model, entry.armId, entry.jobId);
+}
+
+/**
+ * Composite the synthetic cursor over a filmed run, as part of collecting it.
+ *
+ * The recording the fleet produces has no cursor in it: Yarn reimposes one in post, and
+ * `humanize` draws it from the run's OWN trajectory — click points, target rects, and the
+ * real typing timings the run recorded. Until now that was a manual `npm run humanize --
+ * <stamp>` per filmed run, which for a 16-take phase 5 is 16 commands nobody will remember to
+ * run, on artifacts that are ~200MB each and cannot be re-rendered once the frames are gone.
+ *
+ * Shelled out rather than called: humanize is a script whose work lives inside main(), and it
+ * spawns a Python renderer anyway, so a subprocess is the honest shape.
+ *
+ * Idempotent and non-fatal, like the rest of collect. A run whose cursor render already
+ * exists is skipped, and a render failure is a log line — the measurement is already banked
+ * by the time this runs, and losing it to a video step would be the wrong trade. HUMANIZE=0
+ * turns it off.
+ */
+async function humanizePulled(entry: ManifestEntry, job: Record<string, any> | undefined, dataDir: string, log: (s: string) => void): Promise<void> {
+	if (process.env.HUMANIZE === "0") return;
+	// Only filmed runs have a recording to draw on; the arm's own flag is the authority
+	// because a job record can predate the flag being persisted.
+	if (!armById(entry.armId)?.dispatch.record && !job?.artifacts?.recording) return;
+	const dir = path.join(dataDir, "out", "recording", entry.jobId);
+	if (!fs.existsSync(path.join(dir, "frames"))) return;
+	// humanize.ts writes humanized.mp4 beside the raw window.mp4; present means done.
+	if (fs.existsSync(path.join(dir, "humanized.mp4"))) return;
+
+	try {
+		const { execFile } = await import("node:child_process");
+		const { promisify } = await import("node:util");
+		await promisify(execFile)("npx", ["tsx", "src/cursor/humanize.ts", entry.jobId], { cwd: process.cwd(), timeout: 10 * 60_000 });
+		log(`  ↳ cursor composited for ${entry.jobId}`);
+	} catch (e) {
+		log(`  ↳ cursor render failed for ${entry.jobId}: ${(e as Error).message.slice(0, 120)}`);
+	}
 }
 
 /**
