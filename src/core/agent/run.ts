@@ -126,6 +126,10 @@ export async function main(): Promise<void> {
 	// Whether the axdom sidecar supplied DOM id/class this run. Recorded so a run's
 	// element quality is legible from its log rather than inferred.
 	let domEnrichment: { frames: number; unavailable?: string } = { frames: 0, unavailable: "not observed" };
+	// The AX→screenshot transform's inputs, banked once per run. Recorded because the Library
+	// -page offset (~43px, reproduced across four runs, cause unknown) cannot be diagnosed from
+	// any log we currently write: none of them says what the transform was derived from.
+	let geometryBasis: ObservationBundle["geometryBasis"];
 	/**
 	 * Window geometry, for a post-pass reconciling driver coordinates against the captured frames.
 	 * Declared out here because the ax backend and the staging result are scoped to the try below,
@@ -204,6 +208,7 @@ export async function main(): Promise<void> {
 					hintReasons: audit.reasons,
 					homeReset,
 					domEnrichment,
+					...(geometryBasis ? { geometryBasis } : {}),
 					windowGeometry,
 					...(activation ? { activation } : {}),
 					sessionRevivals: driver?.revivals ?? 0,
@@ -532,6 +537,7 @@ export async function main(): Promise<void> {
 			blindStreak: 0,
 		};
 		domEnrichment = { frames: obs.domEnriched, unavailable: obs.domUnavailable };
+		geometryBasis = obs.geometryBasis ?? geometryBasis;
 		console.log(`dom enrichment: ${obs.domEnriched} frames${obs.domUnavailable ? ` (${obs.domUnavailable})` : ""}`);
 		const messages: Anthropic.MessageParam[] = [
 			{

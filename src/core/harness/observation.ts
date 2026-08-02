@@ -92,6 +92,19 @@ export interface ObservationBundle {
 	/** Set when enrichment could not run (sidecar unbuilt, disabled, native app). */
 	domUnavailable?: string;
 	/**
+	 * The inputs the AX→screenshot transform was derived from, for diagnosing a mis-aimed click.
+	 * Absent on cdp, which needs no transform: `scale:"css"` makes screenshot pixels and the
+	 * coordinates act consumes the same space by construction.
+	 */
+	geometryBasis?: {
+		window?: { x: number; y: number; w: number; h: number };
+		shotW: number;
+		shotH: number;
+		scale: number;
+		heightGapPoints?: number;
+		structuredKeys: string[];
+	};
+	/**
 	 * Every named element's position, keyed by name. The geometry channel's raw material:
 	 * comparing two observations' maps says which elements moved and by how far.
 	 *
@@ -461,6 +474,34 @@ export async function observe(
 	const winEl = elements.find((e) => e.role === "AXWindow" && (e.frame?.w ?? 0) > 0);
 	const shotW = Number(structured.screenshot_width ?? 0);
 	const scale = winEl && shotW ? shotW / winEl.frame.w : 0;
+	/**
+	 * The inputs this transform is derived FROM, kept so the next mis-click is diagnosable
+	 * instead of re-litigated.
+	 *
+	 * Yarn's Library page reports a rect ~43 frame px above the control it names — the same
+	 * offset in a run from 2026-07-31 and again in three runs on 2026-08-02, so it is
+	 * systematic, not a layout race. x is off by ~7 while y is off by ~43, and a bad SCALE
+	 * would skew both in proportion; a y-only shift means the ORIGIN is wrong — the screenshot's
+	 * true top edge and `winEl.frame.y` are not the same line.
+	 *
+	 * That is testable from the numbers below and cannot be tested from the run logs we have,
+	 * because none of them recorded these. Whether the driver even reports the screenshot's
+	 * HEIGHT decides the fix: if it does, `shotH / scale` vs `winEl.frame.h` measures the
+	 * vertical discrepancy directly and the correction needs no constant.
+	 */
+	const shotH = Number(structured.screenshot_height ?? 0);
+	const geometryBasis = {
+		window: winEl?.frame ? { x: winEl.frame.x, y: winEl.frame.y, w: winEl.frame.w, h: winEl.frame.h } : undefined,
+		shotW,
+		shotH,
+		scale,
+		// Nonzero means the screenshot covers a taller area than the AX window frame claims —
+		// on macOS the extra is at the top, which is exactly the sign and shape of this bug.
+		heightGapPoints: shotH && scale ? Number((shotH / scale - (winEl?.frame?.h ?? 0)).toFixed(2)) : undefined,
+		// Every key the driver actually returned, so the next reader does not have to guess
+		// which fields exist. Cheap: a dozen short strings, once per observation.
+		structuredKeys: Object.keys(structured ?? {}).sort(),
+	};
 	const toPixels = (f: any): { x: number; y: number; w: number; h: number } =>
 		scale && f
 			? {
@@ -536,6 +577,7 @@ export async function observe(
 		domEnriched: dom.byFrame.size,
 		domUnavailable: dom.unavailable,
 		frames,
+		geometryBasis,
 	};
 }
 
