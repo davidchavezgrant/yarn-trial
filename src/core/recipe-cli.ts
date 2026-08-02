@@ -22,7 +22,7 @@ import { compileRecipe, readRecipe, type Recipe, RecipeCompileError, recipeFileF
 import { modelRescue, replayRecipe } from "./replay.js";
 import { runTeardown } from "./teardown.js";
 import { LIVE_DIR, RUN_FILES, archiveRun, recipesDir, relToData, runDir, runFile, runPath } from "../paths.js";
-import { parseTarget } from "./target.js";
+import { electronTarget, parseTarget } from "./target.js";
 import { coldStart } from "./coldstart.js";
 import { type DriverSync, finishRecording, newRecording, startRecording } from "./agent/recording.js";
 
@@ -133,7 +133,15 @@ async function main(): Promise<void> {
 	const wantCdp = recipe.backend === "cdp" || !!url;
 	if (recipe.backend === "cdp" && !url && recipe.app.includes("."))
 		throw new RecipeCompileError(`this recipe was recorded on a web target — pass --url https://${recipe.app}`);
-	const target = url ? parseTarget(["--url", url], recipe.app).target : parseTarget([], recipe.app).target;
+	let target = url ? parseTarget(["--url", url], recipe.app).target : parseTarget([], recipe.app).target;
+	// An app target driven over CDP must be marked cdpAttach, exactly as agent/cli.ts:73 and
+	// explore/cli.ts:63 do it — that flag is what lets acquisition (re)launch the app with
+	// --remote-debugging-port. Replay was the one entry point that never got it, and it went
+	// unnoticed because replay had only ever been run by hand against an already-flagged app.
+	// The first fleet dispatch of it failed 6 for 6 across two Macs: nothing was listening on
+	// :9222, nothing was allowed to relaunch Yarn, and the runs died before writing a log —
+	// which collect reasonably but wrongly read as two poisoned hosts.
+	if (wantCdp && target.kind === "app") target = electronTarget(recipe.app);
 	// runKey, not mintRunKey: a dispatched replay is handed RUN_STAMP by the runner, and the
 	// job id must be the key the run log and journal land under — the same contract task and
 	// explore runs already honour (see src/core/harness/run.ts).

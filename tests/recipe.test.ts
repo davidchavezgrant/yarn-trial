@@ -425,3 +425,25 @@ test("replayRecipe__WritesStepRecords__When__Replaying", async () => {
 	assert.equal(result.records[0].verificationChannel, "text");
 	assert.match(result.records[0].modelReasoning ?? "", /src-stamp/);
 });
+
+test("replayEntryPoints__MarkTheAppTargetForAttach__When__DrivingOverCdp", () => {
+	// An app target driven over CDP must carry cdpAttach: that flag is what lets acquisition
+	// (re)launch the app with --remote-debugging-port. agent/cli.ts and explore/cli.ts both do
+	// it; recipe-cli.ts did not, and the gap was invisible locally because a hand-run replay
+	// always followed a flagged launch by some earlier command.
+	//
+	// The first fleet dispatch of phase 3 failed 6 for 6 across two Macs: nothing listening on
+	// :9222, nothing permitted to relaunch Yarn, runs dead before they wrote a log — which
+	// collect read as two poisoned hosts, blaming the machines for a one-line omission.
+	//
+	// A CANARY over source, not a proof: standing up a CDP endpoint in a unit test costs more
+	// than it is worth, and the three call sites word the branch differently. What it catches is
+	// an entry point that loses the upgrade entirely — which is exactly how this shipped.
+	for (const rel of ["agent/cli.ts", "explore/cli.ts", "recipe-cli.ts"]) {
+		const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "core", rel), "utf8");
+		assert.ok(
+			/=\s*electronTarget\(/.test(src),
+			`${rel} drives an app over cdp and must upgrade its target with electronTarget(), or acquisition cannot relaunch the app`,
+		);
+	}
+});
