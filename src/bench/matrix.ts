@@ -263,6 +263,25 @@ const PHASE1: Arm[] = [
 	 * per-app budget Jasper described. Read `nodes` and `surfaces` against p1-explore-ax,
 	 * which differs from this arm in nothing but the screenshot channel.
 	 */
+	/**
+	 * Vision-only EXPLORATION on cdp — the pass that writes `yarn.cdp.vision`.
+	 *
+	 * Needed structurally (the cdp vision-only grounded arm has to read a map some pass wrote)
+	 * and worth running on its own: vision-only was phase 1's weakest explorer at 9-21 surfaces
+	 * against 27-50 for the element arms, and it addresses by screenshot pixel on the backend
+	 * where those pixels do not match the frame the harness reports. Whether a vision-only pass
+	 * is genuinely poor at discovery, or was simply unable to open what it clicked, is
+	 * unanswered — and this is the arm that answers it.
+	 */
+	{
+		id: "p1-explore-vision-cdp",
+		phase: 1,
+		kind: "explore",
+		app: BENCH_APP,
+		n: 1,
+		dispatch: { backend: "cdp", noAx: true },
+		informs: "does vision-only discovery improve when its clicks land — surfaces/nodes against p1-explore-vision on ax",
+	},
 	{
 		id: "p1-explore-no-vision",
 		phase: 1,
@@ -716,6 +735,31 @@ const PHASE7: Arm[] = [
 	// only task with 45 runs of Sol baseline behind it.
 	task("p7-claude-cdp-ungrounded", { backend: "cdp", noGrounding: true, model: BENCH_ALT_MODEL }, "is the ungrounded floor a model property or a general one", { phase: 7 }),
 	task("p7-claude-cdp-grounded", { backend: "cdp", model: BENCH_ALT_MODEL }, "does grounding lift Claude the way it lifts Sol", { phase: 7 }),
+	/**
+	 * Vision-only, re-run on the actuator that can aim.
+	 *
+	 * Every vision-only arm in phase 2 went 0/3, and I reported that as a perception result —
+	 * "vision alone cannot find the controls". The failure classification says otherwise: 87 of
+	 * their unverified steps are `target-never-appeared`, the signature of a click that did not
+	 * land, and vision-only addresses by screenshot pixel on a backend where the AX frame and
+	 * the screen disagree by ~40px. Its clicks were missing, not its eyes.
+	 *
+	 * On cdp the class is structurally absent (`scale:"css"` ties screenshot pixels to the
+	 * coordinates act consumes), so these arms measure what the condition was always for. If
+	 * they still fail, THAT is the perception result — and it will be the first honest one.
+	 */
+	task("p7-vision-only-cdp-ungrounded", { backend: "cdp", noAx: true, noGrounding: true }, "vision-only floor on an actuator that can aim", { phase: 7 }),
+	task("p7-vision-only-cdp-grounded", { backend: "cdp", noAx: true }, "does a map lift vision-only once its clicks land (map from an element-perceiving pass)", { phase: 7 }),
+	/**
+	 * Vision-only at BOTH stages on cdp — the ax pair's `-visionmap` arm, on an actuator whose
+	 * screenshot pixels and click coordinates are the same space. This is the honest version of
+	 * the app-with-no-usable-AX deploy story: the ax pair could only ever answer it through a
+	 * click path that misses by ~40px on this app.
+	 */
+	task("p7-vision-only-cdp-visionmap", { backend: "cdp", noAx: true }, "grounding AND actuation vision-only, on the backend that can aim", {
+		phase: 7,
+		env: { APPMAP_VARIANT: "vision" },
+	}),
 	task("p7-claude-cdp-procedure-from-ungrounded", { backend: "cdp", useProcedures: true, procedureLineage: "ungrounded", model: BENCH_ALT_MODEL }, "does the replacement result survive a model change — the finding most worth a second model", { phase: 7 }),
 ];
 

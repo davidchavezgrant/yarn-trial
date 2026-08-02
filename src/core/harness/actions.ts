@@ -219,15 +219,34 @@ Painted targets (canvases, timelines, image regions):
  * reads the harness's own observation, which keeps its element text regardless of what the
  * model was shown — and that is what makes this arm comparable to the others at all.
  */
-export const VISION_ONLY_RULES = `Rules for this driver (follow them):
-- You see the screenshot ONLY. There is no element list and no element_index — never pass one. Address every click/drag by screenshot pixel: x/y on click, from_x/from_y/to_x/to_y on drag.
+/**
+ * The pixel-addressing discipline itself, with nothing backend-specific in it. Split out when
+ * vision-only became runnable on cdp: the AX advice below (delivery_mode, silent no-op clicks)
+ * names driver concepts the cdp act tool does not have, and handing a model instructions for a
+ * tool it is not holding is how you get arguments rejected by the schema.
+ */
+const VISION_ONLY_CORE = `- You see the screenshot ONLY. There is no element list and no element_index — never pass one. Address every click/drag by screenshot pixel: x/y on click, from_x/from_y/to_x/to_y on drag.
 - Screenshot pixels are exactly what the driver consumes — the pixel you read IS the pixel it acts on.
 - Aim at the CENTER of the thing you mean. Small targets punish edge guesses.
 - Text fields are often pre-filled: click the field to focus it, then press cmd+a, then type. Never type without focusing first.
-- Menu-bar keyboard shortcuts (like cmd+,) need delivery_mode "foreground". Escape to close overlays also usually needs "foreground".
-- A silent no-op click means your next keystrokes hit global shortcuts and can open random overlays. If the screenshot shows an unexpected overlay, close it (escape, foreground) before continuing.
 - Your expectations are still checked against the app's rendered text (the harness reads it even though you cannot), so write textIncludes/textExcludes with the literal strings you can READ IN THE SCREENSHOT.
 - Dragging a thing puts it under wherever you released. A reverse drag is NOT an undo.`;
+
+export const VISION_ONLY_RULES = `Rules for this driver (follow them):
+${VISION_ONLY_CORE}
+- Menu-bar keyboard shortcuts (like cmd+,) need delivery_mode "foreground". Escape to close overlays also usually needs "foreground".
+- A silent no-op click means your next keystrokes hit global shortcuts and can open random overlays. If the screenshot shows an unexpected overlay, close it (escape, foreground) before continuing.`;
+
+/**
+ * Vision-only over CDP. Same discipline, no driver concepts — and one guarantee the AX path
+ * cannot make: the screenshot is captured at `scale:"css"`, so its pixels are the SAME
+ * coordinate space the click is dispatched in. On the AX path those two disagree (~40px on
+ * Yarn's Library page, cause unknown), which is what made vision-only look like a perception
+ * failure when it was an aiming one.
+ */
+export const CDP_VISION_ONLY_RULES = `Rules for this driver (follow them):
+${VISION_ONLY_CORE}
+- The page is a browser view: scroll to bring off-screen content in rather than guessing at coordinates outside the visible area.`;
 
 /**
  * Recorded-run variants of the rules blocks. The non-demo rules teach element_index
@@ -240,6 +259,8 @@ export const DEMO_DRIVER_RULES = `${DRIVER_RULES}
 Recorded-run actuation (this run is FILMED):
 - On type_text, pass the target field's element_index and the FULL text: the harness clicks the field for real and types it keystroke by keystroke. Do not pre-click the field as a separate step unless you need cmd+a first to replace its contents.
 - set_value does not exist on recorded runs — an atomic value write is invisible on film.`;
+
+export const DEMO_CDP_VISION_ONLY_RULES = `${CDP_VISION_ONLY_RULES}\n- Mouse-first: move to a target and click it, so the film shows a pointer doing the work.`;
 
 export const DEMO_VISION_ONLY_RULES = `${VISION_ONLY_RULES}
 

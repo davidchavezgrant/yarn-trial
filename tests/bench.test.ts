@@ -49,7 +49,10 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// Nine: ax x2 and cdp x2 (the reference arms, repeated for an error bar), plus the five
 	// single-condition cells that complete the perception grid — element channel in four
 	// states crossed with screenshots on/off, minus the refused empty one.
-	assert.equal(phaseRunCount(1), 9);
+	// Ten since 2026-08-02: the vision-only cdp explore arm joined, both to write the map its
+	// task arm reads and to separate "vision-only discovers little" from "vision-only could not
+	// open what it clicked".
+	assert.equal(phaseRunCount(1), 10);
 	// Phase 2: core 2 backends × 2 grounding × 3, plus 6 slices × 3. Two blocks were cut
 	// 2026-07-31 after their prerequisites were CHECKED rather than assumed (matrix.ts holds
 	// the full reasoning at each site): the Notion Calendar slice (4 arms × 2 = 8 runs — the
@@ -100,9 +103,22 @@ test("MATRIX__PassesGoalOnlyAudit__When__EveryTaskArmIsChecked", () => {
 	}
 });
 
-test("MATRIX__KeepsVisionOnlyOnAxBackend__When__NoAxIsSet", () => {
-	// Vision-only is ax-only by construction: cdp observations ARE ref lists.
-	for (const arm of MATRIX) if (arm.dispatch.noAx) assert.equal(arm.dispatch.backend, "ax", arm.id);
+test("MATRIX__MeasuresVisionOnlyOnBothBackends__When__NoAxIsSet", () => {
+	// This invariant INVERTED, deliberately. It used to assert vision-only was ax-only, on the
+	// reasoning that "a cdp observation IS a ref list, so 'Vision only' cannot be expressed on
+	// that backend". The suppression never lived in the backend — the agent loop hides the list
+	// from the model (observationBlocks(obs, vision, !noAx)) while the harness keeps the full
+	// observation for its gates — and cdp.act has taken a raw x/y point for some time.
+	//
+	// It matters because every vision-only arm went 0/3 and I read that as perception. The
+	// failure classification says aiming: 87 `target-never-appeared` events, on the one backend
+	// whose reported frames and screen pixels disagree. Measuring it on cdp, where scale:"css"
+	// ties the two together, is what separates the two explanations.
+	const vo = MATRIX.filter((a) => a.dispatch.noAx);
+	assert.ok(vo.some((a) => a.dispatch.backend === "cdp"), "vision-only must be measured on cdp");
+	assert.ok(vo.some((a) => a.dispatch.backend === "ax"), "and still on ax, or there is no comparison");
+	// A vision-only arm must never also be handed the element channel by another flag.
+	for (const a of vo) assert.notEqual(a.dispatch.axdomOff, true, `${a.id} combines --no-ax with AXDOM=0, which is redundant and confusing`);
 });
 
 test("MATRIX__LinksSourceArms__When__CompileOrReplay", () => {
@@ -240,17 +256,27 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		const fake = fakeDispatch();
 		const code = await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
 		assert.equal(code, EXIT_OK);
-		// Nine: the two reference arms twice each, plus five single-condition cells.
-		assert.equal(fake.calls.length, 9);
+		// Ten: the two reference arms twice each, five single-condition cells, and the
+		// vision-only cdp pass added 2026-08-02.
+		assert.equal(fake.calls.length, 10);
 		// The two single-channel passes must differ ONLY in which channel they drop — same
 		// backend, same app — or they are not a comparison.
 		const single = fake.calls.filter((c) => c.noAx || c.noVision);
-		// Four single-channel cells now: vision-only, ax-no-vision, ax-noaxdom-no-vision and
-		// cdp-no-vision. Vision-only must stay on ax — cdp addresses actions by ref, so
-		// dropping the element list drops the addressing with it.
-		assert.equal(single.length, 4);
-		assert.equal(single.filter((c) => c.noAx).length, 1, "exactly one screenshots-only pass");
-		for (const c of single.filter((x) => x.noAx)) assert.equal(c.backend, "ax", "vision-only is ax-only by construction");
+		// Five single-channel cells: vision-only on BOTH backends, ax-no-vision,
+		// ax-noaxdom-no-vision and cdp-no-vision.
+		//
+		// Vision-only used to be pinned to ax here, on the reasoning that "cdp addresses actions
+		// by ref, so dropping the element list drops the addressing with it". The cdp act tool
+		// takes x/y — "pointer actions at viewport CSS-pixel coordinates read off the
+		// screenshot" — so pixel addressing was available on that backend all along. Running it
+		// on both is what separates vision-only's 0/3 into a perception result or an aiming one.
+		assert.equal(single.length, 5);
+		assert.equal(single.filter((c) => c.noAx).length, 2, "a screenshots-only pass per backend");
+		assert.deepEqual(
+			single.filter((c) => c.noAx).map((c) => c.backend).sort(),
+			["ax", "cdp"],
+			"vision-only must be measured on the actuator that aims AND the one that does not",
+		);
 		assert.equal(single.filter((c) => c.noVision).length, 3);
 		// The perception grid must span BOTH backends, or the screenshot question is only
 		// answered on the fallback path and not on the one that ships.
@@ -275,7 +301,7 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		assert.ok(fake.calls.every((c) => c.app === "Yarn"), "every phase-1 arm targets Yarn");
 		// Every accepted job landed in the manifest, uncollected.
 		const m = readManifest(DATE, liveDir(dir));
-		assert.equal(m.entries.length, 9);
+		assert.equal(m.entries.length, 10);
 		assert.ok(m.entries.every((e) => !e.collected && e.host === "mac1"));
 	});
 });
@@ -296,6 +322,7 @@ test("runPhase__ShapesOptionsPerArm__When__Phase2Dispatches", async () => {
 			entry("p1-explore-ax-noaxdom", "explore-na", { collected: true, state: "done" }),
 			entry("p1-explore-ax-noaxdom-no-vision", "explore-nanv", { collected: true, state: "done" }),
 			entry("p1-explore-cdp-no-vision", "explore-cnv", { collected: true, state: "done" }),
+			entry("p1-explore-vision-cdp", "explore-vcdp", { collected: true, state: "done" }),
 		]);
 		writeManifest(m, liveDir(dir));
 
@@ -382,8 +409,8 @@ test("runPhase__SubmitsOnlyMissingSamples__When__ManifestAlreadyHoldsSome", asyn
 		const code = await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
 		assert.equal(code, EXIT_OK);
 		// ax and cdp are n=2, so seeding one sample of each leaves one of each outstanding,
-		// plus the un-seeded no-vision pass.
-		assert.equal(fake.calls.length, 3);
+		// plus the un-seeded no-vision pass and the vision-only cdp pass.
+		assert.equal(fake.calls.length, 4);
 	});
 });
 
@@ -891,12 +918,12 @@ test("runPhase__ScopesSampleCountsToTheModelPass__When__TwoModelsRunTheMatrix", 
 	await withTempAsync("bench-", async (dir) => {
 		const a = fakeDispatch();
 		await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: a.fn, log: () => {}, model: "openai/gpt-5.6-sol:nitro" });
-		assert.equal(a.calls.length, 9, "pass A submits the full phase");
+		assert.equal(a.calls.length, 10, "pass A submits the full phase");
 		for (const c of a.calls) assert.equal(c.model, "openai/gpt-5.6-sol:nitro");
 
 		const b = fakeDispatch();
 		await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: b.fn, log: () => {}, model: "claude-fable-5" });
-		assert.equal(b.calls.length, 9, "pass B submits the full phase again — pass A's entries are not its samples");
+		assert.equal(b.calls.length, 10, "pass B submits the full phase again — pass A's entries are not its samples");
 		for (const c of b.calls) assert.equal(c.model, "claude-fable-5");
 
 		// And a re-run of pass A tops up nothing.
@@ -1536,4 +1563,22 @@ test("matrixTasks__StateGoalsOnly__When__DeclaredInAnyPhase", () => {
 		const audit = auditTaskPrompt(a.task);
 		assert.equal(audit.hinted, false, `${a.id} declares a hinted task: ${audit.reasons.join("; ")}`);
 	}
+});
+
+test("visionOnlyArms__NeverOfferElementSearch__When__RunningOnEitherBackend", () => {
+	// A vision-only run must not be handed `find`: searching a snapshot the model cannot see
+	// returns element identity through the side door, and the arm stops being vision-only while
+	// still being labelled it. Asserted over source because the tool list is assembled at run
+	// time from the backend and noAx together.
+	const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "core", "agent", "run.ts"), "utf8");
+	assert.match(src, /noAx \? \[\] : \[cdpMod!\.CDP_FIND_TOOL\]/, "find must be withheld from a vision-only run");
+});
+
+test("visionOnlyArms__RunOnCdpToo__When__TheOffsetIsTheSuspect", () => {
+	// Vision-only was ax-only by an explicit refusal whose reason ("cdp observations ARE ref
+	// lists") stopped being true once cdp.act took raw x/y. The arms exist so the 0/3 result can
+	// be attributed: perception, or aiming.
+	const vo = MATRIX.filter((a) => a.dispatch.noAx);
+	assert.ok(vo.some((a) => a.dispatch.backend === "cdp"), "vision-only must be measured on cdp");
+	assert.ok(vo.some((a) => a.dispatch.backend === "ax"), "and still on ax, or the comparison is gone");
 });

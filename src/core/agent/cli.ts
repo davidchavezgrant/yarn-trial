@@ -76,12 +76,23 @@ export function parseCli(argv: string[]): CliConfig {
 		console.error("default backend: cdp for both target kinds — app targets are (re)launched with --remote-debugging-port, hands-off the operator's session. --backend ax opts into the cua driver.");
 		process.exit(1);
 	}
-	if (noAx && backendKind !== "ax") {
-		// The CDP backend's observations ARE ref lists; suppressing one leaves ref
-		// actions addressing handles the model has never seen.
-		console.error(`--no-ax only applies to the ax backend — the ${backendKind} backend has no AX list to drop.`);
-		process.exit(1);
-	}
+	/**
+	 * `--no-ax` on cdp used to be refused: "the CDP backend's observations ARE ref lists;
+	 * suppressing one leaves ref actions addressing handles the model has never seen." True when
+	 * written, and no longer — CdpBackend.act takes a raw x/y point, so a vision-only run on cdp
+	 * addresses by PIXEL and never touches a ref.
+	 *
+	 * Worth allowing because vision-only was the matrix's worst condition, 0/3 on every arm, and
+	 * the failures were 87 `target-never-appeared` events: its clicks were MISSING, not its
+	 * perception. It shares that with every other coordinate-clicking path on macOS AX, where
+	 * the frame reported for a control and the pixels on screen disagree by ~40px on Yarn's
+	 * Library page (docs/research/2026-07-31-library-page-ax-offset.md, cause still unknown).
+	 *
+	 * On cdp the class is structurally absent: `scale:"css"` keeps screenshot pixels 1:1 with
+	 * the coordinates act consumes. So cdp+vision-only measures what vision-only was always
+	 * meant to measure — can a model drive from pixels alone — instead of measuring an offset.
+	 */
+
 
 	// Prompt hygiene gate: a task prompt containing method hints is not a valid autonomy
 	// test, and the resulting run log is indistinguishable from a clean one unless we

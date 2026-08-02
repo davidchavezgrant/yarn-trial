@@ -7,6 +7,8 @@ import { Driver } from "../driver.js";
 import { envNum } from "../../env.js";
 import {
 	ACT_TOOL,
+	CDP_VISION_ONLY_RULES,
+	DEMO_CDP_VISION_ONLY_RULES,
 	DEMO_ACT_TOOL,
 	DEMO_DRIVER_RULES,
 	DEMO_VISION_ONLY_RULES,
@@ -378,10 +380,15 @@ export async function main(): Promise<void> {
 		// A recorded run is a filmed demo: every backend swaps in its demo rules/tool, and the
 		// prompt gains the DEMO CONDUCT section. Unrecorded runs are byte-identical to before.
 		const basePrompt = systemPrompt(
-			cdp
+			// Vision-only outranks the backend: the model is being given pixels and a pointer,
+			// and which process delivers the click is not its concern. cdp's rules describe ref
+			// addressing, which a vision-only run has no handles for.
+			cdp && !noAx
 				? cdpMod!.cdpRules(record)
 				: noAx
-					? (record ? DEMO_VISION_ONLY_RULES : VISION_ONLY_RULES)
+					? cdp
+						? (record ? DEMO_CDP_VISION_ONLY_RULES : CDP_VISION_ONLY_RULES)
+						: (record ? DEMO_VISION_ONLY_RULES : VISION_ONLY_RULES)
 					: (record ? DEMO_DRIVER_RULES : DRIVER_RULES),
 			vision,
 			targetVocabulary(target),
@@ -400,8 +407,16 @@ export async function main(): Promise<void> {
 		const system = grounding.notes ? `${basePrompt}\n\n${groundingHeading}\n${grounding.notes}${warnings}` : basePrompt;
 		// find is CDP-only: the snapshot is complete there, so find is just search. The AX
 		// path has no need for it (get_window_state returns the whole tree).
+		// Same rule as the prompt: a vision-only run gets the pixel-addressed act tool on EITHER
+		// backend, and no `find` — searching a snapshot the model cannot see would hand back
+		// element identity through the side door.
+		// A vision-only run keeps its backend's act tool — cdp's already takes x/y ("pointer
+		// actions at viewport CSS-pixel coordinates read off the screenshot"), which is exactly
+		// how a pixel-addressed agent acts — but loses `find`. Searching a snapshot the model
+		// cannot see would hand element identity back through the side door and stop the arm
+		// being vision-only at all.
 		const tools: Anthropic.Tool[] = cdp
-			? [cdpMod!.cdpActTool(record), cdpMod!.CDP_FIND_TOOL, CLAIM_TOOL, DONE_TOOL]
+			? [cdpMod!.cdpActTool(record), ...(noAx ? [] : [cdpMod!.CDP_FIND_TOOL]), CLAIM_TOOL, DONE_TOOL]
 			: [record ? DEMO_ACT_TOOL : ACT_TOOL, CLAIM_TOOL, DONE_TOOL];
 		// Last chance to take your hands off before the run owns the pointer.
 		await overlay.countdown();
