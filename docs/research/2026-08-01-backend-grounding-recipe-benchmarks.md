@@ -51,10 +51,10 @@
 | arm | model | flags | done | success | recipe steps | rescued x̄ | calls x̄ | s x̄ |
 |---|---|---|---|---|---|---|---|---|
 | p3-replay-ax | (default) | --backend ax | 0/3 | — | — | — | — | — |
-| p3-replay-cdp | azure/gpt-5.6-sol | --backend cdp | 3/3 | 1/3 | 9 | 1 | 3.5 | 126 |
-| p3-replay-norescue | azure/gpt-5.6-sol | --backend cdp --no-rescue | 3/3 | 0/3 | 9 | 0 | 0 | 17 |
+| p3-replay-cdp | azure/gpt-5.6-sol | --backend cdp | 3/3 | 1/3 | 9 | 1 | 3 | 46.7 |
+| p3-replay-norescue | azure/gpt-5.6-sol | --backend cdp --no-rescue | 3/3 | 0/3 | 9 | 0 | 0 | 25.7 |
 
-Compiles: p3-compile-ax: 2026-08-01T19-54-18-799-yarn; p3-compile-cdp: docs/recipes/yarn.2c2e5fd5.recipe.json
+Compiles: p3-compile-ax: 2026-08-01T19-54-18-799-yarn; p3-compile-cdp: docs/recipes/yarn.2c2e5fd5.cdp.recipe.json
 
 ## Phase 4 — second-task spot check (optional)
 
@@ -205,12 +205,12 @@ _None — every judged run's verdict matches its self-report._
 | p2-vision-only-curated | 2026-08-01T19-57-04-320-yarn | mac1 | 1531 | 153 |
 | p3-compile-ax | 2026-08-01T19-54-18-799-yarn | local | — | 124 |
 | p3-compile-cdp | 2026-08-01T19-54-26-382-yarn | local | — | 75 |
-| p3-replay-cdp | replay-2026-08-02T04-28-03-178-yarn | mac1 | — | 305 |
-| p3-replay-norescue | replay-2026-08-02T04-28-09-161-yarn | mac2 | — | 2 |
-| p3-replay-cdp | replay-2026-08-02T04-28-15-580-yarn | mac3 | — | 20 |
-| p3-replay-norescue | replay-2026-08-02T04-28-21-779-yarn | mac2 | — | 25 |
-| p3-replay-cdp | replay-2026-08-02T04-28-27-744-yarn | mac1 | 281 | 53 |
-| p3-replay-norescue | replay-2026-08-02T04-28-33-986-yarn | mac2 | 12 | 24 |
+| p3-replay-cdp | replay-2026-08-02T04-58-45-260-yarn | mac1 | — | 45 |
+| p3-replay-norescue | replay-2026-08-02T04-58-51-722-yarn | mac2 | — | 26 |
+| p3-replay-cdp | replay-2026-08-02T04-58-58-087-yarn | mac3 | — | 53 |
+| p3-replay-norescue | replay-2026-08-02T04-59-04-443-yarn | mac1 | 26 | 25 |
+| p3-replay-cdp | replay-2026-08-02T04-59-10-997-yarn | mac2 | 7 | 42 |
+| p3-replay-norescue | replay-2026-08-02T04-59-17-485-yarn | mac3 | 34 | 26 |
 
 ## Raw stamps per arm
 
@@ -238,8 +238,8 @@ _None — every judged run's verdict matches its self-report._
 - **p2-vision-only-curated**: `2026-08-01T19-55-07-946-yarn` (mac3, azure/gpt-5.6-sol), `2026-08-01T19-56-05-841-yarn` (mac2, azure/gpt-5.6-sol), `2026-08-01T19-57-04-320-yarn` (mac1, azure/gpt-5.6-sol)
 - **p3-compile-ax**: `2026-08-01T19-54-18-799-yarn` (local, azure/gpt-5.6-sol)
 - **p3-compile-cdp**: `2026-08-01T19-54-26-382-yarn` (local, azure/gpt-5.6-sol)
-- **p3-replay-cdp**: `replay-2026-08-02T04-28-03-178-yarn` (mac1, azure/gpt-5.6-sol), `replay-2026-08-02T04-28-15-580-yarn` (mac3, azure/gpt-5.6-sol), `replay-2026-08-02T04-28-27-744-yarn` (mac1, azure/gpt-5.6-sol)
-- **p3-replay-norescue**: `replay-2026-08-02T04-28-09-161-yarn` (mac2, azure/gpt-5.6-sol), `replay-2026-08-02T04-28-21-779-yarn` (mac2, azure/gpt-5.6-sol), `replay-2026-08-02T04-28-33-986-yarn` (mac2, azure/gpt-5.6-sol)
+- **p3-replay-cdp**: `replay-2026-08-02T04-58-45-260-yarn` (mac1, azure/gpt-5.6-sol), `replay-2026-08-02T04-58-58-087-yarn` (mac3, azure/gpt-5.6-sol), `replay-2026-08-02T04-59-10-997-yarn` (mac2, azure/gpt-5.6-sol)
+- **p3-replay-norescue**: `replay-2026-08-02T04-58-51-722-yarn` (mac2, azure/gpt-5.6-sol), `replay-2026-08-02T04-59-04-443-yarn` (mac1, azure/gpt-5.6-sol), `replay-2026-08-02T04-59-17-485-yarn` (mac3, azure/gpt-5.6-sol)
 
 ## For Aman
 

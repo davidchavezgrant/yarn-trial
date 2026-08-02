@@ -1,0 +1,215 @@
+{
+	"version": 1,
+	"task": "show me how to change the cursor type",
+	"app": "Yarn",
+	"slug": "yarn",
+	"backend": "cdp",
+	"compiledFrom": "2026-08-01T19-54-26-382-yarn",
+	"compiledAt": "2026-08-02T04:27:52.862Z",
+	"grounding": {
+		"provenance": "explore",
+		"path": "docs/appmaps/yarn.cdp.md",
+		"sha256": "ad386896a7ee",
+		"graph": {
+			"nodes": 144,
+			"edges": 54,
+			"scopeAmbiguities": [
+				"screen-clip-auto-hide-cursor",
+				"screen-clip-cursor-clicks",
+				"screen-clip-cursor-scale",
+				"screen-clip-cursor-style",
+				"screen-clip-entrance-animation",
+				"screen-clip-keyboard-presses",
+				"screen-clip-motion-blur",
+				"screen-clip-shadow-blur",
+				"screen-clip-shadow-opacity",
+				"screen-clip-shadow-spread",
+				"screen-clip-shadow-x",
+				"screen-clip-shadow-y",
+				"screen-clip-text-cursor",
+				"screen-clip-window-padding"
+			]
+		}
+	},
+	"steps": [
+		{
+			"action": {
+				"name": "click",
+				"args": {}
+			},
+			"target": {
+				"name": "New Draft",
+				"role": "button"
+			},
+			"expectation": {
+				"description": "A newly created draft opens in the draft editor.",
+				"textIncludes": [
+					"Untitled Scene",
+					"Project actions"
+				]
+			}
+		},
+		{
+			"action": {
+				"name": "type_text",
+				"args": {
+					"text": "Scratch Cursor Type Demo 1337700534"
+				}
+			},
+			"target": {
+				"name": "Untitled",
+				"role": "textbox"
+			},
+			"expectation": {
+				"description": "The draft title updates to the distinctive scratch name.",
+				"textIncludes": [
+					"Scratch Cursor Type Demo 1337700534"
+				],
+				"textExcludes": [
+					"Untitled Draft"
+				]
+			}
+		},
+		{
+			"action": {
+				"name": "click",
+				"args": {}
+			},
+			"target": {
+				"name": "Project actions",
+				"role": "button"
+			},
+			"expectation": {
+				"description": "Project actions menu appears with Screen Clip Settings.",
+				"textIncludes": [
+					"Screen Clip Settings...",
+					"Performance Mode"
+				]
+			}
+		},
+		{
+			"action": {
+				"name": "click",
+				"args": {}
+			},
+			"target": {
+				"name": "Screen Clip Settings...",
+				"role": "menuitem",
+				"surface": "Project actions"
+			},
+			"expectation": {
+				"description": "The Screen Clip Settings panel opens and exposes Cursor Style.",
+				"textIncludes": [
+					"Screen Clip Settings",
+					"Cursor Style",
+					"Done"
+				]
+			}
+		},
+		{
+			"action": {
+				"name": "click",
+				"args": {}
+			},
+			"target": {
+				"name": "Cursor Style",
+				"role": "combobox",
+				"surface": "Screen clip settings"
+			},
+			"expectation": {
+				"description": "The Cursor Style dropdown expands with alternative cursor types.",
+				"textIncludes": [
+					"Pointer-first",
+					"Original"
+				]
+			}
+		},
+		{
+			"action": {
+				"name": "click",
+				"args": {}
+			},
+			"target": {
+				"name": "Pointer-first",
+				"role": "option"
+			},
+			"expectation": {
+				"description": "Cursor Style now shows Pointer-first and the old value is no longer shown.",
+				"textIncludes": [
+					"Pointer-first"
+				],
+				"textExcludes": [
+					"Arrow-first"
+				]
+			}
+		},
+		{
+			"action": {
+				"name": "click",
+				"args": {}
+			},
+			"target": {
+				"name": "Done",
+				"role": "button",
+				"surface": "Screen clip settings"
+			},
+			"expectation": {
+				"description": "The Screen Clip Settings panel closes.",
+				"textExcludes": [
+					"Screen clip settings",
+					"Cursor Style",
+					"Done"
+				]
+			}
+		},
+		{
+			"action": {
+				"name": "click",
+				"args": {}
+			},
+			"target": {
+				"name": "Project actions",
+				"role": "button"
+			},
+			"expectation": {
+				"description": "The Project actions menu reappears with Screen Clip Settings.",
+				"textIncludes": [
+					"Screen Clip Settings...",
+					"Show Version History..."
+				]
+			}
+		},
+		{
+			"action": {
+				"name": "click",
+				"args": {}
+			},
+			"target": {
+				"name": "Screen Clip Settings...",
+				"role": "menuitem",
+				"surface": "Project actions"
+			},
+			"expectation": {
+				"description": "The settings panel reopens showing the saved Pointer-first cursor style, not Arrow-first.",
+				"textIncludes": [
+					"Cursor Style",
+					"Pointer-first"
+				],
+				"textExcludes": [
+					"Arrow-first"
+				]
+			}
+		}
+	],
+	"finalEvidence": {
+		"description": "The scratch draft's Screen Clip Settings visibly show the persisted Pointer-first cursor style, with the former Arrow-first value absent.",
+		"textIncludes": [
+			"Scratch Cursor Type Demo 1337700534",
+			"Cursor Style",
+			"Pointer-first"
+		],
+		"textExcludes": [
+			"Arrow-first"
+		]
+	}
+}
