@@ -163,6 +163,19 @@ async function main(): Promise<void> {
 	// wantCdp is the replay's actual delivery, whatever the recipe says: a cdp replay keeps
 	// its hands off the operator's input, so it shows no banner (backendSeizesInput).
 	const overlay = startOverlay("drive", `Agent replaying on ${recipe.app} — do not touch`, wantCdp ? "cdp" : "ax");
+	/**
+	 * BEFORE EITHER BACKEND ACQUIRES. A recipe records a route through a freshly launched app,
+	 * so replaying into whatever the last run left behind measures that drift rather than the
+	 * recipe.
+	 *
+	 * It used to sit inside the try below, ahead of the AX `findWindow` — which reads as "before
+	 * acquisition" only on the AX path. On CDP, acquisition is the line under this one, so the
+	 * quit landed AFTER attach and killed the page the replay had just connected to: "the page
+	 * this run was driving closed and no successor window appeared — saw: (no pages)", on every
+	 * fleet replay. Locally it never showed, because the app was already running and flagged, so
+	 * the relaunch that follows a quit happened to restore a usable endpoint before observe.
+	 */
+	await coldStart(target, recipe.app);
 	// Lazy, matching the rest of core/: no static value-imports of backends/.
 	const cdp = wantCdp ? await (await import("../backends/cdp.js")).CdpBackend.acquire(target) : undefined;
 	const driver = cdp ? undefined : await Driver.start("replay");
@@ -177,10 +190,8 @@ async function main(): Promise<void> {
 	let exitCode = 1;
 
 	try {
-		// BEFORE acquisition, or the window handle below is stale the moment the app dies. A
-		// recipe records a route from a freshly launched app, so replaying into whatever the last
-		// run left behind measures that drift rather than the recipe.
-		await coldStart(target, recipe.app);
+		// The cold start ran before acquisition (see above), so this handle is of the app the
+		// quit-and-relaunch produced.
 		let win = cdp ? undefined : await findWindow(driver!, recipe.app);
 		if (!cdp) {
 			await driver!.act({ kind: "tool", name: "launch_app", args: { name: recipe.app } });

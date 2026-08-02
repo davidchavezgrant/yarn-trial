@@ -447,3 +447,20 @@ test("replayEntryPoints__MarkTheAppTargetForAttach__When__DrivingOverCdp", () =>
 		);
 	}
 });
+
+test("replay__QuitsTheAppBeforeAcquiring__When__ColdStartingARun", () => {
+	// Ordering, asserted as ordering. coldStart quits the target so acquisition relaunches it
+	// clean; run it AFTER a backend has attached and it kills the very page/window the replay
+	// just connected to.
+	//
+	// That is what happened: the call sat inside the try block ahead of the AX `findWindow`,
+	// which reads as "before acquisition" on the AX path only — the CDP acquire is earlier in
+	// the function. Every fleet replay died with "the page this run was driving closed and no
+	// successor window appeared — saw: (no pages)". Locally it never showed, because the app was
+	// already running and the post-quit relaunch restored an endpoint before the first observe.
+	const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "core", "recipe-cli.ts"), "utf8");
+	const cold = src.indexOf("await coldStart(");
+	assert.ok(cold > 0, "replay must cold-start the app");
+	for (const acquire of ["CdpBackend.acquire(target)", "await findWindow(driver!"])
+		assert.ok(cold < src.indexOf(acquire), `coldStart must precede ${acquire} — quitting after attach kills what was attached`);
+});
