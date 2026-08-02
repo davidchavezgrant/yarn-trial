@@ -7,7 +7,7 @@ import { auditTaskPrompt } from "../src/core/harness.js";
 import type { JobRecord } from "../src/remote/runner/jobs.js";
 import { archiveDirFor, collect, collectEntry, expectedProvenance, failureKind, jobTiming, journalScopes, parseAppmapStamp, parseGraphCounts, parseRunMetrics, poisonedHosts, technicalFailure } from "../src/bench/collect.js";
 import { entriesForArm, manifestPath, readManifest, recordSubmissions, submittedCount, type Manifest, type ManifestEntry, updateEntry, writeManifest } from "../src/bench/manifest.js";
-import { BACKENDS, BENCH_PRIMARY_MODEL, MATRIX, armAppmapSlug, armById, armTitle, perceptionLine, phaseArms, phaseRunCount, type Arm } from "../src/bench/matrix.js";
+import { BACKENDS, BENCH_PRIMARY_MODEL, armModel, MATRIX, armAppmapSlug, armById, armTitle, perceptionLine, phaseArms, phaseRunCount, type Arm } from "../src/bench/matrix.js";
 import type { DispatchOptions } from "../src/remote/control/dispatch.js";
 import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, auditPhase, dateArg, dispatchOptionsFor, findCompileSource, plannedRuns, runPhase } from "../src/bench/orchestrate.js";
 import { renderReport, reportFileName, writeReport } from "../src/bench/report.js";
@@ -1505,4 +1505,35 @@ test("renderReport__MarksRescuedPasses__When__ARunSurvivedABlackout", () => {
 		entries: [entry("p1-explore-ax", "job-x", { collected: true, state: "done", metrics: { controlsActuated: 85, blackouts: 1, relaunches: 1 } })],
 	};
 	assert.match(renderReport(m), /p1-explore-ax ⟲1/);
+});
+
+test("dispatchOptionsFor__PinsTheArmsOwnModel__When__ThePassRunsAnother", () => {
+	// Model was a pass-level choice only, so all 115 runs of the first matrix were one model and
+	// "some runs with Claude" had nowhere to live short of re-dispatching a 45-run phase. An
+	// arm pin lets a few Claude cells sit beside their Sol twins in one pass — which is also the
+	// only way the report's per-model rows become a comparison instead of two separate tables.
+	const claude = MATRIX.find((a) => a.id === "p7-claude-cdp-grounded");
+	assert.ok(claude, "the Claude comparison arm must exist");
+	assert.equal(dispatchOptionsFor(claude!, undefined, "azure/gpt-5.6-sol").model, "anthropic/claude-opus-5");
+	// An unpinned arm still follows the pass.
+	const sol = MATRIX.find((a) => a.id === "p7-create-grounded");
+	assert.equal(dispatchOptionsFor(sol!, undefined, "azure/gpt-5.6-sol").model, "azure/gpt-5.6-sol");
+});
+
+test("armModel__AgreesWithDispatch__When__CountingSamples", () => {
+	// Counting has to resolve the model the same way dispatch does. A pinned arm records its
+	// entries under the PINNED model; if submittedCount looks for the pass model it finds none,
+	// concludes the arm owes runs, and re-dispatches it forever.
+	for (const a of MATRIX) assert.equal(armModel(a, "pass-model"), dispatchOptionsFor(a, undefined, "pass-model").model);
+});
+
+test("matrixTasks__StateGoalsOnly__When__DeclaredInAnyPhase", () => {
+	// The measurement rule, enforced over the matrix itself rather than trusted. The creation
+	// task is the one most at risk: its only previous outing dictated a route and passed the
+	// gate, which is the hole NAV_HINT/SEQUENCE_HINT closed.
+	for (const a of MATRIX) {
+		if (!a.task) continue;
+		const audit = auditTaskPrompt(a.task);
+		assert.equal(audit.hinted, false, `${a.id} declares a hinted task: ${audit.reasons.join("; ")}`);
+	}
 });

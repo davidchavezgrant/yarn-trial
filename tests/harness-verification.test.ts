@@ -382,3 +382,28 @@ test("unpaintedStreak__CountsFromTheEnd__When__TheFreezeStartedMidRun", () => {
 	const steps = [paintStep(true, 0.5), paintStep(false, 0.2), paintStep(false, 0), paintStep(false, 0)];
 	assert.equal(unpaintedStreak(steps), 2);
 });
+
+test("auditTaskPrompt__Refuses__When__ThePromptEnumeratesARoute", () => {
+	// Where a control LIVES is method knowledge — exactly what the appmap is a declared,
+	// budgeted input FOR. The gate had no pattern for it, and the hole was live: the only run of
+	// Yarn's real product flow said "Create a new draft, then open the Script tab and write a
+	// two-scene script… then set the voice to Cassidy" and recorded hintedPrompt: false. No
+	// driver vocab, no AX role, no keystroke, no coordinate, and "open" was in no verb set.
+	const coffee =
+		"Create a new draft, then open the Script tab and write a two-scene script introducing a coffee ordering app called Brew, then set the voice to Cassidy.";
+	const a = auditTaskPrompt(coffee);
+	assert.equal(a.hinted, true, "a dictated route must be refused");
+	assert.match(a.reasons.join(" "), /enumerates a route/);
+});
+
+test("auditTaskPrompt__Accepts__When__ReachingASurfaceIsItselfTheGoal", () => {
+	// The counterweight, and the reason navigation is not a one-strike rule. "show me how to
+	// open the Script tab" names a surface, but reaching it IS the goal — refusing that would
+	// ban the task class the demo product exists to perform. One directive is tolerated exactly
+	// as one incidental "click" is; a ROUTE (two or more chained steps) is what trips the gate.
+	assert.equal(auditTaskPrompt("show me how to open the Script tab").hinted, false);
+	assert.equal(auditTaskPrompt("Make a two-scene video script for a coffee ordering app called Brew, narrated by Cassidy.").hinted, false);
+	// And the two tasks the entire matrix ran on must still pass.
+	assert.equal(auditTaskPrompt("show me how to change the cursor type").hinted, false);
+	assert.equal(auditTaskPrompt("show me how to change the motion blur").hinted, false);
+});

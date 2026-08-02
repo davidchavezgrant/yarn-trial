@@ -28,7 +28,7 @@ export type BenchBackend = "ax" | "cdp";
 export type ArmKind = "task" | "explore" | "replay" | "compile";
 import { appmapSlug } from "../core/target.js";
 
-export type Phase = 1 | 2 | 3 | 4 | 5 | 6;
+export type Phase = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 /**
  * The dispatch knobs an arm turns, in `DispatchOptions`' exact spellings.
@@ -60,6 +60,16 @@ export interface ArmDispatch {
 	record?: boolean;
 	/** Web target for an explore arm (`explore --url … --backend cdp`). Contract-assumed. */
 	url?: string;
+	/**
+	 * Pin THIS arm to a model, overriding the pass-level one.
+	 *
+	 * Model was a pass-level choice only, so the whole 115-run matrix ran on one model and the
+	 * "some runs with Claude" half of the plan had nowhere to live: dispatching a second model
+	 * meant re-running an entire 45-run phase. An arm-level pin lets a handful of Claude cells
+	 * sit beside their Sol twins in the same pass, which is also the only way the report's
+	 * per-model rows become a comparison rather than two separate tables.
+	 */
+	model?: string;
 }
 
 export interface Arm {
@@ -150,6 +160,19 @@ export const CANONICAL_TASK = "show me how to change the cursor type";
  * Goal-only, per the measurement rule: it names the outcome, never the route.
  */
 export const PHASE4_TASK = "show me how to change the motion blur";
+/**
+ * Yarn's ACTUAL product flow — write a script, get scenes, pick a voice — as opposed to the two
+ * settings toggles the rest of the matrix runs on.
+ *
+ * Every finding through phase 6 is scoped to flipping a dropdown. That is a fair test of
+ * navigation and verification and a poor proxy for what Yarn sells, which is making a video.
+ * Phrased GOAL-ONLY: the one previous run of this flow dictated its route ("then open the
+ * Script tab…") and passed the hint gate, which is the hole NAV_HINT/SEQUENCE_HINT now close.
+ */
+export const CREATION_TASK =
+	"Make a two-scene video script for a coffee ordering app called Brew, narrated by Cassidy. Do not publish, export, or share it.";
+/** The comparison model. Every one of the first 115 runs was Sol; nothing tested a second. */
+export const BENCH_ALT_MODEL = "anthropic/claude-opus-5";
 
 export const BACKENDS: readonly BenchBackend[] = ["ax", "cdp"];
 
@@ -678,13 +701,43 @@ const filmed = (arm: Arm): Arm => ({
  * Compiles are excluded because they are a local file transform with nothing to see; explores
  * for the reason above.
  */
-const FILMABLE: Arm[] = [...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE3, ...PHASE4, ...PHASE6].filter((a) => a.kind === "task" || a.kind === "replay");
+/**
+ * Phase 7 — the two axes the first 115 runs never varied: the TASK and the MODEL.
+ *
+ * Creation arms run the product flow on cdp, the actuator that works. Claude arms mirror three
+ * phase-2/6 cells exactly, changing only the model, so the comparison is a difference of one
+ * variable rather than two tables side by side.
+ */
+const PHASE7: Arm[] = [
+	task("p7-create-ungrounded", { backend: "cdp", noGrounding: true }, "can the agent make a video with no map — the product flow, cold", { phase: 7, task: CREATION_TASK }),
+	task("p7-create-grounded", { backend: "cdp" }, "does a map help on CREATION as it does on settings", { phase: 7, task: CREATION_TASK }),
+	task("p7-create-curated", { backend: "cdp", useRecipe: true }, "human notes on the product flow — the tier that won on scope", { phase: 7, task: CREATION_TASK }),
+	// Same three cells as Sol ran, one variable changed. Canonical task on purpose: it is the
+	// only task with 45 runs of Sol baseline behind it.
+	task("p7-claude-cdp-ungrounded", { backend: "cdp", noGrounding: true, model: BENCH_ALT_MODEL }, "is the ungrounded floor a model property or a general one", { phase: 7 }),
+	task("p7-claude-cdp-grounded", { backend: "cdp", model: BENCH_ALT_MODEL }, "does grounding lift Claude the way it lifts Sol", { phase: 7 }),
+	task("p7-claude-cdp-procedure-from-ungrounded", { backend: "cdp", useProcedures: true, procedureLineage: "ungrounded", model: BENCH_ALT_MODEL }, "does the replacement result survive a model change — the finding most worth a second model", { phase: 7 }),
+];
+
+// Phase 7 joins the derivation rather than being remembered — that is the whole point of the
+// rule. It also means the CREATION flow gets filmed, which is the footage closest to what Yarn
+// actually sells; every take before it was of a dropdown being changed.
+const FILMABLE: Arm[] = [...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE3, ...PHASE4, ...PHASE6, ...PHASE7].filter((a) => a.kind === "task" || a.kind === "replay");
 
 const PHASE5: Arm[] = FILMABLE.map(filmed);
 
-export const MATRIX: readonly Arm[] = [...PHASE1, ...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE3, ...PHASE4, ...PHASE5, ...PHASE6];
+
+export const MATRIX: readonly Arm[] = [...PHASE1, ...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE3, ...PHASE4, ...PHASE5, ...PHASE6, ...PHASE7];
 
 export const phaseArms = (phase: Phase): Arm[] => MATRIX.filter((a) => a.phase === phase);
+
+/**
+ * The model an arm will ACTUALLY run on: its own pin, else the pass default. Sample counting
+ * has to agree with dispatch about this or a pinned arm never retires — its entries land under
+ * the pinned model while submittedCount looks for the pass model, finds none, and re-dispatches
+ * forever.
+ */
+export const armModel = (arm: Arm, passModel?: string): string | undefined => arm.dispatch.model ?? passModel;
 
 export const armById = (id: string): Arm | undefined => MATRIX.find((a) => a.id === id);
 

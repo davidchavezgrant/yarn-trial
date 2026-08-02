@@ -23,7 +23,7 @@
 import { liveDir, outDir } from "../paths.js";
 import { collect } from "./collect.js";
 import { type Manifest, readManifest, submittedCount, utcDate } from "./manifest.js";
-import { BENCH_PRIMARY_MODEL, type Phase, phaseArms } from "./matrix.js";
+import { armById, armModel, BENCH_PRIMARY_MODEL, type Phase, phaseArms } from "./matrix.js";
 
 /** Terminal job states — the ones where waiting longer changes nothing. */
 const TERMINAL = new Set(["done", "failed", "stopped", "orphaned"]);
@@ -45,8 +45,8 @@ export interface PhaseProgress {
  */
 export function phaseProgress(phase: Phase, m: Manifest, model = BENCH_PRIMARY_MODEL): PhaseProgress {
 	const ids = new Set(phaseArms(phase).map((a) => a.id));
-	const inFlight = m.entries.filter((e) => ids.has(e.armId) && e.model === model && !TERMINAL.has(e.state)).length;
-	const outstanding = phaseArms(phase).reduce((n, a) => n + Math.max(0, a.n - submittedCount(m, a.id, model)), 0);
+	const inFlight = m.entries.filter((e) => ids.has(e.armId) && e.model === armModel(armById(e.armId) ?? ({ dispatch: {} } as never), model) && !TERMINAL.has(e.state)).length;
+	const outstanding = phaseArms(phase).reduce((n, a) => n + Math.max(0, a.n - submittedCount(m, a.id, armModel(a, model))), 0);
 
 	return { outstanding, inFlight, done: inFlight === 0 && outstanding === 0 };
 }

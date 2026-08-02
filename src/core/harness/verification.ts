@@ -411,6 +411,27 @@ const MECHANIC_VERBS = /\b(?:click(?:s|ing|ed)?|right[- ]click\w*|double[- ]clic
 // coordinate. The cmd glyph lives here rather than in MECHANIC_VERBS because `⌘` is a non-word
 // character: a leading `\b` can never precede it, so inside the bounded group it was dead and
 // a prompt handing over "⌘+," slipped through with zero hits.
+/**
+ * Navigating to a NAMED surface — "open the Script tab", "go to Brand Kit". Where a control
+ * lives is method knowledge: it is precisely what the appmap is a declared, budgeted input FOR,
+ * so putting it in the task hands over the part being measured.
+ *
+ * The gate had no pattern for this and the hole was live: the one run of Yarn's real product
+ * flow said "Create a new draft, then open the Script tab and write a two-scene script… then
+ * set the voice to Cassidy" and recorded `hintedPrompt: false`. No driver vocab, no AX role, no
+ * keystroke, no coordinate, and "open" was in none of the verb sets.
+ *
+ * Requires a CAPITALISED destination or an explicit surface noun, which is what separates
+ * "open the Script tab" from "open a new draft" — the latter names a goal, not a route.
+ */
+const NAV_HINT = /\b(?:open|go to|navigate to|switch to|jump to)\s+(?:the\s+)?(?:[A-Z][\w-]*(?:\s+[A-Z][\w-]*)*|\w+\s+(?:tab|panel|menu|section|page|view|sidebar))\b/g;
+/**
+ * A route is a task with STEPS. One goal may have a clause or two; a prompt chained by "then"
+ * two or more times is dictating an order of operations, which is the thing the agent is
+ * supposed to work out. The coffee prompt chains three imperatives — create, open, set — and
+ * that structure is the hint, independently of the words used.
+ */
+const SEQUENCE_HINT = /\b(?:and\s+)?then\b/gi;
 const KEYSTROKE_HINT = /(?:cmd|ctrl|control|option|opt|alt|shift)\s*\+|⌘|⌥|⌃|⇧/gi;
 /**
  * Screen coordinates, which arrived as a hint vector the moment painted targets became
@@ -437,12 +458,18 @@ export function auditTaskPrompt(task: string): PromptAudit {
 	// them to one collapsed a complete method recipe below the ≥2 threshold and passed it as
 	// goal-only. The threshold still allows ONE incidental mechanic verb ("...the Save
 	// button"); two or more describe HOW rather than WHAT.
-	const mechanicHits = (task.match(MECHANIC_VERBS) ?? []).map((m) => m.toLowerCase());
+	// Navigation directives join the mechanics tally rather than tripping alone: a task whose
+	// whole GOAL is reaching a surface ("show me how to open the Script tab") is legitimate, so
+	// one is tolerated exactly as one incidental "click" is.
+	const navHits = (task.match(NAV_HINT) ?? []).map((m) => m.toLowerCase());
+	const mechanicHits = [...(task.match(MECHANIC_VERBS) ?? []).map((m) => m.toLowerCase()), ...navHits];
 	const mechanics = [...new Set(mechanicHits)];
 	if (vocab.length > 0) reasons.push(`names driver/AX internals: ${vocab.join(", ")}`);
 	if (mechanicHits.length >= 2) reasons.push(`describes interaction mechanics, not just the goal: ${mechanics.join(", ")}`);
 	const keys = [...new Set((task.match(KEYSTROKE_HINT) ?? []).map((m) => m.toLowerCase().replace(/\s+/g, "")))];
 	if (keys.length > 0) reasons.push(`names a keystroke, which is a method not a goal: ${keys.join(", ")}`);
+	const seq = (task.match(SEQUENCE_HINT) ?? []).length;
+	if (seq >= 2) reasons.push(`enumerates a route (${seq + 1} chained steps) rather than stating a goal`);
 	const coords = [...new Set(task.match(COORD_HINT) ?? [])];
 	if (coords.length > 0) reasons.push(`gives screen coordinates, which the agent must derive itself: ${coords.join(", ")}`);
 

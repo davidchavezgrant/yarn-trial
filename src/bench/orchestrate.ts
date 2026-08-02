@@ -6,7 +6,7 @@ import { CHALLENGER_N, challengerNeedsExplore, planChallenger } from "./challeng
 import { collect } from "./collect.js";
 import { manifestCost } from "./cost.js";
 import { fetchTrueCost, reconcile } from "./truecost.js";
-import { BENCH_APP, BENCH_PRIMARY_MODEL, MATRIX, armById, flagsLine, perceptionLine, phaseArms, phaseRunCount, type Arm, type Phase } from "./matrix.js";
+import { BENCH_APP, BENCH_PRIMARY_MODEL, MATRIX, armById, flagsLine, perceptionLine, armModel, phaseArms, phaseRunCount, type Arm, type Phase } from "./matrix.js";
 import {
 	entriesForArm,
 	type Manifest,
@@ -100,7 +100,7 @@ const phase1GateArms = (): Arm[] => phaseArms(1).filter((a) => a.app === BENCH_A
  */
 export function plannedRuns(phase: Phase, manifest: Manifest, model?: string): PlannedRun[] {
 	const arms = phaseArms(phase).filter((a) => a.kind !== "compile");
-	const remaining = arms.map((arm) => ({ arm, have: submittedCount(manifest, arm.id, model) }));
+	const remaining = arms.map((arm) => ({ arm, have: submittedCount(manifest, arm.id, armModel(arm, model)) }));
 	const out: PlannedRun[] = [];
 	const maxN = Math.max(0, ...arms.map((a) => a.n));
 	for (let sample = 0; sample < maxN; sample++)
@@ -115,7 +115,8 @@ export function dispatchOptionsFor(arm: Arm, recipe?: string, model?: string): D
 
 	return {
 		host: AUTO_HOST,
-		...(model ? { model } : {}),
+		// Arm pin beats the pass default: a Claude cell must stay Claude when the pass is Sol.
+		...(d.model ?? model ? { model: d.model ?? model } : {}),
 		app: arm.app,
 		kind: arm.kind === "compile" ? "task" : arm.kind,
 		queue: true,
@@ -466,7 +467,7 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 			if (arm.prereq) log(`    PREREQ: ${arm.prereq}`);
 		}
 		for (const arm of phaseArms(phase).filter((a) => a.kind === "compile"))
-			if (submittedCount(manifest, arm.id, opts.model) < arm.n) log(`  ${arm.id} [local] compile from ${arm.sourceArm}`);
+			if (submittedCount(manifest, arm.id, armModel(arm, opts.model)) < arm.n) log(`  ${arm.id} [local] compile from ${arm.sourceArm}`);
 		if (missingMaps.length) log(`NOTE: --go would currently refuse — no collected phase-1 explore for: ${missingMaps.map((a) => a.id).join(", ")}`);
 		log(`Nothing was dispatched. Re-run with --go to submit.`);
 
