@@ -866,7 +866,9 @@ function resolveReplayArg(arg: string): { app: string; recipe: string } {
 		const logPath = runFile(arg, RUN_FILES.log, path.join(dataRoot(), "out"));
 		if (fs.existsSync(logPath)) {
 			const runLog = JSON.parse(fs.readFileSync(logPath, "utf8"));
-			const candidate = recipeFileFor(recipesDir(), compileRecipe(runLog, arg).slug, runLog.task);
+			// Backend-keyed first, legacy second — see recipeFileFor.
+			const slug_ = compileRecipe(runLog, arg).slug;
+			const candidate = [recipeFileFor(recipesDir(), slug_, runLog.task, runLog.backend), recipeFileFor(recipesDir(), slug_, runLog.task)].find((p) => fs.existsSync(p)) ?? recipeFileFor(recipesDir(), slug_, runLog.task, runLog.backend);
 			if (!fs.existsSync(candidate)) throw new Error(`no compiled recipe for ${arg} — run: ./run recipe compile ${arg}`);
 			file = candidate;
 		}

@@ -275,9 +275,24 @@ export function taskHash(task: string): string {
 	return (h >>> 0).toString(16).padStart(8, "0");
 }
 
-export function recipeFileFor(dir: string, slug: string, task: string): string {
-	// One recipe per (app, task): two tasks on one app never clobber each other.
-	return `${dir}/${slug}.${taskHash(task)}.recipe.json`;
+/**
+ * One recipe per (app, task, BACKEND).
+ *
+ * The backend was missing and it silently destroyed an arm. A recipe is a frozen sequence of
+ * `(name, surface, role)` resolutions, and ax and cdp name the same controls differently — so
+ * the two are not interchangeable artifacts that happen to share a task, they are different
+ * recordings. Keyed on (app, task) alone, phase 3's two compile arms wrote the same path and
+ * the cdp compile (9 steps) overwrote the ax one (11 steps). `p3-replay-ax` then deferred
+ * forever: its gate wanted an ax recipe and the only file on disk was cdp's.
+ *
+ * `procedureFileFor` already keys on backend for exactly this reason. Recipes were the tier
+ * that missed it.
+ *
+ * Backend is optional so a caller that genuinely does not know one (a bare path lookup for an
+ * old file) still resolves the legacy name rather than throwing.
+ */
+export function recipeFileFor(dir: string, slug: string, task: string, backend?: string): string {
+	return `${dir}/${slug}.${taskHash(task)}${backend ? `.${backend}` : ""}.recipe.json`;
 }
 
 export function readRecipe(path: string): Recipe {

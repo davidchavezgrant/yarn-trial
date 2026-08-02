@@ -49,6 +49,14 @@ import { type DriverSync, finishRecording, newRecording, startRecording } from "
  * with a provenance stamp — the appmap rule applies: never hand-edit one; re-record it.
  */
 
+/**
+ * How long to let a freshly relaunched app paint before the first step resolves a control.
+ * Mirrors explore/loop.ts and the task agent's home probe — 8 x 2s covers a cold Electron
+ * relaunch while a genuinely blank target still fails fast instead of burning a fleet slot.
+ */
+const FIRST_OBSERVATION_TRIES = Number(process.env.REPLAY_FIRST_OBS_TRIES ?? 8);
+const FIRST_OBSERVATION_WAIT_MS = Number(process.env.REPLAY_FIRST_OBS_WAIT_MS ?? 2000);
+
 function usage(): never {
 	console.error("usage:");
 	console.error("  npm run recipe -- compile <stamp>");
@@ -64,7 +72,7 @@ export function compileFromStamp(stamp: string): { recipe: Recipe; path: string 
 		// Compiling a hinted run would launder the hint: the recipe replays clean while its
 		// route was dictated. The stamp records it; the refusal keeps the tier honest.
 		throw new RecipeCompileError("run was --hinted — its route was dictated, not discovered; re-run goal-only and compile that");
-	const path = recipeFileFor(recipesDir(), recipe.slug, recipe.task);
+	const path = recipeFileFor(recipesDir(), recipe.slug, recipe.task, recipe.backend);
 	fs.mkdirSync(recipesDir(), { recursive: true });
 	// A copy inside the SOURCE run's folder: compiling is something that run produced, and the
 	// folder is the source of truth for what a run produced. docs/recipes stays the place a
@@ -91,8 +99,11 @@ function recipeFor(arg: string): Recipe {
 	const logPath = runFile(arg, RUN_FILES.log);
 	if (fs.existsSync(logPath)) {
 		const runLog = JSON.parse(fs.readFileSync(logPath, "utf8"));
-		const path = recipeFileFor(recipesDir(), compileRecipe(runLog, arg).slug, runLog.task);
-		if (fs.existsSync(path)) return readRecipe(path);
+		const slug = compileRecipe(runLog, arg).slug;
+		// Backend-keyed first, legacy name second: recipes compiled before the backend joined the
+		// key are still on disk and still replayable.
+		for (const p of [recipeFileFor(recipesDir(), slug, runLog.task, runLog.backend), recipeFileFor(recipesDir(), slug, runLog.task)])
+			if (fs.existsSync(p)) return readRecipe(p);
 		throw new RecipeCompileError(`no compiled recipe for ${arg} — run: npm run recipe -- compile ${arg}`);
 	}
 	throw new RecipeCompileError(`${arg} is neither a recipe file nor a run stamp`);
@@ -214,6 +225,27 @@ async function main(): Promise<void> {
 		if (interrupted()) return;
 
 		const doObserve = (name: string) => (cdp ? cdp.observe(name) : observe(driver!, win!, name));
+		/**
+		 * Let the relaunched app paint before step 1 resolves anything.
+		 *
+		 * The cold start quits the app; on CDP, acquisition returns as soon as the DEBUG PORT
+		 * answers, which Electron's main process opens well before the renderer has content. So
+		 * quit → relaunch → attach → resolve raced the first paint, and every no-rescue replay
+		 * died on `[1/9] click "New Draft" — no control named "New Draft"` with zero model calls.
+		 * The rescued arm gave it away: ONE rescue was enough and one run then completed, which
+		 * cannot happen if the control is truly absent.
+		 *
+		 * Explore hit the identical race after its own cold start and solved it this way
+		 * (FIRST_OBSERVATION_TRIES in explore/loop.ts); the task agent's home probe is the same
+		 * shape. Sample, stop on content, give up after a bounded wait and let step 1 report the
+		 * honest failure.
+		 */
+		for (let attempt = 0; attempt < FIRST_OBSERVATION_TRIES; attempt++) {
+			const first = await doObserve(`${LIVE_DIR}/${stamp}/${RUN_FILES.steps}/replay-step-0`);
+			if (first.appContent > 0) break;
+			if (attempt === 0) console.log(`first observation is empty — waiting for ${recipe.app} to paint`);
+			await new Promise((r) => setTimeout(r, FIRST_OBSERVATION_WAIT_MS));
+		}
 		const result = await replayRecipe(recipe, {
 			driver,
 			cdp,

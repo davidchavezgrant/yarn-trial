@@ -464,3 +464,33 @@ test("replay__QuitsTheAppBeforeAcquiring__When__ColdStartingARun", () => {
 	for (const acquire of ["CdpBackend.acquire(target)", "await findWindow(driver!"])
 		assert.ok(cold < src.indexOf(acquire), `coldStart must precede ${acquire} — quitting after attach kills what was attached`);
 });
+
+test("recipeFileFor__SeparatesBackends__When__OneTaskIsRecordedOnBoth", () => {
+	// ax and cdp name the same controls differently, so a recipe — a frozen sequence of
+	// (name, surface, role) resolutions — is per BACKEND, not merely per task. Keyed on
+	// (app, task) alone, phase 3's two compile arms wrote one path: the cdp compile's 9 steps
+	// overwrote the ax compile's 11, and p3-replay-ax deferred forever because its gate wanted
+	// an ax recipe and the only file present was cdp's.
+	const ax = recipeFileFor("/r", "yarn", "change the cursor type", "ax");
+	const cdp = recipeFileFor("/r", "yarn", "change the cursor type", "cdp");
+	assert.notEqual(ax, cdp);
+	assert.match(ax, /\.ax\.recipe\.json$/);
+	// Omitting the backend still yields the legacy name, so recipes compiled before the key
+	// changed remain findable rather than silently unreplayable.
+	assert.match(recipeFileFor("/r", "yarn", "change the cursor type"), /^\/r\/yarn\.[0-9a-f]{8}\.recipe\.json$/);
+});
+
+test("replay__WaitsForTheAppToPaint__When__TheColdStartJustRelaunchedIt", () => {
+	// On CDP, acquisition returns as soon as the DEBUG PORT answers — which Electron's main
+	// process opens well before the renderer has content. Without a wait, step 1 resolves
+	// against a blank page: every no-rescue replay died on `[1/9] click "New Draft" — no
+	// control named "New Draft"` with zero model calls, while the rescued arm needed just ONE
+	// rescue and then completed, which is impossible if the control is genuinely absent.
+	//
+	// explore/loop.ts hit the same race after its own cold start and polls; this asserts replay
+	// does too, and that the poll precedes the step loop rather than trailing it.
+	const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "core", "recipe-cli.ts"), "utf8");
+	const poll = src.indexOf("FIRST_OBSERVATION_TRIES; attempt++");
+	assert.ok(poll > 0, "replay must poll for first paint after the cold start");
+	assert.ok(poll < src.indexOf("await replayRecipe("), "the paint wait must precede the step loop");
+});
