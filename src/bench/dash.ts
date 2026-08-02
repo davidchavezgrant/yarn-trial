@@ -3530,7 +3530,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		server.once("error", reject);
 		server.listen(port, () => {
 			server.removeListener("error", reject);
-			console.log(`bench dash: http://localhost:${port}  (date ${date}, fleet poll ${FLEET_POLL_SEC}s, ${autoCollect ? `auto-collect ${COLLECT_SEC}s` : "collect OFF — pure reader"})`);
+			console.log(`DASH (David's Agent Supervision Hub): http://localhost:${port}  (date ${date}, fleet poll ${FLEET_POLL_SEC}s, ${autoCollect ? `auto-collect ${COLLECT_SEC}s` : "collect OFF — pure reader"})`);
 			resolve();
 		});
 	});

@@ -26,7 +26,7 @@ app.whenReady().then(async () => {
 	const win = new BrowserWindow({
 		width: 1440,
 		height: 1000,
-		title: "bench dash",
+		title: "DASH — David's Agent Supervision Hub",
 		// The page is dark-only; a white flash on load is the one thing this line prevents.
 		backgroundColor: "#0d0d0d",
 		webPreferences: { contextIsolation: true, nodeIntegration: false },
