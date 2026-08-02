@@ -11,7 +11,7 @@ import {
 	type WindowRef,
 } from "./harness.js";
 import { appendMutation, detectMutation } from "./journal.js";
-import { armAction, needsTarget, type Recipe, type RecipeStep, resolveTarget } from "./recipe.js";
+import { armAction, needsTarget, type Recipe, type RecipeStep, resolveTarget, substituteUnique } from "./recipe.js";
 import type { AppMap, StepRecord } from "../types.js";
 
 /**
@@ -71,6 +71,8 @@ export interface ReplayDeps {
 	model?: string;
 	rescue?: (args: RescueArgs) => Promise<{ ok: boolean; note: string; calls: number }>;
 	graph?: AppMap;
+	/** Value substituted for `{{unique}}`. Injected by tests; a clock stamp otherwise. */
+	unique?: string;
 	journalPath?: string;
 	log?: (line: string) => void;
 	/**
@@ -105,8 +107,22 @@ export async function replayRecipe(recipe: Recipe, deps: ReplayDeps): Promise<Re
 	const records: StepRecord[] = [];
 	let modelCalls = 0;
 
+	/**
+	 * One fresh value per replay for every `{{unique}}` the recipe carries.
+	 *
+	 * A recipe that types its recorded scratch name verbatim is only new once: the second
+	 * replay finds the field already reading it and verify() refuses the step, correctly — the
+	 * check was satisfied before the action, so nothing proves the action did anything. The
+	 * placeholder is resolved here rather than at compile so each run gets its own, and the
+	 * SAME one throughout, or the step would type one value and assert another.
+	 *
+	 * Injectable so a test can pin it; the default is a clock stamp, which is what makes a
+	 * scratch name unique in the first place.
+	 */
+	const unique = deps.unique ?? String(Date.now());
 	let obs = await deps.observe("replay-0");
-	for (const [i, step] of recipe.steps.entries()) {
+	for (const [i, raw] of recipe.steps.entries()) {
+		const step = substituteUnique(raw, unique);
 		const index = i + 1;
 		const prevHaystack = obs.haystack;
 		const prevObs = obs;

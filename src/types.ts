@@ -86,6 +86,12 @@ export interface StepRecord {
 	 */
 	targetSurface?: string;
 	/**
+	 * Position among same-(name, role, surface) twins in the observation this action was chosen
+	 * from, 0-based. Present only when identity alone could not separate them — a recipe should
+	 * fall back to an index only where there is nothing better. See RecipeTarget.ordinal.
+	 */
+	targetOrdinal?: number;
+	/**
 	 * Which channel NAMED the control this step operated: an AX label, the DOM descriptor
 	 * (axdom sidecar — the control is anonymous in bare AX), or neither ("none": addressed by
 	 * handle or coordinate with no name at all). Absent when no element was resolved. This is

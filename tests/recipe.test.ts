@@ -494,3 +494,73 @@ test("replay__WaitsForTheAppToPaint__When__TheColdStartJustRelaunchedIt", () => 
 	assert.ok(poll > 0, "replay must poll for first paint after the cold start");
 	assert.ok(poll < src.indexOf("await replayRecipe("), "the paint wait must precede the step loop");
 });
+
+test("resolveTarget__PicksTheRecordedTwin__When__NothingElseSeparatesThem", () => {
+	// Yarn's Library carries two controls named "New Draft". Identity cannot separate them, so
+	// resolution refused — correctly, but that stopped every no-rescue replay dead on step 1
+	// (0/3, zero model calls). The recording always knew which one it used.
+	const obs = obsWith([ie("New Draft", { handle: 4 }), ie("New Draft", { handle: 9 })]);
+	assert.deepEqual(resolveTarget({ name: "New Draft", ordinal: 1 }, obs), { handle: 9 });
+	assert.deepEqual(resolveTarget({ name: "New Draft", ordinal: 0 }, obs), { handle: 4 });
+});
+
+test("resolveTarget__StillRefuses__When__TheTwinCountChanged", () => {
+	// An index into a DIFFERENT list is not evidence. If the page no longer has the number of
+	// twins the recording saw, it is not the page that was recorded and the ordinal means
+	// nothing — refusing beats clicking the wrong control confidently.
+	const obs = obsWith([ie("New Draft", { handle: 4 }), ie("New Draft", { handle: 9 }), ie("New Draft", { handle: 11 })]);
+	const r = resolveTarget({ name: "New Draft", ordinal: 5 }, obs);
+	assert.ok("error" in r && /ambiguous/.test(r.error));
+});
+
+test("resolveTarget__PrefersIdentity__When__SurfaceAlreadySeparatesTwins", () => {
+	// The ordinal is a LAST resort: document order is weaker evidence than a name, and letting
+	// it win would send a click to the wrong panel whenever a list reordered.
+	const obs = obsWith([
+		ie("Cursor Style", { handle: 3, surface: "Brand Kit" }),
+		ie("Cursor Style", { handle: 9, surface: "Screen Recording Settings" }),
+	]);
+	assert.deepEqual(resolveTarget({ name: "Cursor Style", surface: "Brand Kit", ordinal: 1 }, obs), { handle: 3 });
+});
+
+test("compileRecipe__Parameterises__When__TheRecordedValueWasGeneratedPerRun", () => {
+	// Replay typed the recorded scratch name verbatim, so the SECOND replay found the field
+	// already reading it: "expectation met, but every check was ALREADY satisfied before the
+	// action — no evidence the action changed anything." The check is right; the recipe was
+	// wrong to promise a value that stops being new after one use.
+	const r = compileRecipe(
+		runLog({
+			steps: [
+				step({
+					action: { kind: "tool", name: "type_text", args: { element_index: 4, text: "Scratch Cursor Type Demo 1337700534" } },
+					targetName: "Untitled",
+					targetRole: "textbox",
+					expectation: { description: "title updates", textIncludes: ["Scratch Cursor Type Demo 1337700534"], textExcludes: ["Untitled Draft"] },
+				}),
+			],
+		}),
+		"s-yarn",
+	);
+	// Text and the checks that quote it must move TOGETHER, or replay types one value and
+	// asserts another.
+	assert.equal(r.steps[0].action.args.text, "Scratch Cursor Type Demo {{unique}}");
+	assert.deepEqual(r.steps[0].expectation.textIncludes, ["Scratch Cursor Type Demo {{unique}}"]);
+	assert.deepEqual(r.steps[0].expectation.textExcludes, ["Untitled Draft"]);
+});
+
+test("compileRecipe__LeavesMeaningfulNumbersAlone__When__TheyAreNotGeneratedIds", () => {
+	// "2 scenes" and "1080" are content, not a per-run token. Six-plus digits is the line.
+	const r = compileRecipe(
+		runLog({
+			steps: [
+				step({
+					action: { kind: "tool", name: "type_text", args: { element_index: 4, text: "Scene 2 at 1080p" } },
+					targetName: "Script",
+					expectation: { description: "typed", textIncludes: ["Scene 2 at 1080p"] },
+				}),
+			],
+		}),
+		"s-yarn",
+	);
+	assert.equal(r.steps[0].action.args.text, "Scene 2 at 1080p");
+});

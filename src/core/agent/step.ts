@@ -128,6 +128,26 @@ export async function executeAction(
 	// reassigned to the post-action observation below, and element handles are only
 	// meaningful in the snapshot that produced them.
 	const target = actionTarget(input.action, ls.obs);
+	/**
+	 * Which of several identical twins this action operated, 0-based — recorded ONLY when
+	 * name+role+surface genuinely fail to separate them.
+	 *
+	 * Yarn's Library has two controls named "New Draft". A compiled recipe described the target
+	 * by identity alone, so replay could not tell them apart and correctly refused rather than
+	 * guess — which stopped every no-rescue replay on step 1, 0/3 with zero model calls. The
+	 * recording always knew which one it used; it simply never wrote it down.
+	 *
+	 * Undefined when identity already resolves, so a recipe carries an index only where an index
+	 * is the last thing left. See RecipeTarget.ordinal for why that ordering matters.
+	 */
+	const targetOrdinal = ((): number | undefined => {
+		if (!target) return undefined;
+		const twins = ls.obs.interactive.filter((e) => e.name === target.name && e.role === target.role && e.surface === target.surface);
+		if (twins.length < 2) return undefined;
+		const at = twins.findIndex((e) => e.handle === target.handle);
+
+		return at >= 0 ? at : undefined;
+	})();
 	const prevShot = ls.lastShot;
 	while (sync.busy) await new Promise((r) => setTimeout(r, 50));
 	sync.busy = true;
@@ -395,6 +415,7 @@ export async function executeAction(
 					targetRect: { x: plan.target.x, y: plan.target.y, w: plan.target.w, h: plan.target.h },
 					targetName: plan.target.name,
 					...(target?.surface ? { targetSurface: target.surface } : {}),
+					...(targetOrdinal !== undefined ? { targetOrdinal } : {}),
 					...(target?.namedBy ? { targetNamedBy: target.namedBy } : {}),
 				}
 			: target
@@ -405,6 +426,7 @@ export async function executeAction(
 						targetRect: cdp?.lastActuation ? cdp.lastActuation.box : { x: target.x, y: target.y, w: target.w, h: target.h },
 						targetName: target.name,
 						...(target.surface ? { targetSurface: target.surface } : {}),
+						...(targetOrdinal !== undefined ? { targetOrdinal } : {}),
 						...(target.namedBy ? { targetNamedBy: target.namedBy } : {}),
 					}
 				: {}),

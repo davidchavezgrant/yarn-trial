@@ -62,6 +62,20 @@ export interface RecipeTarget {
 	name: string;
 	/** Nearest named ancestor, disambiguating same-named controls on different panels. */
 	surface?: string;
+	/**
+	 * WHICH of several identical twins the recording operated, 0-based, when name+role+surface
+	 * could not tell them apart on its own.
+	 *
+	 * Yarn's Library carries two controls named "New Draft". Resolution correctly refuses to
+	 * guess between them, so every no-rescue replay stopped dead on step 1 — 0/3 with zero model
+	 * calls. Refusing is right when nothing distinguishes the candidates; it is the wrong answer
+	 * when the RECORDING knew which one it used and simply never wrote it down.
+	 *
+	 * Deliberately a LAST resort, applied only after name, surface and role have all failed to
+	 * narrow: document order is weaker evidence than identity, and a reordered list would send
+	 * the click to the wrong twin. Replay logs when it falls back to this.
+	 */
+	ordinal?: number;
 }
 
 export interface RecipeStep {
@@ -89,6 +103,62 @@ export interface Recipe {
 	/** The run's final goal check, replayed as the recipe's own success gate. */
 	finalEvidence?: Expectation;
 }
+
+/**
+ * A run-unique token the recording generated — a scratch name's disambiguating suffix.
+ *
+ * Replay typed the RECORDED value verbatim, so the second replay found the field already
+ * reading it and `verify()` correctly refused: "expectation met, but every check was ALREADY
+ * satisfied before the action — no evidence the action changed anything." The check is right;
+ * the recipe was wrong to promise a value that stops being new after its first use.
+ *
+ * Compile rewrites such a run to a placeholder in BOTH the typed text and the expectation that
+ * quotes it, and replay substitutes one fresh value per run. Six-plus digits, because that is
+ * what a generated suffix looks like and what a human-meaningful number ("2 scenes", "1080")
+ * does not.
+ */
+const UNIQUE_RUN = /\d{6,}/;
+export const UNIQUE_TOKEN = "{{unique}}";
+
+/**
+ * Swap a generated suffix for the placeholder, in the typed text and in every check that
+ * quotes it — they must move together or replay types one value and asserts another.
+ */
+function parameterise(step: RecipeStep): RecipeStep {
+	const text = step.action.args.text;
+	if (typeof text !== "string") return step;
+	const hit = UNIQUE_RUN.exec(text);
+	if (!hit) return step;
+	const swap = (v: string): string => v.split(hit[0]).join(UNIQUE_TOKEN);
+	const e = step.expectation;
+
+	return {
+		...step,
+		action: { ...step.action, args: { ...step.action.args, text: swap(text) } },
+		expectation: {
+			...e,
+			...(e.textIncludes ? { textIncludes: e.textIncludes.map(swap) } : {}),
+			...(e.textExcludes ? { textExcludes: e.textExcludes.map(swap) } : {}),
+		},
+	};
+}
+
+/** Resolve placeholders for one replay. Same value everywhere in the run, fresh each run. */
+export const substituteUnique = (step: RecipeStep, unique: string): RecipeStep => {
+	const swap = (v: string): string => v.split(UNIQUE_TOKEN).join(unique);
+	const text = step.action.args.text;
+	const e = step.expectation;
+
+	return {
+		...step,
+		...(typeof text === "string" ? { action: { ...step.action, args: { ...step.action.args, text: swap(text) } } } : {}),
+		expectation: {
+			...e,
+			...(e.textIncludes ? { textIncludes: e.textIncludes.map(swap) } : {}),
+			...(e.textExcludes ? { textExcludes: e.textExcludes.map(swap) } : {}),
+		},
+	};
+};
 
 export class RecipeCompileError extends Error {}
 
@@ -134,11 +204,13 @@ export function compileRecipe(runLog: Record<string, any>, stamp: string): Recip
 							name: s.targetName,
 							...(s.targetRole !== undefined ? { role: s.targetRole } : {}),
 							...(surfaceOf(s) !== undefined ? { surface: surfaceOf(s) } : {}),
+							...(s.targetOrdinal !== undefined ? { ordinal: s.targetOrdinal } : {}),
 						},
 					}
 				: {}),
 			expectation: s.expectation,
 		});
+		steps[steps.length - 1] = parameterise(steps[steps.length - 1]);
 	}
 	if (steps.length === 0) throw new RecipeCompileError("run contains no replayable steps (all waits)");
 
@@ -182,11 +254,18 @@ export function resolveTarget(
 	if (candidates.length === 1) return { handle: candidates[0].handle };
 	if (candidates.length === 0)
 		return { error: `no control named ${JSON.stringify(target.name)} in the current observation` };
+	// Identity has run out. If the recording noted WHICH twin it used, and the list still has
+	// that many, take it — weaker evidence than a name, and strictly better than refusing a
+	// route that demonstrably worked. Only when the count matches: a different number of twins
+	// means the page is not the page that was recorded, and an index into it is meaningless.
+	if (target.ordinal !== undefined && target.ordinal < candidates.length)
+		return { handle: candidates[target.ordinal].handle };
 
 	return {
 		error:
 			`${candidates.length} controls named ${JSON.stringify(target.name)}` +
-			`${target.surface ? ` on surface ${JSON.stringify(target.surface)}` : ""} — cannot replay an ambiguous target`,
+			`${target.surface ? ` on surface ${JSON.stringify(target.surface)}` : ""} — cannot replay an ambiguous target` +
+			`${target.ordinal === undefined ? " (the recording did not note which one it used)" : ""}`,
 	};
 }
 
