@@ -2536,3 +2536,35 @@ test("childRunArgs__PutsTheTaskFirst__When__TheKindIsATask", () => {
 	// --record is a TASK concept: an explore is never filmed.
 	assert.ok(!childRunArgs("explore", { record: true }, "Yarn", "").includes("--record"));
 });
+
+test("submitSpec__IsFullyConsumedByTheRunner__When__DispatchPutsAFieldOnTheWire", () => {
+	/**
+	 * Every field dispatch writes into the base64 submit spec must be PARSED by the runner.
+	 *
+	 * `useProcedures` and `procedureLineage` were declared on both ends and dropped in the
+	 * middle: dispatch sent them, serve.ts read `rec.useProcedures` to set USE_PROCEDURES on
+	 * the child — and nothing in between ever copied them out of the request. The path
+	 * typechecks end to end because both halves declare the fields, so the compiler is no help.
+	 * All 12 phase-6 runs silently ground on the appmap instead of the procedure, reported
+	 * 12/12 success, and only `groundingChecked` caught it.
+	 *
+	 * Same shape as the ctl.ts METHODS allowlist that never learned `peek-capture`. The lesson
+	 * generalises: a wire contract needs a test that walks the SENDER's fields and asserts the
+	 * RECEIVER mentions each one, because every other signal says it works.
+	 */
+	const specSrc = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "remote", "control", "dispatch.ts"), "utf8");
+	const serveSrc = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "remote", "runner", "serve.ts"), "utf8");
+	// The spec literal: from `const spec` (or the submit payload) to its closing brace.
+	const start = specSrc.indexOf("app: opts.app,");
+	assert.ok(start > 0, "could not locate the submit spec literal in dispatch.ts");
+	const body = specSrc.slice(start, specSrc.indexOf("\n\t};", start));
+	const fields = [...new Set([...body.matchAll(/^\t*(?:\.\.\.\([^)]*\?\s*\{\s*)?([a-zA-Z][a-zA-Z0-9]*)\s*:/gm)].map((m) => m[1]))];
+	assert.ok(fields.length >= 10, `expected the spec to have many fields, parsed ${fields.length}`);
+	// MENTIONING the field is not enough — that is what made the first version of this test
+	// useless. serve.ts referenced `rec.useProcedures` the whole time it was dropping the field
+	// on arrival, so a "does the string appear" check passed on the shipped bug. The field has
+	// to be READ OUT OF THE REQUEST: `flag(params, "x")` for booleans, `params.x` otherwise.
+	const parsed = (f: string) => new RegExp(`flag\\(params, "${f}"\\)|params\\.${f}\\b`).test(serveSrc);
+	const dropped = fields.filter((f) => !parsed(f));
+	assert.deepEqual(dropped, [], `dispatch puts these on the wire and serve.ts never reads them out of params — silently dropped: ${dropped.join(", ")}`);
+});

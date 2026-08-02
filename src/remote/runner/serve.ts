@@ -804,6 +804,11 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		const axdomOff = flag(params, "axdomOff");
 		const noGrounding = flag(params, "noGrounding");
 		const useRecipe = flag(params, "useRecipe");
+		// Declared on the wire and read at line ~670 to set USE_PROCEDURES, but never PARSED
+		// here — so the field arrived and was dropped, and all 12 phase-6 runs silently ground
+		// on the appmap instead of the procedure. The whole path typechecks because both ends
+		// declare it; only the middle omitted it.
+		const useProcedures = flag(params, "useProcedures");
 		const noRescue = flag(params, "noRescue");
 		const queue = flag(params, "queue");
 		if (typeof record !== "boolean") return record;
@@ -812,6 +817,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		if (typeof axdomOff !== "boolean") return axdomOff;
 		if (typeof noGrounding !== "boolean") return noGrounding;
 		if (typeof useRecipe !== "boolean") return useRecipe;
+		if (typeof useProcedures !== "boolean") return useProcedures;
 		if (typeof noRescue !== "boolean") return noRescue;
 		if (typeof queue !== "boolean") return queue;
 
@@ -821,6 +827,13 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		if (params.backend !== undefined && params.backend !== "ax" && params.backend !== "cdp")
 			return { ok: false, error: `backend must be "ax" or "cdp", got ${JSON.stringify(params.backend)}` };
 		const backend = params.backend as "ax" | "cdp" | undefined;
+
+		// Fixed vocabulary, same rule as backend and appmapVariant: it selects which procedure
+		// FILE the child loads, so an unrecognised value would degrade to the wrong lineage —
+		// and the two lineages are different experiments that must not share an artifact.
+		if (params.procedureLineage !== undefined && params.procedureLineage !== "grounded" && params.procedureLineage !== "ungrounded")
+			return { ok: false, error: `procedureLineage must be "grounded" or "ungrounded", got ${JSON.stringify(params.procedureLineage)}` };
+		const procedureLineage = params.procedureLineage as "grounded" | "ungrounded" | undefined;
 
 		// Same fixed-vocabulary rule for the appmap variant — it becomes an env value, and the
 		// only variant that exists is the vision map. A typo'd variant would silently ground the
@@ -893,7 +906,9 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			axdomOff,
 			noGrounding,
 			useRecipe,
+			useProcedures,
 			noRescue,
+			...(procedureLineage !== undefined ? { procedureLineage } : {}),
 			...(backend !== undefined ? { backend } : {}),
 			...(recipe !== undefined ? { recipe } : {}),
 			...(url !== undefined ? { url } : {}),
