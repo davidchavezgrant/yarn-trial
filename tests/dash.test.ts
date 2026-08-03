@@ -600,6 +600,32 @@ const plantRecording = (dir: string, jobId: string, file: string): void => {
 	fs.writeFileSync(path.join(rec, file), "BYTES");
 };
 
+test("BuildState__CountsUnmatchedEntries__When__AnArmIdResolvesToNothing", () => {
+	const s = buildState(
+		manifest(
+			entry({ armId: "ax-grounded", jobId: "job-ok", collected: true, state: "done" }),
+			// A pre-stages id nothing can place — the phase-6 recipe arms are the real instance.
+			entry({ armId: "p6-ax-recipe", jobId: "job-orphan", collected: true, state: "done" }),
+		),
+		fleet([]),
+		[],
+		true,
+	);
+
+	// The board CANNOT show this row — rows come from MATRIX — so the count is the only place the
+	// gap can appear. Absent is otherwise indistinguishable from never-submitted, which is how a
+	// rename turned a whole pass into an empty board with nothing on screen saying so.
+	assert.equal(s.unmatchedEntries, 1);
+	// It stays counted in `submitted`, because the manifest really does hold it.
+	assert.equal(s.progress.submitted, 2);
+});
+
+test("BuildState__OmitsTheWarning__When__EveryEntryResolves", () => {
+	const s = buildState(manifest(entry({ armId: "ax-grounded", jobId: "job-ok", collected: true, state: "done" })), fleet([]), [], true);
+	// Absent, not zero: a healthy pass renders no warning at all.
+	assert.equal(s.unmatchedEntries, undefined);
+});
+
 /* ---- filmed runs grafted onto their config's row ------------------------------------------- */
 
 test("BuildState__GraftsTheFilmedRunOntoItsConfig__When__BothRanAtTheSameModel", () => {

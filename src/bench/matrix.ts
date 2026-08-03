@@ -1362,8 +1362,56 @@ export const armModel = (arm: Arm, passModel?: string): string | undefined => ar
  * the old locations, writes only ever use the current one. A future rename that is not "drop the
  * phase prefix" will need its own line here, and will be just as visible when it does.
  */
-export const armById = (id: string): Arm | undefined =>
-	MATRIX.find((a) => a.id === id) ?? (/^p[0-9]+-/.test(id) ? MATRIX.find((a) => a.id === id.replace(/^p[0-9]+-/, "")) : undefined);
+/**
+ * Arms renamed by more than the phase prefix, old id → new. Consulted before the prefix strip.
+ *
+ * Every entry here was verified against the RUNS' OWN LOGS, not inferred from the names: each of
+ * these jobs recorded `task: "show me how to change the motion blur"`, identical to the current
+ * `blur-*` arms' task, and the grounded/ungrounded split survives in the id. That is what makes
+ * this a mapping rather than a guess.
+ *
+ * NOT LISTED, deliberately: the phase-6/7 `*-recipe*` arms. Those became either `replay-*` or
+ * `*-procedure*` and this repo's own writeup says recipes and procedures are OPPOSITES, not
+ * variants — a recipe is a frozen click sequence, a procedure is prose for a future agent. Naming
+ * the wrong one would attribute runs to a config that did not produce them, which is the exact
+ * class of error `groundingChecked` exists to catch. They stay unresolved until someone who knows
+ * writes it down here.
+ */
+const RENAMED_ARMS: ReadonlyMap<string, string> = new Map([
+	["p4-ungrounded", "blur-ungrounded"],
+	["p4-grounded", "blur-grounded"],
+	["p4-compile", "blur-compile"],
+	["p5-ungrounded-filmed", "blur-ungrounded-filmed"],
+	["p5-grounded-filmed", "blur-grounded-filmed"],
+]);
+
+export const armById = (id: string): Arm | undefined => {
+	const exact = MATRIX.find((a) => a.id === id);
+	if (exact) return exact;
+	const renamed = RENAMED_ARMS.get(id);
+	if (renamed) return MATRIX.find((a) => a.id === renamed);
+
+	return /^p[0-9]+-/.test(id) ? MATRIX.find((a) => a.id === id.replace(/^p[0-9]+-/, "")) : undefined;
+};
+
+/**
+ * The CURRENT spelling of an arm id, for manifests written before the stages collapse.
+ *
+ * `readManifest` puts every entry through this, which is what makes one boundary enough: the ~9
+ * sites that compare `e.armId === a.id` (report.ts, dash.ts's buildState, autopilot.ts) then see
+ * current ids without any of them knowing a rename happened. Resolving it at each call site
+ * instead would be nine chances to forget, and the failure mode is silent — an entry whose arm
+ * does not resolve is not flagged, it is simply absent from the board.
+ *
+ * UNRECOGNISED IDS PASS THROUGH UNCHANGED, deliberately. 15 arms in the 2026-08-01 pass were
+ * renamed semantically rather than re-prefixed (`p6-ax-recipe`, `p4-grounded`, …), and this
+ * function will not guess at those: recipes and procedures are opposites, not variants, so a
+ * plausible-looking alias would attribute 28 runs to configs that did not produce them. That is
+ * the failure this repo has been burned by before (a run reporting grounding its row did not
+ * have). They stay unresolved and countable — see DashState.unmatchedEntries — until someone who
+ * knows the mapping writes it down.
+ */
+export const canonicalArmId = (id: string): string => armById(id)?.id ?? id;
 
 /** Total runs a phase performs, local compiles included — the per-phase figures `bench plan` prints. */
 export const phaseRunCount = (phase: Phase): number => phaseArms(phase).reduce((sum, a) => sum + a.n, 0);

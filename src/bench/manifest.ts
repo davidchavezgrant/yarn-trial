@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { archiveDir, backupTree, liveDir, OLD_ARCHIVE_DIR, OLD_LIVE_DIR, outDir } from "../paths.js";
-import type { Phase } from "./matrix.js";
+// A VALUE import, unlike the type-only one it replaces: readManifest canonicalises arm ids on
+// the way in. Safe from a cycle — matrix.ts imports only core/target.js, never this file.
+import { canonicalArmId, type Phase } from "./matrix.js";
 
 /**
  * The benchmark's durable memory: which runs were submitted, where, and what came back.
@@ -249,6 +251,34 @@ export function archiveDirFor(benchRoot: string, entry: ManifestEntry): string {
 	return path.join(benchRoot, "appmaps", model, entry.armId, entry.jobId);
 }
 
+/**
+ * Bring a manifest's arm ids to their current spelling, on the way in.
+ *
+ * THE ONE PLACE, because everything downstream matches entries to arms by string equality and
+ * would otherwise each need the rename knowledge. The stages collapse (109bf7a) dropped the phase
+ * prefix from every id, and before this the 2026-08-01 pass rendered as an EMPTY BOARD under
+ * current code — 0 arms, 0 of 198 entries — because nothing resolved and an entry with no arm has
+ * nothing to render.
+ *
+ * A NOTE ON WRITES, since this is the honest consequence: a read-modify-write (collect banking
+ * metrics, orchestrate appending an entry) now persists the canonical ids, so a legacy manifest
+ * heals on its next write rather than being converted by a migration script. That is intended —
+ * it is the same file describing the same runs under the names the code now uses — but it does
+ * mean the id rewrite is one-way, and `out/bench/archive` holds the pre-rewrite copy if the old
+ * spelling is ever needed as evidence.
+ *
+ * Ids it does not recognise are left exactly as they are; canonicalArmId explains why guessing
+ * would be worse than leaving them visible.
+ */
+const canonicaliseArmIds = (m: Manifest): Manifest => ({
+	...m,
+	entries: m.entries.map((e) => {
+		const id = canonicalArmId(e.armId);
+
+		return id === e.armId ? e : { ...e, armId: id };
+	}),
+});
+
 export function readManifest(date = utcDate(), root = liveDir()): Manifest {
 	// Live, then the backup, then the store's pre-bench homes (out/live, out/archive — a few
 	// hours of passes landed there), then the legacy out/bench/<date> layout — the same fallback
@@ -262,7 +292,7 @@ export function readManifest(date = utcDate(), root = liveDir()): Manifest {
 	for (const r of candidates) {
 		try {
 			const m = JSON.parse(fs.readFileSync(manifestPath(date, r), "utf8")) as Manifest;
-			if (Array.isArray(m.entries)) return m;
+			if (Array.isArray(m.entries)) return canonicaliseArmIds(m);
 		} catch {
 			// Absent or unparseable both mean "not here" — try the next root, then start fresh.
 		}

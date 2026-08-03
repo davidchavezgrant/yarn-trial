@@ -353,6 +353,57 @@ test("writeManifest__RoundTrips__When__ReadBack", () => {
 	});
 });
 
+/* ---- arm ids across the stages rename ------------------------------------------------------ */
+
+test("ArmById__ResolvesTheLegacySpelling__When__TheIdCarriesAPhasePrefix", () => {
+	// The stages collapse (109bf7a) dropped the prefix. Manifests written before it still say
+	// p2-ax-grounded, and every consumer turns an entry back into an arm through this.
+	assert.equal(armById("p2-ax-grounded")?.id, "ax-grounded");
+	assert.equal(armById("p1-explore-ax")?.id, "explore-ax");
+	// Still exact-first: a current id never takes the fallback path.
+	assert.equal(armById("ax-grounded")?.id, "ax-grounded");
+	// And an id that means nothing stays undefined rather than resolving to something plausible.
+	assert.equal(armById("p2-not-an-arm"), undefined);
+});
+
+test("ArmById__ResolvesTheRenamedArm__When__ThePrefixStripIsNotEnough", () => {
+	// Verified against these runs' own logs, not their names: each recorded the blur task.
+	assert.equal(armById("p4-grounded")?.id, "blur-grounded");
+	assert.equal(armById("p4-ungrounded")?.id, "blur-ungrounded");
+	assert.equal(armById("p4-compile")?.id, "blur-compile");
+	assert.equal(armById("p5-grounded-filmed")?.id, "blur-grounded-filmed");
+	// The recipe arms are deliberately NOT aliased — recipes and procedures are opposites, and a
+	// wrong alias would attribute runs to a config that did not produce them.
+	assert.equal(armById("p6-ax-recipe"), undefined);
+});
+
+test("ReadManifest__CanonicalisesArmIds__When__TheFileHoldsPreStagesSpellings", () => {
+	withTemp("bench-", (dir) => {
+		const m: Manifest = {
+			date: DATE,
+			createdAt: "2026-07-31T19:00:00.000Z",
+			entries: [
+				{ armId: "p2-ax-grounded", jobId: "j1", host: "mac1", submittedAt: "2026-07-31T20:00:00.000Z", state: "done", collected: true },
+				{ armId: "p4-grounded", jobId: "j2", host: "mac2", submittedAt: "2026-07-31T20:01:00.000Z", state: "done", collected: true },
+				{ armId: "p6-ax-recipe", jobId: "j3", host: "mac3", submittedAt: "2026-07-31T20:02:00.000Z", state: "done", collected: true },
+			],
+		};
+		fs.mkdirSync(liveDir(dir) + "/" + DATE, { recursive: true });
+		fs.writeFileSync(manifestPath(DATE, liveDir(dir)), JSON.stringify(m));
+
+		const read = readManifest(DATE, liveDir(dir));
+
+		// ONE boundary is the whole point: the ~9 sites that compare e.armId === a.id see current
+		// ids without any of them knowing a rename happened. Before this, the 2026-08-01 pass
+		// rendered as 0 arms and 0 of 198 entries.
+		assert.equal(read.entries[0]?.armId, "ax-grounded");
+		assert.equal(read.entries[1]?.armId, "blur-grounded");
+		// Unrecognised ids pass through UNCHANGED and stay countable, rather than being guessed
+		// into a neighbouring arm.
+		assert.equal(read.entries[2]?.armId, "p6-ax-recipe");
+	});
+});
+
 test("readManifest__ReturnsEmpty__When__FileAbsent", () => {
 	withTemp("bench-", (dir) => {
 		const m = readManifest(DATE, liveDir(dir));

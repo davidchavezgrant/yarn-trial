@@ -2675,7 +2675,11 @@ function render() {
 		// A failing fleet poll must say so: the wall silently freezing on stale rows while
 		// tickers advance read as a healthy fleet.
 		const fleetSeg = `Fleet ${state.fleet.polledAt ? hhmm(state.fleet.polledAt) : "–"}${state.fleet.error ? " ⚠ poll failing" : ""}`;
-		$("metaline").textContent = `${state.date} · ${fleetSeg} · ${state.autoCollect ? "Auto-collect on" : "Collect off (pure reader)"} · Updated ${hhmm(state.generatedAt)}`;
+		// Entries the matrix cannot place are NOT on the board — no row exists to carry a warning —
+		// so the count says so here or nowhere. It reads as a data problem because it is one: an
+		// arm renamed out from under a finished pass.
+		const orphan = state.unmatchedEntries ? ` · ⚠ ${state.unmatchedEntries} run${state.unmatchedEntries === 1 ? "" : "s"} reference arms not in this matrix — not shown below` : "";
+		$("metaline").textContent = `${state.date} · ${fleetSeg} · ${state.autoCollect ? "Auto-collect on" : "Collect off (pure reader)"} · Updated ${hhmm(state.generatedAt)}${orphan}`;
 		$("metaline").dataset.tip = state.fleet.error ? `fleet poll error: ${state.fleet.error}` : "";
 	});
 	safe("fleet", null, renderFleet);

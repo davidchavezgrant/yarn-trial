@@ -301,6 +301,18 @@ export interface DashState {
 	 * ranModels is the truth and always wins in the UI.
 	 */
 	defaultModel?: string;
+	/**
+	 * Manifest entries whose armId matches no arm in MATRIX, even after canonicalArmId.
+	 *
+	 * On the wire because the board CANNOT show them: rows are built from MATRIX, so an entry with
+	 * no arm is not degraded, it is absent — and absent is indistinguishable from "never submitted"
+	 * on a page that only draws what it can resolve. That is how the stages rename turned the whole
+	 * 2026-08-01 pass into an empty board with nothing on screen saying so. A count is the smallest
+	 * thing that makes the gap legible; the page prints it in the metaline.
+	 *
+	 * Absent when zero, so a healthy pass carries no field and the page renders no warning.
+	 */
+	unmatchedEntries?: number;
 	progress: { planned: number; submitted: number; collected: number; running: number; queued: number; successes: number };
 	fleet: FleetView;
 	arms: ArmView[];
@@ -1583,11 +1595,16 @@ export function buildState(manifest: Manifest, fleet: FleetView, events: DashEve
 		unproven: judged.filter((e) => pick(e) === "UNPROVEN").length,
 	});
 
+	// Counted against MATRIX directly, not against the rows: a row that was never built cannot
+	// report its own absence, which is precisely the failure this exists to make visible.
+	const unmatchedEntries = manifest.entries.filter((e) => !armById(e.armId)).length;
+
 	return {
 		date: manifest.date,
 		generatedAt: new Date().toISOString(),
 		autoCollect,
 		...(defaultModel ? { defaultModel } : {}),
+		...(unmatchedEntries ? { unmatchedEntries } : {}),
 		progress: {
 			planned: MATRIX.reduce((sum, a) => sum + a.n, 0),
 			submitted: manifest.entries.length,
