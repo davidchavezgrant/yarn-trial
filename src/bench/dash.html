@@ -2110,11 +2110,25 @@ function mountLogPanes() {
 // waiting in line never sorts above a run that is actually going. Oldest→newest within
 // every band, so the next collect lands where the eye already is. The same bands order
 // the chips inside a row's Runs cell (runsCell).
-// Pre-collect statuses that mean the run has ENDED on its host: awaiting-collect, plus the
-// failure verdicts liveFor reads off the host's job registry before any collect pass runs.
-const PRE_COLLECT_TERMINAL = new Set(["awaiting-collect", "failed", "crashed", "stopped"]);
+// Uncollected statuses that will NOT change again — "settled", not "finished": awaiting-collect
+// plus the failure verdicts liveFor reads off the host's job registry before any collect pass
+// runs, and the two states freezeStates mints for a SNAPSHOT.
+//
+// Those last two are why this list matters beyond sort order. A hosted dash has no fleet to ask,
+// so freezeStates (dash.ts) retires a frozen `running` to `abandoned` and a frozen `queued` to
+// `never-ran`. Both were absent here, so entryBand called them non-terminal, and the Pipeline
+// tile leaves a non-terminal run's span OPEN — ending at `receivedAt`, which the 1s ticker
+// advances. The published board's pipeline total therefore climbed 1s/s forever off three
+// entries frozen mid-run: 9h17m when it deployed, 9h53m half an hour later, on data that cannot
+// change. A frozen snapshot must read the same tomorrow as today.
+//
+// `never-ran` is settled without ever having started, which is the one place the old name
+// (PRE_COLLECT_TERMINAL) would have lied: it is not "ended on its host". Its span collapses to
+// zero length through entryTime's submit-time fallback, which is right — a run that never ran
+// consumed no pipeline time.
+const SETTLED = new Set(["awaiting-collect", "failed", "crashed", "stopped", "abandoned", "never-ran"]);
 function entryBand(e) {
-	return e.collected || PRE_COLLECT_TERMINAL.has(e.status) ? 0 : e.status === "running" ? 1 : 2;
+	return e.collected || SETTLED.has(e.status) ? 0 : e.status === "running" ? 1 : 2;
 }
 
 function entryTime(e) {
@@ -2122,7 +2136,7 @@ function entryTime(e) {
 	// Ended on its host but no endedAt on the wire yet (awaiting-collect, or a registry-read
 	// failure verdict) — approximate the finish from the remembered live start + elapsed so
 	// it sorts near its real end.
-	if (PRE_COLLECT_TERMINAL.has(e.status)) {
+	if (SETTLED.has(e.status)) {
 		const m = liveMem[e.jobId];
 		if (m && m.start != null) return m.start + (m.elapsed || 0) * 1000;
 	}
