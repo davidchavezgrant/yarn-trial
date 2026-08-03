@@ -1616,3 +1616,17 @@ test("creationArms__CarryAStepBudgetThatFitsTheTask__When__TheDefaultWouldCutThe
 	// And the budget must actually cross the wire, or the arm is starved anyway.
 	assert.equal(dispatchOptionsFor(create[0], undefined, BENCH_PRIMARY_MODEL).steps, create[0].dispatch.steps);
 });
+
+test("failureKind__SeparatesTheHarnessEndingARun__From__TheAgentsOwnVerdict", () => {
+	// Every non-success used to collapse to "gave-up", so a run stopped by a 15-step budget was
+	// indistinguishable from one that ran to its own conclusion. Seven creation runs stopped at
+	// exactly 15 and read as "the agent cannot make a video" — the only known-good run of that
+	// flow takes 19. The distinction has to survive into the metrics or the report cannot make
+	// it either.
+	const ceiling = failureKind(undefined, { success: false, stopReason: "step-ceiling" }, true);
+	assert.equal(ceiling, "step-ceiling");
+	assert.equal(failureKind(undefined, { success: false, stopReason: "stalled" }, true), "stalled");
+	// An agent that reached its own verdict still reads as gave-up — that label keeps its
+	// meaning precisely because the other two left it.
+	assert.equal(failureKind(undefined, { success: false }, true), "gave-up");
+});

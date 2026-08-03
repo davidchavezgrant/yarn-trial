@@ -38,6 +38,11 @@ export interface RunMetrics {
 	modelCalls?: number;
 	provenance?: string;
 	/**
+	 * `step-ceiling` | `stalled` — set when the HARNESS ended the run, not the agent. Absent on
+	 * a run that reached its own verdict, which is what "gave-up" then means.
+	 */
+	stopReason?: string;
+	/**
 	 * Node count of the appmap graph this run was grounded on. The TIER alone is not the
 	 * condition: phase 1's maps ranged 89–234 nodes, so two runs both reading `explore` can have
 	 * had very different inputs. Present on ungrounded runs too — it records what was on the box,
@@ -79,7 +84,12 @@ export interface RunMetrics {
 	 * mislabelled. Kept in the same field because it disqualifies a row from its arm's
 	 * average exactly as a failure does.
 	 */
-	failureKind?: "unready" | "gave-up" | "hinted-refused" | "stopped" | "crashed" | "grounding-mismatch";
+	/**
+	 * `step-ceiling` and `stalled` are the HARNESS ending a run, not the agent. Distinct from
+	 * gave-up on purpose: folding them together made a 15-step budget read as "the agent cannot
+	 * make a video" for seven runs whose task needs 19.
+	 */
+	failureKind?: "unready" | "gave-up" | "hinted-refused" | "stopped" | "crashed" | "grounding-mismatch" | "step-ceiling" | "stalled";
 	/**
 	 * The attention question, per run: mean interactive elements per pre-action observation,
 	 * and mean element-list lines actually rendered into the prompt (0 on vision-only arms).

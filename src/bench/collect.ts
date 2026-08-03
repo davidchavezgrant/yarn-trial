@@ -70,6 +70,10 @@ export function parseRunMetrics(runLog: Record<string, any>): RunMetrics {
 				? { modelCalls: runLog.modelCalls }
 				: {}),
 		...(runLog.grounding?.provenance ? { provenance: String(runLog.grounding.provenance) } : {}),
+		// How the run ENDED, when it did not end on the agent's own verdict. Without this every
+		// non-success collapses to "gave-up", which is how seven budget-starved creation runs
+		// read as "the agent cannot make a video".
+		...(runLog.stopReason ? { stopReason: String(runLog.stopReason) } : {}),
 		// HOW BIG the map was, not just which tier it came from. Phase 1 produced maps ranging
 		// 89-234 nodes, so "grounded" is not one condition — a grounded arm that underperforms
 		// might have drawn a thin map rather than been failed by grounding. Recording it here
@@ -482,6 +486,10 @@ export function failureKind(
 	if (job?.exitCode === 3) return "unready";
 	if (job?.exitCode === 2) return "hinted-refused";
 	// A run log that says success:false is the agent's own conclusion — it ran to a verdict.
+	// The agent's own verdict is only one way to fail. A run stopped by the harness — the
+	// runaway backstop, or a stall streak — is a different fact about a different thing, and
+	// folding it into "gave-up" made a budget look like a capability limit.
+	if (hasRunLog && metrics.success === false && (metrics.stopReason === "step-ceiling" || metrics.stopReason === "stalled")) return metrics.stopReason;
 	if (hasRunLog && metrics.success === false) return "gave-up";
 	// No run log on a terminal job: orphaned, signalled, or died before the first write.
 	return "crashed";

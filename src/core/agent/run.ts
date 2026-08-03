@@ -51,7 +51,28 @@ import { CLAIM_TOOL, DONE_TOOL, systemPrompt } from "./prompt.js";
 import { type DriverSync, finishRecording, newRecording, startRecording } from "./recording.js";
 import { executeAction, type StepLoopState } from "./step.js";
 
-const MAX_STEPS = envNum("AGENT_STEPS", 15);
+/**
+ * A RUNAWAY BACKSTOP, not a budget (David, 2026-08-03).
+ *
+ * 15 was the operating limit, and it silently became a verdict: a run that hit it recorded
+ * `success: false`, which collect maps to "gave-up" — the same label as an agent that ran to
+ * its own conclusion. Seven creation runs stopped at exactly 15 and read as "the agent cannot
+ * make a video", when the only known-good run of that flow takes 19. Every phase's gave-up
+ * count is suspect for the same reason.
+ *
+ * A run should end when it succeeds or when it genuinely cannot proceed. STALL_STEPS below is
+ * what "cannot proceed" means mechanically; this number exists only so a model looping forever
+ * cannot hold a fleet Mac indefinitely, and hitting it is recorded as its own outcome rather
+ * than folded into the agent's verdict.
+ */
+const MAX_STEPS = envNum("AGENT_STEPS", 100);
+/**
+ * Consecutive steps with nothing verified before a run is called stuck. The honest reading of
+ * "it truly cannot anymore": the agent is still acting, and nothing it does changes anything
+ * the harness can check. Generous, because a legitimate route can include a few unverifiable
+ * steps in a row — the creation runs carry 8-14 of them and one still succeeded.
+ */
+const STALL_STEPS = envNum("AGENT_STALL_STEPS", 8);
 /**
  * Steps a single restore entry may spend before it is abandoned.
  *
@@ -549,6 +570,7 @@ export async function main(): Promise<void> {
 			},
 		];
 
+		let stalled = 0;
 		for (let step = 1; step <= MAX_STEPS; step++) {
 			// Between actions, never mid-action: leaving here rather than from the signal
 			// handler means the finally below still assembles the video and writes the log, so
@@ -852,10 +874,31 @@ export async function main(): Promise<void> {
 					verified: stepRec.verified,
 					...(stepRec.verificationChannel ? { channel: stepRec.verificationChannel } : {}),
 				});
+			/**
+			 * "It truly cannot anymore", mechanically: the agent is still acting and nothing it
+			 * does changes anything the harness can check.
+			 *
+			 * This is what replaces the old 15-step budget as the real stopping condition. A
+			 * budget cannot tell a long task from a stuck one — it cut the creation runs off at
+			 * exactly 15 and recorded them as the agent's own verdict. A stall streak can: it
+			 * ends a run that has genuinely lost the thread while letting a long route finish.
+			 *
+			 * Counted on VERIFIED, not on success/failure of the action: an act the harness
+			 * cannot check is exactly the case where the agent might be wandering, and a
+			 * legitimate route survives because one verified step anywhere resets the count.
+			 */
+			if (stepRec?.index === step && stepRec.verified) stalled = 0;
+			else stalled++;
+			if (stalled >= STALL_STEPS) {
+				console.log(`\n=== stalled: ${stalled} consecutive steps with nothing verified ===`);
+				outcome = { success: false, summary: `stalled — ${stalled} consecutive steps with nothing verified`, stopReason: "stalled" as const };
+				break;
+			}
 		}
+		if (!outcome)
 
-		console.log(`\n=== step limit (${MAX_STEPS}) reached without done ===`);
-		outcome = { success: false, summary: "step limit reached" };
+		console.log(`\n=== runaway backstop (${MAX_STEPS} steps) reached without done ===`);
+		outcome = { success: false, summary: `runaway backstop (${MAX_STEPS} steps) reached`, stopReason: "step-ceiling" as const };
 	} catch (err) {
 		aborted = err;
 	} finally {
