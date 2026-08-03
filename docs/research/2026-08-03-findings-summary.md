@@ -25,11 +25,6 @@ prose write-up harvested from one earlier run that succeeded).
 These are easy to confuse and they are opposites. Both come from one successful run; the
 difference is whether a model is involved when you use them.
 
-> *A note on the words, because they used to mean the reverse.* Until 2026-08-03 the code called
-> the machine-readable one a "recipe" and the prose one a "procedure." That was backwards, so the
-> two were swapped everywhere — code, filenames, and the recorded results. If you saw an earlier
-> version of this write-up, the findings are unchanged; only the labels moved.
-
 A **procedure** is machine-executable JSON that *replaces* the model. Replaying one makes no model
 calls at all. Each step names an exact control and the text that must appear afterwards:
 
@@ -127,76 +122,6 @@ defaults.
 **Claude Fable performed comparably** to Sol on the same cells: 6/9, no disagreements with the
 judge.
 
-## Running this remotely — tenable, and the blocker isn't what we assumed
-
-Not the focus of the benchmark, but a large share of the time and spend went here, so the
-conclusion is worth recording.
-
-**Remote execution itself works.** All ~200 runs were dispatched to a fleet of three colocated
-Macs, queued, filmed and pulled back automatically. Nothing about driving an app from elsewhere
-was the problem.
-
-**The problem is sign-in, not compute.** A run can land on any free Mac, and the target app has
-to already be logged in there. We built a credential vault to move a live session between
-machines — snapshot the app's profile directory, encrypt it, ship it, unpack it. It failed in
-practice: it moved 81 MB to carry what turned out to be a 176-byte token, and restoring it
-crash-looped the app. We fell back to signing in by hand on each Mac.
-
-**The answer is to replicate the machine, not the session.** macOS virtual machines can be cloned
-from a *golden image* (one prepared machine, snapshotted, then stamped out) with both the OS
-permissions we need — Accessibility and Screen Recording, which macOS normally makes a human grant
-by clicking through a dialog on that specific Mac — and the app sign-in already inside it. Adding
-a fourth runner then costs a clone instead of a person. This is how GitHub and Cirrus run their
-own macOS CI fleets, and it dissolves the problem we spent the vault trying to solve: we had
-assumed those permissions were bound to a physical Mac. They are not.
-
-Three constraints to know before pricing it:
-
-- **AWS EC2 Mac is specifically disqualified** — its low-level security settings don't survive
-  being turned into a machine image, which is exactly the thing we need baked in. Colo or
-  MacStadium (whose managed Orka product is this route, pre-built) instead.
-- **Apple's licence caps 2 VMs per physical host,** so this buys provisioning speed, not density.
-- **An app that stores its login in the Mac's hardware-backed keychain still needs a human
-  sign-in per box.** Yarn doesn't — its token is a plain file — so the route works for Yarn.
-  Keep the manual sign-in path for apps that don't.
-
-Full detail: `session-roaming.md` (the post-mortem, with corrections),
-`docs/research/2026-07-31-session-roaming-deep-research.md` (what the industry does),
-`docs/research/2026-07-30-cloud-vm-authentication-brief.md` (the cloud framing).
-
-## How much of this is reusable — about a third
-
-The prototype is 49,412 lines of TypeScript plus 28,169 of tests, which is a fair amount to
-hand over, so it's worth saying plainly which parts a production build would keep. Line counts
-measured; the buckets are my judgement, and `scripts/loc-buckets.sh` re-derives the table so it
-can be argued with rather than trusted.
-
-| | lines | share | |
-|---|---|---|---|
-| **Ships** | 15,547 | 31% | The engine: agent loop, the verification layers, grounding, journal/teardown, procedures and recipes, the CDP driving mode |
-| **Design ports, code rewritten** | 7,798 | 15% | Job queue, run leasing, per-operator isolation, watching a run live — production concerns solved in a colo-Mac-specific way |
-| **Keep as regression tooling** | 5,553 | 11% | The benchmark harness. Not shipped, not waste: it produced every number above and caught five measurement errors |
-| **Scaffolding** | 20,514 | 41% | Fleet administration over SSH (7.2k), the trial's own UI (5.0k), the results dashboards (4.7k), the cursor renderer (1.9k) |
-
-Three things are worth pulling out of that:
-
-- **The checking is bigger than the agent** — 4,131 lines of verification against 2,370 lines of
-  decision loop. That ratio is why the numbers in this document are believable; a thinner agent
-  would have been faster to write and worth less.
-- **The cursor renderer was built to prove a claim, not to ship.** Yarn already composites
-  cursors in post. The 83 lines production needs are the ones that emit the motion feed; the
-  other 1,850 are the argument that the feed is sufficient, which is now settled.
-- **Dropping the AX driving mode removes a dependency.** If production targets Electron and web
-  only, `cua-driver` goes, leaving two runtime dependencies, and the accessibility-bridge
-  workaround for unnamed buttons becomes unnecessary — a first-party app can just expose stable
-  element identity.
-
-The part that ports best isn't code at all: `LIMITATIONS.md`, the revisit-if conditions on each
-architecture decision, and the rule that measurement discipline is enforced by the tool rather
-than by anyone remembering. Those encode failures a rewrite would pay for twice.
-
-Full detail, including what a production build has to *add* that this never needed:
-`docs/research/2026-08-03-what-ports-to-production.md`.
 
 ## What we didn't learn
 
@@ -247,11 +172,37 @@ Full detail, including what a production build has to *add* that this never need
    trace — most creative work — can never be frozen at all.
 3. **Image-analysis click correction.** The real fix for apps with no element list, and a big
    build. Wait for the nudging experiment.
-4. **Any more work on the coordinate maths.** It was never wrong.
 
-## Reading the dashboard
 
-Two discovery columns are unreliable: `seen` and `surfaces`. One exploration pass logged 6609
-controls seen against an identical run's 293 — purely because it scrolled a long list. Both
-produced comparable maps. Use **graph nodes** (how much of the app was mapped) and **actuated**
-(how many controls were actually operated).
+## Running this remotely — tenable, and the blocker isn't what we assumed
+
+Not the focus of the benchmark, but a large share of the time and spend went here, so the
+conclusion is worth recording.
+
+**Remote execution itself works.** All ~200 runs were dispatched to a fleet of three colocated
+Macs, queued, filmed and pulled back automatically. Nothing about driving an app from elsewhere
+was the problem.
+
+**The problem is sign-in, not compute.** A run can land on any free Mac, and the target app has
+to already be logged in there. We built a credential vault to move a live session between
+machines — snapshot the app's profile directory, encrypt it, ship it, unpack it. It failed in
+practice: it moved 81 MB to carry what turned out to be a 176-byte token, and restoring it
+crash-looped the app. We fell back to signing in by hand on each Mac.
+
+**The answer is to replicate the machine, not the session.** macOS virtual machines can be cloned
+from a *golden image* (one prepared machine, snapshotted, then stamped out) with both the OS
+permissions we need — Accessibility and Screen Recording, which macOS normally makes a human grant
+by clicking through a dialog on that specific Mac — and the app sign-in already inside it. Adding
+a fourth runner then costs a clone instead of a person. This is how GitHub and Cirrus run their
+own macOS CI fleets, and it dissolves the problem we spent the vault trying to solve: we had
+assumed those permissions were bound to a physical Mac. They are not.
+
+Three constraints to know before pricing it:
+
+- **AWS EC2 Mac is specifically disqualified** — its low-level security settings don't survive
+  being turned into a machine image, which is exactly the thing we need baked in. Colo or
+  MacStadium (whose managed Orka product is this route, pre-built) instead.
+- **Apple's licence caps 2 VMs per physical host,** so this buys provisioning speed, not density.
+- **An app that stores its login in the Mac's hardware-backed keychain still needs a human
+  sign-in per box.** Yarn doesn't — its token is a plain file — so the route works for Yarn.
+  Keep the manual sign-in path for apps that don't.
