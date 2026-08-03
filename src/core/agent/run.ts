@@ -21,6 +21,7 @@ import {
 	findScopeAmbiguities,
 	homeLabels,
 	homeVisible,
+	isBlind,
 	loadAppMapGraph,
 	makeClient,
 	observationBlocks,
@@ -515,7 +516,7 @@ export async function main(): Promise<void> {
 						for (let attempt = 0; attempt < 8; attempt++) {
 							const obs = await doObserve(`${stepsDir}/home-probe`);
 							probe = homeVisible(app, obs, homeGraph());
-							if (obs.appContent > 0 || probe.ready) break;
+							if (!isBlind(obs.appContent) || probe.ready) break;
 							await new Promise((r) => setTimeout(r, 2000));
 						}
 						if (probe.ready === undefined) return { result: "none", detail: probe.detail };

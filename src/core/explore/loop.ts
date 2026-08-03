@@ -25,6 +25,7 @@ import {
 	frontierRemaining,
 	frontierSummary,
 	gatedId,
+	isBlind,
 	isVagueSurface,
 	observationBlocks,
 	type ObservationBundle,
@@ -177,7 +178,7 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 		 */
 		for (let attempt = 0; attempt < FIRST_OBSERVATION_TRIES; attempt++) {
 			obs = await doObserve(`${p.stepsDir}/explore-step-0`);
-			if (obs.appContent > 0) break;
+			if (!isBlind(obs.appContent)) break;
 			if (attempt === 0) console.log(`first observation is empty — waiting for ${p.app} to paint`);
 			await new Promise((r) => setTimeout(r, FIRST_OBSERVATION_WAIT_MS));
 		}
@@ -197,7 +198,7 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 	 * point a short pass may already have "finished". This is the same check applied once, up
 	 * front, where the answer is unambiguous and the run has cost nothing yet.
 	 */
-	if (obs.appContent === 0)
+	if (isBlind(obs.appContent))
 		throw new TargetNotObservableError(
 			p.app,
 			`the first observation still has no app content after ${Math.round((FIRST_OBSERVATION_TRIES * FIRST_OBSERVATION_WAIT_MS) / 1000)}s — ` +
@@ -789,7 +790,7 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 			}
 		}
 
-		if (obs.appContent === 0) {
+		if (isBlind(obs.appContent)) {
 			/**
 			 * The app is exposing nothing. Acting now means acting blind, so this is counted and
 			 * eventually fatal — but the COUNT USED TO BE INVISIBLE to the model, and that is what

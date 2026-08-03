@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import type { Driver } from "../core/driver.js";
-import { ensureObservable, findWindow, observe, pickWindow, type ObservationBundle, type WindowCandidate, type WindowRef } from "../core/harness.js";
+import { ensureObservable, findWindow, isBlind, observe, pickWindow, type ObservationBundle, type WindowCandidate, type WindowRef } from "../core/harness.js";
 import type { Target } from "../core/target.js";
 import { KEEP_RENDERING_FLAGS } from "./electron-attach.js";
 
@@ -166,7 +166,9 @@ export class AxBackend {
 				seen.add(w.window_id);
 				const ref = { pid: w.pid, windowId: w.window_id, bounds: w.bounds };
 				const got = await observe(this.driver, ref, name, {}).catch(() => undefined);
-				if (!got || got.appContent === 0) continue;
+				// `isBlind`, not `> 0`: a window answering with one element is a dead end, and
+				// following it here is what commits `currentWin` to it for the rest of the pass.
+				if (!got || isBlind(got.appContent)) continue;
 				if (w.window_id !== this.currentWin.windowId) {
 					console.log(`  window follow: "${this.lastTitle ?? ""}" -> "${w.title}" (id ${this.currentWin.windowId} -> ${w.window_id}, ${got.appContent} elements)`);
 					this.currentWin = ref;
@@ -183,7 +185,7 @@ export class AxBackend {
 				const target = front ?? held ?? pool[0]!;
 				const ref = { pid: target.pid, windowId: target.window_id, bounds: target.bounds };
 				const after = await observe(this.driver, ref, name, {}).catch(() => undefined);
-				if (after && after.appContent > 0) {
+				if (after && !isBlind(after.appContent)) {
 					console.log(`  window follow: re-activated "${this.app}" and recovered (${after.appContent} elements)`);
 					this.currentWin = ref;
 					this.lastTitle = target.title ?? this.lastTitle;

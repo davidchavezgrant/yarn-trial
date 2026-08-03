@@ -5,6 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { provenanceHeader, writeArtifacts } from "../src/core/explore/artifacts.js";
 import { blindAction, newPass } from "../src/core/explore/state.js";
+import { isBlind, MIN_APP_CONTENT } from "../src/core/harness/observation.js";
 
 /**
  * The blackout ladder and its accounting.
@@ -135,4 +136,35 @@ test("writeArtifacts__PublishesTheMap__When__ThePassSweptTheFrontier", () => {
 		writeArtifacts(p, { document: "# map", findings: [] } as never, "frontier-empty");
 		assert.equal(fs.existsSync(p.outPath), true);
 	});
+});
+
+/**
+ * The gap the ladder above could not see, and the reason a 47-minute pass died on 2026-08-03.
+ *
+ * Yarn's recorder child window answers AX with exactly ONE element. The ax backend's window
+ * follow accepted it (`appContent > 0`), permanently reassigning the window every later
+ * observation reads; the ladder armed only at exactly 0, so it never fired — no advice, no
+ * relaunch, no concede turn. The window was simultaneously good enough to follow and not blind
+ * enough to recover, and nothing in the ladder's own tests could catch that, because the
+ * disagreement lived between two modules rather than inside either one.
+ *
+ * The counts are measured, not invented: every `window follow` line in the archive reports
+ * either 1–2 elements (dead ends) or 514–934 (real windows), with nothing in between.
+ */
+test("isBlind__RejectsTheWindow__When__ItAnswersWithATokenElementCount", () => {
+	// The two dead-end shapes actually observed: Yarn's blank recorder child, and a titled
+	// "Window" shell. Both must read as blind, or the follow commits to them.
+	assert.equal(isBlind(1), true, "the recorder child answers with one element");
+	assert.equal(isBlind(2), true, 'the titled "Window" shell answers with two');
+	// A genuinely dark tree was always caught; it must stay caught.
+	assert.equal(isBlind(0), true);
+});
+
+test("isBlind__AcceptsTheWindow__When__ItAnswersLikeARealOne", () => {
+	// The smallest real window ever observed on this fleet was 514 elements, so the floor has
+	// ~170x of margin. Pin the boundary itself too, so raising the constant has to be deliberate.
+	assert.equal(isBlind(514), false, "the smallest real window observed must not read as blind");
+	assert.equal(isBlind(934), false);
+	assert.equal(isBlind(MIN_APP_CONTENT), false, "the floor is inclusive");
+	assert.equal(isBlind(MIN_APP_CONTENT - 1), true);
 });

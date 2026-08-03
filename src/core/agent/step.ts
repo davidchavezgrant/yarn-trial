@@ -5,6 +5,7 @@ import {
 	actionTarget,
 	dragMoved,
 	framesShifted,
+	isBlind,
 	observationBlocks,
 	OUT,
 	pixelDelta,
@@ -412,7 +413,7 @@ export async function executeAction(
 		if (settleMs > SETTLE_MS) console.log(`    waiting ${Math.round(settleMs / 1000)}s before re-observing`);
 		await new Promise((r) => setTimeout(r, settleMs));
 		ls.obs = await doObserve(shotName(`agent-step-${step}`));
-		if (ls.obs.appContent === 0) {
+		if (isBlind(ls.obs.appContent)) {
 			// AX tree collapsed (e.g. a modal/other window took over). Acting now means
 			// acting blind — stop rather than let the model flail against a menu bar.
 			if (++ls.blindStreak >= 3)

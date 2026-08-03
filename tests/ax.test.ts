@@ -138,7 +138,15 @@ test("AxBackend__PicksAWindowThatCanAnswer__When__TheFrontOneIsSilent", () => {
 
 	// One ladder, not per-branch patches: every candidate is PROBED and skipped when it answers
 	// nothing, whether or not it is the one we already hold.
-	assert.match(src, /if \(!got \|\| got\.appContent === 0\) continue;/, "candidates must be skipped on empty content, not on absence");
+	//
+	// The predicate must be the SHARED one. `appContent === 0` was the original spelling and it
+	// cost a 47-minute pass on 2026-08-03: Yarn's recorder child answers with exactly one
+	// element, which cleared this bar and permanently reassigned the window every later
+	// observation reads — while the explore ladder, testing `=== 0`, never armed. A window that
+	// is good enough to follow but not blind enough to recover is the gap, so both sides ask
+	// `isBlind` and neither may drift back to a bare zero-check.
+	assert.match(src, /if \(!got \|\| isBlind\(got\.appContent\)\) continue;/, "candidates must be skipped via the shared blindness floor, not a bare zero-check");
+	assert.equal(/appContent === 0|appContent > 0/.test(src), false, "the follow must not re-introduce its own content threshold");
 	assert.match(src, /const order = \[front, held, \.\.\.pool\]/, "front, then held, then the rest — deduped");
 	// The old per-branch helpers must be GONE, or the hole they left can reopen.
 	assert.equal(/const heldAlive = all\.some/.test(src), false, "the dead-handle branch should be subsumed by the ladder");

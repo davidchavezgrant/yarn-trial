@@ -221,6 +221,28 @@ export class TargetNotObservableError extends Error {
 export const isAppContent = (e: any) => !String(e.role ?? "").startsWith("AXMenu");
 
 /**
+ * The floor an observation clears to count as a usable view of the app.
+ *
+ * MEASURED, not chosen. Across every `window follow` line in the run archive the counts are
+ * bimodal with nothing in between: dead-end windows answer with 1 or 2 elements (Yarn's blank
+ * recorder child, and a titled "Window" shell), real ones answer with 514–934. 3 is the
+ * smallest value that separates them — ~170x of margin below the smallest real window, and low
+ * enough that a genuinely sparse native window is not mistaken for a blackout.
+ *
+ * It exists because two call sites asked the same question in two spellings and disagreed on
+ * the answer. The ax backend's window follow accepted anything with `appContent > 0`; the
+ * explore ladder armed only at exactly 0. Yarn's recorder answers 1 — good enough to follow,
+ * not blind enough to recover — so on 2026-08-03 a 47-minute pass followed itself into a blank
+ * window, permanently reassigned the window it observes, and had no rung left to climb: no
+ * advice, no relaunch, no concede turn. It died 7 actions later on the unrelated path that
+ * notices the window is no longer composited. Both sides now ask `isBlind`.
+ */
+export const MIN_APP_CONTENT = 3;
+
+/** Whether an observation exposed too little of the app to be worth acting on. */
+export const isBlind = (appContent: number): boolean => appContent < MIN_APP_CONTENT;
+
+/**
  * Whether the login window currently owns the display.
  *
  * `ioreg` rather than a Quartz call because this has to work from whatever context the runner

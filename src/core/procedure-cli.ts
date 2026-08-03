@@ -6,6 +6,7 @@ import {
 	appSlug,
 	ensureObservable,
 	findWindow,
+	isBlind,
 	loadAppMapGraph,
 	makeClient,
 	observe,
@@ -263,7 +264,7 @@ async function main(): Promise<void> {
 		 */
 		for (let attempt = 0; attempt < FIRST_OBSERVATION_TRIES; attempt++) {
 			const first = await doObserve(`${LIVE_DIR}/${stamp}/${RUN_FILES.steps}/replay-step-0`);
-			if (first.appContent > 0) break;
+			if (!isBlind(first.appContent)) break;
 			if (attempt === 0) console.log(`first observation is empty — waiting for ${procedure.app} to paint`);
 			await new Promise((r) => setTimeout(r, FIRST_OBSERVATION_WAIT_MS));
 		}
