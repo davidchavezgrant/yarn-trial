@@ -2093,13 +2093,31 @@ function offMatrixJobs() {
 	return jobs;
 }
 
-const OFFMATRIX_TIP = "the matrix shows only manifest entries; off-matrix jobs still occupy a Mac and delay queued matrix runs";
+const OFFMATRIX_TIP = "a real run on a real Mac, dispatched outside `bench phase` so it has no manifest row and no collected metrics — the board's other numbers come from that row";
 
+/**
+ * Runs with no manifest row, shown as RUNS (David, 2026-08-03: "they're all valid runs").
+ *
+ * They used to render as a ⚠ warning reading "not a benchmark cell", which framed a real run
+ * on a real Mac as an anomaly. It is not one — a `./run dispatch` probe, a re-run by hand, or a
+ * job whose row was dropped is still work the fleet is doing, and hiding it behind a warning
+ * glyph is how a Mac looks idle while it is busy.
+ *
+ * What they genuinely lack is a manifest row, which is where every other number on this board
+ * comes from — so they appear with what the FLEET knows (host, app, state, elapsed) and no
+ * metric columns, rather than being dressed up as cells with blank data.
+ */
 function renderOffMatrix() {
-	// Empty strip = empty container: no reserved space when everything on the fleet is a cell.
-	$("offmatrix").innerHTML = offMatrixJobs().map((j) =>
-		`<div class="q" data-tip="${esc(OFFMATRIX_TIP)}">⚠ off-matrix: ${esc(j.host)} · ${esc(j.jobId)}${j.app ? ` (${esc(j.app)})` : ""} · ${j.queued ? "Queued" : `Running ${elapsedSpan(j.elapsedSec)}`} — dispatched outside \`bench phase\`, not a benchmark cell</div>`,
-	).join("");
+	const jobs = offMatrixJobs();
+	// Empty = empty container: no reserved space when every fleet job is a matrix cell.
+	if (!jobs.length) { $("offmatrix").innerHTML = ""; return; }
+	$("offmatrix").innerHTML =
+		`<div class="card"><h2>Ad-hoc runs <span class="pill">${jobs.length}</span></h2>`
+		+ `<div class="sub">on the fleet now, with no manifest row — dispatched outside \`bench phase\`, so no collected metrics</div>`
+		+ jobs.map((j) =>
+			`<div class="q" data-tip="${esc(OFFMATRIX_TIP)}">${esc(j.host)} · ${esc(j.jobId)}${j.app ? ` · ${esc(j.app)}` : ""} · ${j.queued ? "Queued" : `Running ${elapsedSpan(j.elapsedSec)}`}</div>`,
+		).join("")
+		+ `</div>`;
 }
 
 function renderExplore() {
