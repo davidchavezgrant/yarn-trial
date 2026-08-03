@@ -1,7 +1,12 @@
 # Stages, not phases — reorganizing the matrix before a clean run
 
-**Status**: draft, nothing implemented. The 203-run pass is draining and the fleet rsyncs the
-checkout per phase; this lands after it.
+**Status**: implemented 2026-08-03 in `a433309` — *"Collapse eight phases into five stages plus a
+diagnostics track."* The `StageDef` table is in `src/bench/matrix.ts`, `type Phase = 1 | 2 | 3 | 4 |
+5 | 9` (diagnostics off-ladder at 9), and `DEFAULT_PHASES` is derived rather than hand-listed —
+`STAGES.filter((s) => s.inCorePass).map((s) => s.n)` at `src/bench/autopilot.ts:79`, evaluating to
+`[1, 2, 3]` with judge→harvest→promote inserted before stage 3. The matrix now stands at 194 arms /
+383 runs across those five stages. Every eight-phase list and `phase === n` quote below is the
+before-state this plan argued against — evidence, not current code.
 
 **Why now**: a clean run is the only cheap moment to renumber. There is no live manifest to migrate
 and no half-collected pass to keep comparable.

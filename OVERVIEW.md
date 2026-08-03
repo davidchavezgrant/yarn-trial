@@ -12,18 +12,29 @@ and what it's worth.
 ```
 NL task
   ▼
-Agent loop (GPT-5.6 Sol via OpenRouter; Opus 5 on a bare Anthropic key)   src/core/agent.ts
+Agent loop (azure/gpt-5.6-sol over Azure Responses; claude-fable-5 direct)  src/core/agent/
   observe: AX elements (+ DOM id/class via native/axdom) + window screenshot
   decide:  ONE action + a checkable expectation (tool use)
   act:     via the actuator backend
   verify:  re-observe, check expectation, feed verdict back
+  stop:    success | "stalled" (8 unverified steps) | "step-ceiling" (100, a backstop)
   ▼
 Actuator seam (Observation/ActionRequest) — two backends:
   --backend cdp  (default)  src/backends/cdp.ts → playwright-core, NO cua in the loop
   --backend ax              src/backends/ax.ts → @trycua/cua-driver → AX actions;
                             primary for native Mac apps, automatic fallback when an
                             Electron target's debug port never comes up
+  SNAP_PX=24|48 (opt-in)    src/core/agent/step.ts — before actuating a coordinate
+                            action, re-address it by handle to the nearest interactive
+                            control within tolerance
 ```
+
+`src/core/agent.ts` is now a 13-line **entry point** over `src/core/agent/` (the path is
+load-bearing — everything spawns `tsx src/core/agent.ts`); the loop itself is
+`src/core/agent/run.ts`. `src/core/harness.ts` is likewise a barrel over
+`src/core/harness/`, where model and transport resolution is `model.ts` and `verify()` /
+`auditTaskPrompt()` are `verification.ts`. Import the submodule from outside core — the
+barrel drags in the Anthropic SDK and the cua driver.
 
 Design decisions and their reasoning live in `docs/architecture.md`.
 
@@ -55,6 +66,29 @@ Design decisions and their reasoning live in `docs/architecture.md`.
 - **DOM enrichment without CDP.** `native/axdom` (Swift, `npm run build:native`) recovers
   the DOM id/class Chromium drops from its AX tree, naming 955 of 1044 anonymous Yarn
   nodes. Optional: unbuilt or `AXDOM=0` degrades silently to the bare AX view.
+- **A run ends exactly three ways**, and the log names which in `stopReason` so the three
+  are never conflated: success (the model called `done` and `gradeDone` accepted the
+  evidence); `"stalled"` — `AGENT_STALL_STEPS` (default **8**) consecutive steps verified
+  nothing, the only mechanical reading of "it truly cannot proceed"; `"step-ceiling"` — the
+  `AGENT_STEPS` (default **100**) runaway backstop. **The 100 is a backstop, not a budget**:
+  a run must never fail because it ran out of steps, and a test refuses any arm that pins
+  `steps` below it (`stallSteps` is the knob for a route with a long unverified stretch). The
+  stall counter resets on a *verified* step and nothing else — not a successful driver call,
+  not moved pixels, not the model's own account of progress. A 15-step operating limit used
+  to be the third exit and silently became a verdict: seven runs stopped at exactly 15 and
+  were recorded as the agent giving up, on a flow whose only known-good run takes 19.
+- **Pixel snap** (`SNAP_PX`, off by default; unset it changes no behaviour). A vision-only
+  step addresses by screenshot pixel, so the model's point is treated as a *hypothesis*: if
+  it lands within tolerance of an interactive control, the action is re-addressed to that
+  control by handle, falling through to the raw coordinate when nothing is in range.
+  Measured at 24 and 48px. The diagnostic (`snapName`, `snapDistancePx`,
+  `snapMatchesDeclared`) is recorded whether or not the stage is on, because it splits
+  vision-only failure into two classes with opposite remedies: the point missed the control
+  the model named (spatial — refinable) versus landed on it exactly and still failed
+  (semantic — not). A snapped arm is deliberately an **upper bound**. Vetoing the rewrite
+  when the snapped control disagrees with the declared one was considered and rejected — a
+  veto measures the harness's veto rate rather than vision-only actuation — so the confound
+  is recorded per step instead of gated away.
 - **Grounding** comes in three tiers, kept in separate directories so that measuring one
   doesn't quietly measure another. `USE_CURATED` and `USE_RECIPES` each REPLACE the appmap
   rather than adding to it, and the run log records which tier actually loaded:
@@ -119,8 +153,10 @@ Design decisions and their reasoning live in `docs/architecture.md`.
 ## Running it
 
 Prereqs: macOS 15+, Node 22+, `ffmpeg` (assembly), `python3` with PIL (frame QC),
-Accessibility + Screen Recording permissions for your terminal, and either
-`ANTHROPIC_API_KEY` or `OPENROUTER_API_KEY` in the environment.
+Accessibility + Screen Recording permissions for your terminal, and a model credential in
+the environment: `AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_API_KEY` for the default
+`azure/gpt-5.6-sol`, or `ANTHROPIC_API_KEY` for `claude-fable-5`, or `OPENROUTER_API_KEY`
+for the fallback.
 Starting from a fresh clone, follow **`README.md`** — it covers the TCC grants and the
 per-app grounding pass step by step.
 
@@ -177,9 +213,27 @@ individual interactions (hard-coded to Notion Calendar).
 ## Honest limitations
 
 - Proven breadth: two Electron apps (Notion Calendar, Yarn) and web targets, all with
-  zero harness changes. Native AppKit: one pass (Calculator), one diagnosed fail (Hex
-  Fiend — foreground delivery never makes a native app key/main), and out of scope for
-  now. Sample sizes are 2-4 runs per condition, not a measured failure rate.
+  zero harness changes. **`app.notion.com` is now a first-class second app**, not one more
+  web fixture: it carries a full cdp mirror across a simple task and a complex one, and the
+  stage-4 arms that run against it measure cross-*app* transfer rather than only cross-task
+  — the one axis every earlier pass held fixed, which made every finding so far
+  indistinguishable from a fact about Yarn's DOM. The honest ceiling on that parity is
+  structural: half the matrix cannot be mirrored. A web target on the `ax` backend is a hard refusal in three
+  places (`src/core/agent/run.ts`, `src/core/explore.ts`, `src/backends/ax.ts`), and the
+  `axdom` sidecar reads a native window's pid, which a CDP page has no equivalent of. So
+  Notion mirrors the cdp cells and nothing else; the ax/cdp comparison, the
+  native-equivalent tier and the min-context floor are Yarn-only by construction. What
+  parity exists is 152 Notion runs against Yarn's 116 cdp runs (Notion crosses two tasks
+  where the config sweep crosses one) — not against Yarn's 231, 115 of which are ax/axdom.
+  Notion **Calendar**, the desktop app, is cut for good: installed on none of the three
+  colo Macs, so those arms were guaranteed refusals. Native AppKit: one pass (Calculator),
+  one diagnosed fail (Hex Fiend — foreground delivery never makes a native app key/main),
+  and out of scope for now.
+- Sample sizes are small and deliberately uneven: **n=3** for a measured task arm, **n=2**
+  for an explore arm and for the diagnostics pair, **n=1** for a filmed take and for a
+  compile. Nothing runs at n=4. A take is a deliverable and a compile is a deterministic
+  file transform, so repeating either measures nothing. None of this is a measured failure
+  rate.
 - **Roughly one run in three aborts** on AX flakiness (empty tree, focus loss, dead driver
   session; measured 2026-07-29 on the AX backend). Retries were clean every time, so it
   is a throughput cost rather than a capability limit — but it is the main obstacle to
@@ -230,7 +284,8 @@ contaminated. Read those before quoting a figure.
 - `docs/research/` — driver quirks, verified sequences, and measured results
   (`2026-07-31-poc-gotchas-and-lessons.md` is the consolidated handoff writeup)
 - `docs/appmaps/` — grounding notes produced by the exploration pass (machine, stamped)
-- `docs/curated/` — hand-written grounding notes (prose recipes a human wrote)
+- `docs/curated/` — hand-written grounding prose (a human wrote it; not a harvested
+  **recipe**, which is a formal tier — see `docs/recipes/` below)
 - `docs/procedures/` — compiled replay procedures
 - `docs/recipes/` — task write-ups harvested from judged-PASS runs (machine, stamped)
 - `LIMITATIONS.md` — running log of what constrains the agent in practice

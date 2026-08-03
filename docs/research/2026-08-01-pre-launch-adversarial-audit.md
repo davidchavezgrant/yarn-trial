@@ -1,5 +1,11 @@
 # Pre-launch adversarial audit of the benchmark matrix
 
+> **Ids superseded 2026-08-03.** A dated audit; the findings stand, but the arm ids in the body no
+> longer resolve. The eight-phase ladder has collapsed into five stages plus an off-ladder
+> diagnostics track (`a433309`), and arm ids were renamed and are now canonicalised at the manifest
+> boundary (`af7e5a4`) — so `p2-`, `p6-`, "phase 6" and the like name nothing in the current matrix.
+> Read them as the phase-era labels they were.
+
 **Date**: 2026-08-01 · **Trigger**: David, before firing phase 1 of the 58-arm matrix
 **Method**: two adversarial agents, disjoint scopes, both told to assume the author is
 confident and mistaken and to verify against code rather than comments.

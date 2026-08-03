@@ -103,8 +103,50 @@ that was wrong for a target class we care about: apps with an embedded agent of 
 Yarn's takes up to five minutes to think, during which the correct behaviour is to wait —
 and waiting produces this exact signature, nothing verified and no pixels moved. A frozen
 window and a working one waiting on a slow model cannot be told apart from outside, so the
-run no longer tries; the streak prints a note at 4 and the operator decides. Still
-unsolved: a genuinely dead window now burns the full step budget again, as it did before.
+run no longer tries; the streak prints a note at 4 and the operator decides.
+
+**What ends a dead window now: the stall detector** (`STALL_STEPS`, 2026-08-03). Since every
+step against a frozen window verifies nothing, the streak that `unpaintedStreak()` only
+reports is also the streak the stall detector counts — and at `AGENT_STALL_STEPS`
+consecutive unverified steps (default **8**) the run ends with `stopReason: "stalled"`. So a
+genuinely dead window costs 8 steps, not the ceiling. It is a strictly weaker instrument
+than aborting at 4 and that is the point: 8 is generous enough that an app thinking for five
+minutes survives it (the creation runs carry 8–14 unverifiable steps in a row and one still
+succeeded), while a window that never repaints has no route back. The counter resets on a
+VERIFIED step and on nothing else — not a successful driver call, not moved pixels, not the
+model's own account. A verified `wait` is the one carve-out and does not reset it, because
+waiting must not be able to count as progress.
+
+Still unsolved is the *diagnosis*, not the exit: a stalled run does not say whether it was
+frozen or merely lost. `stopReason: "stalled"` plus a trailing unpainted streak in the log is
+as close as the harness gets, and reading the two together is a human's job.
+
+### 1b. The stopping contract: three exits, and 100 steps is not a budget
+
+**CONSTRAINT** · set 2026-08-03 · `src/core/agent/run.ts`
+
+A run ends exactly three ways, and the run log names which one in `stopReason` so
+`src/bench/collect.ts` can tell them apart:
+
+| `stopReason` | Meaning | Default |
+|---|---|---|
+| *(success)* | the model called `done` and `gradeDone` accepted the evidence | — |
+| `"stalled"` | consecutive steps that verified nothing — the only mechanical reading of "it truly cannot proceed" | `AGENT_STALL_STEPS=8` |
+| `"step-ceiling"` | a **runaway backstop**, never a budget | `AGENT_STEPS=100` |
+
+**A run must never fail because it ran out of steps.** That is the whole point of the 100:
+high enough that reaching it means the loop is not converging, so hitting it is a statement
+about the harness having cut the run off — recorded as its own outcome rather than folded
+into the agent's verdict.
+
+The reason this is written down as a contract is that the previous arrangement corrupted a
+whole pass. 15 was the *operating* limit, and it silently became a **verdict**: a run that
+hit it recorded `success: false`, which collect maps to "gave-up" — the same label as an
+agent that reasoned its way to a conclusion. Seven creation runs stopped at exactly 15 and
+read as "the agent cannot make a video", when the only known-good run of that flow takes 19.
+**Every pre-split stage's gave-up count is suspect for the same reason.** An arm may widen
+the stall window with `stallSteps`; `dispatch.steps` is guarded by a test that refuses any
+pin below the backstop.
 
 ---
 
@@ -187,10 +229,11 @@ element labels reports false failures exactly when the environment is hostile.
 
 **QUIRK** · found 2026-07-27–28
 
-- OpenRouter does not strictly enforce tool schemas; a required field (`expectation`) can
-  arrive missing. **The harness now refuses to execute** such an act call and returns an
-  error the model must correct — previously it acted anyway and reported an unqualified
-  success, which is how vacuously-"verified" steps entered the run logs.
+- A required tool field (`expectation`) can arrive missing — observed on the **OpenRouter**
+  path, which does not strictly enforce tool schemas, and the reason the gate is unconditional
+  rather than scoped to that transport. **The harness now refuses to execute** such an act
+  call and returns an error the model must correct — previously it acted anyway and reported
+  an unqualified success, which is how vacuously-"verified" steps entered the run logs.
 - **The observation drops most of the AX tree.** `observe()` keeps only elements with a
   label, value or DOM descriptor, plus 8 whitelisted roles. Anything else — including
   canvas/preview content, which has no AX representation at all — never reaches the model
@@ -199,11 +242,20 @@ element labels reports false failures exactly when the environment is hostile.
 - ~10–25s of model thinking between actions (a finished Yarn explore pass measured ~25s
   per action). **Not a concern for Yarn** — their pipeline imperceptibly speeds up demos
   in post — but it is one for any interactive use.
-- Default model is key-conditional (`src/core/harness.ts`): `openai/gpt-5.6-sol` over an
-  OpenRouter key, `claude-opus-5` over a bare Anthropic key; `AGENT_MODEL` overrides.
-  OpenRouter caveat: `cache_creation_input_tokens` comes back null for OpenAI models, so
-  the `cache_control` blocks the prompts carry are accepted and silently ignored — the
-  system prompt is billed in full every turn.
+- **The model id picks the transport, not the key** (`src/core/harness/model.ts`; harness.ts
+  is now a barrel). Default is `azure/gpt-5.6-sol` over the **Azure Responses** transport
+  (`AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_API_KEY`); the Anthropic-direct alternative is
+  `claude-fable-5`; `openai/gpt-5.6-sol:nitro` over OpenRouter is the last fallback when
+  neither of those exists. `AGENT_MODEL` overrides. Key presence was the OLD rule and it
+  silently broke the two-provider split the moment both keys sat on one host — OpenRouter won
+  unconditionally, so a `claude-*` run went through the router anyway, measurable only as a
+  surprising `provider_name` in an error and invisible when nothing failed. A bare `claude-*`
+  id (or an explicit `anthropic:` prefix) is Anthropic-direct; anything with a slash goes to
+  OpenRouter, `anthropic/claude-*` included, that being the router's own spelling.
+- **OpenRouter-fallback caveat only** (it does not apply to the Azure default or the
+  Anthropic-direct path): `cache_creation_input_tokens` comes back null for OpenAI models, so
+  the `cache_control` blocks the prompts carry are accepted and silently ignored — the system
+  prompt is billed in full every turn.
 - ~~Generalization beyond one app is unproven.~~ **Superseded**: Electron (Yarn, Notion
   Calendar) and web targets (`--url`, own appmaps) run with zero harness changes. Native
   AppKit: one pass (Calculator), one diagnosed fail (Hex Fiend — foreground delivery never
@@ -341,8 +393,8 @@ omitted Save step, a wrong generalisation, or an ambiguous scope survives every 
 mechanical prose check was considered and rejected — it can only ever be one-directional. It
 could flag a missing text-verified surface, but never an invented one, because a legitimate
 canvas step has no AX or DOM name to match against; it would prune exactly the vision-only
-knowledge that is hardest to acquire. The check is therefore empirical and downstream: phase 6
-grounds on the recipe and is itself judged, so a bad recipe shows up as phase 6
+knowledge that is hardest to acquire. The check is therefore empirical and downstream: stage 3
+(Reuse) grounds on the recipe and is itself judged, so a bad recipe shows up as stage 3
 underperforming. Adequate for a benchmark, an open problem for productization.
 
 ---
@@ -681,8 +733,8 @@ the run only if that function was also edited. **This has now happened three tim
 | flag | consequence |
 |---|---|
 | `APPMAP_VARIANT=novision` | two grounding passes had no consumer; `bench plan` printed a false claim |
-| `record` | all 16 filmed runs would have been unfilmed *duplicates of their phase-2 siblings* — `filmed()` derives them by adding only `record` and `n:1`, so dropping it erases the entire difference |
-| `useRecipes` | all 6 phase-6 runs would have measured the appmap tier |
+| `record` | all 88 filmed runs (stage 5, 88 arms × n=1) would have been unfilmed *duplicates of their stage-2 and stage-4 siblings* — `filmed()` derives them by adding only `record` and `n:1`, so dropping it erases the entire difference |
+| `useRecipes` | the recipe arms would have measured the appmap tier — 4 stage-3 arms × n=3 = 12 runs, plus the 7 stage-4 recipe arms (21 runs) |
 
 The failure shape is the same each time and is the worst available: plausible, correctly-shaped
 data under the wrong label. `groundingChecked` catches the tier case, but only at collect time,
@@ -759,7 +811,7 @@ on the committed maps:
 | `yarn.ax.vision.json` | `[]` |
 
 Both perception-reduced passes failed to declare a home and both full-perception passes declared
-one — a property of the treatment, so re-running phase 1 reproduces it. `resetToHome` returned
+one — a property of the treatment, so re-running stage 1 reproduces it. `resetToHome` returned
 `"none"`, and only `"failed"` refuses, so nine runs began wherever the previous job on that Mac
 left the app. Their comparators all reset.
 
@@ -768,3 +820,45 @@ screenshots costs N extra steps" would have silently included "and started from 
 state". Home is a property of the app, not of the channel that mapped it, so it now falls back to
 the full-perception map for that backend (`plainVariant`, used by nothing else and explicitly
 forbidden for choosing grounding).
+
+---
+
+## 24. The snap arms are an upper bound, and we chose not to fix that
+
+**CONSTRAINT (deliberate, measurable)** · added 2026-08-03 · `src/core/agent/step.ts`
+
+Vision-only driving misses. Pixels alone gave a 75% target-never-appeared rate against 11%
+with element addressing, and the raw number could not say *why*: the model's point either
+landed on a different control than the one it declared (SPATIAL — it identified the right
+thing and missed its pixels, which refinement could rescue) or landed on exactly the control
+it named and the step still failed (SEMANTIC — it chose wrong, and no refinement helps).
+Those two have opposite remedies and the split decides whether the bigger build is worth
+doing, so a **diagnostic** — nearest interactive control, its distance, whether the point was
+inside it, and whether its name matches the declared target — is now computed on every
+coordinate-addressed step whether or not snapping is on. It costs one pass over an array: the
+harness holds the element list even in vision-only mode, because the isolation is of what the
+model *perceives*, not of what the run can *prove*.
+
+`SNAP_PX` then acts on it. Off by default, and unset it changes no behaviour whatsoever. Set
+(measured at 24 and 48), the model's pixel is treated as a hypothesis: if it lands within
+tolerance of an interactive control the action is re-addressed to that control **by handle**,
+falling through to the raw coordinate when nothing is in range. The model still reasons
+entirely from pixels; only the actuation is refined.
+
+**The limitation, stated plainly: a snapped arm scores partly the harness aiming and not only
+the model aiming.** A 48px miss can be confidently retargeted to a control the model never
+named. Gating the rewrite on `snapMatchesDeclared !== false` was considered and **rejected** —
+a veto turns the measurement into one of the harness's veto rate rather than of vision-only
+actuation, and it would discard exactly the SPATIAL rescues the stage exists to test. So
+`snapMatchesDeclared` is recorded on every snapped step and the confound is readable in the
+data instead of hidden by a gate. Read a snap arm as a ceiling, not a score.
+
+Two narrower limits. Snapping to elements presupposes elements, so this is **not** an answer
+for an app with no element channel — the genuine analogue there snaps to image structure
+(edges, contrast, widget-shaped regions) and is a much larger build; this is the tractable
+half, and the one that matches Yarn's own Electron-with-a-DOM target. And the re-address takes
+the ELEMENT, never its (name, role): a re-lookup by identity returns the first match, which
+for a CDP settings control — routinely a `combobox [ref=..]` with **no name at all** — matched
+the first nameless combobox in the tree, actuating something unrelated while the log recorded
+`snapApplied: true`. A wrong click that reads as a clean one, on the arm whose entire purpose
+is to measure whether snapping helps.

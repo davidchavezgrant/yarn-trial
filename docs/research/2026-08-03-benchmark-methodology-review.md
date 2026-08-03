@@ -23,7 +23,10 @@ step 22 and log `runaway backstop (100 steps) reached`; and statistically, notic
 `step-ceiling` failures with a median of 16 steps against a backstop of 100. Fixed in `ab31ba2`.
 
 **The data is repaired**, re-derived from step counts — a run that stopped before its own cap
-stalled. Final: **27 stalls, 3 genuine ceilings** (creation arms at their budget of 30). Before
+stalled. Final: **27 stalls, 3 genuine ceilings** (creation arms at their budget of 30)
+[superseded 2026-08-03: the creation arms' 30-step pin has since been deleted — no arm sets
+`dispatch.steps` at all now, so a `step-ceiling` label can only mean the 100-step runaway
+backstop]. Before
 the repair the pass carried 30 step-ceiling labels and zero stalls.
 
 Worth keeping as the specimen it is: an operating limit recorded as a capability verdict, which
@@ -119,13 +122,20 @@ Diagnose the 2-step exit before anyone quotes 6/9.
 
 **95 of 165 runs are unjudged** (judge coverage 70/165). Every wrong-scope claim, and every check
 of self-reported success, is confined to the older runs. The creation task — where verification is
-weakest — has no judge verdicts at all.
+weakest — has no judge verdicts at all. [superseded 2026-08-03: the judge finished the pass —
+**187 verdicts** (`c08097a`), and the Judge table in
+`2026-08-01-backend-grounding-reuse-benchmarks.md` carries 30 `create-*` rows, four of them
+disagreements. The creation task is judged; this also settles §4.3 and the first item of §6 below.]
 
 **Verification still cannot prove which control it verified** (LIMITATIONS §8), and the creation
 runs are where that bites: 8–14 unverifiable steps out of 15, one success passing with nine.
 
 **Still one app.** Every Notion arm was cut, so cross-app transfer remains unmeasured, and every
-finding above could be a fact about Yarn.
+finding above could be a fact about Yarn. [superseded 2026-08-03: no longer one app — Notion on the
+**web** now runs over CDP at 77 arms / 152 runs against Yarn's 117 / 231, with discovery, the
+configuration cells mirrored across two Notion tasks, reuse, the Fable model axis and 36 filmed
+takes. Stage 4 varies app as well as task and model. Notion *Calendar* — the desktop app — is still
+in no arm.]
 
 **Still n=3.** Two of three is not distinguishable from three of three at this sample size.
 

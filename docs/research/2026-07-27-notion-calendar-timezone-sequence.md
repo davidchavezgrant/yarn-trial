@@ -1,5 +1,12 @@
 # Notion Calendar: "Change timezone to Paris" — verified action sequence
 
+> **A dated probe, 2026-07-27 — superseded as current state.** Everything below happened, and the
+> driver quirks are still worth reading; but the present tense in the updates ("`src/agent.ts`
+> (Claude Opus 5 …) now performs this task autonomously") describes the 07-27 prototype, not the
+> current agent. Notion *Calendar* — the desktop app — is on no Mac in the fleet and appears in zero
+> arms of the current matrix; the second app that shipped is Notion on the **web**, driven over CDP.
+> Nothing here was re-measured against it.
+
 First end-to-end run of the target demo example (2026-07-27), driven manually through
 `src/driver.ts` (cua-driver, in-process, window-scoped tools). Both directions verified:
 EDT → Paris (GMT+2) and back to New York (EDT).

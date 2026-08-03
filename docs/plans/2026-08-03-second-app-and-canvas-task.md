@@ -1,4 +1,16 @@
-# Phase 8 (Notion web) and the canvas task — drafted, not wired
+# Phase 8 (Notion web) and the canvas task
+
+**Landed 2026-08-03 in `af38f55`** — *"Wire the second app: Notion web, simple and complex."* Part 1
+is wired; the Status line below is the draft state as of that morning and is kept as written. Phase
+8's arms landed on **stage 4** (generalization, app axis) under the reorganization this plan
+anticipated, plus explores on stage 1. What shipped is larger than what is specified here: a full
+cdp mirror across **two** tasks rather than one — a simple one (a five-row table) and a complex one
+(a task database with a status property, five tasks, a filtered board view) — 3 discovery explores,
+11 mirrored config cells × 2 tasks, reuse × 2 tasks, the `claude-fable-5` model axis × 2 tasks, and
+36 filmed takes. 77 arms / 152 runs, half the matrix. `SECOND_APP_TASK = "show me how to change the
+timezone"` never shipped; the two tasks above replaced it, and the arm ids and `TRANSFER_CELLS`
+sketch below are not what is in `matrix.ts`. **Part 2 — the canvas task — is still unwired**: no arm
+mentions canvas or gradient.
 
 **Status**: draft. Nothing is in `matrix.ts` yet, deliberately — the 203-run pass is draining and
 the fleet rsyncs the checkout per phase. Moving HEAD mid-pass is the defect the methodology review

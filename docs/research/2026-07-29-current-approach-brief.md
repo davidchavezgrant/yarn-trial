@@ -1,5 +1,15 @@
 # yarn-trial — Current Approach Brief
 
+> **Superseded 2026-08-03 — the title lies now.** This describes the ~900-line 2026-07-29 prototype,
+> not the current system. The step budgets in particular are dead: the agent's "15-step cap" and
+> explore's "25-step budget" are both gone. A run ends exactly three ways — success; `stalled`, after
+> 8 consecutive steps that verify nothing (`AGENT_STALL_STEPS`); or `step-ceiling` at 100
+> (`AGENT_STEPS`), a runaway backstop and never a budget, because a run must never fail for running
+> out of steps. Explore has no step budget at all — a pass runs until the frontier of un-operated
+> controls empties, with `EXPLORE_MAX_ACTIONS` (default 10,000) as a non-binding backstop. Read this
+> as a snapshot of the approach at the time. Current: `docs/architecture.md`,
+> `docs/research/2026-08-03-findings-summary.md`.
+
 *2026-07-29 · codebase analysis of `~/Code/work/yarn-trial` (~900 lines TS across 6 modules)*
 
 ## ELI5

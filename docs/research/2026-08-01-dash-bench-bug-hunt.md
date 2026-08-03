@@ -1,5 +1,11 @@
 # Dash + bench data layer bug hunt — 2026-08-01
 
+> **Ids superseded 2026-08-03.** A dated hunt; the findings stand, but the arm ids in the body no
+> longer resolve. The eight-phase ladder has collapsed into five stages plus an off-ladder
+> diagnostics track (`a433309`), and arm ids were renamed and are now canonicalised at the manifest
+> boundary (`af7e5a4`) — so `p1-`, `p2-`, `p5-`, "phase 3" and the like name nothing in the current
+> matrix. Read them as the phase-era labels they were.
+
 Provenance: multi-agent hunt (5 scoped finders → 1 adversarial verifier per finding, 23 agents).
 Every finding below marked CONFIRMED survived an independent skeptic instructed to refute it by
 tracing the code; "corrected" notes are where the skeptic upheld the bug but fixed the mechanism.

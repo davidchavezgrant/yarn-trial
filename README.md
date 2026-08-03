@@ -10,7 +10,7 @@ read **`OVERVIEW.md`**.
 |---|---|---|
 | macOS 15+, Apple Silicon | the driver's native library is per-OS/arch | yes |
 | Node 22+ | ESM + `tsx` | yes |
-| `OPENROUTER_API_KEY` (or `ANTHROPIC_API_KEY`) | the model — GPT-5.6 Sol over OpenRouter, Claude Opus 5 on a bare Anthropic key. `AGENT_MODEL` overrides. | yes |
+| `AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_API_KEY` (or `ANTHROPIC_API_KEY`, or `OPENROUTER_API_KEY`) | the model — `azure/gpt-5.6-sol` over Azure's Responses API is the default; `claude-fable-5` direct on a bare Anthropic key; `openai/gpt-5.6-sol:nitro` over OpenRouter is the last fallback. The **model id picks the transport**, not whichever key happens to be set. `AGENT_MODEL` overrides. | yes |
 | `ffmpeg` | assembles `--record` frames into mp4; renders humanized cursors | only for recording |
 | `python3` + PIL (`pip install pillow`) | pixel-delta verification, frame QC, cursor rendering | degrades without it |
 | Xcode Command Line Tools | builds the Swift sidecars (`axdom` DOM enrichment, `liveview` remote sign-in) | build-time only; required for `./run liveview` |
@@ -36,11 +36,19 @@ to the bare AX view; a quality lever, not a dependency) and `native/liveview`
 ## 3. API key
 
 ```sh
-echo 'OPENROUTER_API_KEY=sk-or-...' > .env      # or ANTHROPIC_API_KEY=sk-ant-...
+cat >> .env <<'EOF'
+AZURE_OPENAI_ENDPOINT=https://<resource>.openai.azure.com/openai/v1/responses?api-version=...
+AZURE_OPENAI_API_KEY=...
+EOF
+# or ANTHROPIC_API_KEY=sk-ant-...   (claude-fable-5, direct)
+# or OPENROUTER_API_KEY=sk-or-...   (openai/gpt-5.6-sol:nitro, the fallback)
 ```
 
 `./run` sources `.env`, then `../yarn/.env`, then `~/.yarn-runner/env`, then falls back
-to whatever is already exported. `AGENT_MODEL` overrides the model id.
+to whatever is already exported. `AGENT_MODEL` overrides the model id — and the id, not
+the key, chooses the transport: `azure/<deployment>` is Azure Responses, a bare `claude-*`
+is Anthropic-direct, anything with a slash goes to OpenRouter. Setting an id the matching
+key can't serve is a refusal at startup, not a surprise mid-run.
 
 **On a team?** Skip all of this: drop `team-credentials.json` (from `./run enroll
 --export` on an enrolled machine) beside `./run`, in `~/.yarn-runner/`, or inside the
@@ -90,8 +98,12 @@ Web targets work the same way with `--url` (sign in once first with
 ./run "search for Fritz Lang" --url https://www.wikipedia.org
 ```
 
-Appmaps for Yarn, Notion Calendar (prose only — no `.json`, so graph features are off for
-it) and two web targets are committed, so you can skip `explore` for those. Run logs land
+Committed appmaps, so you can skip `explore` for these: **Yarn** (one per
+backend/perception variant), **Notion Calendar** (prose only — no `.json`, so graph
+features are off for it, and no arm reads it any more), and **three web targets** —
+`app.notion.com`, `www.notion.so`, `example.com`. `app.notion.com` is the benchmark's
+second app rather than a spare fixture: it has a full `.cdp` mirror and the stage-4 arms
+that measure cross-*app* transfer run against it. Run logs land
 in `out/bench/live/<stamp>-<app>/run.json`. If a run is killed before it can tidy up,
 `npm run cleanup -- <stamp>` replays its mutation journal and puts the app back.
 
@@ -162,6 +174,22 @@ signin` (full screen share) or `./run liveview` (just that window, in your brows
   session). Retries have been clean every time. (LIMITATIONS §10)
 - **Driver sessions die at 300s** from `start_session` — an absolute lifetime, not idle
   TTL. `src/core/driver.ts` heartbeats every 90s; anything bypassing it must too.
+- **A run that stops at step 8 has not run out of steps.** Three terminations, named in
+  the run log's `stopReason` (`src/core/agent/run.ts`'s stopping contract): success;
+  `"stalled"` — `AGENT_STALL_STEPS` (default **8**) consecutive steps verified nothing,
+  which is the stop that ends genuinely stuck runs; `"step-ceiling"` — the `AGENT_STEPS`
+  (default **100**) *runaway backstop*. The 100 is not a budget. A run must never fail
+  because it ran out of steps, so a test refuses any arm that pins `steps` below the
+  backstop — widen `stallSteps` instead if a legitimate route needs a longer unverified
+  stretch.
+- **`SNAP_PX` makes an arm an upper bound, on purpose.** Off by default (unset changes no
+  behaviour). Set, it treats the vision model's pixel as a *hypothesis* and re-addresses
+  the action by handle to the nearest interactive control within tolerance — measured at
+  24 and 48px — falling through to the raw coordinate when nothing is in range. It is
+  deliberately **not** vetoed when the snapped control disagrees with the one the model
+  named: a veto would measure the harness's veto rate instead of vision-only actuation.
+  `snapMatchesDeclared` is recorded on every snapped step so the confound is readable in
+  the data rather than hidden by a gate.
 - **Task prompts must state the goal only.** `auditTaskPrompt()` rejects prompts that
   dictate method; `--hinted` opts in and stamps the run log. Don't bypass it to make a
   run look good.

@@ -2,6 +2,11 @@
 
 Verified 2026-08-03 against the 2026-08-01 pass (198 entries, 195 collected, 43 filmed takes).
 
+**Every count below is that pass's, not the matrix's.** The mechanism is what this document is
+about; the figures are the one snapshot it was verified against, and they move with each pass —
+`matrix.ts` has since grown to 194 arms / 383 runs, of which 88 are filmed. Re-derive before
+quoting a number here as current.
+
 The dash is a reader that normally sits beside the store it reads. Hosting it means separating
 the two, and the whole trick is that the separation is cheap: what the board *renders* is
 ~6 MB of JSON and text (plus the filmed runs' cursor renders — see below), while what the store
@@ -58,6 +63,15 @@ What that publishes, listed so the next person weighing it sees all of it: the f
 Yarn's product UI, per-run cost estimates, the appmaps of the app, and every run's console log. No
 `robots.txt` is served, so a link posted anywhere is crawlable.
 
+**It is no longer only Yarn's surface.** Since the second app landed (2026-08-03) a pass also
+carries the Notion **web** appmaps and the console logs of runs executed inside a real Notion
+workspace — a third party's UI and whatever page titles, database names and row values those runs
+touched. Notion arms are filmed too, 36 takes at stage 5, so Notion footage now exists as well.
+Read those takes as the ranking's validity check — did the arm that won on Yarn also win here —
+rather than as reel material: they are recordings of someone's workspace, and the reel argument
+was only ever made about Yarn's own product. Weigh the Notion half separately before pointing a
+public link at a pass that includes it.
+
 Two properties of the switch are deliberate. It is a SEPARATE declaration from "DASH_AUTH is
 unset", because an absent secret is the shape of a misconfigured deploy — a rotated key, a
 forgotten env var — and share mode still refuses to start on that. And it OVERRIDES a DASH_AUTH
@@ -97,15 +111,18 @@ video.
 
 Coverage is a property of the pass, not of the dash. The 2026-08-01 pass shipped 2026-08-03 with
 198 entries, 195 collected, **48 filmed arms and 43 renders** — 43 of 198 rows offer a ▶, a bit
-over a fifth. Two caps, neither fixable here:
+over a fifth. That 48 was the matrix's filmed count *then*; stage 5 now specifies **88**, so the
+next pass has 88 takes to fill and the arithmetic below is the 08-01 pass's, not a standing fact.
+Two caps, neither fixable here:
 
 - **Explores are deliberately never filmed.** `--record` swaps in demo rules and a demo act tool
   with no `set_value`, which changes what the pass DOES — a filmed explore would produce a
   different map from the one every downstream arm is grounded on (`matrix.ts`'s `filmed`). Every
   grounding-pass row therefore shows `–`, and those are the rows a folded board shows first.
-- **5 filmed entries have no render**: 3 left no run directory (evicted, or never wrote one) and
-  2 hold frames whose trajectory has no driver turns — `humanize` exits with "nothing to animate",
-  which is an honest answer rather than a failure to retry.
+- **5 filmed entries have no render** on that pass (48 arms − 43 renders): 3 left no run directory
+  (evicted, or never wrote one) and 2 hold frames whose trajectory has no driver turns —
+  `humanize` exits with "nothing to animate", which is an honest answer rather than a failure to
+  retry. The gap is a per-pass residue, so expect a different one against stage 5's current 88.
 
 **Collect before snapshotting.** `bench collect` composites on pull (`humanizePulled`, `HUMANIZE=0`
 disables), so the render count climbs as runs land: this pass went 20 → 28 → 33 → 43 over the
@@ -165,7 +182,9 @@ Live in the **Yarn** workspace (`tea-c9b5apvho1kjc8a5l9t0`), from a private imag
 Why an image and not build-from-repo: `davidchavezgrant/yarn-trial` **is a public GitHub repo**
 (verified `"private": false`, 2026-08-03 — earlier notes calling it private are stale). A
 build-from-repo needs `git add -f snapshots/current`, which would publish 852 run logs, per-run
-costs and appmaps of Yarn's app to a public repo. The image path keeps all of it out of git.
+costs and appmaps of Yarn's app — and, since the second app landed, the Notion web appmaps and the
+console logs of runs inside a real Notion workspace — to a public repo. The image path keeps all of
+it out of git.
 
 `render.yaml` remains committed for the build-from-repo route, should the repo ever go private.
 

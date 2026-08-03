@@ -1,5 +1,13 @@
 # Benchmark matrix: backends × grounding × procedures (settled 2026-07-31)
 
+**Superseded** — the shape as settled on 2026-07-31, kept for the record. Three things in it must
+not be read forward. The **~62-run total** below: the matrix is now 194 arms / 383 runs across five
+stages plus a diagnostics track (`a433309`, `af38f55`). The **"Electron only"** scope: Notion web
+over cdp is half of it, 77 arms / 152 runs. And **"Vision-only is ax-backend-only by
+construction"** — flatly false; there are 42 vision-only cdp arms. The per-backend `dom` column went
+the same way: no arm uses that backend and `src/dom.ts` is deleted. The judge step at the bottom did
+survive, and now runs before stage 3 rather than before a phase 6.
+
 **Status**: approved shape; NO runs fire without David's explicit go, phase by phase.
 **Target**: Electron only — the Yarn app. Canonical task: "show me how to change the
 cursor type". Optional second task: the Auto Time sync example.

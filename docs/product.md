@@ -15,9 +15,15 @@ keeps going until the task is done — recording video the whole time. It has co
 multi-step work on two different apps, including a 17-step task that created a document,
 wrote content into it, and changed a setting. It recovers from its own mistakes without
 help — including on an app where it was given no notes at all. **The core bet is validated.**
-Across 77 logged runs it completed the task in 70; of the seven failures, three ran out of
-steps and four aborted because the app became unobservable (aborts used to write no log at
-all — they do now, which is why the failure count grew faster than the failures did). Since
+As of the 2026-07-31 pass, across 77 logged runs it completed the task in 70; of the seven
+failures, three ran out of steps and four aborted because the app became unobservable (aborts
+used to write no log at all — they do now, which is why the failure count grew faster than the
+failures did). Both halves of that sentence have since been overtaken. The benchmark now
+specifies 194 arms / 383 runs, so 77 is no longer the denominator — quote the latest generated
+report in `docs/research/`, not this paragraph. And "ran out of steps" is no longer a way to
+fail: a run now ends on success, on a stall (eight consecutive steps that verify nothing), or
+on a 100-step runaway backstop that is not a budget. The old 15-step limit silently recorded
+those three runs as the agent giving up, which is exactly why it was replaced. Since
 the last update it has also driven websites end to end (with no changes to the core loop)
 and one native Mac app (Calculator — a second native app failed for a diagnosed,
 fixable-in-principle reason, and native apps are out of scope for now). Runs now execute
@@ -51,7 +57,7 @@ and the per-app setup pass now has a defensible number behind it.**
 | Runs unattended on dedicated machines | **Proven** | Three colo Macs, dispatched from a laptop; a lease keeps runs from colliding; a human signs each app in once per Mac |
 | The app is put back after a run | **Built, partly proven live** | Every change is journaled as it happens and undone after the recording is saved; verified live on web runs, not yet on a live Yarn run |
 | Works on arbitrary apps | **Not proven** | Both deeply-proven apps are web technology in a Mac wrapper. One native app passed (Calculator), one failed with a diagnosed cause (Hex Fiend); native is out of scope for now. Still the headline open risk |
-| Works *reliably* — same task, many times | **Partly measured** | 70 of 77 logged runs completed their task. Aborted runs now write logs too (they didn't before 07-30, which silently flattered earlier tallies), but the ~1-in-3 abort figure below predates that fix and hasn't been re-measured |
+| Works *reliably* — same task, many times | **Partly measured** | 70 of 77 logged runs completed their task *as of the 07-31 pass*; the matrix now specifies 383 runs, so re-derive from the latest generated report rather than quoting this. Aborted runs now write logs too (they didn't before 07-30, which silently flattered earlier tallies), but the ~1-in-3 abort figure below predates that fix and hasn't been re-measured |
 
 ---
 
@@ -67,10 +73,10 @@ handed to it.
 **2. The setup pass pays for itself — and what it really buys is correctness, not speed.**
 We give each app a one-time "scouting" pass that writes down where things live. The early
 comparisons were invalid: the notes had been hand-edited over time to include step-by-step
-procedures for the exact tasks we were measuring, so we were partly measuring "does telling the
+instructions for the exact tasks we were measuring, so we were partly measuring "does telling the
 agent the answer help" — not a question. The pipeline has since been split so the two can't
-be confused again (machine-written notes and hand-written procedures are separate tiers, and
-each run records which it used), and the comparison was re-run clean.
+be confused again (machine-written notes and hand-written notes are separate tiers, kept in
+separate directories, and each run records which it used), and the comparison was re-run clean.
 
 Result: with scouting, roughly **half the steps and half the cost** — 4 steps vs 10 on the
 Yarn task, 5 vs 7–10 on Notion. Useful, but not the important part.
@@ -184,7 +190,8 @@ technical:
 ### Q4. What reliability bar counts as shippable?
 
 Two different numbers, and the gap between them is the whole answer. Of runs that got
-started, **70 of 77 completed the task**. But roughly **one attempt in three never got that
+started, **70 of 77 completed the task** as of the 07-31 pass (the matrix has grown to 383
+runs since; the ratio is the point here, not the tally). But roughly **one attempt in three never got that
 far** when measured on 07-29 — the app's accessibility layer goes dark, focus jumps to
 another window, the driver session dies. (Aborted attempts now write logs; that figure
 predates the fix and hasn't been re-measured.) Retrying has worked every time, so today
@@ -235,7 +242,7 @@ building it from controls.
 | Risk | Severity | Note |
 |---|---|---|
 | Doesn't generalize past web-technology apps | **High** | Narrowed but standing. Websites now work end to end; one native app passed, one failed with a diagnosed cause, and native is out of scope. Visually-drawn content (canvases, timelines) is the hardest class |
-| Runs abort on environment flakiness ~1 in 3 | **High** | The task itself succeeds 70 times in 77 once it starts. The abort figure is an 07-29 accessibility-channel measurement; the newer debug-port driving mode can't fail this way, but hasn't been measured at volume. Q4 |
+| Runs abort on environment flakiness ~1 in 3 | **High** | The task itself succeeded 70 times in 77 once it started, on the 07-31 pass (383 runs are specified now — re-derive before quoting). The abort figure is an 07-29 accessibility-channel measurement; the newer debug-port driving mode can't fail this way, but hasn't been measured at volume. Q4 |
 | Recordings contain real workspace data | **High** | Product/legal, not technical. Q2. Narrowed: per-operator data isolation on shared machines is built, and credentials never enter the loop |
 | Demos change the customer's live state | Medium → **Low-Medium** | The reset story is now built: every change is journaled and undone after the recording is saved; killed runs can be tidied afterwards. The irreversible-action carve-out is the deny-list's job and is enforced in the prompt + code |
 | Some app surfaces can't be driven at all | Medium | Yarn's own preview canvas is invisible to accessibility APIs; drags on it work but can't be text-verified. Every app will have a few of these; they need to be found during scouting, not during a demo |

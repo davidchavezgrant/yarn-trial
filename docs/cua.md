@@ -287,6 +287,38 @@ Its own quirks, measured:
   renderer pads to even.
 - `CDP_PORT` defaults to 9777, deliberately off cua's 9222 so the two backends can coexist.
 
+### snap: re-addressing a coordinate to the control under it (2026-08-03)
+
+`SNAP_PX` (`src/core/agent/step.ts`) treats a coordinate action as a hypothesis: if the point
+lands on, or within N px of, an interactive control, the action is rewritten to address **that
+control by handle** instead of the raw coordinate. The model still reasons entirely from
+pixels — only the actuation changes. Off by default; arms run 24 and 48px.
+
+Why it lives here rather than in the ax notes: snapping to elements presupposes an element
+channel, and cdp is the backend that always has one (`ariaSnapshot` returns the whole tree).
+The idea is lifted from the redaction pipeline's `detect (AI) → track → snap·prune·size →
+render`, where the vision model's box is a hypothesis and four stages refine it before
+anything is drawn. Vision-only UI driving had no middle at all — the model's pixel went
+straight to a click — and that gap is most of the distance between 75% target-never-appeared
+on pixels alone and 11% with element addressing.
+
+Two properties to know before reading a snap arm's numbers:
+- **It is not vetoed on semantic mismatch, on purpose.** Gating the rewrite on
+  `snapMatchesDeclared !== false` would measure the harness's veto rate instead of vision-only
+  actuation, and would throw away exactly the spatial rescues the stage exists to test. So a
+  48px miss can be confidently retargeted to a control the model never named: the arm is an
+  **upper bound** with a known confound. `snapMatchesDeclared` is recorded on every snapped
+  step so the confound sits in the data rather than behind a gate — read the two together.
+- **The diagnostic half is unconditional.** Candidates, distances and inside-hits are computed
+  even with `SNAP_PX` unset, because the harness holds the element list even in vision-only
+  mode ("the isolation is of what the model *perceives*, not of what the run can prove"). It
+  costs one pass over an array and changes no behaviour, which is what made the question
+  answerable before the rewrite existed.
+
+What it is **not**: a fix for an app with no element channel. That case needs snapping to
+image structure — edges, contrast, widget-shaped regions — and is a much larger build. This is
+the tractable half, and the half that matches Yarn's own target: an Electron app with a DOM.
+
 ## Patterns that work (harness-level)
 
 - **One action per model turn, with a machine-checked expectation.** The harness
@@ -295,15 +327,31 @@ Its own quirks, measured:
   check with visual evidence (e.g. expected "CEST", saw "GMT+2" — correctly declared
   success), but the check catches silent no-ops that would otherwise cascade.
 - **Ground first, then act.** A one-time exploration pass (`src/core/explore.ts`, safety
-  rules + step budget) writes app notes that eliminate dead ends: on Notion Calendar,
+  rules and a frontier) writes app notes that eliminate dead ends: on Notion Calendar,
   grounded runs hit 0 dead ends vs 2 (a Settings detour) ungrounded, and found quirks
-  manual testing missed.
+  manual testing missed. The pass has **no step budget** — it runs until the frontier of
+  un-operated controls empties, and `EXPLORE_MAX_ACTIONS` (`src/core/explore/config.ts`,
+  default 10,000) is a non-binding backstop sized so it cannot be what ends a long pass.
+  Reaching it means something is looping, not that the app was large. An earlier budget was
+  what produced the retracted "~5-6 minute" pass figure.
 - **Verified sequences beat re-derivation.** Once a sequence works, record it
   (`docs/research/`, `docs/procedures/`) — the exact element roles, delivery modes, and
   verification substrings. This is the seed of procedure compilation.
-- **Tolerate loose tool schemas.** OpenRouter doesn't enforce tool input schemas
-  strictly — handle a missing `expectation` by flagging it in the tool result,
-  not crashing.
+- **A run ends three ways, and none of them is a budget.** Success; `"stalled"` when
+  `AGENT_STALL_STEPS` (default 8) consecutive steps verify nothing; `"step-ceiling"` when
+  `AGENT_STEPS` (default 100) is reached. The 100 is a runaway backstop — **a run must never
+  fail because it ran out of steps.** The lesson that produced this: a 15-step operating limit
+  silently became a verdict, because a run that hit it recorded `success: false`, which the
+  collector maps to "gave-up" — the same label as an agent that reasoned to a wrong
+  conclusion. Seven creation runs stopped at exactly 15 and read as "the agent cannot make a
+  video" when the only known-good run of that flow takes 19. The stall count is the honest
+  mechanical reading of "it truly cannot proceed", and it resets on a *verified* step and
+  nothing else — not a successful driver call, not moved pixels, not the model's own account
+  of progress. `src/core/agent/run.ts` carries the contract; `stopReason` in the run log names
+  which exit fired, so the collector can tell a harness cutoff from an agent's verdict.
+- **Tolerate loose tool schemas.** Not every provider enforces tool input schemas strictly
+  (found on OpenRouter, but treat it as a property of the transport rather than of one
+  vendor) — handle a missing `expectation` by flagging it in the tool result, not crashing.
 
 ## Open questions
 
@@ -328,6 +376,15 @@ Its own quirks, measured:
   end; Hex Fiend perceived fine and actuated nothing (foreground delivery never makes a
   native app key/main — see "Action & delivery modes" and
   `docs/research/2026-07-30-native-mac-apps-investigation.md`). Native is out of scope.
+  ~~Never *measured* on a second app, only demonstrated~~ — measured 2026-08-03: Notion on the
+  **web** (`SECOND_APP_URL = "https://app.notion.com"`) is a full cdp mirror of the
+  configuration slice across two tasks — a simple one (a five-row table) and a complex one (a
+  task database with a status property, five tasks, a filtered board view) — 77 arms / 152 runs
+  of the 194-arm / 383-run matrix, plus 36 filmed takes, and the generalization stage now
+  varies app as well as task and model. Two asymmetries are structural, not oversights: Notion
+  cannot reach Yarn's 231 runs because 115 of those are `ax`/`axdom` arms and both backends
+  hard-refuse a web target, and Notion **Calendar** — the desktop app of the original probe —
+  is in no arm, because it is on none of the Macs.
 - **What verification still cannot do**: prove it verified the *right* control. It greps a
   flattened bag of labels and values, so a per-project override and a brand-wide default
   reading the same value are indistinguishable to it. Yarn has 10 settings in exactly that

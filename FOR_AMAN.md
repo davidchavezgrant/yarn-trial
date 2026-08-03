@@ -251,8 +251,10 @@ loophole exists.
 - The model must state, WITH the action, substrings that will appear/disappear in the
   next observation's text (window title + all element labels + values). An act call with
   no checkable expectation is **rejected unexecuted** — it costs the model a turn. This
-  matters more than it looks: OpenRouter doesn't strictly enforce tool schemas, so a
-  "required" field can simply be missing.
+  matters more than it looks: not every provider path strictly enforces tool schemas, so a
+  "required" field can simply be missing. We hit it through OpenRouter; assume any router or
+  translation layer in front of the model can drop one, and make the gate unconditional
+  rather than transport-specific.
 - **Checks must discriminate.** An expectation already satisfied by the PRE-action
   observation proves nothing about the action and doesn't count. This one rule is what
   killed the largest class of false positives (e.g. verifying "GMT+2" when the screen
@@ -353,6 +355,26 @@ are indistinguishable from outside. Related: `wait` must take a `seconds` argume
 clamp at 10 min). Before it did, the longest expressible pause was the ~900ms settle,
 so waiting out five minutes cost ~330 model round-trips against a 15-step budget.
 
+**So what DOES end a dead window: a stall detector, set generously and separated from the
+step ceiling.** Count consecutive steps that verified nothing; at 8 (`AGENT_STALL_STEPS`) end
+the run with its own outcome, `stopReason: "stalled"`. This is the same streak
+`unpaintedStreak()` merely reports, one instrument weaker on purpose: 4 aborts an app that is
+legitimately thinking, 8 does not (our creation runs carry 8–14 unverifiable steps in a row
+and one still succeeded), and a window that never repaints has no route back from 8 either.
+Two design rules, both learned by getting them wrong:
+
+- **The counter resets on a VERIFIED step and on nothing else** — not a successful driver
+  call, not moved pixels, not the model's own account of progress. A verified `wait` is the
+  one carve-out and must NOT reset it, or an agent can hold a stalled run open indefinitely
+  by waiting.
+- **Give "it cannot proceed" and "the harness cut it off" separate names.** Keep a high
+  runaway ceiling (ours is 100) and record hitting it as its own `stopReason`, never as the
+  agent's verdict. Our 15-step operating limit silently became a verdict: seven runs stopped
+  at exactly 15 and were collected as "gave up" — the same label as an agent that reasoned to
+  a conclusion — on a flow whose only known-good run takes 19. **A run must never fail because
+  it ran out of steps.** Every pre-split gave-up count in our data is suspect for this reason,
+  and that is an expensive way to learn it.
+
 ---
 
 ## 3. Grounding: the explore pass
@@ -360,6 +382,28 @@ so waiting out five minutes cost ~330 model round-trips against a 15-step budget
 Cost: a *finished* pass on Yarn = 40 min / 96 actions ≈ 2.8% of the ~24h/app onboarding
 budget Jasper described. (Ignore any "~5-6 min" figure in older docs — that measured a
 pass truncated by a step budget.)
+
+**Budget for a second app from day one, and expect it to be lopsided.** Every finding through
+the first pass was indistinguishable from a fact about Yarn's DOM, so `https://app.notion.com`
+is now the benchmark's second app — the brief's own example, no install needed since the cdp
+backend drives its own persistent Chrome. It runs a simple task (a five-row table) and a
+complex one (a task database with a status property, five tasks, a filtered board view), and
+the arms that vary the app measure cross-*app* transfer rather than only cross-task. Two things
+to know before you copy the shape:
+
+- **Half a native matrix cannot be mirrored on the web, structurally.** A web target on the
+  `ax` backend is a hard refusal in three places (`src/core/agent/run.ts`,
+  `src/core/explore.ts`, `src/backends/ax.ts`), and the `axdom` sidecar reads a native window's
+  pid, which a CDP page has no equivalent of. So the second app mirrors the cdp cells and
+  nothing else: the ax/cdp comparison, the native-equivalent tier and the min-context floor
+  stay single-app by construction. State that up front rather than presenting a lopsided
+  matrix as parity.
+- **Name the target the way the appmap slugger does.** The arm carries the FULL URL, not a
+  host: the slugger recognises a target by being a URL and slugs it to `web-app.notion.com`,
+  which is what the committed map is called. A bare host slugs to `app.notion.com`, loads
+  nothing, and the arm runs **ungrounded under a grounded label** — this repo's most-repeated
+  failure, caught six times in one pass by `groundingChecked`, which compares the tier that
+  actually loaded against the tier the arm declared. Build that check.
 
 Two artifacts per app, and the split matters:
 - `docs/appmaps/<app>.md` — prose, injected verbatim into the system prompt. Models use
@@ -696,6 +740,37 @@ The full constraint list is LIMITATIONS §12; the architecture-shaping subset:
   carries role/label/value and verification greps text anyway). KEEP vision in explore
   (built once, aimed at surfaces AX can't describe) and in the visual judge. Re-measure
   before deciding; that's part of the pending A/B work.
+- **Before building anything to make vision aim better, build the two-line diagnostic that
+  tells you whether aiming is the problem.** Vision-only cost us 75% target-never-appeared
+  against 11% with element addressing, and the number could not say why. Have the vision tool
+  require the model to *declare which control it means*, then on every coordinate step record
+  the nearest interactive control, its distance, and whether its name matches the declaration.
+  That splits the failures into SPATIAL (right control, missed its pixels — refinement helps)
+  and SEMANTIC (hit exactly the control it named, still failed — refinement cannot help), which
+  are the two answers that decide whether the expensive build is worth starting. It costs one
+  pass over an array, because the harness holds the element list even in vision-only mode: the
+  isolation is of what the model *perceives*, never of what the run can *prove*. Compute it
+  unconditionally, including on arms where nothing acts on it.
+- **A snap stage is the cheap half of that, and it is an upper bound — say so.** Our
+  `SNAP_PX` (off by default) treats the model's pixel as a hypothesis and re-addresses the
+  action to the nearest interactive control within tolerance, by handle; the model still
+  reasons entirely from pixels, only the actuation is refined. It is the same shape as the
+  redaction pipeline's `detect (AI) → track → snap·prune·size → render`, where the vision
+  model's box is refined by four stages before anything is drawn — vision-only UI driving had
+  no middle at all. Three things to carry over:
+  - **Do not veto the rewrite on a semantic mismatch.** We considered gating it on "the
+    snapped control matches the declared one" and rejected it: a veto measures the harness's
+    veto rate rather than vision-only actuation, and discards exactly the SPATIAL rescues the
+    stage exists to test. Record the match per step instead, and read the arm as a ceiling.
+  - **Re-address by the ELEMENT, never by its (name, role).** A re-lookup by identity returns
+    the first match. A CDP settings control is routinely a `combobox` with **no name at all**,
+    so the lookup matched the first nameless combobox in the tree and actuated something
+    unrelated while the log said the snap applied — a wrong click that reads as a clean one, on
+    the one arm whose purpose is measuring whether snapping helps.
+  - **It presupposes elements, so it is not the answer for an app that has none.** The real
+    analogue there snaps to image structure — edges, contrast, widget-shaped regions — and is
+    a much larger build. We built the tractable half because Yarn's target is Electron with a
+    DOM. Decide which case you are actually in before starting.
 - **Canvas heroics, mostly.** We proved painted targets are drivable: drags actuate
   (with real caveats: an app that draws an indicator at the press point breaks "drag it
   back" — use app undo, after clicking into the canvas to focus it), the model locates
@@ -810,9 +885,9 @@ test is not a control.**
 **A hand-written forwarding list drops flags in silence.** Translating a declared config into a
 job order by spelling out every field means a new flag reaches the run only if someone edited
 that function. It happened three times. The worst was the recording flag: filmed arms are derived
-from measured arms by adding *only* "record", so dropping it turned 16 runs into byte-identical
-duplicates of their siblings under different labels — plausible data, no footage, nothing
-detecting it. The fix that finally held is a test that walks every declared config and asserts
+from measured arms by adding *only* "record", so dropping it turned all 88 filmed runs into
+byte-identical duplicates of their siblings under different labels — plausible data, no footage,
+nothing detecting it. The fix that finally held is a test that walks every declared config and asserts
 each set field arrives. It caught a regression I introduced ten seconds later.
 
 ---
@@ -821,8 +896,8 @@ each set field arrives. It caught a regression I introduced ten seconds later.
 
 | What | Where |
 |---|---|
-| Agent loop, evidence gates, done-grading | `src/core/agent.ts` (~1550 lines; system prompt is the top ~150) |
-| `verify()`, `auditTaskPrompt()`, scope warnings, observe/projection | `src/core/harness.ts` (~2450 lines) |
+| Agent loop, evidence gates, done-grading | `src/core/agent/` (~2590 lines over 8 files: `run.ts` 1086 is the loop, `step.ts` 650 the act/verify/snap step, `done.ts` 211 the grading, `prompt.ts` 84 the system prompt). `src/core/agent.ts` is a 13-line entry point — keep the path, everything spawns `tsx src/core/agent.ts` |
+| `verify()`, `auditTaskPrompt()`, scope warnings, observe/projection | `src/core/harness/` (~4090 lines over 14 files: `observation.ts` 709, `verification.ts` 535, `appmap.ts` 545, `responses.ts` 430, `model.ts` 251 resolves model→transport). `src/core/harness.ts` is a 38-line barrel — import the submodule from outside core, the barrel drags in the Anthropic SDK and the cua driver |
 | CDP backend + its rationale | `src/backends/cdp.ts` header |
 | cua boundary (the whole thing) | `src/core/driver.ts` (196 lines) |
 | Explore: frontier, dismissal, salvage, descent, home | `src/core/explore.ts` |

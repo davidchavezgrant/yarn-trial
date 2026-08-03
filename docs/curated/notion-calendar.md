@@ -1,5 +1,7 @@
 // Notion Calendar (Electron/web app) — grounding notes
 
+**Not benchmarked**: no arm in the matrix targets Notion Calendar (the second app is Notion **web**, `https://app.notion.com`, over cdp), and the `dom` backend / `src/dom.ts` fallback cited under "Change the primary time zone" below are deleted.
+
 ## Layout
 - **Main window** ("<date range> · Notion Calendar"), 3 panes:
   - **Left sidebar** (toggle with `` ` `` or "Hide sidebar" button @~276,40): mini-month table with ▲/▼ month arrows (@374,88 / @400,88), "Scheduling" row (+ eye button), "Meet with…" field, calendar list ("me@davidgrant.info" *Default*, "Holidays in United States"), "Add calendar account", "Add Notion database", "Notion", help "?" bottom-left.

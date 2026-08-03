@@ -63,6 +63,69 @@ pixels; vision sees pixels but is a model opinion. Cheap-deterministic gates, ex
 probabilistic advises. The offline judge is the only layer OUTSIDE the loop it grades —
 the in-run layers all share the agent's observation channel and can fail together.
 
+## 2a. The stopping contract: three exits, and none of them is a budget (2026-08-03)
+
+A run ends exactly three ways, and `stopReason` in the run log names which one so `collect`
+can tell them apart (`src/core/agent/run.ts`, `src/bench/collect.ts`):
+
+- **success** — the model called `done` and `gradeDone` accepted the evidence.
+- **`"stalled"`** — `AGENT_STALL_STEPS` (default 8) consecutive steps verified nothing. This
+  is the only mechanical reading of "it truly cannot proceed", and it is the stop that ends
+  genuinely stuck runs. The counter resets on a VERIFIED step and on nothing else — not on a
+  successful driver call, not on moved pixels, not on the model's own account of progress
+  (a verified `wait` is the carve-out and deliberately does not reset it).
+- **`"step-ceiling"`** — `AGENT_STEPS` (default 100) steps went by without either of the
+  above. A RUNAWAY BACKSTOP, never a budget.
+
+**A run must never fail because it ran out of steps.** That is the whole point of the 100:
+high enough that reaching it means the loop is not converging, so hitting it is a statement
+about the harness having cut the run off, recorded as its own outcome rather than folded into
+the agent's verdict. The old 15-step operating limit silently became one — a run that hit it
+recorded `success: false`, which `collect` maps to "gave-up", the same label as an agent that
+reasoned its way to a wrong conclusion. Seven creation runs stopped at exactly 15 and read as
+"the agent cannot make a video" when the only known-good run of that flow takes 19. Every
+gave-up count from before the split is suspect for the same reason, and no arm pins a step
+count now.
+
+**Revisit if**: `stalled` starts firing on legitimate routes (long navigation stretches where
+nothing verifiable changes are the known false-positive class), or `step-ceiling` appears at
+all outside a genuine loop — either would mean the two numbers are the wrong distance apart.
+
+## 2b. Snap: the model's coordinate is a hypothesis, not a command (2026-08-03)
+
+`SNAP_PX` re-addresses a coordinate action to the nearest interactive control within tolerance,
+**by handle** — the model still reasons entirely from pixels, only the actuation is refined
+(`src/core/agent/step.ts`). Off by default; arms run it at 24 and 48px.
+
+The reasoning is borrowed from the redaction pipeline, `detect (AI) → track → snap·prune·size
+→ render`: there the vision model's box is a hypothesis and four stages refine it before
+anything is drawn. Vision-only UI driving had no middle at all — the model's pixel went
+straight to a click — and that missing middle is most of the distance between 75%
+target-never-appeared with pixels alone and 11% with element addressing.
+
+Two things this is deliberately NOT:
+
+- **Not a solution for an app with no element channel.** Snapping to elements presupposes
+  elements, and vision-only exists to ask what happens without them. The honest analogue for
+  that case snaps to IMAGE structure — edges, contrast, widget-shaped regions — and is a much
+  larger build. This is the tractable half, and it is the half that matches Yarn's own
+  deployment target: an Electron app with a DOM.
+- **Not vetoed on semantic mismatch.** Gating the rewrite on `snapMatchesDeclared !== false`
+  was considered and rejected: a veto measures the harness's veto rate rather than vision-only
+  actuation, and it would discard exactly the spatial rescues the stage exists to test. So the
+  arm is an UPPER BOUND with a known, deliberate confound — a 48px miss can be confidently
+  retargeted to a control the model never named — and `snapMatchesDeclared` is recorded on
+  every snapped step instead, which puts the confound in the data rather than hiding it behind
+  a gate. Read the two together or not at all.
+
+The diagnostic half (candidates, distances, inside-hits) is computed unconditionally, because
+the harness holds the element list even in vision-only mode; with `SNAP_PX` unset it changes
+no behaviour whatsoever.
+
+**Revisit if**: `snapMatchesDeclared` comes back mostly false, which would say the arm is
+measuring the harness and not the model, or an app class with no element channel becomes the
+target — that is the image-structure build, not this one.
+
 ## 3. Measurement rule: goal-only prompts, enforced in code
 
 Task prompts state the GOAL only; method knowledge lives in appmaps (a declared,
@@ -108,13 +171,13 @@ Three decisions worth the words:
   verdict and refuses anything the judge did not pass.
 - **Promotion is a separate, deliberate step.** Harvesting records what a run taught;
   promoting makes it an input to every later run of that task. An input tier appearing as a
-  side effect of dispatching a phase is how sample independence dies quietly.
+  side effect of dispatching a stage is how sample independence dies quietly.
 - **Lineage is part of the key.** A recipe from a run that HAD a map presupposes the sweep;
   one from an ungrounded run is the honest "can this replace exploration" claim. Different
   experiments, so different files, and the lineage is derived from the source run's recorded
   provenance rather than typed by an operator.
 
-**Revisit if**: recipes measurably replace the exploration pass (phase 6 answers this), or
+**Revisit if**: recipes measurably replace the exploration pass (stage 3, Reuse, answers this), or
 if the ungrounded lineage proves unharvestable — which would itself answer the onboarding
 question.
 
@@ -241,7 +304,7 @@ values verbatim; "search for X" with a different X is a new recording).
 ## 9. Web targets are a target KIND, not a specially-named app (2026-07-30)
 
 `Target = {kind:"app",name} | {kind:"web",url,origin}` (`src/core/target.ts`) replaces the bare
-app-name string. Web artifacts key on the origin (`docs/appmaps/web-www.notion.so.md`) while
+app-name string. Web artifacts key on the origin (`docs/appmaps/web-app.notion.com.md`) while
 `appSlug` keeps its exact prior behaviour for Mac apps, so no existing appmap, run log or job
 id moves. `--url` is value-bearing and consumed by `parseTarget` before positionals are read.
 

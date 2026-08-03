@@ -203,14 +203,23 @@ Full detail, including what a production build has to *add* that this never need
 - **Whether a map built from screenshots alone is useful.** That run went out without its map and
   was automatically disqualified. I reported it as a result first and had to retract it.
 - **Whether any of this transfers to a second app.** We measured a second *task*, never a second
-  application.
+  application. [superseded 2026-08-03: a second app is now measured — Notion on the **web**, driven
+  over CDP: 77 arms / 152 runs of the current 194-arm / 383-run matrix, against Yarn's 117 / 231.
+  Three discovery explores, the configuration cells mirrored across two Notion tasks (a five-row
+  table; a task database with a status property and a filtered board view), reuse and the Fable
+  model axis on both, 36 filmed takes. Stage 4 now varies task, model *and* app. Notion cannot
+  reach Yarn's run count because 115 of those are AX/axdom runs, and both backends refuse on the
+  web. Notion *Calendar* — the desktop app — is in no arm.]
 - **Whether "procedures" work.** A procedure is a frozen click-by-click replay of a successful run.
   It succeeded 1/3 with a model on standby to fix broken steps, 0/3 without. Two causes found and
   fixed; not yet re-measured.
 - **Whether nudging the agent's click onto the nearest real control rescues the
   screenshots-only mode.** Built, not yet run.
 - **Whether the script-writing runs would finish with more steps.** Three hit a step limit while
-  still making progress. Limit removed, re-runs outstanding.
+  still making progress. Limit removed, re-runs outstanding. [superseded 2026-08-03: not removed —
+  replaced. A run now ends exactly three ways: success; `stalled`, after 8 consecutive steps that
+  verify nothing (`AGENT_STALL_STEPS`); or `step-ceiling` at 100 (`AGENT_STEPS`), which is a runaway
+  backstop and never a budget. No arm pins a step count any more.]
 - **How much of the reusable-code estimate above survives contact with Yarn's own services.** The
   7,798-line "rewrite" bucket is job queueing, leasing and host management — all of which Yarn
   may already have. This was scoped without access to that repo, so the figure is the honest
