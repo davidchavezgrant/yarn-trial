@@ -848,3 +848,16 @@ test("dispatch__NamesTheTimeout__When__TheSubmitGetsNoAnswer", async () => {
 	assert.match(res.error, /may still be launching/);
 	assert.equal(res.error.includes("runnerctl exited 124"), false, "the bare exit code is what this replaced");
 });
+
+test("dispatchCli__ParsesEveryArmFlag__When__AnOperatorSetsOneByHand", () => {
+	// The bench arms set backend/noAx/axdomOff/noGrounding programmatically, so nothing noticed
+	// the CLI never parsed them: `--backend ax` was accepted in silence and the run came back
+	// cdp. Same shape as the runner dropping useProcedures — every layer agrees the field
+	// exists, one link never touches it, nothing errors, and the run is quietly the wrong arm.
+	const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "remote", "control", "dispatch.ts"), "utf8");
+	for (const flag of ["--backend", "--no-ax", "--axdom-off", "--no-grounding", "--use-recipe", "--use-procedures", "--model"])
+		assert.ok(src.includes(`"${flag}"`), `the dispatch CLI must let an operator set ${flag}`);
+	// And it must be documented, or an operator cannot discover it.
+	const usage = src.slice(src.indexOf("const USAGE"), src.indexOf("const USAGE") + 400);
+	for (const flag of ["--backend", "--no-ax", "--no-grounding"]) assert.ok(usage.includes(flag), `${flag} missing from usage`);
+});

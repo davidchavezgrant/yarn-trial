@@ -834,7 +834,7 @@ function toHost(host: HostEntry | string, inv?: Inventory): HostEntry {
 	return typeof host === "string" ? resolveHost(host, inv ?? loadHosts()) : host;
 }
 
-const USAGE = `usage: dispatch <host|auto> "<task>" "<App>" [--record] [--no-vision] [--no-cleanup]
+const USAGE = `usage: dispatch <host|auto> "<task>" "<App>" [--backend ax|cdp] [--record] [--no-vision] [--no-ax] [--axdom-off] [--no-grounding] [--use-recipe] [--use-procedures [--procedure-lineage grounded|ungrounded]] [--model <id>] [--no-cleanup]
        dispatch <host|auto> explore "<App>"
        dispatch <host|auto> replay <recipe-file-or-stamp> [--no-rescue]
        dispatch <host> follow <jobId> [--from <byte>]
@@ -918,6 +918,24 @@ async function main(argv: string[]): Promise<number> {
 			app: argv[2] ?? "Yarn",
 			record: argv.includes("--record"),
 			noVision: argv.includes("--no-vision"),
+			/**
+			 * The perception/actuation flags the BENCH arms have always set programmatically and
+			 * an operator could not.
+			 *
+			 * DispatchOptions declared `backend`, dispatch() put it on the wire and the runner
+			 * read it — the CLI simply never parsed it, so `--backend ax` was accepted in silence
+			 * and the run came back cdp. Same shape as useProcedures being dropped by the runner:
+			 * every layer agrees the field exists and one link never touches it, so nothing
+			 * errors and the run is quietly the wrong arm.
+			 */
+			...(argv.includes("--backend") ? { backend: argv[argv.indexOf("--backend") + 1] as "ax" | "cdp" } : {}),
+			noAx: argv.includes("--no-ax"),
+			axdomOff: argv.includes("--axdom-off"),
+			noGrounding: argv.includes("--no-grounding"),
+			...(argv.includes("--model") ? { model: argv[argv.indexOf("--model") + 1] } : {}),
+			...(argv.includes("--procedure-lineage")
+				? { procedureLineage: argv[argv.indexOf("--procedure-lineage") + 1] as "grounded" | "ungrounded" }
+				: {}),
 			// The curated-recipe grounding tier (docs/recipes/<app>.md), same knob the bench
 			// arms use — app method knowledge belongs there, never in the task prompt.
 			useRecipe: argv.includes("--use-recipe"),
