@@ -919,7 +919,11 @@ test("dispatchCli__ParsesEveryArmFlag__When__AnOperatorSetsOneByHand", () => {
 test("parseUrlArg__ReturnsTheUrl__When__AnOperatorDispatchesAWebTarget", () => {
 	const parsed = parseUrlArg(["mac3", "explore", "--url", "https://app.notion.com"]);
 
-	assert.deepEqual(parsed, { url: "https://app.notion.com/" });
+	// The RAW string, not new URL().toString() — that appends a trailing slash, which appSlug
+	// turns into a run key ending "-" and which changes the per-operator profile the run claims.
+	// The matrix arms carry it unnormalised, so a CLI run must too or it reproduces a different
+	// cell than the one it names.
+	assert.deepEqual(parsed, { url: "https://app.notion.com" });
 });
 
 test("parseUrlArg__ReturnsNothing__When__NoUrlIsAsked", () => {
@@ -969,4 +973,15 @@ test("dispatchCli__DocumentsTheWebTargetForm__When__AnOperatorReadsUsage", () =>
 	const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "remote", "control", "dispatch.ts"), "utf8");
 	const usage = src.slice(src.indexOf("const USAGE"), src.indexOf("const USAGE") + 700);
 	assert.ok(usage.includes("--url"), "the web-target form must be discoverable from usage");
+});
+
+test("parseUrlArg__MatchesTheMatrixArmsSpelling__When__TheOperatorTypesABareOrigin", () => {
+	// The notion arms set url: "https://app.notion.com". A CLI rerun of one of those cells has to
+	// produce the same string end to end, or the run key and profile claim diverge from the arm
+	// while the appmap slug — host-derived — stays identical and hides the divergence.
+	const parsed = parseUrlArg(["mac1", "explore", "--url", "https://app.notion.com"]);
+
+	assert.ok(!("error" in parsed));
+	assert.equal("url" in parsed && parsed.url, "https://app.notion.com");
+	assert.equal(String("url" in parsed && parsed.url).endsWith("/"), false, "a trailing slash changes the run key");
 });

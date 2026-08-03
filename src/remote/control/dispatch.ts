@@ -954,7 +954,17 @@ export function parseUrlArg(argv: string[]): { url?: string } | { error: string 
 	const raw = argv[i + 1];
 	if (!raw || raw.startsWith("--")) return { error: "--url needs a URL, e.g. --url https://app.notion.com" };
 	try {
-		return { url: webTarget(raw).kind === "web" ? new URL(raw).toString() : raw };
+		// VALIDATE here, but hand on the operator's RAW string. webTarget normalises through
+		// `new URL()`, which appends a trailing slash to a bare origin — and that slash is not
+		// cosmetic downstream: `appSlug` turns it into a run key ending "-", and the app LABEL is
+		// what claims the per-operator profile. The matrix arms carry `https://app.notion.com`
+		// unnormalised, so normalising here would give a CLI run a different run key and a
+		// different profile claim than the arm it is meant to reproduce. (The appmap slug is
+		// host-derived and identical either way, so grounding was never at risk — which is
+		// exactly why this would have gone unnoticed.)
+		webTarget(raw);
+
+		return { url: raw };
 	} catch (e) {
 		return { error: e instanceof TargetError ? e.message : `not a valid URL: ${JSON.stringify(raw)}` };
 	}
