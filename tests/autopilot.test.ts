@@ -16,7 +16,7 @@ import {
 	stageTitle,
 } from "../src/bench/autopilot.js";
 import { type Manifest, type ManifestEntry, readManifest, utcDate, writeManifest } from "../src/bench/manifest.js";
-import { BENCH_PRIMARY_MODEL, CANONICAL_TASK, type Phase, phaseArms } from "../src/bench/matrix.js";
+import { BENCH_PRIMARY_MODEL, CANONICAL_TASK, type Phase, phaseArms, procedureArms } from "../src/bench/matrix.js";
 import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, interruptedPass, runPhase } from "../src/bench/orchestrate.js";
 import { watchPhase } from "../src/bench/watch.js";
 import { procedureFileFor } from "../src/core/procedure.js";
@@ -73,10 +73,12 @@ test("orderedPhases__PutsFilmedPassLast__When__Phase5Requested", () => {
 	assert.deepEqual(orderedPhases([2, 2, 1] as Phase[]), [1, 2]);
 });
 
-test("planStages__InsertsJudgeHarvestPromoteBeforePhase6__When__Phase6Requested", () => {
-	const titles = planStages([1, 6] as Phase[]).map(stageTitle);
-	assert.deepEqual(titles, ["phase 1", "judge", "harvest", "promote", "phase 6", "final"]);
-	// Without phase 6 the pipeline stages don't appear — judging happens once, in final.
+test("planStages__InsertsJudgeHarvestPromote__When__AStageDeclaresThemInBefore", () => {
+	// Reuse declares before: [judge, harvest, promote]; the planner reads that rather than
+	// matching a phase number, so a future stage gets the same prep by saying so.
+	const titles = planStages([1, 3] as Phase[]).map(stageTitle);
+	assert.deepEqual(titles, ["phase 1", "judge", "harvest", "promote", "phase 3", "final"]);
+	// No stage that declares them → they don't appear; judging happens once, in final.
 	assert.deepEqual(planStages([1, 2] as Phase[]).map(stageTitle), ["phase 1", "phase 2", "final"]);
 });
 
@@ -444,7 +446,7 @@ test("promoteForPhase6__FillsTheArm__When__AHarvestedCandidateExists", async () 
 		assert.deepEqual(outcome.promoted, ["run-1"]);
 		// The other three arms (cdp, and both ungrounded lineages) have no candidates: blocked,
 		// reported as findings — and phase 6 skips them rather than refusing outright.
-		assert.equal(outcome.blocked.length, phaseArms(6).length - 1);
+		assert.equal(outcome.blocked.length, procedureArms(3).length - 1);
 	});
 });
 
@@ -459,7 +461,7 @@ test("promoteForPhase6__ReportsTheArmBlocked__When__NoSourceRunWasHarvested", as
 			log: () => {},
 		});
 		assert.deepEqual(outcome.promoted, []);
-		assert.equal(outcome.blocked.length, phaseArms(6).length);
+		assert.equal(outcome.blocked.length, procedureArms(3).length);
 	});
 });
 
@@ -478,7 +480,7 @@ test("runPhase__SkipsOnlyTheMissingArms__When__SomeProceduresArePromoted", async
 		const calls: string[] = [];
 		let n = 0;
 		const lines: string[] = [];
-		const code = await runPhase(6, {
+		const code = await runPhase(3, {
 			go: true,
 			date: DATE,
 			outRoot: dir,
@@ -491,7 +493,7 @@ test("runPhase__SkipsOnlyTheMissingArms__When__SomeProceduresArePromoted", async
 			},
 		});
 		assert.equal(code, EXIT_OK);
-		const grounded = phaseArms(6).filter((a) => (a.dispatch.procedureLineage ?? "grounded") === "grounded");
+		const grounded = procedureArms(3).filter((a) => (a.dispatch.procedureLineage ?? "grounded") === "grounded");
 		assert.equal(calls.length, grounded.reduce((s, a) => s + a.n, 0), "only the promoted arms dispatch");
 		assert.ok(lines.some((l) => /SKIPPED/.test(l) && /from-ungrounded/.test(l)));
 	});
@@ -500,7 +502,7 @@ test("runPhase__SkipsOnlyTheMissingArms__When__SomeProceduresArePromoted", async
 test("runPhase__RefusesPhase6Outright__When__NoProcedureExistsAtAll", async () => {
 	await withTempAsync("auto-", async (dir) => {
 		const calls: string[] = [];
-		const code = await runPhase(6, {
+		const code = await runPhase(3, {
 			go: true,
 			date: DATE,
 			outRoot: dir,
@@ -526,6 +528,7 @@ test("passSpend__PricesOnlyCollectedEntries__When__SomeAreStillInFlight", () => 
 });
 
 test("DEFAULT_PHASES__ExcludeOptionalAndFilmed__When__Unspecified", () => {
-	// 4 is optional and 5 films with a different action space — both are opt-in via --phases.
-	assert.deepEqual(DEFAULT_PHASES, [1, 2, 3, 6]);
+	// Generalization and Deliverables are opt-in via --phases; Diagnostics is off the ladder.
+	// Read off StageDef.inCorePass rather than hardcoded, so a new core stage needs no edit here.
+	assert.deepEqual(DEFAULT_PHASES, [1, 2, 3]);
 });

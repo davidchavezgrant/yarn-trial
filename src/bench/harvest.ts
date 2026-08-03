@@ -26,7 +26,7 @@ import path from "node:path";
 import { archiveRun, dataRoot as dataRootDir, liveDir, outDir, RUN_FILES, runFile, runPath } from "../paths.js";
 import { harvest as harvestOne } from "../core/procedure-cli.js";
 import { writeProcedure } from "../core/procedure.js";
-import { armById, phaseArms } from "./matrix.js";
+import { armById, procedureArms } from "./matrix.js";
 import { readManifest, utcDate } from "./manifest.js";
 
 const TERMINAL = new Set(["done", "failed", "stopped", "orphaned"]);
@@ -40,7 +40,7 @@ export interface BenchHarvestOutcome {
 }
 
 /** The arms phase 6 grounds on — the only runs eligible to become procedures. */
-export const harvestSourceArms = (): string[] => [...new Set(phaseArms(6).map((a) => a.sourceArm).filter((x): x is string => Boolean(x)))];
+export const harvestSourceArms = (): string[] => [...new Set(procedureArms().map((a) => a.sourceArm).filter((x): x is string => Boolean(x)))];
 
 export async function harvestBench(opts?: {
 	date?: string;

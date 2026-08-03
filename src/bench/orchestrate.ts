@@ -6,7 +6,7 @@ import { CHALLENGER_N, challengerNeedsExplore, planChallenger } from "./challeng
 import { collect } from "./collect.js";
 import { manifestCost } from "./cost.js";
 import { fetchTrueCost, reconcile } from "./truecost.js";
-import { BENCH_APP, BENCH_PRIMARY_MODEL, MATRIX, armById, flagsLine, perceptionLine, armModel, phaseArms, phaseRunCount, type Arm, type Phase } from "./matrix.js";
+import { BENCH_APP, BENCH_PRIMARY_MODEL, MATRIX, PHASES, armById, flagsLine, isPhase, perceptionLine, armModel, phaseArms, phaseRunCount, procedureArms, stageOf, type Arm, type Phase } from "./matrix.js";
 import {
 	entriesForArm,
 	type Manifest,
@@ -406,7 +406,7 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 	// The gate refuses DISPATCH, not the preview: without --go nothing can fire anyway, and
 	// the preview is how an operator finds out what phase 2 needs before phase 1 has run.
 	const missingMaps =
-		(phase === 2 || phase === 5) && !opts.force
+		(stageOf(phase)?.homeGuard ?? false) && !opts.force
 			? phase1GateArms().filter((a) => !entriesForArm(manifest, a.id, opts.model).some((e) => e.collected))
 			: [];
 	if (missingMaps.length && opts.go) {
@@ -429,16 +429,16 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 	 * Only when EVERY arm is missing does the phase refuse outright, as before.
 	 */
 	let missingProcedures = new Set<string>();
-	if (phase === 6 && !opts.force) {
+	if ((stageOf(phase)?.procedureGate ?? false) && !opts.force) {
 		const { proceduresDir } = await import("../paths.js");
 		const { procedureFileFor } = await import("../core/procedure.js");
 		const fs6 = await import("node:fs");
 		const dir = opts.proceduresDir ?? proceduresDir();
 		const wanted = (a: (typeof MATRIX)[number]): string =>
 			procedureFileFor(dir, appSlug(a.app), a.task ?? "", a.dispatch.backend, a.dispatch.procedureLineage ?? "grounded");
-		const missing = phaseArms(6).filter((a) => !fs6.existsSync(wanted(a)));
-		if (missing.length === phaseArms(6).length && opts.go) {
-			log(`REFUSED: phase 6 grounds on promoted procedures, and none exists for any arm.`);
+		const missing = procedureArms(phase).filter((a) => !fs6.existsSync(wanted(a)));
+		if (missing.length === procedureArms(phase).length && opts.go) {
+			log(`REFUSED: the reuse stage grounds on promoted procedures, and none exists for any arm.`);
 			log(`Workflow: runs land → \`./run bench judge\` → \`./run bench harvest\` → \`./run procedures promote <stamp>\` → phase 6.`);
 			log(`Expected at: ${missing.map((a) => relToData(wanted(a))).join(", ")}`);
 
@@ -451,7 +451,7 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 	}
 
 	// Compiles are local and cheap, but they are still phase work — gated like everything else.
-	if (opts.go && (phase === 3 || phase === 4)) manifest = await runCompiles(phase, manifest, { ...opts, log });
+	if (opts.go && stageOf(phase)?.compiles) manifest = await runCompiles(phase, manifest, { ...opts, log });
 
 	const planned = plannedRuns(phase, manifest, opts.model).filter((p) => !missingProcedures.has(p.arm.id));
 	// Resolve replay recipes AFTER compiles so a single --go does compile-then-replay when
@@ -525,16 +525,12 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 export function printPlan(log: (line: string) => void = console.log): void {
 	const total = MATRIX.reduce((sum, a) => sum + a.n, 0);
 	log(`benchmark matrix — ${MATRIX.length} arms, ${total} runs (dom cut; Notion cut entirely; procedures added 2026-08-01 — reasons in matrix.ts)`);
-	for (const phase of [1, 2, 3, 4, 5, 6, 7, 8] as Phase[]) {
-		const note =
-			phase === 4
-				? " (optional)"
-				: phase === 5
-					? " (filmed takes — run last; --record changes the action space)"
-					: phase === 6
-						? " (procedures — needs `bench judge` then `bench harvest` first, and each procedure promoted)"
-						: "";
-		log(`\nphase ${phase} — ${phaseRunCount(phase)} runs${note}`);
+	for (const phase of PHASES) {
+		const st = stageOf(phase);
+		const note = [st?.inCorePass ? "" : "optional", st?.before?.length ? `needs ${st.before.join(" → ")} first` : "", st?.note]
+			.filter(Boolean)
+			.join("; ");
+		log(`\nstage ${phase} ${st?.title ?? ""} — ${phaseRunCount(phase)} runs${note ? ` (${note})` : ""}`);
 		for (const arm of phaseArms(phase)) {
 			log(`  ${arm.id}  n=${arm.n}  ${arm.kind}  "${arm.app}"  ${flagsLine(arm)}`);
 			// Only where it is not the default: printing "elements + screenshots" on every one
@@ -709,7 +705,7 @@ async function main(argv: string[]): Promise<number> {
 	}
 	if (cmd === "phase") {
 		const phase = Number(argv[1]);
-		if (![1, 2, 3, 4, 5, 6, 7, 8].includes(phase)) {
+		if (!isPhase(phase)) {
 			console.error(USAGE);
 
 			return EXIT_REFUSED;
@@ -805,7 +801,7 @@ async function main(argv: string[]): Promise<number> {
 		const ti = argv.indexOf("--then");
 		const then = ti >= 0 ? Number(argv[ti + 1]) : undefined;
 		const ii = argv.indexOf("--interval");
-		const valid = (p: number) => [1, 2, 3, 4, 5, 6, 7, 8].includes(p);
+		const valid = (p: number) => isPhase(p);
 		if (!valid(phase) || (then !== undefined && !valid(then))) {
 			console.error(USAGE);
 
@@ -833,7 +829,7 @@ async function main(argv: string[]): Promise<number> {
 		let phases: Phase[] | undefined;
 		if (pi >= 0) {
 			const nums = (argv[pi + 1] ?? "").split(",").map((s) => Number(s.trim()));
-			if (!nums.length || nums.some((n) => ![1, 2, 3, 4, 5, 6, 7, 8].includes(n))) {
+			if (!nums.length || nums.some((n) => !isPhase(n))) {
 				console.error("--phases wants a comma list from 1-6, e.g. --phases 1,2,3,6");
 
 				return EXIT_REFUSED;

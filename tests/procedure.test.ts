@@ -13,7 +13,7 @@ import { test } from "node:test";
 import { harvestPrompt, harvestRefusal, lineageOf, procedureFileFor, procedureHeader, routeOf, type HarvestSource } from "../src/core/procedure.js";
 import { harvestSourceArms } from "../src/bench/harvest.js";
 import { expectedProvenance } from "../src/bench/collect.js";
-import { armById, phaseArms } from "../src/bench/matrix.js";
+import { armById, phaseArms, procedureArms } from "../src/bench/matrix.js";
 import { taskHash } from "../src/core/recipe.js";
 
 const PASSING: HarvestSource = {
@@ -131,7 +131,7 @@ test("expectedProvenance__ExpectsProcedure__When__TheArmAsksForOne", () => {
 	// The silent-fallback guard. USE_PROCEDURES with no file on disk degrades to the appmap, so
 	// without this an arm that never received its procedure would report clean numbers under the
 	// wrong tier label. groundingChecked compares this against what the run log recorded.
-	for (const arm of phaseArms(6)) assert.equal(expectedProvenance(arm), "procedure", arm.id);
+	for (const arm of procedureArms(3)) assert.equal(expectedProvenance(arm), "procedure", arm.id);
 	assert.equal(expectedProvenance(armById("p2-ax-grounded")!), "explore");
 	assert.equal(expectedProvenance(armById("p2-curated")!), "curated");
 });
@@ -171,7 +171,7 @@ test("Phase6Arms__ReplaceTheAppmapRatherThanStack__When__Declared", () => {
 	// USE_PROCEDURES is a replacement tier, like USE_RECIPE. An arm that carried both would
 	// measure neither, and the question the phase exists to answer — can a write-up stand IN FOR
 	// the exploration pass — would be unanswerable from its own data.
-	const arms = phaseArms(6);
+	const arms = procedureArms(3);
 	assert.ok(arms.length > 0);
 	for (const a of arms) {
 		assert.equal(a.dispatch.useProcedures, true, a.id);

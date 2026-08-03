@@ -28,7 +28,112 @@ export type BenchBackend = "ax" | "cdp";
 export type ArmKind = "task" | "explore" | "replay" | "compile";
 import { appmapSlug } from "../core/target.js";
 
-export type Phase = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+/**
+ * Stages, not phases (2026-08-03). Eight phases collapse to five ordered stages plus one that
+ * sits off the ladder.
+ *
+ * The old numbering accreted because a bare integer was carrying three jobs at once —
+ * dependency order, the axis a phase varied, and what KIND of thing it was — so every new
+ * question took the next free number and the orchestrator learned about it through hand-edited
+ * checks: five copies of `[1..8]` and seven behaviours keyed on specific values. Phase 8 was
+ * claimed by two sessions inside one hour because the next number was the only slot on offer.
+ *
+ * `9` is deliberately non-adjacent. Diagnostics is not the sixth step; it measures the
+ * INSTRUMENT rather than the agent, needs nothing, and blocks nothing.
+ */
+export type Phase = 1 | 2 | 3 | 4 | 5 | 9;
+
+export type StageKind = "artifact" | "measurement" | "deliverable" | "diagnostic";
+
+export interface StageDef {
+	n: Phase;
+	id: string;
+	title: string;
+	kind: StageKind;
+	/** Topological order. Replaces autopilot's "ascending, except 5 (filmed) always runs last". */
+	needs: Phase[];
+	/** Workflow steps inserted before this stage. Replaces "judge→harvest→promote before phase 6". */
+	before?: Array<"judge" | "harvest" | "promote">;
+	/** This stage compiles recipes as part of `--go`. Replaces `phase === 3 || phase === 4`. */
+	compiles?: boolean;
+	/** Runs need a normalised home state. Replaces `phase === 2 || phase === 5`. */
+	homeGuard?: boolean;
+	/** Dispatch refuses arms with no promoted procedure. Replaces `phase === 6`. */
+	procedureGate?: boolean;
+	/** In the default hands-off pass. Replaces `DEFAULT_PHASES = [1, 2, 3, 6]`. */
+	inCorePass?: boolean;
+	note?: string;
+}
+
+/**
+ * The one source of truth for what stages exist and how they order. Adding a stage is adding an
+ * object here; nothing in orchestrate.ts or autopilot.ts changes.
+ *
+ * Every guard below keys on a DECLARED FIELD rather than on a number, which is what lets the
+ * diagnostics stage exist without exceptions. It films (`record`) because filming IS its
+ * measurement, and it is excluded from the filmed-twin derivation — both fall out of
+ * `kind !== "measurement"` instead of being written as two special cases against its number.
+ */
+export const STAGES: readonly StageDef[] = [
+	{
+		n: 1, id: "discovery", title: "Discovery", kind: "artifact", needs: [], inCorePass: true,
+		note: "what a pass can find, per perception condition, per app — produces every grounding artifact downstream reads",
+	},
+	{
+		n: 2, id: "configuration", title: "Configuration", kind: "measurement", needs: [1], homeGuard: true, inCorePass: true,
+		note: "which backend / perception / grounding tier wins, holding task and model fixed",
+	},
+	{
+		n: 3, id: "reuse", title: "Reuse", kind: "measurement", needs: [2], before: ["judge", "harvest", "promote"], compiles: true, procedureGate: true, inCorePass: true,
+		note: "does a frozen artifact beat live grounding — compiled recipes and harvested procedures, together so the report can finally compare them",
+	},
+	{
+		n: 4, id: "generalization", title: "Generalization", kind: "measurement", needs: [2, 3], compiles: true,
+		note: "does stage 2 hold off this task, this model, this app",
+	},
+	{
+		n: 5, id: "deliverables", title: "Deliverables", kind: "deliverable", needs: [2, 4], homeGuard: true,
+		note: "footage of the configs that won; --record changes the action space, so these were never comparable to stage 2",
+	},
+	{
+		n: 9, id: "diagnostics", title: "Diagnostics", kind: "diagnostic", needs: [],
+		note: "is the instrument sound — measures the harness, not the agent; runs whenever the fleet is free",
+	},
+] as const;
+
+export const PHASES: Phase[] = STAGES.map((s) => s.n);
+
+export const stageOf = (phase: Phase): StageDef | undefined => STAGES.find((s) => s.n === phase);
+
+export const isPhase = (n: number): n is Phase => PHASES.includes(n as Phase);
+
+/**
+ * Stages in execution order: topological over `needs`, ties broken by number.
+ *
+ * This is what replaces "ascending, except 5 always runs last". Deliverables runs last because
+ * it DECLARES `needs: [2, 4]`, not because a sort function remembers a special case.
+ */
+export function orderStages(phases: Phase[]): Phase[] {
+	const want = [...new Set(phases)].filter(isPhase);
+	const out: Phase[] = [];
+	const rest = new Set(want);
+	while (rest.size) {
+		// Ready = every dependency either satisfied or not requested in this run at all.
+		const ready = [...rest].filter((p) => (stageOf(p)?.needs ?? []).every((d) => !rest.has(d))).sort((a, b) => a - b);
+		if (!ready.length) {
+			// Cycle: emit the remainder in numeric order rather than hanging. The test below
+			// makes this unreachable; the fallback exists so a bad edit degrades loudly-but-safely.
+			out.push(...[...rest].sort((a, b) => a - b));
+			break;
+		}
+		for (const p of ready) {
+			out.push(p);
+			rest.delete(p);
+		}
+	}
+
+	return out;
+}
 
 /**
  * The dispatch knobs an arm turns, in `DispatchOptions`' exact spellings.
@@ -226,7 +331,7 @@ const task = (id: string, dispatch: ArmDispatch, informs: string, over: Partial<
  * Phase 1 — node discovery per backend (grounded arms use their own backend's map), plus
  * the one web-explore run that verifies cdp covers the web path dom used to own.
  */
-const PHASE1: Arm[] = [
+const DISCOVERY: Arm[] = [
 	...BACKENDS.map((backend): Arm => ({
 		id: `p1-explore-${backend}`,
 		phase: 1,
@@ -386,13 +491,13 @@ const PHASE1: Arm[] = [
 ];
 
 /** Phase 2 core — backend × grounding, n=3 per cell. */
-const PHASE2_CORE: Arm[] = BACKENDS.flatMap((backend) => [
+const CONFIG_CORE: Arm[] = BACKENDS.flatMap((backend) => [
 	task(`p2-${backend}-ungrounded`, { backend, noGrounding: true }, "ad-hoc discovery floor on this backend"),
 	task(`p2-${backend}-grounded`, { backend }, "what a grounding pass buys on this backend"),
 ]);
 
 /** Phase 2 permutation slices — each maps to a fork in the implementation Aman inherits. */
-const PHASE2_SLICES: Arm[] = [
+const CONFIG_SLICES: Arm[] = [
 	/**
 	 * THE NATIVE-EQUIVALENT TIER (reframed 2026-08-01, David).
 	 *
@@ -554,7 +659,7 @@ const PHASE2_SLICES: Arm[] = [
  * fleet. The compile source — one clean grounded run per backend — is resolved at phase
  * time from the collected manifest, never named here.
  */
-const PHASE3: Arm[] = [
+const REUSE_RECIPES: Arm[] = [
 	...BACKENDS.map((backend): Arm => ({
 		id: `p3-compile-${backend}`,
 		phase: 3,
@@ -596,7 +701,7 @@ const PHASE3: Arm[] = [
  * after the grounded runs land, then `bench phase 4 --go` again — already-submitted samples
  * are skipped, the compile runs, and the replays go out.
  */
-const PHASE4: Arm[] = [
+const GEN_SECOND_TASK: Arm[] = [
 	task("p4-ungrounded", { backend: "cdp", noGrounding: true }, "is everything above cursor-task-specific", { phase: 4, task: PHASE4_TASK, n: 2 }),
 	task("p4-grounded", { backend: "cdp" }, "is everything above cursor-task-specific", { phase: 4, task: PHASE4_TASK, n: 2 }),
 	{
@@ -642,7 +747,7 @@ const PHASE4: Arm[] = [
  * (a previous run's write-up). USE_PROCEDURES REPLACES the appmap rather than adding to it —
  * stacking them would measure neither.
  */
-const PHASE6: Arm[] = [
+const REUSE_PROCEDURES: Arm[] = [
 	/**
 	 * The honest replacement claim (added by David, 2026-08-01). Its procedure is harvested from
 	 * an UNGROUNDED run — an agent that worked the app out from nothing, succeeded, was judged
@@ -660,7 +765,7 @@ const PHASE6: Arm[] = [
 	 */
 	...BACKENDS.map((backend): Arm => ({
 		id: `p6-${backend}-procedure-from-ungrounded`,
-		phase: 6,
+		phase: 3,
 		kind: "task",
 		app: BENCH_APP,
 		task: CANONICAL_TASK,
@@ -673,7 +778,7 @@ const PHASE6: Arm[] = [
 	})),
 	...BACKENDS.map((backend): Arm => ({
 	id: `p6-${backend}-procedure`,
-	phase: 6,
+	phase: 3,
 	kind: "task",
 	app: BENCH_APP,
 	task: CANONICAL_TASK,
@@ -768,12 +873,12 @@ const filmed = (arm: Arm): Arm => ({
  * here, and arguably the more useful one.
  */
 const creationArms = (): Arm[] =>
-	[...PHASE2_CORE, ...PHASE2_SLICES]
+	[...CONFIG_CORE, ...CONFIG_SLICES]
 		.filter((a) => a.kind === "task")
 		.map((a) => ({
 			...a,
 			id: a.id.replace(/^p2-/, "p7-create-"),
-			phase: 7 as Phase,
+			phase: 4 as Phase,
 			task: CREATION_TASK,
 			// NO arm-level budget. 30 was the right fix against a default of 15 and became the
 			// wrong one the moment the default turned into a runaway backstop of 100 with a
@@ -784,11 +889,11 @@ const creationArms = (): Arm[] =>
 			dispatch: { ...a.dispatch },
 		}));
 
-const PHASE7: Arm[] = [
+const GEN_TASK_AND_MODEL: Arm[] = [
 	...creationArms(),
 	// Same three cells as Sol ran, one variable changed. Canonical task on purpose: it is the
 	// only task with 45 runs of Sol baseline behind it.
-	task("p7-vision-only-cdp-curated", { backend: "cdp", noAx: true, useRecipe: true }, "vision-only against the human-written tier — completes the grid ax already has", { phase: 7 }),
+	task("p7-vision-only-cdp-curated", { backend: "cdp", noAx: true, useRecipe: true }, "vision-only against the human-written tier — completes the grid ax already has", { phase: 2 }),
 	/**
 	 * An ELEMENT-perceiving agent reading a map written from PIXELS.
 	 *
@@ -803,11 +908,11 @@ const PHASE7: Arm[] = [
 	 * pass and nothing else — which is the native-app generalisation story, priced.
 	 */
 	task("p7-cdp-grounded-visionmap", { backend: "cdp" }, "is a map written from pixels any good to an agent that can see elements", {
-		phase: 7,
+		phase: 2,
 		env: { APPMAP_VARIANT: "vision" },
 	}),
-	task("p7-claude-cdp-ungrounded", { backend: "cdp", noGrounding: true, model: BENCH_ALT_MODEL }, "is the ungrounded floor a model property or a general one", { phase: 7 }),
-	task("p7-claude-cdp-grounded", { backend: "cdp", model: BENCH_ALT_MODEL }, "does grounding lift Claude the way it lifts Sol", { phase: 7 }),
+	task("p7-claude-cdp-ungrounded", { backend: "cdp", noGrounding: true, model: BENCH_ALT_MODEL }, "is the ungrounded floor a model property or a general one", { phase: 4 }),
+	task("p7-claude-cdp-grounded", { backend: "cdp", model: BENCH_ALT_MODEL }, "does grounding lift Claude the way it lifts Sol", { phase: 4 }),
 	/**
 	 * Vision-only, re-run on the actuator that can aim.
 	 *
@@ -821,8 +926,8 @@ const PHASE7: Arm[] = [
 	 * coordinates act consumes), so these arms measure what the condition was always for. If
 	 * they still fail, THAT is the perception result — and it will be the first honest one.
 	 */
-	task("p7-vision-only-cdp-ungrounded", { backend: "cdp", noAx: true, noGrounding: true }, "vision-only floor on an actuator that can aim", { phase: 7 }),
-	task("p7-vision-only-cdp-grounded", { backend: "cdp", noAx: true }, "does a map lift vision-only once its clicks land (map from an element-perceiving pass)", { phase: 7 }),
+	task("p7-vision-only-cdp-ungrounded", { backend: "cdp", noAx: true, noGrounding: true }, "vision-only floor on an actuator that can aim", { phase: 2 }),
+	task("p7-vision-only-cdp-grounded", { backend: "cdp", noAx: true }, "does a map lift vision-only once its clicks land (map from an element-perceiving pass)", { phase: 2 }),
 	/**
 	 * Vision-only at BOTH stages on cdp — the ax pair's `-visionmap` arm, on an actuator whose
 	 * screenshot pixels and click coordinates are the same space. This is the honest version of
@@ -830,20 +935,15 @@ const PHASE7: Arm[] = [
 	 * click path that misses by ~40px on this app.
 	 */
 	task("p7-vision-only-cdp-visionmap", { backend: "cdp", noAx: true }, "grounding AND actuation vision-only, on the backend that can aim", {
-		phase: 7,
+		phase: 2,
 		env: { APPMAP_VARIANT: "vision" },
 	}),
-	task("p7-claude-cdp-procedure-from-ungrounded", { backend: "cdp", useProcedures: true, procedureLineage: "ungrounded", model: BENCH_ALT_MODEL }, "does the replacement result survive a model change — the finding most worth a second model", { phase: 7 }),
+	task("p7-claude-cdp-procedure-from-ungrounded", { backend: "cdp", useProcedures: true, procedureLineage: "ungrounded", model: BENCH_ALT_MODEL }, "does the replacement result survive a model change — the finding most worth a second model", { phase: 4 }),
 ];
 
 // Phase 7 joins the derivation rather than being remembered — that is the whole point of the
 // rule. It also means the CREATION flow gets filmed, which is the footage closest to what Yarn
 // actually sells; every take before it was of a dropdown being changed.
-const FILMABLE: Arm[] = [...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE3, ...PHASE4, ...PHASE6, ...PHASE7].filter((a) => a.kind === "task" || a.kind === "replay");
-
-const PHASE5: Arm[] = FILMABLE.map(filmed);
-
-
 /**
  * Phase 8 — HARNESS diagnostics. These arms measure the rig, not the agent.
  *
@@ -861,22 +961,53 @@ const PHASE5: Arm[] = FILMABLE.map(filmed);
  * Their task outcome is close to irrelevant — the artifact is geometryBasis and the step rects.
  * n=2 because the offset is intermittent, and an intermittent fault seen once is a rumour.
  */
-const PHASE8: Arm[] = [
+const DIAGNOSTICS: Arm[] = [
 	task("p8-geometry-ax", { backend: "ax" }, "is the AX→screenshot transform sound when nothing stages the window", {
-		phase: 8,
+		phase: 9,
 		n: 2,
 		axRationale: "the transform under test IS the ax path's; cdp needs none (scale:\"css\" ties screenshot pixels to the coordinates act consumes)",
 	}),
 	task("p8-geometry-ax-filmed", { backend: "ax", record: true }, "does staging the window perturb the geometry the harness reads", {
-		phase: 8,
+		phase: 9,
 		n: 2,
 		axRationale: "same transform, with the window resize --record performs — the difference between the two arms IS the measurement",
 	}),
 ];
 
-export const MATRIX: readonly Arm[] = [...PHASE1, ...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE3, ...PHASE4, ...PHASE5, ...PHASE6, ...PHASE7, ...PHASE8];
+/**
+ * Everything declared directly, before the two derived stages. Deliverables is derived FROM it,
+ * so it cannot appear here.
+ */
+const DECLARED: Arm[] = [...DISCOVERY, ...CONFIG_CORE, ...CONFIG_SLICES, ...REUSE_RECIPES, ...REUSE_PROCEDURES, ...GEN_SECOND_TASK, ...GEN_TASK_AND_MODEL, ...DIAGNOSTICS];
+
+/**
+ * Filmed twins come from MEASUREMENT stages only, read off `StageDef.kind`.
+ *
+ * This used to be a hand-listed set of phase arrays, and Diagnostics had to be left out of it by
+ * name — one of two exceptions that stage needed, because it films as its own measurement and
+ * filming it again would compare a run against itself. Keying on kind makes that a consequence
+ * rather than a special case, and a future non-measurement stage is excluded before anyone
+ * remembers to exclude it.
+ */
+const FILMABLE: Arm[] = DECLARED.filter((a) => stageOf(a.phase)?.kind === "measurement" && (a.kind === "task" || a.kind === "replay"));
+
+const DELIVERABLES: Arm[] = FILMABLE.map(filmed);
+
+
+export const MATRIX: readonly Arm[] = [...DECLARED, ...DELIVERABLES];
 
 export const phaseArms = (phase: Phase): Arm[] => MATRIX.filter((a) => a.phase === phase);
+
+/**
+ * Arms that ground on a promoted procedure — the set the procedure gate, the harvest source list
+ * and the autopilot's "ran without" report all mean when they say it.
+ *
+ * They used to say `phaseArms(6)`, which was true only while procedures lived alone in a phase.
+ * Reuse now holds recipes and procedures together, so the number stopped meaning the thing; the
+ * dispatch flag always did.
+ */
+export const procedureArms = (phase?: Phase): Arm[] =>
+	MATRIX.filter((a) => a.dispatch.useProcedures && (phase === undefined || a.phase === phase));
 
 /**
  * The model an arm will ACTUALLY run on: its own pin, else the pass default. Sample counting

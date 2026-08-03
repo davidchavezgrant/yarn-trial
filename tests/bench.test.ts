@@ -7,7 +7,7 @@ import { auditTaskPrompt } from "../src/core/harness.js";
 import type { JobRecord } from "../src/remote/runner/jobs.js";
 import { collect, collectEntry, expectedProvenance, failureKind, jobTiming, journalScopes, parseAppmapStamp, parseGraphCounts, parseRunMetrics, poisonedHosts, technicalFailure } from "../src/bench/collect.js";
 import { archiveDirFor, entriesForArm, manifestPath, readManifest, recordSubmissions, submittedCount, type Manifest, type ManifestEntry, updateEntry, writeManifest } from "../src/bench/manifest.js";
-import { BACKENDS, BENCH_ALT_MODEL, BENCH_PRIMARY_MODEL, armModel, MATRIX, armAppmapSlug, armById, armTitle, perceptionLine, phaseArms, phaseRunCount, type Arm } from "../src/bench/matrix.js";
+import { BACKENDS, BENCH_ALT_MODEL, BENCH_PRIMARY_MODEL, armModel, MATRIX, armAppmapSlug, armById, armTitle, orderStages, perceptionLine, phaseArms, phaseRunCount, STAGES, stageOf, type Arm } from "../src/bench/matrix.js";
 import type { DispatchOptions } from "../src/remote/control/dispatch.js";
 import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, auditPhase, dateArg, dispatchOptionsFor, findCompileSource, plannedRuns, runPhase } from "../src/bench/orchestrate.js";
 import { renderReport, reportFileName, writeReport } from "../src/bench/report.js";
@@ -73,11 +73,24 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// core 12 (2 backends x grounded/ungrounded x 3), slices 27, procedures-tier comparators 6.
 	// Slices went 24 -> 27 on 2026-08-01: the native-equivalent grid (AXDOM=0, i.e. AX
 	// with no DOM behind it) was missing its cold+screenshots cell.
-	assert.equal(phaseRunCount(2), 12 + 27 + 6);
-	// Phase 3: 2 local compiles + replay ×3 per backend + no-rescue ×3.
-	assert.equal(phaseRunCount(3), 2 + 6 + 3);
-	// Phase 4 (optional): 2 task cells × 2 + 1 compile + 2 replays.
-	assert.equal(phaseRunCount(4), 7);
+	// Stage 2 Configuration (2026-08-03): the old phase-2 grid (12 core + 27 slices + 6
+	// procedure-tier comparators = 45) plus the five cdp cells that came home from phase 7 —
+	// four vision-only and one grounded on a vision-written map. They vary perception and
+	// grounding tier on the canonical task, which is this stage's definition.
+	assert.equal(phaseRunCount(2), 45 + 15);
+	// Stage 3 Reuse: both frozen-artifact tiers together, so the report can finally compare
+	// them. Recipes (2 local compiles + 6 replays + 3 no-rescue) and procedures (4 arms x 3).
+	assert.equal(phaseRunCount(3), 11 + 12);
+	// Stage 4 Generalization: second task (7), the creation task on every stage-2 config
+	// carried over from phase 7 (15 x 3), and the model axis (3 x 3).
+	assert.equal(phaseRunCount(4), 7 + 45 + 9);
+	// Stage 9 Diagnostics: the AX-offset pair at n=2. Off the ladder — it measures the rig.
+	assert.equal(phaseRunCount(9), 4);
+	// The collapse REGROUPED; it did not add or drop a run. This is the guard on that claim.
+	assert.equal(
+		STAGES.reduce((t, st) => t + phaseRunCount(st.n), 0),
+		207,
+	);
 	// Phase 5 (filmed): one take per phase-2 task config (14, including the minimum-context
 	// pair — derived from the phase-2 arms, so adding a config there adds a filmed take here)
 	// plus one filmed replay per backend.
@@ -88,8 +101,48 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// Phase 8 is excluded: it is a diagnostics PAIR (one plain arm, one filmed) and the filmed
 	// half is the measurement, not a take of the other. Deriving a twin for it would film the
 	// same config twice and compare a run against itself.
-	const filmable = MATRIX.filter((a) => a.phase !== 5 && a.phase !== 8 && (a.kind === "task" || a.kind === "replay"));
+	const filmable = MATRIX.filter((a) => stageOf(a.phase)?.kind === "measurement" && (a.kind === "task" || a.kind === "replay"));
 	assert.equal(phaseRunCount(5), filmable.length);
+});
+
+/**
+ * The guards the old numbering never had. Five hand-maintained copies of `[1..8]` and seven
+ * behaviours keyed on literal values meant a new stage was correct only if someone remembered
+ * every site; these assert the table itself instead.
+ */
+test("STAGES__DeclareAnAcyclicOrder__When__EveryStageIsRequested", () => {
+	const order = orderStages(STAGES.map((st) => st.n));
+	assert.equal(order.length, STAGES.length, "every declared stage is orderable — a cycle drops one");
+	for (const [i, p] of order.entries()) {
+		for (const dep of stageOf(p)?.needs ?? []) {
+			assert.ok(order.indexOf(dep) < i, `stage ${p} runs before its dependency ${dep}`);
+		}
+	}
+});
+
+test("STAGES__PutDeliverablesLast__When__AllRequested", () => {
+	// This used to be a special case in the sort ("ascending, except 5 always runs last").
+	// It is now a CONSEQUENCE of Deliverables declaring needs: [2, 4] — delete that and the
+	// test fails, which is the point.
+	const order = orderStages(STAGES.map((st) => st.n));
+	const deliverable = STAGES.find((st) => st.kind === "deliverable")!;
+	assert.equal(order.at(-1), deliverable.n);
+});
+
+test("STAGES__AreUniqueAndCoverEveryArm__When__TheMatrixIsWalked", () => {
+	assert.equal(new Set(STAGES.map((st) => st.n)).size, STAGES.length, "two stages share a number");
+	assert.equal(new Set(STAGES.map((st) => st.id)).size, STAGES.length, "two stages share an id");
+	for (const arm of MATRIX) assert.ok(stageOf(arm.phase), `${arm.id} sits in stage ${arm.phase}, which no StageDef declares`);
+});
+
+test("STAGES__KeepFilmingOutOfMeasurementStages__When__ArmsSetRecord", () => {
+	// Diagnostics films as its own measurement and must not be filmed-twinned. That used to be
+	// two exceptions written against phase 8 by name; both now fall out of `kind`.
+	for (const arm of MATRIX) {
+		if (arm.dispatch.record) assert.notEqual(stageOf(arm.phase)?.kind, "measurement", `${arm.id} films inside a measurement stage`);
+	}
+	const filmedTwins = MATRIX.filter((a) => stageOf(a.phase)?.kind === "deliverable");
+	for (const t of filmedTwins) assert.equal(t.dispatch.record, true, `${t.id} is a deliverable and must film`);
 });
 
 test("MATRIX__UsesOnlyAxAndCdp__When__DomIsDeleted", () => {
@@ -149,7 +202,7 @@ test("MATRIX__ConfinesRecordingToTheFilmedPhase__When__ArmsAreDeclared", () => {
 		// Phase 8 is the exception, and a narrow one: its filmed arm exists BECAUSE recording
 		// changes the action space. It stages the window, which is the perturbation under
 		// measurement — a diagnostic that could not film would be measuring nothing.
-		if (arm.dispatch.record) assert.ok(arm.phase === 5 || arm.phase === 8, `${arm.id} films, so it belongs to phase 5 (or 8, diagnostics)`);
+		if (arm.dispatch.record) assert.ok(stageOf(arm.phase)?.kind !== "measurement", `${arm.id} films, so it cannot sit in a measurement stage — filming changes the action space`);
 		if (arm.phase === 5) assert.equal(arm.dispatch.record, true, `${arm.id} is a filmed take and must set record`);
 	}
 	// Every filmed take is n=1 — footage, not statistics.
@@ -366,11 +419,19 @@ test("runPhase__ShapesOptionsPerArm__When__Phase2Dispatches", async () => {
 		// third — the machine-written-appmap arm — was cut, which is why no dispatch carries
 		// appmapVariant: the variant it asked for resolves to a file that does not exist, and
 		// a missing map degrades to no grounding at all rather than failing.
-		// Four vision-only arms × 3. Exactly ONE carries appmapVariant: the arm grounded on the
-		// vision-written map. The others are the ungrounded floor, the ax-written map, and the
-		// curated notes — all four differ only in which grounding tier they read.
-		assert.equal(byFlag((c) => c.noAx === true).length, 12);
-		assert.equal(byFlag((c) => c.appmapVariant === "vision").length, 3);
+		// EIGHT vision-only arms x 3 since the stage reorganisation (2026-08-03), which brought
+		// the four cdp vision-only cells home from phase 7. They were never a separate question:
+		// same task, same model, a grounding tier the ax half of the grid already had — one of
+		// them says exactly that in its own `informs` ("completes the grid ax already has").
+		assert.equal(byFlag((c) => c.noAx === true).length, 24);
+		// Split by actuator, so the perception condition is measured against both rather than
+		// only the one whose click path misses by ~40px on this app.
+		assert.equal(byFlag((c) => c.noAx === true && c.backend === "ax").length, 12);
+		assert.equal(byFlag((c) => c.noAx === true && c.backend === "cdp").length, 12);
+		// THREE arms read the vision-written map, x3 each: the vision-only ax consumer, its cdp
+		// twin, and — the interesting one — a full-perception cdp agent handed the same pixel-written
+		// map, which is what separates "bad map" from "reader that cannot act on a good one".
+		assert.equal(byFlag((c) => c.appmapVariant === "vision").length, 9);
 		// The Notion Calendar slice was cut, so phase 2 must dispatch nothing for it — the
 		// assertion is kept (inverted) rather than deleted, so a careless restore that skips
 		// the fleet-install prereq trips a test instead of burning 8 runs on exit 3.
@@ -456,12 +517,13 @@ test("runPhase__CompilesLocallyAndDispatchesReplays__When__Phase3HasCleanSources
 		// Only the ax replay arm dispatches: p3-replay-norescue moved to cdp on 2026-08-01 (it
 		// measures the unattended FLEET posture, a question about the shipping actuator), so it
 		// waits on the cdp compile like every other cdp replay.
-		assert.equal(fake.calls.length, 3);
-		for (const c of fake.calls) {
-			assert.equal(c.kind, "replay");
-			assert.match(c.recipe ?? "", /recipe\.json$/);
-		}
-		assert.equal(fake.calls.filter((c) => c.noRescue === true).length, 0, "the no-rescue arm is cdp now and defers with the others");
+		// Reuse holds recipes AND procedures since 2026-08-03, so the stage dispatches both tiers
+		// in one go and the replay claim has to name its own slice. The mixed readiness is the
+		// wave loop's job: replays wait on compiles, procedure arms on promote.
+		const replays = fake.calls.filter((c) => c.kind === "replay");
+		assert.equal(replays.length, 3);
+		for (const c of replays) assert.match(c.recipe ?? "", /recipe\.json$/);
+		assert.equal(replays.filter((c) => c.noRescue === true).length, 0, "the no-rescue arm is cdp now and defers with the others");
 
 		const after = readManifest(DATE, liveDir(dir));
 		const compileEntry = after.entries.find((e) => e.armId === "p3-compile-ax");
@@ -492,8 +554,9 @@ test("runPhase__RecordsCompileRefusal__When__CompileFnThrows", async () => {
 		const refusal = after.entries.find((e) => e.armId === "p3-compile-ax");
 		assert.equal(refusal?.state, "failed");
 		assert.match(refusal?.note ?? "", /--hinted/);
-		// No recipe means every ax replay deferred rather than dispatched without one.
-		assert.equal(fake.calls.length, 0);
+		// No recipe means every ax replay deferred rather than dispatching without one. Scoped to
+		// replays: Reuse also dispatches the procedure tier, which does not wait on a compile.
+		assert.equal(fake.calls.filter((c) => c.kind === "replay").length, 0);
 	});
 });
 
@@ -1207,7 +1270,7 @@ test("MATRIX__FilmsEveryMeasuredConfig__When__PhaseFiveIsDerived", () => {
 	// Phase 8 is excluded: it is a diagnostics PAIR (one plain arm, one filmed) where the filmed
 	// half IS the measurement — staging the window is the perturbation under test. Deriving a
 	// twin would film the same config twice and compare a run against itself.
-	const measured = MATRIX.filter((a) => a.phase !== 5 && a.phase !== 8 && (a.kind === "task" || a.kind === "replay"));
+	const measured = MATRIX.filter((a) => stageOf(a.phase)?.kind === "measurement" && (a.kind === "task" || a.kind === "replay"));
 	const filmed = MATRIX.filter((a) => a.phase === 5);
 	const shape = (a: Arm) => JSON.stringify({ ...a.dispatch, record: undefined, env: a.env ?? null });
 
@@ -1608,7 +1671,7 @@ test("runPhase__RecordsTheArmsOwnModel__When__AnArmIsPinnedToAnother", async () 
 	// arms reached n=6 with "azure/gpt-5.6-sol" on all six rows before this was caught.
 	await withTempAsync("bench-pin-", async (dir) => {
 		const fake = fakeDispatch();
-		await runPhase(7, { go: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
+		await runPhase(4, { go: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
 		const claude = fake.calls.filter((c) => c.model === BENCH_ALT_MODEL);
 		assert.ok(claude.length > 0, "the Claude arms must dispatch as Claude");
 		const m = readManifest(DATE, liveDir(dir));
