@@ -188,3 +188,23 @@ consumes a retry: with n=2 samples sharing one `docs/appmaps/<slug>` filename ex
 the published map, always, so counting the other as lost made every two-sample arm read 1/2 and
 re-dispatch forever. `RETRYABLE_TECHNICAL` now names only the four kinds that mean nothing was
 measured. Verified: `bench phase 1` went from proposing 1 run to proposing 0.
+
+**Coverage-wins broke self-grounding, and the phase-2 gate cannot see it.** `13aaa00` withholds a
+fresh map that is smaller than the committed one. Correct per the rule, and the consequence is
+that a pass no longer grounds on itself: at phase-2 dispatch on 2026-08-03, **5 of 11 arm maps
+were from an earlier pass** — `yarn.cdp.novision` (170 nodes, 08-01, beat today's 158),
+`yarn.ax.novision` (234), `yarn.ax.noaxdom.novision` (230), `yarn.ax.vision` (89) and
+`web-app.notion.com.cdp` (471, 07-31).
+
+This collides with `hasCollectedExplores`, whose own comment justifies the gate by asserting
+"pass B's task runs must consume pass B's maps, and pass A's collected explores prove nothing
+about what is on disk once pass B's explores overwrite them". That reasoning assumed pass B's
+explores ALWAYS overwrite. They no longer do, so the gate passes while the maps belong to the
+previous pass — satisfied check, false premise.
+
+Neither rule is wrong alone; they are two definitions of correct that cannot both hold. "The map
+only ever improves" and "a pass grounds on itself" conflict, and the phase-2 comparison is built
+on the second. Three ways out, in ascending cost: report grounded arms as reading the best map to
+date rather than this pass's; hand-publish each fresh map from `out/bench/archive/<runKey>/`
+before phase 2; or scope coverage-wins to contemporaneous maps (prefer larger within a pass,
+newer otherwise) — the option raised and declined when the rule was requested.
