@@ -4,6 +4,7 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
 import { compileProcedure, readProcedure, procedureFileFor } from "../../core/procedure.js";
+import { TargetError, webTarget } from "../../core/target.js";
 import { LIVE_DIR, RUN_FILES, archiveRun, dataRoot, proceduresDir, runFile, runRel } from "../../paths.js";
 import { EXIT_REFUSED as CTL_REFUSED, EXIT_UNREACHABLE as CTL_UNREACHABLE } from "../runner/ctl.js";
 import type { JobArtifacts, JobKind, JobRecord } from "../runner/jobs.js";
@@ -876,7 +877,9 @@ function toHost(host: HostEntry | string, inv?: Inventory): HostEntry {
 }
 
 const USAGE = `usage: dispatch <host|auto> "<task>" "<App>" [--backend ax|cdp] [--record] [--no-vision] [--no-ax] [--axdom-off] [--no-grounding] [--use-curated] [--use-recipes [--recipe-lineage grounded|ungrounded]] [--model <id>] [--no-cleanup] [--steps N] [--stall-steps N] [--snap-px N]
+       dispatch <host|auto> "<task>" --url <https://site>
        dispatch <host|auto> explore "<App>"
+       dispatch <host|auto> explore --url <https://site>
        dispatch <host|auto> replay <procedure-file-or-stamp> [--no-rescue]
        dispatch <host> follow <jobId> [--from <byte>]
        dispatch <host> pull <jobId>
@@ -927,6 +930,48 @@ function resolveReplayArg(arg: string): { app: string; procedure: string } {
 }
 
 /**
+ * The web target, off the CLI's own argv.
+ *
+ * `DispatchOptions.url` was declared, `dispatch()` put it on the wire and the runner read it
+ * (`serve.ts` builds `--url` onto the child argv) — and this CLI never parsed it, so the only
+ * way to dispatch a web run was the bench arms' programmatic path. An operator typing the URL
+ * where the app label goes got it treated as a bundle name: three notion runs on 2026-08-03
+ * died with `no "https://app.notion.com.app" in /Applications`, and a fourth with `--url needs
+ * a URL` because the flag itself landed in the app slot.
+ *
+ * The same shape as `--backend` (19550e6) and `useProcedures` (61fe8a2): every layer agrees the
+ * field exists, one link never touches it, nothing errors, and the run is quietly wrong. The
+ * regression test walks the CLI's parse rather than the wire, because the wire was always fine.
+ *
+ * `app` stays the DISPLAY LABEL and defaults to the URL, which is what the notion arms already
+ * put on it — the appmap slugger recognises a target by being a URL, so a bare host would slug
+ * to a name no map is written under and the run would ground on nothing.
+ */
+export function parseUrlArg(argv: string[]): { url?: string } | { error: string } {
+	const i = argv.indexOf("--url");
+	if (i < 0) return {};
+
+	const raw = argv[i + 1];
+	if (!raw || raw.startsWith("--")) return { error: "--url needs a URL, e.g. --url https://app.notion.com" };
+	try {
+		return { url: webTarget(raw).kind === "web" ? new URL(raw).toString() : raw };
+	} catch (e) {
+		return { error: e instanceof TargetError ? e.message : `not a valid URL: ${JSON.stringify(raw)}` };
+	}
+}
+
+/**
+ * A URL in the app slot is refused rather than passed through. Left alone it reaches
+ * `appExecutable()`, which appends `.app` and reports a missing bundle — an error that names
+ * /Applications and sends the reader to `install`, for what is a typo in the invocation.
+ */
+export function appSlotError(app: string | undefined, url: string | undefined): string | undefined {
+	if (url || !app || !/^https?:\/\//i.test(app)) return undefined;
+
+	return `"${app}" is a URL, not an installed app — dispatch a web target as: --url ${app}`;
+}
+
+/**
  * The operator loop, end to end. Ctrl-C detaches rather than stopping the run — a grounding
  * pass costs 40 minutes and the whole point of dispatching it is that this process is not
  * load-bearing. The job id it prints is the resume handle.
@@ -942,9 +987,33 @@ async function main(argv: string[]): Promise<number> {
 	if (argv[1] === "follow") return attach(host, argv[2], Number(argv[argv.indexOf("--from") + 1]) || 0);
 	if (argv[1] === "pull") return report(await pull(host, argv[2]));
 
+	const parsedUrl = parseUrlArg(argv);
+	if ("error" in parsedUrl) {
+		console.error(parsedUrl.error);
+
+		return 2;
+	}
+	const { url } = parsedUrl;
+	// The positional app label, with `--url`'s own two tokens excluded: `explore --url <URL>`
+	// otherwise reads "--url" as the app name, which is the fourth of the four failures above.
+	const positionalApp = argv[2] && !argv[2].startsWith("--") ? argv[2] : undefined;
+	const slotError = appSlotError(positionalApp, url);
+	if (slotError) {
+		console.error(slotError);
+
+		return 2;
+	}
+
 	let opts: DispatchOptions;
-	if (argv[1] === "explore") opts = { host, kind: "explore", app: argv[2] ?? "" };
-	else if (argv[1] === "replay") {
+	if (argv[1] === "explore") {
+		const app = positionalApp ?? url ?? "";
+		if (!app) {
+			console.error(USAGE);
+
+			return 2;
+		}
+		opts = { host, kind: "explore", app, ...(url ? { url } : {}) };
+	} else if (argv[1] === "replay") {
 		if (!argv[2]) {
 			console.error(USAGE);
 
@@ -960,7 +1029,10 @@ async function main(argv: string[]): Promise<number> {
 			host,
 			kind: "task",
 			task: argv[1],
-			app: argv[2] ?? "Yarn",
+			// A web run's label defaults to its URL — matching what the notion arms set — so the
+			// appmap slugger sees a URL and resolves the map the run is meant to ground on.
+			app: positionalApp ?? url ?? "Yarn",
+			...(url ? { url } : {}),
 			record: argv.includes("--record"),
 			noVision: argv.includes("--no-vision"),
 			/**

@@ -13,6 +13,8 @@ import {
 	stopRemote,
 	type StreamRunner,
 	signinRemedy,
+	parseUrlArg,
+	appSlotError,
 } from "../src/remote/control/dispatch.js";
 import type { SshRunner } from "../src/remote/control/ssh.js";
 import type { HostEntry } from "../src/remote/control/hosts.js";
@@ -903,4 +905,68 @@ test("dispatchCli__ParsesEveryArmFlag__When__AnOperatorSetsOneByHand", () => {
 	// And it must be documented, or an operator cannot discover it.
 	const usage = src.slice(src.indexOf("const USAGE"), src.indexOf("const USAGE") + 400);
 	for (const flag of ["--backend", "--no-ax", "--no-grounding"]) assert.ok(usage.includes(flag), `${flag} missing from usage`);
+});
+
+/**
+ * The web-target gap, from the four notion runs that died on 2026-08-03.
+ *
+ * `DispatchOptions.url` was declared, dispatch() put it on the wire and the runner built it onto
+ * the child argv — and the CLI never parsed it. These are BEHAVIOURAL rather than a grep over
+ * source, because the previous flag-gap test in this file is a source canary and a canary cannot
+ * see what a parse returns. That distinction is the reason both snap defects and the runner's
+ * dropped fields shipped behind green suites.
+ */
+test("parseUrlArg__ReturnsTheUrl__When__AnOperatorDispatchesAWebTarget", () => {
+	const parsed = parseUrlArg(["mac3", "explore", "--url", "https://app.notion.com"]);
+
+	assert.deepEqual(parsed, { url: "https://app.notion.com/" });
+});
+
+test("parseUrlArg__ReturnsNothing__When__NoUrlIsAsked", () => {
+	assert.deepEqual(parseUrlArg(["mac3", "explore", "Yarn"]), {});
+});
+
+test("parseUrlArg__Refuses__When__TheFlagHasNoValue", () => {
+	// The literal failure of job 2026-08-03T11-18-49-956---url: the flag landed in the app slot
+	// because nothing consumed its pair, so the run was leased under the app name "--url".
+	const parsed = parseUrlArg(["mac3", "explore", "--url"]);
+
+	assert.ok("error" in parsed && /--url needs a URL/.test(parsed.error));
+});
+
+test("parseUrlArg__Refuses__When__TheNextTokenIsAnotherFlag", () => {
+	const parsed = parseUrlArg(["mac3", "explore", "--url", "--no-vision"]);
+
+	assert.ok("error" in parsed && /--url needs a URL/.test(parsed.error));
+});
+
+test("parseUrlArg__Refuses__When__TheUrlHasNoScheme", () => {
+	// A bare host also slugs to a name no appmap is written under, so it would ground on
+	// nothing even if it connected — refusing here is cheaper than an ungrounded run.
+	const parsed = parseUrlArg(["mac3", "explore", "--url", "app.notion.com"]);
+
+	assert.ok("error" in parsed && /not a valid URL|include the scheme/.test(parsed.error));
+});
+
+test("appSlotError__NamesTheFlag__When__AUrlIsPassedAsTheAppLabel", () => {
+	// Jobs 11-19-39-568 and 11-19-47-650: without this the URL reaches appExecutable(), which
+	// appends .app and reports a missing bundle — an error that blames /Applications for a typo.
+	const err = appSlotError("https://app.notion.com", undefined);
+
+	assert.match(String(err), /is a URL, not an installed app/);
+	assert.match(String(err), /--url https:\/\/app\.notion\.com/);
+});
+
+test("appSlotError__SaysNothing__When__TheUrlCameThroughTheFlag", () => {
+	assert.equal(appSlotError("https://app.notion.com", "https://app.notion.com"), undefined);
+});
+
+test("appSlotError__SaysNothing__When__TheAppIsAnOrdinaryBundleName", () => {
+	assert.equal(appSlotError("Yarn", undefined), undefined);
+});
+
+test("dispatchCli__DocumentsTheWebTargetForm__When__AnOperatorReadsUsage", () => {
+	const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "remote", "control", "dispatch.ts"), "utf8");
+	const usage = src.slice(src.indexOf("const USAGE"), src.indexOf("const USAGE") + 700);
+	assert.ok(usage.includes("--url"), "the web-target form must be discoverable from usage");
 });
