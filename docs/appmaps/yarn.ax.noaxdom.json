@@ -1,15 +1,15 @@
 {
   "app": "Yarn",
-  "capturedAt": "2026-08-01T14:05:22.865Z",
+  "capturedAt": "2026-08-03T13:18:19.892Z",
   "provenance": "explore",
-  "proseSha256": "3f4a86260c64",
-  "elapsed": "27m",
+  "proseSha256": "955de2f47c07",
+  "elapsed": "41m",
   "coverage": {
-    "seen": 483,
-    "actuated": 86,
-    "dismissed": 227,
-    "surfaces": 39,
-    "chapters": 13,
+    "seen": 450,
+    "actuated": 102,
+    "dismissed": 175,
+    "surfaces": 31,
+    "chapters": 14,
     "stopped": "frontier-empty",
     "dismissals": [
       "content",
@@ -17,20 +17,40 @@
       "destroys-user-data"
     ],
     "gatedRead": 0,
-    "gatedRefused": 1
+    "gatedRefused": 2
   },
   "home": {
     "surface": "library",
     "control": "Library",
-    "description": "Left-rail Library overview showing collections and drafts for the current workspace."
+    "description": "Persistent left-rail Library overview with search, view/sort controls, collections, New Draft, and New Collection."
   },
   "nodes": [
     {
       "id": "library",
       "title": "Library",
       "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "library/search",
+      "title": "Search",
+      "kind": "control",
       "scope": "workspace",
-      "notes": "Ordinary landing view; overview of collections and drafts."
+      "settingKey": "library-search"
+    },
+    {
+      "id": "library/view-grid",
+      "title": "Grid",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "library-view"
+    },
+    {
+      "id": "library/view-list",
+      "title": "List",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "library-view"
     },
     {
       "id": "library/new-draft",
@@ -45,24 +65,6 @@
       "kind": "control",
       "scope": "workspace",
       "settingKey": "create-collection"
-    },
-    {
-      "id": "library/view-mode",
-      "title": "Grid / List",
-      "kind": "control",
-      "scope": "app",
-      "settingKey": "library-view-mode",
-      "options": [
-        "Grid",
-        "List"
-      ]
-    },
-    {
-      "id": "library/search",
-      "title": "Search",
-      "kind": "control",
-      "scope": "workspace",
-      "settingKey": "library-search"
     },
     {
       "id": "settings",
@@ -98,7 +100,7 @@
       "title": "Agent model",
       "kind": "control",
       "scope": "app",
-      "settingKey": "default-agent-model",
+      "settingKey": "agent-model",
       "options": [
         "Opus 5",
         "Fable 5",
@@ -111,7 +113,7 @@
       "title": "Agent effort",
       "kind": "control",
       "scope": "app",
-      "settingKey": "default-agent-effort",
+      "settingKey": "agent-effort",
       "options": [
         "Low",
         "Medium",
@@ -121,344 +123,18 @@
       ]
     },
     {
-      "id": "settings/workspace",
-      "title": "Workspace settings",
-      "kind": "surface",
-      "scope": "workspace"
-    },
-    {
       "id": "settings/workspace-name",
       "title": "Workspace name",
       "kind": "control",
       "scope": "workspace",
-      "settingKey": "workspace-name",
-      "notes": "Up to 65 characters."
-    },
-    {
-      "id": "settings/workspace-icon",
-      "title": "Workspace icon",
-      "kind": "control",
-      "scope": "workspace",
-      "settingKey": "workspace-icon"
+      "settingKey": "workspace-name"
     },
     {
       "id": "settings/custom-window-sizes",
       "title": "Custom window sizes",
       "kind": "control",
       "scope": "workspace",
-      "settingKey": "custom-window-sizes",
-      "notes": "Rows have a label and WxH value; Add Size appends a row; Remove deletes a row."
-    },
-    {
-      "id": "settings/integrations",
-      "title": "Integrations",
-      "kind": "surface",
-      "scope": "workspace"
-    },
-    {
-      "id": "settings/team-members",
-      "title": "Team Members",
-      "kind": "surface",
-      "scope": "workspace"
-    },
-    {
-      "id": "settings/screen-studio-import",
-      "title": "Screen Studio Import",
-      "kind": "control",
-      "scope": "workspace",
-      "settingKey": "screen-studio-import",
-      "notes": "Opens standard macOS Open chooser."
-    },
-    {
-      "id": "system/open-file",
-      "title": "Open file chooser",
-      "kind": "surface",
-      "scope": "unknown"
-    },
-    {
-      "id": "workspace-menu",
-      "title": "Workspaces",
-      "kind": "surface",
-      "scope": "app"
-    },
-    {
-      "id": "workspace-menu/new-workspace",
-      "title": "New workspace",
-      "kind": "control",
-      "scope": "app",
-      "settingKey": "workspace-create"
-    },
-    {
-      "id": "workspace-menu/create-workspace",
-      "title": "Create Workspace dialog",
-      "kind": "surface",
-      "scope": "workspace",
-      "notes": "Enter Workspace name; Create Workspace is disabled until nonempty. Creation switches to the new workspace Library."
-    },
-    {
-      "id": "workspace/scratch-map-m11/library",
-      "title": "Scratch Workspace Map M11 Library",
-      "kind": "surface",
-      "scope": "workspace",
-      "notes": "Scratch created for exploration; report for cleanup. Empty workspace says “No AG projects yet.”"
-    },
-    {
-      "id": "draft-editor",
-      "title": "Draft editor",
-      "kind": "surface",
-      "scope": "document",
-      "notes": "Three-column editor: script/agent at left of content, preview canvas, timeline below. Scratch “Scratch Draft Map M11” created in scratch workspace."
-    },
-    {
-      "id": "draft-editor/title",
-      "title": "Draft title",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "draft-title"
-    },
-    {
-      "id": "draft-editor/agent-script",
-      "title": "Agent / Script tabs",
-      "kind": "control",
-      "scope": "document",
-      "options": [
-        "Agent",
-        "Script"
-      ]
-    },
-    {
-      "id": "draft-editor/script",
-      "title": "Script editor",
-      "kind": "control",
-      "scope": "document",
-      "notes": "Placeholder “Type script or # for new scene”."
-    },
-    {
-      "id": "draft-editor/agent-composer",
-      "title": "Agent composer",
-      "kind": "control",
-      "scope": "document",
-      "notes": "Placeholder “Ask, edit, or make something...” with Composer actions, effort, Send."
-    },
-    {
-      "id": "draft-editor/voice",
-      "title": "Select voice",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "draft-voice"
-    },
-    {
-      "id": "draft-editor/project-actions",
-      "title": "Project actions",
-      "kind": "control",
-      "scope": "document"
-    },
-    {
-      "id": "draft-editor/paint",
-      "title": "Open paint picker",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "canvas-background"
-    },
-    {
-      "id": "draft-editor/music",
-      "title": "Add Music",
-      "kind": "control",
-      "scope": "document"
-    },
-    {
-      "id": "draft-editor/timeline-library",
-      "title": "Timeline Library",
-      "kind": "control",
-      "scope": "document"
-    },
-    {
-      "id": "draft-editor/timeline-zoom",
-      "title": "Timeline Zoom",
-      "kind": "control",
-      "scope": "document"
-    },
-    {
-      "id": "draft-editor/add-scene",
-      "title": "Add scene",
-      "kind": "control",
-      "scope": "document"
-    },
-    {
-      "id": "draft-editor/project-actions-menu",
-      "title": "Project actions menu",
-      "kind": "surface",
-      "scope": "document"
-    },
-    {
-      "id": "draft-editor/aspect-ratio",
-      "title": "Aspect ratio",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "aspect-ratio",
-      "options": [
-        "Widescreen (16:9)",
-        "Laptop (16:10)",
-        "Square (1:1)",
-        "Vertical (9:16)"
-      ]
-    },
-    {
-      "id": "draft-editor/performance-mode",
-      "title": "Performance Mode",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "performance-mode",
-      "options": [
-        "Efficiency",
-        "Default",
-        "Ultra"
-      ]
-    },
-    {
-      "id": "draft-editor/brand",
-      "title": "Brand",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "draft-brand"
-    },
-    {
-      "id": "draft-editor/screen-clip-settings",
-      "title": "Screen Clip Settings…",
-      "kind": "control",
-      "scope": "document"
-    },
-    {
-      "id": "draft-editor/version-history",
-      "title": "Show Version History…",
-      "kind": "control",
-      "scope": "document"
-    },
-    {
-      "id": "draft-editor/make-copy",
-      "title": "Make a copy",
-      "kind": "control",
-      "scope": "document"
-    },
-    {
-      "id": "draft-editor/download-srt",
-      "title": "Download SRT…",
-      "kind": "control",
-      "scope": "document"
-    },
-    {
-      "id": "draft-editor/screen-recording-settings",
-      "title": "Screen Recording Settings",
-      "kind": "surface",
-      "scope": "document"
-    },
-    {
-      "id": "draft-editor/screen-recording/cursor-auto-hide",
-      "title": "Auto-Hide Cursor",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "screen-cursor-auto-hide",
-      "options": [
-        "Auto Hide",
-        "Off"
-      ]
-    },
-    {
-      "id": "draft-editor/screen-recording/text-cursor",
-      "title": "Text Cursor",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "screen-text-cursor",
-      "options": [
-        "Hide",
-        "Show"
-      ]
-    },
-    {
-      "id": "draft-editor/screen-recording/cursor-style",
-      "title": "Cursor Style",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "screen-cursor-style",
-      "options": [
-        "Arrow-first",
-        "Pointer-first",
-        "Original"
-      ]
-    },
-    {
-      "id": "draft-editor/screen-recording/cursor-scale",
-      "title": "Cursor Scale",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "screen-cursor-scale"
-    },
-    {
-      "id": "draft-editor/screen-recording/window-padding",
-      "title": "Screen Window Padding",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "screen-window-padding"
-    },
-    {
-      "id": "draft-editor/screen-recording/shadow",
-      "title": "Screen shadow",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "screen-shadow",
-      "notes": "Opacity, blur, spread, X offset, Y offset."
-    },
-    {
-      "id": "draft-editor/screen-recording/cursor-clicks",
-      "title": "Cursor Clicks",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "screen-cursor-clicks"
-    },
-    {
-      "id": "draft-editor/screen-recording/keyboard-presses",
-      "title": "Keyboard Presses",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "screen-keyboard-presses"
-    },
-    {
-      "id": "draft-editor/screen-recording/entrance-exit",
-      "title": "Entrance/Exit Animation",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "screen-entrance-exit-animation"
-    },
-    {
-      "id": "draft-editor/screen-recording/motion-blur",
-      "title": "Motion Blur",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "screen-motion-blur",
-      "options": [
-        "Off",
-        "Low",
-        "Medium",
-        "High"
-      ]
-    },
-    {
-      "id": "draft-editor/screen-recording/default-zoom-type",
-      "title": "Default Zoom Type",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "screen-default-zoom-type",
-      "options": [
-        "Glide",
-        "Fixed"
-      ]
-    },
-    {
-      "id": "draft-editor/screen-recording/default-zoom-level",
-      "title": "Default Zoom Level",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "screen-default-zoom-level"
+      "settingKey": "screen-recording-window-sizes"
     },
     {
       "id": "brand-kit",
@@ -467,86 +143,107 @@
       "scope": "brand"
     },
     {
+      "id": "brand-kit/overview",
+      "title": "Brand Overview",
+      "kind": "surface",
+      "scope": "brand"
+    },
+    {
+      "id": "brand-kit/overview-notes",
+      "title": "Overview notes",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "brand-overview-notes"
+    },
+    {
+      "id": "brand-kit/brand-options",
+      "title": "Brand options",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "brand-options"
+    },
+    {
       "id": "brand-kit/templates",
       "title": "Templates",
       "kind": "surface",
       "scope": "brand"
     },
     {
-      "id": "brand-kit/templates/new-template",
-      "title": "New Template",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "create-template"
-    },
-    {
       "id": "template-editor",
-      "title": "Template Editor",
+      "title": "Template editor",
       "kind": "surface",
       "scope": "brand"
     },
     {
-      "id": "template-editor/title",
-      "title": "Template title",
+      "id": "template-editor/duration",
+      "title": "Duration",
       "kind": "control",
       "scope": "brand",
-      "settingKey": "template-title"
+      "settingKey": "template-duration"
     },
     {
-      "id": "template-editor/agent-layers",
-      "title": "Agent / Layers",
+      "id": "template-editor/opacity",
+      "title": "Opacity",
       "kind": "control",
       "scope": "brand",
-      "settingKey": "template-editor-left-panel"
+      "settingKey": "template-opacity"
     },
     {
-      "id": "template-editor/insert",
-      "title": "Group / Text / Media / Shape / Comment",
+      "id": "template-editor/layout",
+      "title": "Layout",
       "kind": "control",
       "scope": "brand",
-      "settingKey": "template-insert"
+      "settingKey": "template-layout"
     },
     {
-      "id": "template-editor/inspector",
-      "title": "Template inspector",
+      "id": "template-editor/webcam-preview",
+      "title": "Webcam Preview",
       "kind": "control",
       "scope": "brand",
-      "settingKey": "template-properties"
+      "settingKey": "webcam-preview",
+      "options": [
+        "None"
+      ]
+    },
+    {
+      "id": "template-editor/project-bg-preview",
+      "title": "Project BG Preview",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "project-bg-preview-color"
     },
     {
       "id": "brand-kit/workflows",
       "title": "Workflows",
       "kind": "surface",
-      "scope": "brand",
-      "notes": "Lists brand workflows and provides New Workflow, Save Changes, Cancel."
+      "scope": "brand"
     },
     {
-      "id": "brand-kit/workflows/new-workflow",
-      "title": "New Workflow",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "brand-workflows",
-      "notes": "Opens required Name/Description/Prompt modal; Done creates workflow."
-    },
-    {
-      "id": "brand-kit/workflows/workflow-editor-modal",
-      "title": "New Workflow",
+      "id": "workflow-editor",
+      "title": "Edit Workflow",
       "kind": "surface",
       "scope": "brand"
     },
     {
-      "id": "brand-kit/workflows/save",
-      "title": "Save Changes",
+      "id": "workflow-editor/name",
+      "title": "Name",
       "kind": "control",
       "scope": "brand",
-      "settingKey": "brand-workflows"
+      "settingKey": "workflow-name"
     },
     {
-      "id": "brand-kit/workflows/edit-workflow",
-      "title": "Edit Workflow",
-      "kind": "surface",
+      "id": "workflow-editor/description",
+      "title": "Description",
+      "kind": "control",
       "scope": "brand",
-      "notes": "Name, Description, Prompt; Delete/Cancel/Done."
+      "settingKey": "workflow-description"
+    },
+    {
+      "id": "workflow-editor/instructions",
+      "title": "Workflow instructions",
+      "kind": "control",
+      "scope": "brand",
+      "settingKey": "workflow-instructions"
     },
     {
       "id": "brand-kit/colors",
@@ -555,41 +252,25 @@
       "scope": "brand"
     },
     {
-      "id": "brand-kit/colors/background",
-      "title": "Background colors",
+      "id": "brand-kit/colors/background-palette",
+      "title": "Background palette",
       "kind": "control",
       "scope": "brand",
-      "settingKey": "brand-background-colors",
-      "notes": "Palette swatches; add background; paint types Solid/Linear/Radial/Multi/Image/Shader."
+      "settingKey": "brand-background-colors"
     },
     {
-      "id": "brand-kit/colors/text",
-      "title": "Text Colors",
+      "id": "brand-kit/colors/text-palette",
+      "title": "Text Colors palette",
       "kind": "control",
       "scope": "brand",
-      "settingKey": "brand-text-colors",
-      "notes": "Palette swatches and Add Text Color."
+      "settingKey": "brand-text-colors"
     },
     {
       "id": "brand-kit/colors/notes",
-      "title": "Color Notes",
+      "title": "Color notes",
       "kind": "control",
       "scope": "brand",
       "settingKey": "brand-color-notes"
-    },
-    {
-      "id": "brand-kit/colors/paint-picker",
-      "title": "Paint picker",
-      "kind": "surface",
-      "scope": "brand",
-      "options": [
-        "Solid",
-        "Linear",
-        "Radial",
-        "Multi",
-        "Image",
-        "Shader"
-      ]
     },
     {
       "id": "brand-kit/type",
@@ -612,10 +293,11 @@
       "settingKey": "secondary-font"
     },
     {
-      "id": "brand-kit/type/new-text-style",
-      "title": "New Text Style",
+      "id": "brand-kit/type/text-styles",
+      "title": "Text Styles",
       "kind": "control",
-      "scope": "brand"
+      "scope": "brand",
+      "settingKey": "text-styles"
     },
     {
       "id": "brand-kit/type/font-usage-notes",
@@ -625,51 +307,49 @@
       "settingKey": "font-usage-notes"
     },
     {
-      "id": "brand-kit/type/text-style-modal",
-      "title": "New/Edit Text Style",
+      "id": "text-style-editor",
+      "title": "Edit Text Style",
       "kind": "surface",
       "scope": "brand"
     },
     {
-      "id": "brand-kit/type/text-style-font-family",
-      "title": "Font Family",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "text-style-font-family"
-    },
-    {
-      "id": "brand-kit/type/text-style-font-weight",
+      "id": "text-style-editor/font-weight",
       "title": "Font Weight",
       "kind": "control",
       "scope": "brand",
-      "settingKey": "text-style-font-weight"
+      "settingKey": "text-style-font-weight",
+      "options": [
+        "Thin",
+        "Extra Light",
+        "Light",
+        "Regular",
+        "Medium",
+        "Semi Bold",
+        "Bold",
+        "Extra Bold",
+        "Black"
+      ]
     },
     {
-      "id": "brand-kit/type/text-style-font-size",
+      "id": "text-style-editor/font-size",
       "title": "Font Size",
       "kind": "control",
       "scope": "brand",
       "settingKey": "text-style-font-size"
     },
     {
-      "id": "brand-kit/type/text-style-line-height",
+      "id": "text-style-editor/line-height",
       "title": "Line Height",
       "kind": "control",
       "scope": "brand",
       "settingKey": "text-style-line-height"
     },
     {
-      "id": "brand-kit/type/text-style-letter-spacing",
+      "id": "text-style-editor/letter-spacing",
       "title": "Letter Spacing",
       "kind": "control",
       "scope": "brand",
       "settingKey": "text-style-letter-spacing"
-    },
-    {
-      "id": "brand-kit/type/save",
-      "title": "Save Changes",
-      "kind": "control",
-      "scope": "brand"
     },
     {
       "id": "brand-kit/screen-clips",
@@ -678,11 +358,11 @@
       "scope": "brand"
     },
     {
-      "id": "brand-kit/screen-clips/cursor-auto-hide",
+      "id": "brand-kit/screen-clips/auto-hide-cursor",
       "title": "Auto-Hide Cursor",
       "kind": "control",
       "scope": "brand",
-      "settingKey": "cursor-auto-hide",
+      "settingKey": "auto-hide-cursor",
       "options": [
         "Auto Hide",
         "Off"
@@ -719,32 +399,18 @@
       "settingKey": "cursor-scale"
     },
     {
-      "id": "brand-kit/screen-clips/window-padding",
-      "title": "Screen Window Padding",
+      "id": "brand-kit/screen-clips/screen-display",
+      "title": "Screen Display",
       "kind": "control",
       "scope": "brand",
-      "settingKey": "window-padding"
+      "settingKey": "screen-display"
     },
     {
-      "id": "brand-kit/screen-clips/shadow",
-      "title": "Shadow Settings",
+      "id": "brand-kit/screen-clips/sound-effects",
+      "title": "Sound Effects",
       "kind": "control",
       "scope": "brand",
-      "settingKey": "screen-shadow"
-    },
-    {
-      "id": "brand-kit/screen-clips/cursor-clicks",
-      "title": "Cursor Clicks",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "cursor-clicks"
-    },
-    {
-      "id": "brand-kit/screen-clips/keyboard-presses",
-      "title": "Keyboard Presses",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "keyboard-presses"
+      "settingKey": "sound-effects"
     },
     {
       "id": "brand-kit/screen-clips/entrance-exit",
@@ -821,189 +487,319 @@
       "title": "Misc notes",
       "kind": "control",
       "scope": "brand",
-      "settingKey": "misc-brand-context"
+      "settingKey": "misc-context"
     },
     {
-      "id": "brand-kit/brand-options",
-      "title": "Brand options",
+      "id": "routines",
+      "title": "Routines",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "List of automation routines; New Routine at upper right."
+    },
+    {
+      "id": "routine-editor",
+      "title": "Routine creator/detail",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Full page for create and post-save editing; shows API endpoint/request example."
+    },
+    {
+      "id": "routine-editor/name",
+      "title": "Routine name",
       "kind": "control",
-      "scope": "brand",
-      "settingKey": "brand-management",
+      "scope": "workspace",
+      "settingKey": "routine-name"
+    },
+    {
+      "id": "routine-editor/start-project",
+      "title": "Start from a project",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "routine-start-project",
       "options": [
-        "Rename Brand",
-        "Duplicate Brand",
-        "New Brand",
-        "Archive Brand"
+        "Off",
+        "On"
+      ]
+    },
+    {
+      "id": "routine-editor/delivery",
+      "title": "Delivery options",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "routine-delivery",
+      "options": [
+        "Watch page",
+        "MP4 file",
+        "Draft project"
       ],
-      "notes": "Popup in Brand Kit header."
+      "notes": "Watch page is enabled by default; MP4 delivery requires callbackUrl."
     },
     {
-      "id": "brand-kit/new-brand",
-      "title": "New Brand",
+      "id": "routine-editor/instructions",
+      "title": "Agent instructions",
       "kind": "control",
       "scope": "workspace",
-      "settingKey": "create-brand",
-      "notes": "Immediately creates Untitled Brand and opens its Brand Overview."
+      "settingKey": "routine-agent-instructions"
     },
     {
-      "id": "brand-kit/rename-brand",
-      "title": "Rename Brand",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "brand-name",
-      "notes": "Opens inline heading field; commit with Done."
-    },
-    {
-      "id": "brand-kit/make-default",
-      "title": "Make Default",
+      "id": "routine-editor/api",
+      "title": "Run endpoint and request body",
       "kind": "control",
       "scope": "workspace",
-      "settingKey": "default-brand",
-      "notes": "Non-default brands only; applies immediately, no confirmation."
+      "settingKey": "routine-api",
+      "notes": "POST endpoint; variables payload; HTTP 202 means queued, not complete."
     },
     {
-      "id": "brand-kits-popup",
-      "title": "Brand Kits popup",
-      "kind": "surface",
-      "scope": "workspace",
-      "notes": "Lists brand kits and marks the primary brand."
-    },
-    {
-      "id": "brand-kit/duplicate-brand",
-      "title": "Duplicate Brand",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "duplicate-brand",
-      "notes": "Immediately creates and opens a new brand named '<original> Copy'; no modal."
-    },
-    {
-      "id": "brand-kit/overview",
-      "title": "Brand Overview",
-      "kind": "surface",
-      "scope": "brand"
-    },
-    {
-      "id": "brand-kit/overview/notes",
-      "title": "Overview notes",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "brand-overview-notes",
-      "notes": "Editing stages changes; click Save Changes to commit or Cancel."
-    },
-    {
-      "id": "brand-kit/overview/save",
-      "title": "Save Changes",
-      "kind": "control",
-      "scope": "brand",
-      "settingKey": "brand-overview-save"
-    },
-    {
-      "id": "library/new-collection-modal",
-      "title": "New Collection",
+      "id": "your-drafts",
+      "title": "Your Drafts",
       "kind": "surface",
       "scope": "workspace"
     },
     {
-      "id": "library/new-collection/name",
-      "title": "Collection name",
+      "id": "your-drafts/search",
+      "title": "Search",
       "kind": "control",
       "scope": "workspace",
-      "settingKey": "collection-name"
+      "settingKey": "draft-search"
     },
     {
-      "id": "library/new-collection/color",
-      "title": "Color",
+      "id": "your-drafts/view",
+      "title": "Grid/List",
       "kind": "control",
       "scope": "workspace",
-      "settingKey": "collection-color",
-      "notes": "Eight unlabeled preset swatches."
+      "settingKey": "draft-view"
     },
     {
-      "id": "collection",
-      "title": "Collection",
+      "id": "your-drafts/sort",
+      "title": "Sort",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "draft-sort"
+    },
+    {
+      "id": "your-drafts/new-draft",
+      "title": "New Draft",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "create-draft"
+    },
+    {
+      "id": "persona-onboarding",
+      "title": "Create Your Persona",
       "kind": "surface",
       "scope": "workspace"
     },
     {
-      "id": "collection/new-in-collection",
-      "title": "New in Collection",
+      "id": "persona-onboarding/file",
+      "title": "Select an audio or video file",
       "kind": "control",
-      "scope": "workspace"
+      "scope": "workspace",
+      "settingKey": "persona-samples"
     },
     {
-      "id": "collection/actions",
-      "title": "Collection actions",
+      "id": "persona-onboarding/noise-removal",
+      "title": "Remove background noise",
       "kind": "control",
-      "scope": "workspace"
+      "scope": "workspace",
+      "settingKey": "persona-noise-removal"
     },
     {
-      "id": "draft-editor/voice-picker",
-      "title": "Voice picker",
+      "id": "persona-onboarding/skip",
+      "title": "Skip",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "skip-persona"
+    },
+    {
+      "id": "draft-editor",
+      "title": "Draft Editor",
       "kind": "surface",
       "scope": "document"
     },
     {
-      "id": "draft-editor/voice-category",
-      "title": "Voice category",
+      "id": "draft-editor/title",
+      "title": "Draft title",
       "kind": "control",
       "scope": "document",
-      "settingKey": "voice-category",
-      "options": [
-        "English",
-        "World",
-        "Creative"
-      ]
+      "settingKey": "draft-title"
     },
     {
-      "id": "draft-editor/voice-speed",
-      "title": "Voice speed",
+      "id": "draft-editor/script",
+      "title": "Type script",
       "kind": "control",
       "scope": "document",
-      "settingKey": "voice-speed",
-      "options": [
-        "Slowest",
-        "Slow",
-        "Default",
-        "Fast",
-        "Faster"
-      ]
+      "settingKey": "draft-script"
     },
     {
-      "id": "draft-editor/media-gen",
+      "id": "draft-editor/voice",
+      "title": "Voice",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "draft-voice"
+    },
+    {
+      "id": "draft-editor/brand",
+      "title": "Brand",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "draft-brand"
+    },
+    {
+      "id": "draft-editor/composer",
+      "title": "Agent composer",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "agent-composer"
+    },
+    {
+      "id": "draft-editor/effort",
+      "title": "Effort",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "agent-effort"
+    },
+    {
+      "id": "draft-editor/captions",
+      "title": "Captions",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "captions-enabled",
+      "options": [
+        "On",
+        "Off"
+      ],
+      "notes": "Immediate toggle; labels are Turn on Captions / Turn off Captions."
+    },
+    {
+      "id": "draft-editor/library",
+      "title": "Library",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "insert-library"
+    },
+    {
+      "id": "draft-editor/add-music",
+      "title": "Add Music",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "music"
+    },
+    {
+      "id": "draft-editor/export",
+      "title": "Export",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "export"
+    },
+    {
+      "id": "persona-creator",
+      "title": "Create Persona",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Opened from draft editor voice picker > New Persona; requires local audio/video sample."
+    },
+    {
+      "id": "persona-creator/file",
+      "title": "Select an audio or video file",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "persona-sample-file",
+      "notes": "Accepts MP3, WAV, MP4, MOV; at least one minute."
+    },
+    {
+      "id": "persona-creator/noise-removal",
+      "title": "Remove background noise from audio samples",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "persona-noise-removal"
+    },
+    {
+      "id": "draft-editor/composer-actions",
+      "title": "Composer actions",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "draft-composer-mode",
+      "options": [
+        "Add Reference…",
+        "Switch to Media Gen"
+      ],
+      "notes": "In Media Gen mode the switch item becomes a return-to-agent action."
+    },
+    {
+      "id": "draft-editor/media-gen-mode",
       "title": "Media Gen composer",
       "kind": "surface",
-      "scope": "document"
+      "scope": "document",
+      "notes": "Prompt mode with Image, Video and model/credit selector."
     },
     {
-      "id": "draft-editor/media-gen/type",
+      "id": "draft-editor/media-gen-type",
       "title": "Image / Video",
       "kind": "control",
       "scope": "document",
-      "settingKey": "media-gen-type",
+      "settingKey": "media-generation-type",
       "options": [
         "Image",
         "Video"
       ]
     },
     {
-      "id": "draft-editor/media-gen/model",
-      "title": "Media generation model",
+      "id": "draft-editor/media-gen-model",
+      "title": "Multi 21 cr",
       "kind": "control",
       "scope": "document",
-      "settingKey": "media-gen-model",
+      "settingKey": "media-generation-model"
+    },
+    {
+      "id": "draft-editor/media-gen-image-settings",
+      "title": "Generate Image",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Opened by clicking the model/credit summary in Image mode."
+    },
+    {
+      "id": "draft-editor/media-gen-image-models",
+      "title": "Image generation models",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "image-generation-models",
       "options": [
-        "Gemini"
+        "Gemini",
+        "GPT Image 1.5",
+        "Seedream-4"
+      ],
+      "notes": "Each model has four selectable generation-count dots."
+    },
+    {
+      "id": "draft-editor/media-gen-image-layout",
+      "title": "Preferred Layout",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "image-generation-layout",
+      "options": [
+        "Auto",
+        "Landscape",
+        "Portrait"
       ]
     },
     {
-      "id": "draft-editor/media-gen/video-models",
-      "title": "Generate Video settings",
-      "kind": "surface",
-      "scope": "document"
+      "id": "draft-editor/media-gen-save-default",
+      "title": "Save as default",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "media-generation-defaults",
+      "notes": "Saves current generation configuration as default; scope inferred from label."
     },
     {
-      "id": "draft-editor/media-gen/video-generations",
-      "title": "Video model generation counts",
+      "id": "draft-editor/media-gen-video-settings",
+      "title": "Generate Video",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Opened by clicking model/credit summary in Video mode."
+    },
+    {
+      "id": "draft-editor/media-gen-video-models",
+      "title": "Video generation models",
       "kind": "control",
       "scope": "document",
       "settingKey": "video-generation-models",
@@ -1011,341 +807,685 @@
         "Kling-2.5",
         "Sora-2 Pro",
         "Veo-3.1"
-      ]
+      ],
+      "notes": "Each model has four selectable generation-count dots."
     },
     {
-      "id": "draft-editor/media-gen/video-duration",
+      "id": "draft-editor/media-gen-video-duration",
       "title": "Preferred Duration",
       "kind": "control",
       "scope": "document",
-      "settingKey": "video-generation-duration",
+      "settingKey": "media-gen-video-duration",
       "options": [
         "5 sec",
         "10 sec"
-      ]
+      ],
+      "notes": "Duration affects the displayed credit estimate; observed 10 sec→630 cr and 5 sec→395 cr for current selections."
     },
     {
-      "id": "draft-editor/media-gen/video-layout",
+      "id": "draft-editor/media-gen-video-layout",
       "title": "Preferred Layout",
       "kind": "control",
       "scope": "document",
       "settingKey": "video-generation-layout",
       "options": [
-        "Auto",
-        "Landscape",
-        "Portrait"
+        "Auto"
       ]
     },
     {
-      "id": "draft-editor/media-gen/save-default",
-      "title": "Save as default",
-      "kind": "control",
-      "scope": "workspace",
-      "settingKey": "media-generation-defaults",
-      "notes": "Saves current model counts, duration, and layout as defaults."
-    },
-    {
-      "id": "draft-editor/media-gen/image-models",
-      "title": "Image model selector",
+      "id": "draft-editor/music-uploader",
+      "title": "Background Track Uploader",
       "kind": "surface",
-      "scope": "document"
+      "scope": "document",
+      "notes": "Centered popover; upload MP3/WAV/M4A."
     },
     {
-      "id": "draft-editor/media-gen/image-generations",
-      "title": "Image generation count",
+      "id": "draft-editor/music-uploader/file",
+      "title": "Upload background track",
       "kind": "control",
       "scope": "document",
-      "settingKey": "media-gen-image-generations",
+      "settingKey": "draft-background-music",
+      "notes": "Opens file chooser; accepted MP3, WAV, M4A."
+    },
+    {
+      "id": "draft-editor/comment-composer",
+      "title": "Timeline Comment Composer",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Anchored at current timeline playhead; includes text, emoji/reaction popup, and send."
+    },
+    {
+      "id": "draft-editor/comment-composer/text",
+      "title": "Add a comment",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "draft-comment-text"
+    },
+    {
+      "id": "draft-editor/comment-composer/send",
+      "title": "Send comment",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "draft-comment-send",
+      "notes": "Externally visible to collaborators; do not operate during exploration."
+    },
+    {
+      "id": "draft-editor/comment-composer/emoji-picker",
+      "title": "Emoji Picker",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Searchable categorized emoji grid; selection inserts into pending comment."
+    },
+    {
+      "id": "draft-editor/library-picker",
+      "title": "Add from Library",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Modal asset browser with tabs Everything, Images, Screen Clips, Webcams, Videos, Projects."
+    },
+    {
+      "id": "draft-editor/library-picker/search",
+      "title": "Search Everything",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-search"
+    },
+    {
+      "id": "draft-editor/library-picker/tabs",
+      "title": "Asset Type Tabs",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-filter",
       "options": [
-        "1",
-        "2",
-        "3",
-        "4"
+        "Everything",
+        "Images",
+        "Screen Clips",
+        "Webcams",
+        "Videos",
+        "Projects"
       ]
     },
     {
-      "id": "draft-editor/media-gen/image-layout",
-      "title": "Preferred Layout",
+      "id": "draft-editor/library-picker/upload-video",
+      "title": "Upload Video",
       "kind": "control",
       "scope": "document",
-      "settingKey": "media-gen-image-layout",
-      "options": [
-        "Auto",
-        "Landscape",
-        "Portrait"
-      ]
+      "settingKey": "library-upload-video"
     },
     {
-      "id": "draft-editor/overlay-picker",
-      "title": "Overlay/template picker",
+      "id": "draft-editor/library-picker/upload-camera",
+      "title": "Upload Camera Footage",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "library-upload-camera-footage"
+    },
+    {
+      "id": "draft-editor/insert-menu",
+      "title": "Insert menu",
       "kind": "surface",
       "scope": "document"
     },
     {
-      "id": "draft-editor/overlay-picker/new-blank",
-      "title": "New Blank Overlay",
-      "kind": "control",
-      "scope": "document",
-      "settingKey": "add-overlay"
-    },
-    {
-      "id": "draft-editor/overlay-editor",
-      "title": "Overlay editor",
-      "kind": "surface",
-      "scope": "document"
-    },
-    {
-      "id": "draft-editor/overlay-editor/insert",
+      "id": "draft-editor/insert",
       "title": "Insert",
       "kind": "control",
       "scope": "document",
-      "settingKey": "overlay-insert"
+      "settingKey": "insert-overlay",
+      "options": [
+        "Add Text",
+        "Add Image or Video",
+        "Add Chart",
+        "Add Rectangle",
+        "Browse Overlay Templates",
+        "Open Library",
+        "Record Camera / Screen"
+      ]
     },
     {
-      "id": "draft-editor/media-library",
-      "title": "Media library overlay",
+      "id": "draft-editor/text-overlay-editor",
+      "title": "Text overlay editor",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/text-overlay-style",
+      "title": "Text style",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "text-style",
+      "notes": "Top toolbar dropdown initially Title; likely selects brand text styles for this overlay."
+    },
+    {
+      "id": "draft-editor/text-overlay-alignment",
+      "title": "Text alignment",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "text-alignment"
+    },
+    {
+      "id": "draft-editor/text-overlay-scale",
+      "title": "Text scale",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "text-scale",
+      "notes": "Initially 100%."
+    },
+    {
+      "id": "draft-editor/text-overlay-motion",
+      "title": "Text motion",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "text-motion",
+      "notes": "Initially Fade Up."
+    },
+    {
+      "id": "draft-editor/text-overlay-font-family",
+      "title": "Overlay font family",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "font-family"
+    },
+    {
+      "id": "draft-editor/text-overlay-font-weight",
+      "title": "Overlay font weight",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "font-weight"
+    },
+    {
+      "id": "draft-editor/text-overlay-font-size",
+      "title": "Overlay font size",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "font-size"
+    },
+    {
+      "id": "draft-editor/text-overlay-line-height",
+      "title": "Overlay line height",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "line-height"
+    },
+    {
+      "id": "draft-editor/text-overlay-letter-spacing",
+      "title": "Overlay letter spacing",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "letter-spacing"
+    },
+    {
+      "id": "library/collection-detail",
+      "title": "Collection detail",
       "kind": "surface",
       "scope": "workspace"
     },
     {
-      "id": "draft-editor/media-library/upload",
-      "title": "Upload media",
+      "id": "library/collection-detail/search",
+      "title": "Search",
       "kind": "control",
       "scope": "workspace",
-      "settingKey": "media-library-upload"
+      "settingKey": "collection-search"
     },
     {
-      "id": "your-drafts",
-      "title": "Your Drafts",
+      "id": "library/collection-detail/view",
+      "title": "Grid/List",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "collection-view",
+      "options": [
+        "Grid",
+        "List"
+      ]
+    },
+    {
+      "id": "library/collection-detail/sort",
+      "title": "Sort",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "collection-sort"
+    },
+    {
+      "id": "library/collection-detail/new",
+      "title": "New in Collection",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "new-in-collection"
+    },
+    {
+      "id": "library/collection-detail/options",
+      "title": "Collection options",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "collection-options"
+    },
+    {
+      "id": "library/collection-detail/new-draft-result",
+      "title": "New in Collection → draft editor",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "create-draft-in-collection",
+      "notes": "Immediate creation; new draft opens in standard editor and is pinned in left rail."
+    },
+    {
+      "id": "draft-editor/project-actions",
+      "title": "Project actions",
       "kind": "surface",
-      "scope": "workspace"
+      "scope": "document",
+      "notes": "Menu from ellipsis beside voice selector."
+    },
+    {
+      "id": "draft-editor/screen-clip-settings",
+      "title": "Screen Recording Settings",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Opened from Project actions > Screen Clip Settings…; mirrors brand Screen Clips defaults."
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/auto-hide-cursor",
+      "title": "Auto-Hide Cursor",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "auto-hide-cursor",
+      "options": [
+        "Auto Hide",
+        "Off"
+      ]
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/text-cursor",
+      "title": "Text Cursor",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "text-cursor",
+      "options": [
+        "Hide",
+        "Show"
+      ]
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/cursor-style",
+      "title": "Cursor Style",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "cursor-style",
+      "options": [
+        "Arrow-first",
+        "Pointer-first",
+        "Original"
+      ]
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/cursor-scale",
+      "title": "Cursor Scale",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "cursor-scale"
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/screen-display",
+      "title": "Screen Display",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "screen-display",
+      "notes": "Padding and shadow opacity/blur/spread/X/Y."
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/sound-effects",
+      "title": "Sound Effects",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "sound-effects",
+      "notes": "Cursor Clicks and Keyboard Presses toggles plus sound selectors."
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/entrance-exit",
+      "title": "Entrance/Exit Animation",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "entrance-exit-animation"
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/motion-blur",
+      "title": "Motion Blur",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "motion-blur",
+      "options": [
+        "Off",
+        "Low",
+        "Medium",
+        "High"
+      ]
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/default-zoom-type",
+      "title": "Default Zoom Type",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "default-zoom-type",
+      "options": [
+        "Glide",
+        "Fixed"
+      ]
+    },
+    {
+      "id": "draft-editor/screen-clip-settings/default-zoom-level",
+      "title": "Default Zoom Level",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "default-zoom-level"
+    },
+    {
+      "id": "draft-editor/version-history",
+      "title": "Version History",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Top-right Versions button; automatic version list with revert capability."
+    },
+    {
+      "id": "draft-editor/project-background",
+      "title": "Project Background Paint Picker",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Top-bar swatch; supports solid, linear/radial/multi gradients, image, and shader backgrounds."
+    },
+    {
+      "id": "draft-editor/project-background/type",
+      "title": "Paint type",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "project-background-type",
+      "options": [
+        "Solid",
+        "Linear",
+        "Radial",
+        "Multi",
+        "Image",
+        "Shader"
+      ]
+    },
+    {
+      "id": "draft-editor/project-background/image-upload",
+      "title": "Upload image",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "project-background-image"
+    },
+    {
+      "id": "draft-editor/project-background/shader",
+      "title": "Shader settings",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "project-background-shader",
+      "options": [
+        "Watercolor"
+      ]
+    },
+    {
+      "id": "draft-editor/aspect-ratio",
+      "title": "Project Aspect Ratio",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "project-aspect-ratio",
+      "options": [
+        "Widescreen (16:9)",
+        "Laptop (16:10)",
+        "Square (1:1)",
+        "Vertical (9:16)"
+      ]
+    },
+    {
+      "id": "draft-editor/performance-mode",
+      "title": "Performance Mode",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "performance-mode",
+      "options": [
+        "Efficiency",
+        "Default",
+        "Ultra"
+      ]
+    },
+    {
+      "id": "draft-editor/add-scene",
+      "title": "Add scene",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "scenes"
     }
   ],
   "edges": [
     {
       "from": "root",
       "to": "library",
-      "action": "launch Yarn or click \"Library\" in the left rail"
+      "action": "click \"Library\" in the left rail"
     },
     {
       "from": "library",
       "to": "settings",
-      "action": "click \"Settings\" in the lower-left rail"
-    },
-    {
-      "from": "settings",
-      "to": "settings/workspace",
-      "action": "Click inside modal, then press Page Down."
-    },
-    {
-      "from": "settings/workspace",
-      "to": "settings/integrations",
-      "action": "Continue downward in the same modal."
-    },
-    {
-      "from": "settings/workspace",
-      "to": "settings/team-members",
-      "action": "Page Down farther."
-    },
-    {
-      "from": "settings/integrations",
-      "to": "system/open-file",
-      "action": "Click Import in Screen Studio Import."
+      "action": "click \"Settings\" at bottom of left rail"
     },
     {
       "from": "library",
-      "to": "workspace-menu",
-      "action": "Click the current workspace name at top-left."
-    },
-    {
-      "from": "workspace-menu/new-workspace",
-      "to": "workspace-menu/create-workspace",
-      "action": "click “New workspace”"
-    },
-    {
-      "from": "workspace-menu/create-workspace",
-      "to": "workspace/scratch-map-m11/library",
-      "action": "enter a name and click “Create Workspace”"
-    },
-    {
-      "from": "library/new-draft",
-      "to": "draft-editor",
-      "action": "click “New Draft” or sidebar “New draft”"
-    },
-    {
-      "from": "draft-editor",
-      "to": "draft-editor/project-actions-menu",
-      "action": "click “Project actions”"
-    },
-    {
-      "from": "draft-editor/project-actions-menu",
-      "to": "draft-editor/screen-recording-settings",
-      "action": "click “Screen Clip Settings…”"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/templates",
-      "action": "click “Templates”"
-    },
-    {
-      "from": "brand-kit/templates",
-      "to": "template-editor",
-      "action": "click “New Template”"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/workflows",
-      "action": "click “Workflows”"
-    },
-    {
-      "from": "brand-kit/workflows",
-      "to": "brand-kit/workflows/workflow-editor-modal",
-      "action": "click “New Workflow”"
-    },
-    {
-      "from": "brand-kit/workflows",
-      "to": "brand-kit/workflows/edit-workflow",
-      "action": "click a workflow row"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/colors",
-      "action": "click “Colors”"
-    },
-    {
-      "from": "brand-kit/colors",
-      "to": "brand-kit/colors/paint-picker",
-      "action": "click a palette swatch"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/type",
-      "action": "click Type"
-    },
-    {
-      "from": "brand-kit/type",
-      "to": "brand-kit/type/text-style-modal",
-      "action": "click New Text Style or Edit Style"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/screen-clips",
-      "action": "click Screen Clips"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/motion",
-      "action": "click Motion"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/layout",
-      "action": "click Layout"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/misc",
-      "action": "click Misc"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/new-brand",
-      "action": "open Brand options (…) and click “New Brand”"
-    },
-    {
-      "from": "brand-kit/brand-options",
-      "to": "brand-kit/rename-brand",
-      "action": "click “Rename Brand”"
-    },
-    {
-      "from": "library",
-      "to": "brand-kits-popup",
-      "action": "click bottom-left “Brand Kits”"
-    },
-    {
-      "from": "brand-kits-popup",
       "to": "brand-kit",
-      "action": "click a brand row"
-    },
-    {
-      "from": "brand-kit",
-      "to": "brand-kit/duplicate-brand",
-      "action": "open Brand options and click “Duplicate Brand”"
+      "action": "click \"Brand Kit\" in the left rail"
     },
     {
       "from": "brand-kit",
       "to": "brand-kit/overview",
-      "action": "click “Brand Overview”"
+      "action": "click \"Brand Overview\""
     },
     {
-      "from": "library",
-      "to": "library/new-collection-modal",
-      "action": "click “New Collection”"
+      "from": "brand-kit",
+      "to": "brand-kit/templates",
+      "action": "click \"Templates\""
     },
     {
-      "from": "library/new-collection-modal",
-      "to": "collection",
-      "action": "enter a distinct name, choose an optional color, click “Create Collection”"
+      "from": "brand-kit/templates",
+      "to": "template-editor",
+      "action": "select a template, then click \"Edit Template...\""
     },
     {
-      "from": "collection",
-      "to": "library",
-      "action": "click “Your Library” back button"
+      "from": "brand-kit",
+      "to": "brand-kit/workflows",
+      "action": "click \"Workflows\""
     },
     {
-      "from": "draft-editor/voice",
-      "to": "draft-editor/voice-picker",
-      "action": "click “Select voice”"
+      "from": "brand-kit/workflows",
+      "to": "workflow-editor",
+      "action": "click a workflow card"
     },
     {
-      "from": "draft-editor",
-      "to": "draft-editor/media-gen",
-      "action": "open Composer actions and choose “Switch to Media Gen”"
+      "from": "brand-kit",
+      "to": "brand-kit/colors",
+      "action": "click \"Colors\""
     },
     {
-      "from": "draft-editor/media-gen",
-      "to": "draft-editor/media-gen/video-models",
-      "action": "choose Video, then click the model/credit popup"
+      "from": "brand-kit",
+      "to": "brand-kit/type",
+      "action": "click \"Type\" in Brand Kit secondary sidebar"
     },
     {
-      "from": "draft-editor/media-gen",
-      "to": "draft-editor/media-gen/image-models",
-      "action": "choose Image, then click the current model popup (e.g. Gemini)"
+      "from": "brand-kit/type",
+      "to": "text-style-editor",
+      "action": "click a style's \"Edit Style\" button"
     },
     {
-      "from": "draft-editor",
-      "to": "draft-editor/overlay-picker",
-      "action": "click the unlabeled A-card timeline popup"
+      "from": "brand-kit",
+      "to": "brand-kit/screen-clips",
+      "action": "click \"Screen Clips\" in Brand Kit secondary sidebar"
     },
     {
-      "from": "draft-editor/overlay-picker",
-      "to": "draft-editor/overlay-editor",
-      "action": "click New Blank Overlay"
+      "from": "brand-kit",
+      "to": "brand-kit/motion",
+      "action": "click \"Motion\" in Brand Kit secondary sidebar"
     },
     {
-      "from": "draft-editor",
-      "to": "draft-editor/media-library",
-      "action": "click the unlabeled stacked-image timeline popup"
+      "from": "brand-kit",
+      "to": "brand-kit/layout",
+      "action": "click \"Layout\" in Brand Kit secondary sidebar"
     },
     {
-      "from": "draft-editor/media-library",
-      "to": "system/open-file",
-      "action": "click the bottom-center upload button"
+      "from": "brand-kit",
+      "to": "brand-kit/misc",
+      "action": "click \"Misc\" in Brand Kit secondary sidebar"
     },
     {
-      "from": "library",
+      "from": "root",
+      "to": "routines",
+      "action": "click “Routines” in the persistent left rail"
+    },
+    {
+      "from": "routines",
+      "to": "routine-editor",
+      "action": "click “New Routine” or an existing routine card"
+    },
+    {
+      "from": "root",
       "to": "your-drafts",
-      "action": "click left-rail “Your Drafts”"
+      "action": "click “Your Drafts” in the left rail"
     },
     {
-      "from": "your-drafts",
-      "to": "library",
-      "action": "click left-rail “Library”"
+      "from": "your-drafts/new-draft",
+      "to": "persona-onboarding",
+      "action": "click “New Draft” (shown when persona is not configured)"
+    },
+    {
+      "from": "persona-onboarding",
+      "to": "draft-editor",
+      "action": "click “Skip”"
+    },
+    {
+      "from": "your-drafts/new-draft",
+      "to": "draft-editor",
+      "action": "click “New Draft”; after any persona onboarding"
+    },
+    {
+      "from": "draft-editor/brand",
+      "to": "brand-kit",
+      "action": "open brand popup, click “Edit Brands…”"
+    },
+    {
+      "from": "draft-editor",
+      "to": "persona-creator",
+      "action": "open voice popup, click “New Persona”"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/media-gen-mode",
+      "action": "click Composer actions, then “Switch to Media Gen”"
+    },
+    {
+      "from": "draft-editor/media-gen-mode",
+      "to": "draft-editor/media-gen-image-settings",
+      "action": "select Image, click model/credits popup (e.g. “Multi 21 cr”)"
+    },
+    {
+      "from": "draft-editor/media-gen-mode",
+      "to": "draft-editor/media-gen-video-settings",
+      "action": "select Video, click model/credits popup (e.g. “Multi 630 cr”)"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/music-uploader",
+      "action": "click “Add Music” at the bottom of the timeline"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/comment-composer",
+      "action": "click “New Comment C” (or press C)"
+    },
+    {
+      "from": "draft-editor/comment-composer",
+      "to": "draft-editor/comment-composer/emoji-picker",
+      "action": "click the lower-left smiley icon"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/library-picker",
+      "action": "click the timeline toolbar “Library” popup"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/insert-menu",
+      "action": "click Insert (K)"
+    },
+    {
+      "from": "draft-editor/insert-menu",
+      "to": "draft-editor/text-overlay-editor",
+      "action": "click Add Text"
+    },
+    {
+      "from": "library",
+      "to": "library/collection-detail",
+      "action": "click a collection card"
+    },
+    {
+      "from": "library/collection-detail",
+      "to": "draft-editor",
+      "action": "click “New in Collection”; an Untitled draft is created immediately"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/project-actions",
+      "action": "click “Project actions” ellipsis beside voice selector"
+    },
+    {
+      "from": "draft-editor/project-actions",
+      "to": "draft-editor/screen-clip-settings",
+      "action": "click “Screen Clip Settings…”"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/version-history",
+      "action": "Click the top-right Versions button, immediately left of Export."
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/project-background",
+      "action": "Click the colored paint swatch in the top bar, left of comments/music."
+    },
+    {
+      "from": "draft-editor/project-actions",
+      "to": "draft-editor/aspect-ratio",
+      "action": "choose an aspect ratio row"
+    },
+    {
+      "from": "draft-editor/project-actions",
+      "to": "draft-editor/performance-mode",
+      "action": "choose Efficiency, Default, or Ultra"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/add-scene",
+      "action": "click Add scene in the timeline"
+    },
+    {
+      "from": "root",
+      "to": "template-editor",
+      "action": "click a pinned template name in the left rail"
+    },
+    {
+      "from": "template-editor",
+      "to": "brand-kit",
+      "action": "click “Open Default Brand in Brand Studio”"
+    },
+    {
+      "from": "draft-editor/project-actions",
+      "to": "brand-kit",
+      "action": "open Brand submenu, click \"Edit Brands…\""
     }
   ],
   "gated": [
     {
-      "id": "brand-options/archive-brand",
+      "id": "project-actions/download-srt",
+      "tierReached": 0,
+      "boundary": "not opened — descent off",
+      "stoppedBecause": "descent:off",
+      "scratchUsed": false
+    },
+    {
+      "id": "project-actions/delete",
       "tierReached": 0,
       "boundary": "not opened — descent off",
       "stoppedBecause": "descent:off",

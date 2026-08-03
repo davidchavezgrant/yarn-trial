@@ -1,95 +1,103 @@
-<!-- provenance: explore-vision | app: Yarn | date: 2026-08-03 | backend: cdp | actions: 245 | elapsed: 58m | calls: 472 | tokens-in: 1262243 | tokens-out: 102581 | cache-read: 5850112 | cache-write: 0 | findings: 59 | finds: 0 | controls (DECLARED): 145 actuated / 220 dismissed / 363 seen | surfaces: 22 | chapters: 23 | stopped: frontier-empty | descent: off | gated: 0 read / 0 refused -->
+<!-- provenance: explore-vision | app: Yarn | date: 2026-08-03 | backend: cdp | actions: 289 | elapsed: 1h02m | calls: 544 | tokens-in: 1823182 | tokens-out: 94947 | cache-read: 7255552 | cache-write: 0 | findings: 36 | finds: 0 | controls (DECLARED): 162 actuated / 751 dismissed / 907 seen | surfaces: 53 | chapters: 27 | stopped: frontier-empty | descent: off | gated: 0 read / 0 refused -->
 <!-- controls tallies are DECLARED — self-reported by the model from screenshots, not measured against an element list. A control the pass never declared is invisible to these numbers. -->
-<!-- Written by src/core/explore.ts. DO NOT HAND-EDIT: edits make this a curated recipe, not exploration output — move such notes to docs/recipes/<app>.md instead. -->
+<!-- Written by src/core/explore.ts. DO NOT HAND-EDIT: edits make this a curated recipe, not exploration output — move such notes to docs/curated/<app>.md instead. -->
 
 # Layout
 
-## Your Library (home)
-- **Library** in the left sidebar is the ordinary landing view and safest starting point.
-- Main area: Collections, Search, Grid/List controls, Sort, draft cards, **New Collection**, and **New Draft**.
-- Sidebar: Library, Your Drafts, recent drafts, Invite Members, Brand Kits, Settings.
-- Right-click a draft card for its context menu; **Make a copy** acts immediately with no confirmation.
-
-## Draft editor
-- **New Draft** opens an autosaved **Untitled** draft directly, with no setup chooser.
-- Top area includes title, Agent/Script, ellipsis, recording, canvas/view, comment, music, Globe, and Export affordances.
-- Persistent agent composer is lower-left; the timeline spans the bottom.
-- In Script view, focus the writing area and type `#` to add a scene. One observed press unexpectedly created two 5-second scenes.
-- In Agent/canvas view, centered **+** immediately creates a large `New Text` object; it is not a menu.
-- Selecting canvas content exposes document-scoped formatting. Text selection offers font, weight, size, alignment, and color. Group selection offers fill/color, layout/reorder, crop, border, corner radius, zoom status, and Ungroup.
-- Selection toolbar’s leftmost waveform-like control is document **Voice**, not Exit. It opens English/World/Creative tabs and voices Annie, Cassidy, Jacob, James, Kendra, Robert, Brynn, Fay, Jada, Jeff, Miranda, and Sarah, plus Default Speed.
-- Circular color control opens presets, Solid/Linear/Radial/Multi modes, saturation/brightness, hue, eyedropper, HEX, and opacity.
-- Right-clicking a selected generated group showed only disabled **No actions**.
-- Right-clicking a recent sidebar draft row opens Move to workspace, Rename, Make a copy, Add to Collection, and Delete.
-
-## Settings
-- **Settings** opens a centered modal.
-- Preferences: app-wide Auto-Add Screen Zooms; Theme Dark/Light/System (`Shift+Command+\` quick switch); Agent model; Agent effort.
-- Models: Opus 5, Fable 5, Opus 4.8, GPT-5.6 Sol. Opus 5 conditionally reveals checked **Agent Fast Mode default**.
-- Efforts: Low, Medium, High, Extra High, Max.
-- Workspace settings: name, icon upload, custom recording window sizes, Add Size, Figma and Google Slides sign-in.
-- **Add Size** immediately creates a sequential editable row, initially 1440×897, with Remove.
-
-## Workspace menu
-- Click workspace name/logo at sidebar top. It lists workspaces, highlights the current workspace, and includes New workspace and Sign out. New workspace was disabled/inert.
+- **Your Library** — ordinary landing view; click **Library** in the left sidebar. Supports Grid/List views, live title Search, ordering toggle, **+ New Draft**, and **New Collection**.
+- **Your Drafts** — click **Your Drafts** in the left sidebar for the draft list. A draft opens the full editor.
+- **Draft editor** — title and Script/Agent area at left, canvas in the center, timeline and Add media/Add text/Add screen clip/Add BG below, voice/language controls, comments, and Export. The title is editable inline.
+- **Routines** — click **Routines** in the sidebar. New routines open an in-place setup editor; saved routines reopen in the same style.
+- **Brand Kit** — click **Brand Kit** at the bottom of the sidebar. Internal tabs: **Brand Overview, Templates, Workflows, Colors, Type, Screen Clips, Motion, Layout, Misc**.
+- **Settings** — click **Settings** at bottom-left. This is a scrollable modal containing preferences, plan/credits, workspace settings, custom window sizes, and integrations.
+- **Template editor** — Brand Kit > Templates > New Template, or select a template and choose **Edit Template...**. It has Agent/Layers tabs, canvas/timeline tools, version controls, Copy URL, Export, Publish Updates, and an inspector.
+- **Developer Inspector** — from a draft's **Dev** menu choose **Show Inspector**. Composition > Resolved Node exposes document-level projectStyle JSON.
 
 # How to
 
-## Create a draft
-1. Click **Library**.
-2. Click **New Draft**.
-3. Yarn opens autosaved Untitled directly.
+## Create and edit a draft
+1. From Library click **+ New Draft**. Yarn immediately creates an **Untitled Draft** card and stays in Library.
+2. Open the card.
+3. Click the title at top-left to turn it into an inline field; replace the text to rename.
+4. Use the **Script** tab and click the area reading **Type script or # for new scene** to enter script content.
+5. The Agent composer is the field labeled **Ask, edit, or make something...**.
 
-## Ask Yarn to generate
-1. Open/create a draft.
-2. Enter a request in the lower-left composer.
-3. Click the black up-arrow Send.
-4. Wait generously: an observed request looked inert, then completed about a minute later and populated Agent/canvas view.
+## Find a draft
+- Library Search filters rows live by title. Grid/List toggles change presentation; List rows show title/type, owner, and updated time.
+- Right-click a row for **Move to David's, Rename, Make a copy, Delete**. Only use destructive actions on known scratch content. Rename closed the menu without exposing an obvious editor in this build.
 
-## Add Script scenes
-1. Select **Script**.
-2. Focus the writing area.
-3. Type `#`.
-4. Verify scene count because one press created two scenes once.
+## Choose a draft voice
+1. In a draft click the waveform/ellipsis voice control.
+2. Choose a tab (**English, World, Creative**) and a voice. English displayed Annie, Cassidy, Jacob, James, Kendra, Robert, Brynn, Fay, Jada, Jeff, Miranda, and Sarah.
+3. Selection applies immediately and closes the picker. **Default Speed** is in the same picker.
 
-## Add and format canvas text
-1. In Agent/canvas view click centered **+** to create `New Text`.
-2. Select/double-click text until its toolbar appears.
-3. Font family opens a searchable long list. Weight choices: Light, Regular, Medium, Semibold, Bold, Heavy, Black.
-4. A weight change may apply and clear selection.
-5. Click blank canvas or press Escape to exit; do not use the leftmost toolbar control, which opens Voice.
+## Create a template
+1. Open **Brand Kit > Templates**.
+2. Click **New Template**; an **Untitled Template** is created immediately and the template editor opens.
+3. The editor exposes Agent/Layers, prompt, timeline, version controls, Copy URL, Export, and Publish Updates.
+4. Existing templates can be selected in the Templates list and opened with **Edit Template...**.
 
-## Change document narration voice
-1. Select canvas/group content.
-2. Click the leftmost voice control in the selection toolbar.
-3. Choose a tab and voice. This is document-scoped.
+## Create a workflow
+1. Open **Brand Kit > Workflows** and click **New Workflow**.
+2. Fill **Name**, **Description**, and the rich editor whose placeholder is **Workflow instructions**.
+3. **Done** enables only after all required fields are filled.
+4. Done returns to the Workflows page and stages the new row; click **Save Changes** to commit or **Cancel** to discard.
 
-## Change selected content color
-1. Select the object/group.
-2. Click the far-right circular color control.
-3. Choose a preset/mode or edit HEX and opacity.
+## Create a routine
+1. Open **Routines** and start a new routine.
+2. Enter its name and **Agent instructions**; instructions are required before **Add Routine** enables.
+3. Optional: check **Start from a project**, then select an existing draft/project. Duplicate Untitled names are indistinguishable.
+4. Choose delivery options: **Watch page**, **MP4 file**, and/or **Draft project**.
+5. Click **Add Routine**. It saves in place; the button disappears and the generated API endpoint remains.
+6. Saved routines reopen in place and appear to persist edits directly—no explicit Save button was visible. Copy actions include **Copy full instructions for your agent**, **Copy endpoint**, and **Copy request**.
 
-## Search library
-1. Click **Library**.
-2. Type a title substring in **Search**; draft cards filter live.
+## Edit Brand Kit text guidance
+- **Brand Overview**, **Motion**, **Layout**, and **Misc** each contain a brand/workspace-scoped rich text field.
+- Editing reveals **Save Changes** and **Cancel**. Save commits; Cancel restores the previous text.
 
-## Duplicate a draft
-1. In Library, right-click the intended card.
-2. Choose **Make a copy**.
-3. Duplication is immediate with no confirmation.
+## Manage Brand Kit colors
+1. Open **Brand Kit > Colors**.
+2. Use **Add Background** or **Add Text Color**.
+3. Background picker modes are **Solid, Linear, Radial, Multi, Image, Shader**.
+4. Linear mode has a gradient bar, stop position/hex/opacity fields, reverse, duplicate, add, and remove-stop controls.
+5. The page also has **Color Notes**; changes are brand/workspace scoped.
 
-## Configure new-chat defaults
-1. Open **Settings**.
-2. Set Agent model and Agent effort under Preferences.
-3. These defaults are distinct from document-scoped Voice and canvas formatting.
+## Manage Brand Kit typography
+1. Open **Brand Kit > Type**.
+2. Click the current **Primary Font** or **Secondary Font** to open a searchable font picker. A selection is staged; use Save Changes or Cancel.
+3. Click **New Text Style** to open a modal with Name, preview text, Font Family, Font Weight, Font Size, Line Height, and Letter Spacing.
+4. **Done** stages the style on the Type page; **Save Changes** commits it.
+
+## Configure Screen Clip defaults
+- Open **Brand Kit > Screen Clips** for brand/workspace defaults.
+- Cursor: Auto-Hide Cursor (Auto Hide/Off), Text Cursor (Hide/Show), Cursor Style (Arrow-first/Pointer-first/Original), Cursor Scale.
+- Screen Display: padding and shadow opacity, blur, spread, X, and Y.
+- Sound Effects: Cursor Clicks plus sound; Keyboard Presses plus key set and sound.
+- Visual Effects: Entrance/Exit Animation and Motion Blur (Off/Low/Medium/High).
+- Any edit is staged and reveals **Save Changes / Cancel**.
+
+## Change app preferences
+1. Open **Settings** from the sidebar.
+2. Preferences include app-scoped Auto-Add Screen Zooms, Theme (Dark/Light/System; shortcut shown as Shift-Command-\\), default Agent model, default Agent effort, and Agent Fast Mode default.
+3. Scroll for workspace name/icon, custom window sizes, and integrations.
+
+## Inspect per-document Screen Clip overrides
+1. Open the target draft.
+2. Open **Dev > Show Inspector**.
+3. Select **Composition**, then **Resolved Node**.
+4. Read `projectStyle`: document-level keys include `screenClipMotionBlur`, `cursorScaleBoost`, `cursorSwapMode`, `hideInactiveCursor`, `hideTextCursor`, `windowPadding`, and `screenWindowShadow` opacity/blur/spread/offset values.
+5. These are document overrides; Brand Kit > Screen Clips controls brand/workspace defaults. Do not confuse their scopes.
 
 # Dead ends & quirks
-- Tested controls showing no visible response in the current blank/generated states include editor ellipsis, Music, comments, Export, screen recording, Add media, Record, Add text, Add screen zoom, Globe, two view icons, group Add BG/Ungroup/zoom display, and several group-style controls.
-- Brand Kits and Your Drafts did not visibly navigate. Library List did not visibly replace Grid. Sort showed no menu/obvious reorder. New Collection and a visible collection label showed no visible flow/navigation.
-- One late Library click from a populated editor did not navigate, though Library worked normally earlier.
-- Timeline Trash does nothing with nothing selected. Tested timeline overlay/narration/scene right-clicks opened no menu; overlay double-click opened no editor. Preview Play did not start.
-- Composer Low effort indicator and attachment button appeared inert; use Settings for default effort.
-- Choosing SF Pro Display once closed its picker but toolbar still showed Cereal; verify font changes. Choosing Bold applied and deselected text.
-- Workspace account card and New workspace were inert. External Invite Members, integration sign-ins, Sign out, Publish/Share were not completed.
-- Scratch artifacts include multiple Untitled/Brew drafts, copy/copies, a New Text object, Script scenes, and custom size `Custom 2`.
-- Three successive final sweeps found no unvisited visible navigation doors among sidebar destinations, workspace menu, Settings, Agent/Script, ellipsis and top toolbar, canvas controls, timeline toolbar, library controls, or context menus. Sidebar Rename/Delete/Add to Collection were skipped because the generic Untitled row could not be reliably proven exploration-owned after transcript reset.
+
+- **+ New Draft** creates immediately but does not open a wizard/editor.
+- **New Collection** and Settings > Workspace settings > **Add Size** produced no visible change in this build.
+- Blank-draft **Add media**, **Add text**, **Export**, Agent **+**, and **Language** produced no visible surface. Add text/media/screen clip also appeared inactive on the tested 4-second scene.
+- **Add BG** did not open a picker; the canvas merely refreshed to the existing scene.
+- **Fit timeline** caused no visible change on the tested short scene.
+- Canvas objects and timeline clips showed no selection/context affordances when clicked, double-clicked, or right-clicked in the tested state.
+- The centered canvas **+** produced no visible insertion menu.
+- World/Creative voice tabs caused no visible list change in this build.
+- Brand Kit Brand Overview's top-right ellipsis and the top-left workspace label produced no visible menu.
+- Integrations (Figma, Google Slides, Notion MCP, Team YouTube), Invite Members, Copy URL, publishing/export/sharing, and account/authentication actions were not committed because they can be externally visible.
+- Scratch objects created during exploration and eligible for cleanup: **Untitled Draft**, **Untitled Template**, **Grounding Scratch Style**, **Grounding Map Routine 2**, and other clearly named Grounding/Copy scratch items. The workflow **Grounding Scratch Workflow** was left staged/unsaved during exploration.
