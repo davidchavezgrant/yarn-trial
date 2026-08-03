@@ -120,6 +120,7 @@ export interface JobRecord {
 	useRecipe?: boolean;
 	/** `USE_PROCEDURES=1`: the child loads docs/procedures/<app>.<backend>.<task-hash>[.ungrounded].procedure.md. */
 	useProcedures?: boolean;
+	snapPx?: number;
 	/** `PROCEDURE_LINEAGE=ungrounded`: load the write-up by an agent that had NO map. */
 	procedureLineage?: "grounded" | "ungrounded";
 	/** Replay only: the recipe file, relative to the data root — the same key on both machines. */
@@ -160,6 +161,7 @@ export interface JobInit {
 	noGrounding?: boolean;
 	useRecipe?: boolean;
 	useProcedures?: boolean;
+	snapPx?: number;
 	procedureLineage?: "grounded" | "ungrounded";
 	recipe?: string;
 	noRescue?: boolean;
@@ -279,6 +281,7 @@ export function createJob(init: JobInit, root = jobsDir()): JobRecord {
 		...(init.noGrounding ? { noGrounding: true } : {}),
 		...(init.useRecipe ? { useRecipe: true } : {}),
 		...(init.useProcedures ? { useProcedures: true } : {}),
+		...(init.snapPx !== undefined ? { snapPx: init.snapPx } : {}),
 		...(init.procedureLineage ? { procedureLineage: init.procedureLineage } : {}),
 		...(init.recipe ? { recipe: init.recipe } : {}),
 		...(init.noRescue ? { noRescue: true } : {}),

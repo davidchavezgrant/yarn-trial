@@ -345,3 +345,28 @@ test("demoTranslatable__LeavesClicksToAXPress__When__FilmingOnTheAxPath", () => 
 	assert.equal(demoTranslatable({ name: "type_text", element_index: 5, text: "hello" }), true);
 	assert.equal(demoTranslatable({ name: "type_text", element_index: 5, text: "" }), false);
 });
+
+test("snapDiagnostic__SeparatesSpatialFromSemantic__When__AVisionOnlyStepMisses", () => {
+	/**
+	 * The decomposition the whole build rests on. A vision-only step gives x/y AND declares the
+	 * control it MEANT, so the two together say which failure occurred:
+	 *
+	 *   SPATIAL  — the point landed on a different control than declared. Right intent, bad
+	 *              aim. A refinement stage rescues it.
+	 *   SEMANTIC — the point landed on exactly the declared control and the step still failed.
+	 *              Wrong choice; refinement cannot help.
+	 *
+	 * Asserted over the source because the computation lives inside executeAction's closure,
+	 * where exercising it needs a driver, an overlay and a recording mutex. What matters is the
+	 * geometry: distance to the RECT (zero inside it), and a normalised name comparison.
+	 */
+	const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "core", "agent", "step.ts"), "utf8");
+	// Distance must be to the rect, not to its centre — a wide toolbar's centre is far from a
+	// legitimate click near its edge, and centre-distance would rank a small neighbour closer.
+	assert.match(src, /Math\.max\(e\.x - ax, 0, ax - \(e\.x \+ e\.w\)\)/, "distance must be to the rect");
+	assert.match(src, /snapInside: best\.d === 0/);
+	assert.match(src, /snapMatchesDeclared/, "the declared-vs-hit comparison IS the decomposition");
+	// And the diagnostic must be inert unless SNAP_PX asks for it, or every existing arm moves.
+	assert.match(src, /const snapPx = Number\(process\.env\.SNAP_PX \?\? 0\)/);
+	assert.match(src, /if \(snapPx > 0 && snap/, "snapping must be opt-in");
+});

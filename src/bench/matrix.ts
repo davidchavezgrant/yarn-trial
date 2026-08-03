@@ -169,6 +169,11 @@ export interface ArmDispatch {
 	/** Web target for an explore arm (`explore --url … --backend cdp`). Contract-assumed. */
 	url?: string;
 	/**
+	 * SNAP_PX for this arm: treat a coordinate action as a hypothesis and act on the interactive
+	 * control within this many pixels of it, if any. 0/absent leaves the raw coordinate alone.
+	 */
+	snapPx?: number;
+	/**
 	 * Step budget for this arm, when the default 15 is the wrong size for its TASK.
 	 *
 	 * The settings tasks finish in 5-13 steps, so 15 was never questioned. The creation task
@@ -607,6 +612,31 @@ const CONFIG_CDP_PERCEPTION: Arm[] = [
 	 */
 	task("vision-only-cdp-ungrounded", { backend: "cdp", noAx: true, noGrounding: true }, "vision-only floor on an actuator that can aim", { phase: 2 }),
 	task("vision-only-cdp-grounded", { backend: "cdp", noAx: true }, "does a map lift vision-only once its clicks land (map from an element-perceiving pass)", { phase: 2 }),
+	/**
+	 * The SNAP arms: vision-only reasoning, element-precise actuation.
+	 *
+	 * Vision-only misses its target 75% of the time against 11% for element addressing, on a
+	 * backend whose coordinate space is provably exact — so the model localises poorly from
+	 * pixels, and the harness is not at fault. The redaction pipeline in ../yarn solved the same
+	 * class by treating the vision model's box as a HYPOTHESIS and refining it
+	 * (`detect -> track -> snap·prune·size -> render`, then a few pixels of padding because
+	 * over-covering is free). UI driving had no refinement stage at all: the model's pixel went
+	 * straight to a click, where a 40px error is not "slightly worse" but a no-op on a different
+	 * control, and the error compounds because every later step reasons about a state that never
+	 * happened.
+	 *
+	 * These add the middle. The model still sees ONLY pixels and still names its own target; the
+	 * harness rewrites the coordinate to the control it landed on, within a tolerance. Two
+	 * tolerances because the right radius is unknown and cheap to measure: 24px is about a small
+	 * control's half-height, 48px is forgiving enough to cross a label into its widget.
+	 *
+	 * NOT a solution for an app with no element channel — snapping to elements presupposes
+	 * elements, and vision-only exists to ask what happens without them. The genuine analogue
+	 * there snaps to IMAGE structure and is a much larger build. This is the tractable half, and
+	 * the half that matches a target with a DOM.
+	 */
+	task("vision-only-cdp-snap24", { backend: "cdp", noAx: true, snapPx: 24 }, "does refining the pixel to the nearest control rescue vision-only", { phase: 2 }),
+	task("vision-only-cdp-snap48", { backend: "cdp", noAx: true, snapPx: 48 }, "same, at a tolerance that can cross a label into its widget", { phase: 2 }),
 	/**
 	 * Vision-only at BOTH stages on cdp — the ax pair's `-visionmap` arm, on an actuator whose
 	 * screenshot pixels and click coordinates are the same space. This is the honest version of

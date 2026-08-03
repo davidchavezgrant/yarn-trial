@@ -668,6 +668,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 						...(rec.noGrounding ? { NO_GROUNDING: "1" } : {}),
 						...(rec.useRecipe ? { USE_RECIPE: "1" } : {}),
 						...(rec.useProcedures ? { USE_PROCEDURES: "1" } : {}),
+						...(rec.snapPx !== undefined ? { SNAP_PX: String(rec.snapPx) } : {}),
 						...(rec.procedureLineage ? { PROCEDURE_LINEAGE: rec.procedureLineage } : {}),
 						...(rec.appmapVariant ? { APPMAP_VARIANT: rec.appmapVariant } : {}),
 						...(rec.model ? { AGENT_MODEL: rec.model } : {}),
@@ -809,6 +810,11 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		// on the appmap instead of the procedure. The whole path typechecks because both ends
 		// declare it; only the middle omitted it.
 		const useProcedures = flag(params, "useProcedures");
+		// Numeric, validated like `steps`: it becomes an env value on the child, and an
+		// unbounded one would let a snap reach across the whole window.
+		if (params.snapPx !== undefined && (typeof params.snapPx !== "number" || params.snapPx < 0 || params.snapPx > 200))
+			return { ok: false, error: `snapPx must be 0..200, got ${JSON.stringify(params.snapPx)}` };
+		const snapPx = params.snapPx as number | undefined;
 		const noRescue = flag(params, "noRescue");
 		const queue = flag(params, "queue");
 		if (typeof record !== "boolean") return record;
@@ -908,6 +914,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			useRecipe,
 			useProcedures,
 			noRescue,
+			...(snapPx !== undefined ? { snapPx } : {}),
 			...(procedureLineage !== undefined ? { procedureLineage } : {}),
 			...(backend !== undefined ? { backend } : {}),
 			...(recipe !== undefined ? { recipe } : {}),

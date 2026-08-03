@@ -100,6 +100,8 @@ export interface DispatchOptions {
 	useRecipe?: boolean;
 	/** Step budget override for the child run (AGENT_STEPS on the runner). */
 	steps?: number;
+	/** SNAP_PX on the child: snap a coordinate action to a control within N px. 0 = off. */
+	snapPx?: number;
 	/** Replay only: recipe file path RELATIVE to the data root — the same key on both machines. */
 	recipe?: string;
 	/** Replay only: `--no-rescue`, the unattended posture — a broken step fails instead of calling the model. */
@@ -249,6 +251,7 @@ export async function dispatch(opts: DispatchOptions): Promise<DispatchResult> {
 		noGrounding: Boolean(opts.noGrounding),
 		useRecipe: Boolean(opts.useRecipe),
 		useProcedures: Boolean(opts.useProcedures),
+		...(opts.snapPx !== undefined ? { snapPx: opts.snapPx } : {}),
 		...(opts.procedureLineage ? { procedureLineage: opts.procedureLineage } : {}),
 		noRescue: Boolean(opts.noRescue),
 		...(opts.backend ? { backend: opts.backend } : {}),
@@ -946,6 +949,7 @@ async function main(argv: string[]): Promise<number> {
 			// --steps N: budget override for runs whose recovery overhead outgrows the
 			// default 15 (validated to 1..100 on the runner).
 			...(argv.includes("--steps") ? { steps: Number(argv[argv.indexOf("--steps") + 1]) || undefined } : {}),
+			...(argv.includes("--snap-px") ? { snapPx: Number(argv[argv.indexOf("--snap-px") + 1]) || undefined } : {}),
 		};
 
 	const result = await dispatch(opts);

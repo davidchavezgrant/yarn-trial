@@ -79,20 +79,31 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// procedure-tier comparators = 45) plus the five cdp cells that came home from phase 7 —
 	// four vision-only and one grounded on a vision-written map. They vary perception and
 	// grounding tier on the canonical task, which is this stage's definition.
-	assert.equal(phaseRunCount(2), 45 + 15);
+	// 45 + 15 + 6: the two snap arms joined stage 2 on 2026-08-03 — vision-only reasoning with
+	// element-precise actuation, the refinement stage the redaction pipeline has and UI driving
+	// lacked.
+	assert.equal(phaseRunCount(2), 45 + 15 + 6);
 	// Stage 3 Reuse: both frozen-artifact tiers together, so the report can finally compare
 	// them. Recipes (2 local compiles + 6 replays + 3 no-rescue) and procedures (4 arms x 3).
 	assert.equal(phaseRunCount(3), 11 + 12);
 	// Stage 4 Generalization: second task (7), the creation task on every stage-2 config
 	// carried over from phase 7 (15 x 3), the model axis (3 x 3), and — since 2026-08-03 — the
 	// second APP: three cdp cells crossed with a simple and a complex task (6 x 3).
-	assert.equal(phaseRunCount(4), 7 + 45 + 9 + 18);
+	// 51, not 45: the creation task derives from EVERY stage-2 config, so the two snap arms added
+	// there carry creation twins here automatically. That propagation is the derivation working —
+	// the alternative is remembering to add them.
+	assert.equal(phaseRunCount(4), 7 + 51 + 9 + 18);
 	// Stage 9 Diagnostics: the AX-offset pair at n=2. Off the ladder — it measures the rig.
 	assert.equal(phaseRunCount(9), 4);
-	// The collapse REGROUPED; it did not add or drop a run. This is the guard on that claim.
+	// The collapse REGROUPED; it did not add or drop a run. This is the guard on that claim, and
+	// the +16 is kept as its own term rather than folded in so the claim stays checkable: the
+	// snap pair adds 6 in stage 2, 6 more as creation twins in stage 4 (derived from every
+	// stage-2 config), and 4 filmed takes in stage 5. Three derivations firing off two arms —
+	// which is the structure working, and also why the number moves more than it looks like it
+	// should.
 	assert.equal(
 		STAGES.reduce((t, st) => t + phaseRunCount(st.n), 0),
-		207 + 20,
+		207 + 20 + 16,
 	);
 	// Phase 5 (filmed): one take per phase-2 task config (14, including the minimum-context
 	// pair — derived from the phase-2 arms, so adding a config there adds a filmed take here)
@@ -517,11 +528,15 @@ test("runPhase__ShapesOptionsPerArm__When__Phase2Dispatches", async () => {
 		// the four cdp vision-only cells home from phase 7. They were never a separate question:
 		// same task, same model, a grounding tier the ax half of the grid already had — one of
 		// them says exactly that in its own `informs` ("completes the grid ax already has").
-		assert.equal(byFlag((c) => c.noAx === true).length, 24);
+		// 30 since the snap pair: both are vision-only (they refine ACTUATION, not perception),
+		// so they carry --no-ax like every other vision-only cell.
+		assert.equal(byFlag((c) => c.noAx === true).length, 30);
 		// Split by actuator, so the perception condition is measured against both rather than
 		// only the one whose click path misses by ~40px on this app.
 		assert.equal(byFlag((c) => c.noAx === true && c.backend === "ax").length, 12);
-		assert.equal(byFlag((c) => c.noAx === true && c.backend === "cdp").length, 12);
+		// 18 on cdp: the four original vision-only cdp cells plus the snap pair, which is
+		// vision-only by construction — it refines the coordinate, never the perception.
+		assert.equal(byFlag((c) => c.noAx === true && c.backend === "cdp").length, 18);
 		// THREE arms read the vision-written map, x3 each: the vision-only ax consumer, its cdp
 		// twin, and — the interesting one — a full-perception cdp agent handed the same pixel-written
 		// map, which is what separates "bad map" from "reader that cannot act on a good one".
@@ -1864,4 +1879,26 @@ test("writeReport__WritesNothing__When__TheManifestIsEmpty", () => {
 		);
 		assert.equal(fs.existsSync(withRow), true);
 	});
+test("snapPx__ReachesTheChild__When__AnArmDeclaresIt", () => {
+	// The wire has swallowed a declared field four separate times: useProcedures at the runner,
+	// --backend at the CLI, record and procedureLineage on the control side. Walk it end to end
+	// rather than trusting each layer to have been updated.
+	const arm = MATRIX.find((a) => a.id === "vision-only-cdp-snap24");
+	assert.ok(arm, "the snap arm must exist");
+	assert.equal(dispatchOptionsFor(arm!, undefined, BENCH_PRIMARY_MODEL).snapPx, 24);
+	const disp = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "remote", "control", "dispatch.ts"), "utf8");
+	assert.match(disp, /snapPx: opts\.snapPx/, "dispatch must put snapPx on the wire");
+	const serve = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "remote", "runner", "serve.ts"), "utf8");
+	assert.match(serve, /params\.snapPx/, "the runner must READ snapPx out of the request");
+	assert.match(serve, /SNAP_PX: String\(rec\.snapPx\)/, "and set it on the child");
+	const jobs = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "remote", "runner", "jobs.ts"), "utf8");
+	assert.match(jobs, /init\.snapPx/, "and persist it, or a queued job loses it across a runner restart");
+});
+
+test("snapArms__StayVisionOnly__When__TheyRefineActuation", () => {
+	// The snap stage must not become a back door to element PERCEPTION. The model still sees
+	// only pixels and still names its own target; only the coordinate is refined. An arm that
+	// dropped --no-ax would be plain element addressing under a name that claims otherwise.
+	for (const a of MATRIX.filter((x) => x.dispatch.snapPx))
+		assert.equal(a.dispatch.noAx, true, `${a.id} snaps but is not vision-only — that is just element addressing`);
 });
