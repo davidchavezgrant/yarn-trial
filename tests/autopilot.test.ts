@@ -12,11 +12,11 @@ import {
 	passSpend,
 	pendingWork,
 	planStages,
-	promoteForPhase6,
+	promoteForReuse,
 	stageTitle,
 } from "../src/bench/autopilot.js";
 import { type Manifest, type ManifestEntry, readManifest, utcDate, writeManifest } from "../src/bench/manifest.js";
-import { BENCH_PRIMARY_MODEL, CANONICAL_TASK, type Phase, phaseArms, recipeArms } from "../src/bench/matrix.js";
+import { BENCH_PRIMARY_MODEL, CANONICAL_TASK, PHASES, type Phase, phaseArms, recipeArms, STAGES } from "../src/bench/matrix.js";
 import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, interruptedPass, runPhase } from "../src/bench/orchestrate.js";
 import { watchPhase } from "../src/bench/watch.js";
 import { recipeFileFor } from "../src/core/recipe.js";
@@ -71,6 +71,23 @@ test("orderedPhases__PutsFilmedPassLast__When__Phase5Requested", () => {
 	// planner enforces that regardless of how the operator ordered the flag.
 	assert.deepEqual(orderedPhases([5, 1, 3, 2] as Phase[]), [1, 2, 3, 5]);
 	assert.deepEqual(orderedPhases([2, 2, 1] as Phase[]), [1, 2]);
+});
+
+test("PlanStages__OrdersEveryDeclaredStage__When__TheWholeMatrixIsRequested", () => {
+	// What `scripts/full-pass.sh` asks for, and the ordering the operator is trusting while
+	// offline: discovery before anything that reads a map, judge→harvest→promote before Reuse
+	// (harvest refuses unjudged runs, the recipe gate refuses unpromoted ones), deliverables after
+	// the measurements they film, diagnostics out of the way of the pass.
+	const titles = planStages([...PHASES]).map(stageTitle);
+	assert.deepEqual(titles, ["phase 1", "phase 2", "judge", "harvest", "promote", "phase 3", "phase 4", "phase 5", "phase 9", "final"]);
+
+	// Each stage lands after everything it declares a need for. Asserted from the declarations
+	// rather than against the literal above, so a new stage cannot be added with a bad edge and
+	// still pass by matching a hardcoded list.
+	const order = titles.filter((t) => t.startsWith("phase ")).map((t) => Number(t.slice(6)));
+	for (const s of STAGES)
+		for (const need of s.needs ?? [])
+			assert.ok(order.indexOf(need) < order.indexOf(s.n), `stage ${s.n} must come after ${need}`);
 });
 
 test("planStages__InsertsJudgeHarvestPromote__When__AStageDeclaresThemInBefore", () => {
@@ -422,7 +439,7 @@ test("overRetryBudget__IgnoresHonestFailures__When__RunsFailedOnTheirMerits", ()
 
 // --- promote stage ---
 
-test("promoteForPhase6__FillsTheArm__When__AHarvestedCandidateExists", async () => {
+test("promoteForReuse__FillsTheArm__When__AHarvestedCandidateExists", async () => {
 	await withTempAsync("auto-", async (dir) => {
 		const procDir = path.join(dir, "procs");
 		const dataOut = path.join(dir, "out");
@@ -432,7 +449,7 @@ test("promoteForPhase6__FillsTheArm__When__AHarvestedCandidateExists", async () 
 		fs.writeFileSync(path.join(runDir, "recipe.md"), "route prose");
 
 		const wanted = recipeFileFor(procDir, "yarn", CANONICAL_TASK, "ax", "grounded");
-		const outcome = await promoteForPhase6({
+		const outcome = await promoteForReuse({
 			manifest: manifest([entry("ax-grounded", "run-1")]),
 			model: MODEL,
 			dataOut,
@@ -453,9 +470,9 @@ test("promoteForPhase6__FillsTheArm__When__AHarvestedCandidateExists", async () 
 	});
 });
 
-test("promoteForPhase6__ReportsTheArmBlocked__When__NoSourceRunWasHarvested", async () => {
+test("promoteForReuse__ReportsTheArmBlocked__When__NoSourceRunWasHarvested", async () => {
 	await withTempAsync("auto-", async (dir) => {
-		const outcome = await promoteForPhase6({
+		const outcome = await promoteForReuse({
 			manifest: manifest([]),
 			model: MODEL,
 			dataOut: path.join(dir, "out"),

@@ -7,9 +7,9 @@
  * recipe makes it an INPUT to every later run of the same task, and an input tier must never
  * appear as a side effect of dispatching a phase — that is how sample independence dies quietly.
  *
- * Workflow: runs land → `bench judge` → `bench harvest` → `bench phase 6 --go`.
+ * Workflow: runs land → `bench judge` → `bench harvest` → `bench phase 3 --go` (Reuse).
  *
- * SOURCE ARMS ARE RESTRICTED to the arms phase 6 names as `sourceArm` — currently the grounded
+ * SOURCE ARMS ARE RESTRICTED to the arms Reuse names as `sourceArm` — currently the grounded
  * AND ungrounded phase-2 arms, which are two different experiments:
  *
  *   grounded source   → "does a frozen route beat the map it came from, on that task"
@@ -39,7 +39,7 @@ export interface BenchHarvestOutcome {
 	failed: Array<{ jobId: string; error: string }>;
 }
 
-/** The arms phase 6 grounds on — the only runs eligible to become recipes. */
+/** The arms Reuse grounds on — the only runs eligible to become recipes. */
 export const harvestSourceArms = (): string[] => [...new Set(recipeArms().map((a) => a.sourceArm).filter((x): x is string => Boolean(x)))];
 
 export async function harvestBench(opts?: {
@@ -105,7 +105,7 @@ export async function harvestBench(opts?: {
 			`${outcome.refused.length} refused, ${outcome.failed.length} failed`,
 	);
 	if (outcome.harvested.length)
-		log(`promote them so phase 6 can load them: ${outcome.harvested.map((s) => `./run recipes promote ${s}`).join(" && ")}`);
+		log(`promote them so Reuse can load them: ${outcome.harvested.map((s) => `./run recipes promote ${s}`).join(" && ")}`);
 
 	return outcome;
 }

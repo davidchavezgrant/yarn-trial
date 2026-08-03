@@ -1,5 +1,5 @@
 /**
- * `./run bench watch <phase> [--then <phase>] [--interval <sec>]` — the loop between phases.
+ * `./run bench watch <phase> [--interval <sec>]` — one process whose whole job is waiting.
  *
  * What was already automated, and why this is not that: `collect` pulls artifacts (which is
  * what triggers the appmap fan-out to the rest of the fleet — `autoSync` rides inside `pull`),
@@ -11,11 +11,12 @@
  * caller's timeout and the cleanup took the runs with it. The fix is not a better poll, it is
  * one process whose whole job is waiting, holding no leash on anything.
  *
- * SAFETY. `--then` dispatches, so it is opt-in and it fires exactly one phase, once. Chaining
- * further would mean an unattended process spending the rest of the matrix on a judgement
- * nobody made — and phase 2 wants a human to read the phase-1 maps first (`controls: N
- * actuated / M dismissed / K seen` is the whole point of the frontier work). The next phase's
- * own gates still apply: it refuses if the maps it needs were not collected.
+ * IT ONLY WATCHES. It used to carry `--then`, which dispatched the next phase once the watched
+ * one finished — a second way to advance a pass, deliberately crippled to one hop so it could
+ * not become an unattended driver. `bench autopilot` (and `scripts/full-pass.sh` over it) is
+ * that driver now, ordered off each stage's declared prerequisites rather than off an operator
+ * remembering which phase comes next, so the half-measure was two mechanisms for one job and
+ * the weaker one is gone. Watch observes; the autopilot advances.
  *
  * A watcher dying must never touch the runs. Nothing here stops, kills or signals a job — it
  * reads the manifest, calls the idempotent collect, and waits.
@@ -53,8 +54,6 @@ export function phaseProgress(phase: Phase, m: Manifest, model = BENCH_PRIMARY_M
 
 export interface WatchOptions {
 	phase: Phase;
-	/** Dispatch this phase once the watched one completes. Opt-in; fires once, never chains. */
-	then?: Phase;
 	intervalSec?: number;
 	date?: string;
 	model?: string;
@@ -145,14 +144,6 @@ export async function watchPhase(opts: WatchOptions): Promise<PhaseProgress> {
 	}
 
 	log(`phase ${opts.phase} complete.`);
-	if (opts.then === undefined) return progress;
-
-	// One phase, once. The gates inside runPhase still apply — it refuses if the maps this
-	// phase needs were never collected.
-	log(`dispatching phase ${opts.then} (--then), which fires once and does not chain further`);
-	const runPhaseFn = opts.runPhaseFn ?? (async (p: Phase) => (await import("./orchestrate.js")).runPhase(p, { go: true, date, model }));
-	const code = await runPhaseFn(opts.then);
-	log(code === 0 ? `phase ${opts.then} dispatched` : `phase ${opts.then} refused (exit ${code}) — read the reason above`);
 
 	return progress;
 }

@@ -961,7 +961,7 @@ const REUSE_RECIPES: Arm[] = [
 	 * It may not be runnable: the wrong-scope class makes a judged-PASS ungrounded run rare, and
 	 * `harvestRefusal` will decline every one that failed. That refusal IS a finding — "an agent
 	 * with no map could not produce trustworthy knowledge" answers the question too — and the
-	 * phase-6 gate refuses dispatch rather than silently running it as an appmap arm.
+	 * recipe gate refuses dispatch rather than silently running it as an appmap arm.
 	 */
 	...BACKENDS.map((backend): Arm => ({
 		id: `${backend}-recipe-from-ungrounded`,

@@ -12,7 +12,7 @@ import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, auditPhase, findCompileSource, in
 import { type PhaseProgress, phaseProgress, watchPhase } from "./watch.js";
 
 /**
- * `./run bench autopilot [--phases 1,2,3,6] [--go]` — the whole benchmark pass, hands off.
+ * `./run bench autopilot [--phases all|1,2,3] [--go]` — the whole benchmark pass, hands off.
  *
  * Exists because the manual workflow (phase --go, poll hosts, collect, judge, harvest, promote,
  * next phase) is a two-day interactive relay with a dozen documented ways to fumble the baton,
@@ -21,10 +21,11 @@ import { type PhaseProgress, phaseProgress, watchPhase } from "./watch.js";
  * process an operator (or an agent) starts once and watches.
  *
  * David's HARD CONSTRAINT — no benchmark run fires without an explicit go — is intact: the
- * autopilot's own `--go` is that go, given once for the span it prints in preview. `bench watch
- * --then` deliberately refuses to chain phases because chaining is "a judgement nobody made";
- * invoking the autopilot IS that judgement, made explicitly, which is why chaining lives here
- * and not there.
+ * autopilot's own `--go` is that go, given once for the span it prints in preview. `bench watch`
+ * once carried a `--then` that advanced one phase and deliberately refused to chain further,
+ * because chaining was "a judgement nobody made"; invoking the autopilot IS that judgement, made
+ * explicitly, so chaining lives here and `--then` is gone rather than sitting alongside as a
+ * second, weaker way to do the same job.
  *
  * The gotchas it encodes, each one paid for before it got here:
  *  - UTC rollover: the date is pinned ONCE at launch and carried through every step. A pass
@@ -45,8 +46,9 @@ import { type PhaseProgress, phaseProgress, watchPhase } from "./watch.js";
  *    procedures, so those phases legitimately take more than one dispatch→drain round. The wave
  *    loop re-runs the phase until nothing is pending — and a wave that changes NOTHING
  *    (blocked compile, refused source) is recorded as a finding and moved past, never spun on.
- *  - Judge before harvest, harvest before promote, promote before phase 6: the stage planner
- *    inserts them in that order automatically when phase 6 is requested. A phase-6 arm whose
+ *  - Judge before harvest, harvest before promote, promote before Reuse: the stage planner
+ *    inserts them in that order automatically when Reuse is requested, off that stage's own
+ *    `before` declaration rather than a phase number. A Reuse arm whose
  *    recipe cannot exist (no judged-PASS source run — likely for the ungrounded lineage) is
  *    reported as the finding it is; the runnable arms still run.
  *  - Spend: `--max-usd` is a hard ceiling checked before every dispatch wave, so an unattended
@@ -295,20 +297,20 @@ export async function driveToCompletion(phase: Phase, ctx: DriveContext): Promis
 	return `phase ${phase} still owes work after ${ctx.maxWaves} waves — raise --max-waves if this is genuine second-wave churn, or read the collect notes for what keeps failing`;
 }
 
-/** One phase-6 arm's promote state: the file it needs, and the harvested candidates that could fill it. */
+/** One Reuse arm's promote state: the file it needs, and the harvested candidates that could fill it. */
 export interface PromoteOutcome {
 	promoted: string[];
-	/** Arm ids phase 6 will skip — no promotable recipe exists. A finding, not an error. */
+	/** Arm ids Reuse will skip — no promotable recipe exists. A finding, not an error. */
 	blocked: string[];
 }
 
 /**
- * Promote harvested recipes until every phase-6 arm's expected file exists, or its
+ * Promote harvested recipes until every Reuse arm's expected file exists, or its
  * candidates run out. Promotion derives lineage/backend from the run log itself (never from the
  * arm), so a candidate is verified by re-checking the expected path after each promote — a
  * grounded-lineage file cannot satisfy an ungrounded arm by construction.
  */
-export async function promoteForPhase6(opts: {
+export async function promoteForReuse(opts: {
 	manifest: Manifest;
 	model?: string;
 	dataOut: string;
@@ -365,7 +367,7 @@ export async function promoteForPhase6(opts: {
 		}
 		if (!filled) {
 			outcome.blocked.push(arm.id);
-			opts.log(`– ${arm.id}: no promotable recipe from ${arm.sourceArm} — phase 6 skips this arm. That refusal is a finding (see harvest's refused list for why each source run declined).`);
+			opts.log(`– ${arm.id}: no promotable recipe from ${arm.sourceArm} — Reuse skips this arm. That refusal is a finding (see harvest's refused list for why each source run declined).`);
 		}
 	}
 
@@ -567,7 +569,7 @@ export async function autopilot(opts: AutopilotOptions = {}): Promise<number> {
 				log(`⚠ HEAD moved since the last phase (${lastHead.slice(0, 7)} → ${head.slice(0, 7)}) — this phase's runs will execute DIFFERENT code than the previous phase's. Comparability across phases is now on you.`);
 			lastHead = head ?? lastHead;
 			if (recipeArms(stage.phase).length > 0 && phase6Blocked.length === recipeArms(stage.phase).length) {
-				log(`phase 6 skipped entirely: no arm has a promoted recipe. That is the finding — no judged-PASS source run produced one (the likely case for the ungrounded lineage; see harvest's refusals).`);
+				log(`the Reuse recipe half is skipped entirely: no arm has a promoted recipe. That is the finding — no judged-PASS source run produced one (the likely case for the ungrounded lineage; see harvest's refusals).`);
 				continue;
 			}
 			if (stageOf(stage.phase)?.kind === "deliverable") log(`filmed pass — cursor compositing stays manual afterwards: npm run humanize -- <stamp>`);
@@ -593,12 +595,12 @@ export async function autopilot(opts: AutopilotOptions = {}): Promise<number> {
 		}
 
 		if (stage.kind === "promote") {
-			const outcome = await promoteForPhase6({ manifest: readManifest(date, liveRoot), model, dataOut, recipesDir: procDir, promoteFn, log });
+			const outcome = await promoteForReuse({ manifest: readManifest(date, liveRoot), model, dataOut, recipesDir: procDir, promoteFn, log });
 			phase6Blocked = outcome.blocked;
 		}
 
 		if (stage.kind === "final") {
-			// Final judge sweep catches runs that landed after the pre-phase-6 pass (phases 3/4/6
+			// Final judge sweep catches runs that landed after the pre-Reuse pass (stages 3/4/5
 			// themselves); then one collect rewrites the report with everything included.
 			if (phases.some((p) => p !== 1)) {
 				const outcome = await judgeFn();

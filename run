@@ -101,15 +101,19 @@ ${b}sign-in & sessions${n}
   session-wipe [<mac>|all] [--go]        close every GUI app on the Macs, wipe all session data
 
 ${b}bench${n}
+  scripts/full-pass.sh [--go]            THE way to run a whole pass. Without --go: the plan.
+                                         With --go: launches it DETACHED and hands the terminal
+                                         back — survives closing the laptop. Logs to
+                                         out/bench/full-pass-<date>.log, one pass at a time.
+                                         Collect whenever you get back; it is idempotent.
   bench plan                             print the benchmark matrix (no side effects)
-  bench autopilot [--phases 1,2,3,6] --go   the whole pass, hands off: dispatch -> watch ->
+  bench autopilot [--phases all] --go    what full-pass.sh drives: dispatch -> watch ->
                                          collect -> re-dispatch technical failures, judge ->
-                                         harvest -> promote before phase 6. Without --go:
-                                         prints the plan. Encodes the known gotchas (date
-                                         pinning, key preflight, retry budget, --max-usd
-                                         ceiling); holds no leash — Ctrl-C safe, resumes
-                                         from the manifest. \`bench\` alone shows all flags.
-  bench phase <1|2|3|4> --go             submit ONE phase to the fleet queue (without --go: preview)
+                                         harvest -> promote before Reuse. Every stage waits on
+                                         the ones it declares a need for. Without --go: prints
+                                         the plan. Runs in the FOREGROUND — use full-pass.sh to
+                                         go offline. \`bench\` alone shows all flags.
+  bench phase <1|2|3|4|5|9> --go         submit ONE phase to the fleet queue (without --go: preview)
   bench collect                          pull finished runs, compute metrics, rewrite the report
   bench judge                            re-grade landed runs with the offline judge (idempotent)
   dash [--port N] [--collect] [--web]    live dashboard (Electron): fleet, matrix progress, charts

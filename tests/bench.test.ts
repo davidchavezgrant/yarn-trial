@@ -1643,10 +1643,16 @@ test("phaseProgress__WaitsForOwedSamples__When__NothingIsInFlight", () => {
 	assert.deepEqual(phaseProgress(1, crashed), { outstanding: 1, inFlight: 0, done: false });
 });
 
-test("watchPhase__DispatchesTheNextPhaseOnce__When__ThenIsGiven", async () => {
+test("watchPhase__NeverDispatches__When__ThePhaseCompletes", async () => {
 	// The loop nobody had: results already came home on their own (collect pulls, and the dash
 	// collects on a timer), but nothing NOTICED a phase finishing. An operator polled for two
 	// hours, and the session doing it is how five batches of explores died to a caller's timeout.
+	//
+	// It observes and STOPS THERE. `--then` used to dispatch one further phase from here — a
+	// second, deliberately-crippled way to advance a pass, kept to one hop because chaining was
+	// "a judgement nobody made". The autopilot makes that judgement explicitly and orders every
+	// stage off its declared prerequisites, so this pins the absence: a watcher that dispatches
+	// is a watcher racing the driver for the same arm counts.
 	const arms = phaseArms(1);
 	const complete: Manifest = {
 		date: DATE,
@@ -1668,7 +1674,6 @@ test("watchPhase__DispatchesTheNextPhaseOnce__When__ThenIsGiven", async () => {
 				// without an injected one under test, for the same reason collectFn does.
 				rebalanceFn: async () => [],
 				phase: 1,
-				then: 2,
 				date: DATE,
 				log: (l) => lines.push(l),
 				collectFn: async () => undefined,
@@ -1683,9 +1688,7 @@ test("watchPhase__DispatchesTheNextPhaseOnce__When__ThenIsGiven", async () => {
 				sleepFn: async () => undefined,
 			});
 			assert.equal(p.done, true);
-			// Exactly one dispatch, of exactly the named phase. Chaining further would spend the
-			// rest of the matrix on a judgement nobody made.
-			assert.deepEqual(fired, [2]);
+			assert.deepEqual(fired, [], "watch must not dispatch anything");
 			assert.ok(lines.some((l) => /phase 1 complete/.test(l)));
 		} finally {
 			if (prev === undefined) delete process.env.YARN_RUNNER_DATA;

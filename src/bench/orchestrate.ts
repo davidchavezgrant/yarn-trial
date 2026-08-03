@@ -6,7 +6,7 @@ import { CHALLENGER_N, challengerNeedsExplore, planChallenger } from "./challeng
 import { collect } from "./collect.js";
 import { manifestCost } from "./cost.js";
 import { fetchTrueCost, reconcile } from "./truecost.js";
-import { BENCH_APP, BENCH_PRIMARY_MODEL, MATRIX, PHASES, armById, discoveryArmsFor, flagsLine, isPhase, perceptionLine, armModel, phaseArms, phaseRunCount, recipeArms, stageCompiles, stageNeedsMaps, stageOf, type Arm, type Phase } from "./matrix.js";
+import { BENCH_APP, BENCH_PRIMARY_MODEL, MATRIX, PHASES, armById, discoveryArmsFor, flagsLine, isPhase, perceptionLine, armModel, phaseArms, phaseRunCount, recipeArms, stageCompiles, stageNeedsMaps, stageOf, STAGES, type Arm, type Phase } from "./matrix.js";
 import {
 	entriesForArm,
 	type Manifest,
@@ -75,7 +75,7 @@ export interface PhaseOptions {
 	 */
 	host?: string;
 	compileFn?: CompileFn;
-	/** Where promoted recipes live (phase-6 gate). Injected by tests; defaults to paths'. */
+	/** Where promoted recipes live (the recipe gate). Injected by tests; defaults to paths'. */
 	recipesDir?: string;
 	log?: (line: string) => void;
 }
@@ -459,7 +459,7 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 		}
 		if (missing.length) {
 			missingRecipes = new Set(missing.map((a) => a.id));
-			for (const a of missing) log(`– ${a.id}: no promoted recipe at ${relToData(wanted(a))} — SKIPPED (harvest + promote a source run, then re-run phase 6)`);
+			for (const a of missing) log(`– ${a.id}: no promoted recipe at ${relToData(wanted(a))} — SKIPPED (harvest + promote a source run, then re-run this stage)`);
 		}
 	}
 
@@ -625,7 +625,7 @@ const USAGE = `usage: ./run bench plan
        ./run bench collect [--date YYYY-MM-DD]
        ./run bench judge [--cross] [--date YYYY-MM-DD]
        ./run bench harvest [--date YYYY-MM-DD]
-       ./run bench watch <phase> [--then <phase>] [--interval <sec>] [--date YYYY-MM-DD]
+       ./run bench watch <phase> [--interval <sec>] [--date YYYY-MM-DD]
        ./run bench autopilot [--phases 1,2,3,6] [--model <id>] [--date YYYY-MM-DD] [--host <mac>]
                              [--interval <sec>] [--max-usd <n>] [--max-waves <n>] [--max-retries <n>] [--go]
        ./run bench truecost [--since <RFC3339>] [--bucket 1m|1h|1d]
@@ -685,13 +685,12 @@ judge    grades collected runs with the offline adversarial judge. --cross adds 
          judged. Run after runs land, before reading the report's Judge section.
 watch    waits for a phase to finish, collecting as it goes (which is also what pulls
          artifacts home and fans the appmaps out to the fleet). Prints only on change.
-         --then <phase> dispatches the next phase ONCE when this one completes — opt-in,
-         and it never chains further, because phase 2 wants a human to read the phase-1
-         maps first. Holds no leash: a dying watcher never touches a run.
+         Observes and nothing else — advancing a pass is autopilot's job. Holds no
+         leash: a dying watcher never touches a run.
 autopilot
          the whole pass, hands off: for each phase — dispatch, watch, collect, re-dispatch
          what technical failures freed — and judge → harvest → promote automatically before
-         phase 6. Encodes the known gotchas: date pinned at launch (UTC rollover), judge-key
+         Reuse (off that stage's own declared prerequisites). Encodes the known gotchas: date pinned at launch (UTC rollover), judge-key
          liveness checked BEFORE anything dispatches, per-arm technical-failure retry budget
          (--max-retries, default 2), optional hard spend ceiling (--max-usd), second waves
          for phase-3/4 compiles+replays (--max-waves, default 4). Stops the line on the first
@@ -707,7 +706,7 @@ harvest  turns judged-PASS phase-2 runs into recipes — prose describing the ro
          worked, for a later agent to ground on. Refuses any run the judge did not pass, so
          run \`bench judge\` first. Writes into each run's own folder; promoting one into
          docs/recipes/ (\`./run recipes promote <stamp>\`) is a SEPARATE, deliberate step,
-         because that is what makes it an input to phase 6.`;
+         because that is what makes it an input to the Reuse stage.`;
 
 async function main(argv: string[]): Promise<number> {
 	const cmd = argv[0];
@@ -811,11 +810,9 @@ async function main(argv: string[]): Promise<number> {
 	}
 	if (cmd === "watch") {
 		const phase = Number(argv[1]);
-		const ti = argv.indexOf("--then");
-		const then = ti >= 0 ? Number(argv[ti + 1]) : undefined;
 		const ii = argv.indexOf("--interval");
 		const valid = (p: number) => isPhase(p);
-		if (!valid(phase) || (then !== undefined && !valid(then))) {
+		if (!valid(phase)) {
 			console.error(USAGE);
 
 			return EXIT_REFUSED;
@@ -824,7 +821,6 @@ async function main(argv: string[]): Promise<number> {
 		const wDate = dateArg(argv);
 		await watchPhase({
 			phase: phase as Phase,
-			...(then !== undefined ? { then: then as Phase } : {}),
 			...(ii >= 0 ? { intervalSec: Number(argv[ii + 1]) } : {}),
 			...(wDate ? { date: wDate } : {}),
 		});
@@ -841,9 +837,21 @@ async function main(argv: string[]): Promise<number> {
 		const pi = argv.indexOf("--phases");
 		let phases: Phase[] | undefined;
 		if (pi >= 0) {
-			const nums = (argv[pi + 1] ?? "").split(",").map((s) => Number(s.trim()));
+			const raw = (argv[pi + 1] ?? "").trim();
+			/**
+			 * `all` means every declared stage, which is what a clean full pass wants.
+			 *
+			 * Spelled rather than enumerated because the numbers moved once already: this validator
+			 * used to say "a comma list from 1-6" and offer `--phases 1,2,3,6` as its example — an
+			 * invocation `run help` and autopilot's own header both printed, and which `isPhase`
+			 * REFUSED from the day eight phases collapsed into five stages plus diagnostics (there
+			 * is no stage 6; there is a stage 9). A caller that says `all` cannot go stale that way,
+			 * and the message below now reads the list from STAGES instead of restating it.
+			 */
+			const nums = raw === "all" ? [...PHASES] : raw.split(",").map((s) => Number(s.trim()));
 			if (!nums.length || nums.some((n) => !isPhase(n))) {
-				console.error("--phases wants a comma list from 1-6, e.g. --phases 1,2,3,6");
+				const core = STAGES.filter((st) => st.inCorePass).map((st) => st.n);
+				console.error(`--phases wants "all" or a comma list from ${PHASES.join(", ")} — e.g. --phases ${core.join(",")} (the core pass) or --phases all`);
 
 				return EXIT_REFUSED;
 			}
@@ -880,7 +888,7 @@ async function main(argv: string[]): Promise<number> {
 			`harvested ${outcome.harvested.length}, skipped ${outcome.skipped.length}, refused ${outcome.refused.length}, failed ${outcome.failed.length}`,
 		);
 		// Refusals print as findings, not errors: "which runs were not good enough to teach
-		// from" is the phase-6 datum most likely to be interesting.
+		// from" is the Reuse datum most likely to be interesting.
 		for (const r of outcome.refused) console.log(`  – ${r.jobId}: ${r.reason}`);
 		for (const f of outcome.failed) console.log(`  ✗ ${f.jobId}: ${f.error}`);
 
