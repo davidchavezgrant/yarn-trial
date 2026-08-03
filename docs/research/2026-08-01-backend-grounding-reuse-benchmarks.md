@@ -90,8 +90,8 @@ Compiles: compile-ax: 2026-08-01T19-54-18-799-yarn; compile-cdp: docs/procedures
 
 | arm | model | tier | map | flags | done | success | failures | steps x̄ | s x̄ | calls x̄ | out-tok x̄ | $ | rejections | doc-scope muts | obs-nodes x̄ | shown x̄ | depth x̄ | max idx | unnormalised |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| blur-ungrounded | azure/gpt-5.6-sol | none | 144 | --backend cdp NO_GROUNDING=1 | 2/2 | 2/2 | — | 8 | 101.5 | 12 | 1766.5 | $0.54 | 0 | 0 | 62.1 | 68.1 | — | — | ⚠ 2 |
-| blur-grounded | azure/gpt-5.6-sol | explore | 144 | --backend cdp | 2/2 | 2/2 | — | 8 | 102 | 12 | 2395.5 | $0.68 | 0 | 0 | 74.9 | 80.9 | — | — | ⚠ 2 |
+| blur-ungrounded | azure/gpt-5.6-sol | none | 144 | --backend cdp NO_GROUNDING=1 | 2/3 | 2/2 | — | 8 | 101.5 | 12 | 1766.5 | $0.54 | 0 | 0 | 62.1 | 68.1 | — | — | ⚠ 2 |
+| blur-grounded | azure/gpt-5.6-sol | explore | 144 | --backend cdp | 2/3 | 2/2 | — | 8 | 102 | 12 | 2395.5 | $0.68 | 0 | 0 | 74.9 | 80.9 | — | — | ⚠ 2 |
 | create-ax-ungrounded | azure/gpt-5.6-sol | none | 166 | --backend ax NO_GROUNDING=1 | 3/3 | 3/3 | — | 14.7 | 456.7 | 18 | 3178.3 | $5.31 | 0 | 0 | 282.9 | 445.1 | 67% | 284 | 0 |
 | create-ax-grounded | azure/gpt-5.6-sol | explore | 166 | --backend ax | 3/3 | 2/3 | stalled 1 | 16.7 | 354 | 19.3 | 3871 | $6.85 | 0 | 0 | 286.1 | 449.8 | 60% | 262 | 0 |
 | create-cdp-ungrounded | azure/gpt-5.6-sol | none | 144 | --backend cdp NO_GROUNDING=1 | 3/3 | 0/3 | stalled 3 | 11.7 | 122.3 | 13.7 | 3439.7 | $1.41 | 0 | 0 | 98.2 | 104.2 | — | — | ⚠ 3 |
@@ -121,7 +121,7 @@ Compiles: compile-ax: 2026-08-01T19-54-18-799-yarn; compile-cdp: docs/procedures
 
 | arm | model | flags | done | success | procedure steps | rescued x̄ | calls x̄ | s x̄ |
 |---|---|---|---|---|---|---|---|---|
-| blur-replay | (default) | --backend cdp | 0/2 | — | — | — | — | — |
+| blur-replay | (default) | --backend cdp | 0/3 | — | — | — | — | — |
 
 ## Stage 5 — Deliverables: filmed takes
 
