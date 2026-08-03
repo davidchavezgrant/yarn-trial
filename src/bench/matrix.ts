@@ -382,13 +382,55 @@ export const BACKENDS: readonly BenchBackend[] = ["ax", "cdp"];
  */
 export const BENCH_PRIMARY_MODEL = "azure/gpt-5.6-sol";
 
+/**
+ * THE SAMPLING POLICY — one number per family, applied without exception (David, 2026-08-03,
+ * prepping a clean run: "let's make the N numbers consistent across runs and explore phases").
+ *
+ * It used to be per-arm, and the drift was not random: the arms that got repeats were the ones
+ * someone was actively arguing about. That produced a hole worth remembering. The comment
+ * justifying explore repeats cited the vision pass's spread — 9 surfaces on one attempt, 21 on
+ * the next under identical code — while `explore-vision`, the arm that spread belongs to, ran at
+ * n=1. The stated rule was that reference arms repeat and single-channel arms are "read relative
+ * to them", but a variant read against a reference still has no error bar of its own: comparing a
+ * distribution to a single draw tells you the reference is trustworthy, not what the variant does.
+ *
+ * Two numbers, because the two families fail differently:
+ *
+ *  - MEASUREMENT runs report a SUCCESS RATE, and per-run success is binary. At n=1 an arm can only
+ *    say 0% or 100%, so one flake flips the verdict; n=2 gives 0/50/100, which still cannot
+ *    separate "usually works" from "works half the time". Three is the first count that resolves
+ *    a single flake as 67% instead of a reversal.
+ *  - EXPLORE passes report CONTINUOUS quantities (surfaces, nodes, controls actuated), where two
+ *    draws already bound a spread. Two is enough, and explores cost 20-50x a task run.
+ *
+ * Deliberate exceptions, each because the arm is not sampling a distribution at all:
+ *  - `filmed` arms take ONE take per variant (TAKE_RUNS). A take is a deliverable, not a
+ *    measurement, and `--record` changes the action space, so a second one buys footage of the
+ *    same config and ~200 MB of frames.
+ *  - compiles run ONCE (COMPILE_RUNS). A compile is a deterministic local file transform; running
+ *    it twice produces the same bytes.
+ *  - the diagnostics pair keeps its own count (DIAGNOSTIC_SAMPLES) — see DIAGNOSTICS.
+ */
+export const TASK_SAMPLES = 3;
+export const EXPLORE_SAMPLES = 2;
+export const TAKE_RUNS = 1;
+export const COMPILE_RUNS = 1;
+/**
+ * The diagnostics pair, kept at 2 rather than raised to TASK_SAMPLES — the one count that is NOT
+ * about resolving a rate. It hunts an intermittent fault (an intermittent fault seen once is a
+ * rumour), and its artifact is `geometryBasis` and the step rects, not whether the task passed.
+ * Both halves share it so the filmed/unfilmed comparison stays like-for-like; raising one alone
+ * would be the bug the pair exists to catch.
+ */
+export const DIAGNOSTIC_SAMPLES = 2;
+
 const task = (id: string, dispatch: ArmDispatch, informs: string, over: Partial<Arm> = {}): Arm => ({
 	id,
 	phase: 2,
 	kind: "task",
 	app: BENCH_APP,
 	task: CANONICAL_TASK,
-	n: 3,
+	n: TASK_SAMPLES,
 	dispatch,
 	informs,
 	...over,
@@ -405,19 +447,19 @@ const DISCOVERY: Arm[] = [
 		kind: "explore",
 		app: BENCH_APP,
 		/**
-		 * TWO passes, not one. Every phase-1 number was a point estimate with no error bar,
-		 * and we know the spread can be brutal: the vision arm gave 8 surfaces on one run and
-		 * 3 on the next under identical code. Without a repeat, "cdp found 63 surfaces and ax
-		 * found 31" cannot be told apart from two draws of a wide distribution — and that
-		 * comparison is the headline of the whole discovery question.
+		 * EXPLORE_SAMPLES, like every other explore arm now. The original reason still holds —
+		 * a phase-1 number is a point estimate with no error bar, and the spread can be brutal:
+		 * the vision arm gave 8 surfaces on one run and 3 on the next under identical code, so
+		 * "cdp found 63 surfaces and ax found 31" could not be told from two draws of one
+		 * distribution.
 		 *
-		 * Free in wall-clock: four arms across three Macs is already two waves, and six is
-		 * still two. It costs tokens, not time.
-		 *
-		 * Only these two repeat. They are the ones every other comparison is measured
-		 * against; the single-channel arms are read relative to them.
+		 * What changed is the SCOPE. This used to read "only these two repeat; the
+		 * single-channel arms are read relative to them" — and that does not survive contact
+		 * with the arithmetic. A variant compared against a repeated reference still has no
+		 * spread of its own, and the arm the evidence above is ABOUT ran at n=1. See the
+		 * sampling policy.
 		 */
-		n: 2,
+		n: EXPLORE_SAMPLES,
 		dispatch: { backend },
 		informs: "controls seen/actuated/dismissed, obs latency, pass duration, map size, scope ambiguities",
 	})),
@@ -467,13 +509,14 @@ const DISCOVERY: Arm[] = [
 		kind: "explore",
 		app: BENCH_APP,
 		/**
-		 * TWO passes. It is a reference arm now — three task arms ground on its map — and
-		 * vision-only discovery is the widest-spread measurement in the matrix: the ax vision
-		 * pass gave 9 surfaces on one attempt and 21 on the next under identical code. Reading a
-		 * single draw of that as "vision-only discovers little" is what the repeats exist to
-		 * stop, and here a bad draw would also mis-grade every arm downstream of it.
+		 * Vision-only discovery is the WIDEST-SPREAD measurement in the matrix — the ax vision
+		 * pass gave 9 surfaces on one attempt and 21 on the next under identical code — and this
+		 * arm is a reference for three task arms that ground on its map, so a bad draw would
+		 * mis-grade everything downstream of it. It was already repeated for that reason; the
+		 * policy now extends the same treatment to `explore-vision`, which is the arm those
+		 * 9-vs-21 numbers actually came from and which ran at n=1 until 2026-08-03.
 		 */
-		n: 2,
+		n: EXPLORE_SAMPLES,
 		dispatch: { backend: "cdp", noAx: true },
 		informs: "does vision-only discovery improve when its clicks land — surfaces/nodes against explore-vision on ax",
 	},
@@ -482,7 +525,7 @@ const DISCOVERY: Arm[] = [
 		phase: 1,
 		kind: "explore",
 		app: BENCH_APP,
-		n: 1,
+		n: EXPLORE_SAMPLES,
 		dispatch: { backend: "ax", noVision: true },
 		informs: "can grounding be done from the element tree alone — map size and cost vs the same pass with Vision",
 	},
@@ -506,7 +549,7 @@ const DISCOVERY: Arm[] = [
 		phase: 1,
 		kind: "explore",
 		app: BENCH_APP,
-		n: 1,
+		n: EXPLORE_SAMPLES,
 		dispatch: { backend: "ax", axdomOff: true },
 		informs: "does the axdom sidecar earn its keep at GROUNDING time — map size and named-control count vs explore-ax",
 	},
@@ -515,7 +558,7 @@ const DISCOVERY: Arm[] = [
 		phase: 1,
 		kind: "explore",
 		app: BENCH_APP,
-		n: 1,
+		n: EXPLORE_SAMPLES,
 		dispatch: { backend: "ax", axdomOff: true, noVision: true },
 		// Consumed by min-context-grounded since 2026-08-01 — it was comparison-only until
 		// David pointed out that the least-context condition is exactly the one worth running
@@ -527,7 +570,7 @@ const DISCOVERY: Arm[] = [
 		phase: 1,
 		kind: "explore",
 		app: BENCH_APP,
-		n: 1,
+		n: EXPLORE_SAMPLES,
 		dispatch: { backend: "cdp", noVision: true },
 		informs: "what Vision buys on the SHIPPING backend — the ax answer may not transfer",
 	},
@@ -550,7 +593,7 @@ const DISCOVERY: Arm[] = [
 		phase: 1,
 		kind: "explore",
 		app: BENCH_APP,
-		n: 1,
+		n: EXPLORE_SAMPLES,
 		dispatch: { backend: "ax", noAx: true },
 		axRationale: "Vision-only is ax-only by construction — a cdp observation IS a ref list, so 'Vision only' cannot be expressed on that backend",
 		informs: "can grounding itself be done from Vision — declared coverage, pass duration, map size vs the ax pass",
@@ -819,7 +862,7 @@ const REUSE_RECIPES: Arm[] = [
 		phase: 3,
 		kind: "compile",
 		app: BENCH_APP,
-		n: 1,
+		n: COMPILE_RUNS,
 		dispatch: { backend },
 		sourceArm: `${backend}-grounded`,
 		informs: "compile success; what the gate refuses",
@@ -829,7 +872,7 @@ const REUSE_RECIPES: Arm[] = [
 		phase: 3,
 		kind: "replay",
 		app: BENCH_APP,
-		n: 3,
+		n: TASK_SAMPLES,
 		dispatch: { backend },
 		sourceArm: `compile-${backend}`,
 		informs: "steps re-resolved vs rescued, model calls (target 0), wall-clock + tokens vs live grounded",
@@ -839,7 +882,7 @@ const REUSE_RECIPES: Arm[] = [
 		phase: 3,
 		kind: "replay",
 		app: BENCH_APP,
-		n: 3,
+		n: TASK_SAMPLES,
 		// cdp, not ax: this measures the UNATTENDED FLEET POSTURE, which is a question about
 		// how the shipping configuration behaves with no operator, not about the fallback.
 		dispatch: { backend: "cdp", noRescue: true },
@@ -849,21 +892,24 @@ const REUSE_RECIPES: Arm[] = [
 ];
 
 /**
- * Phase 4 (optional) — second-task spot check, ax only. n=2 per cell keeps the phase inside
- * the plan's ~5–8 run budget (n=3 would be 9). The replay arm needs a recipe compiled from a
+ * Phase 4 (optional) — second-task spot check, ax only. The cells used to run n=2 to keep the
+ * phase inside the plan's ~5–8 run budget; they now take TASK_SAMPLES like every other measured
+ * cell (David, 2026-08-03). Three runs is the cost of the phase reporting a rate at all: at n=2 a
+ * cell can only say 0/50/100%, which is the resolution problem the task default exists to avoid,
+ * and the phase is worth 3 runs or it is not worth running. The replay arm needs a recipe compiled from a
  * clean phase-4 grounded run, so it is dispatched in a second wave: run `bench collect`
  * after the grounded runs land, then `bench phase 4 --go` again — already-submitted samples
  * are skipped, the compile runs, and the replays go out.
  */
 const GEN_SECOND_TASK: Arm[] = [
-	task("blur-ungrounded", { backend: "cdp", noGrounding: true }, "is everything above cursor-task-specific", { phase: 4, task: PHASE4_TASK, n: 2 }),
-	task("blur-grounded", { backend: "cdp" }, "is everything above cursor-task-specific", { phase: 4, task: PHASE4_TASK, n: 2 }),
+	task("blur-ungrounded", { backend: "cdp", noGrounding: true }, "is everything above cursor-task-specific", { phase: 4, task: PHASE4_TASK }),
+	task("blur-grounded", { backend: "cdp" }, "is everything above cursor-task-specific", { phase: 4, task: PHASE4_TASK }),
 	{
 		id: "blur-compile",
 		phase: 4,
 		kind: "compile",
 		app: BENCH_APP,
-		n: 1,
+		n: COMPILE_RUNS,
 		// Follows blur-grounded: a recipe compiled from a cdp run resolves cdp's control names.
 		dispatch: { backend: "cdp" },
 		sourceArm: "blur-grounded",
@@ -874,7 +920,7 @@ const GEN_SECOND_TASK: Arm[] = [
 		phase: 4,
 		kind: "replay",
 		app: BENCH_APP,
-		n: 2,
+		n: TASK_SAMPLES,
 		dispatch: { backend: "cdp" },
 		sourceArm: "blur-compile",
 		informs: "does replay generalize past the canonical task",
@@ -923,7 +969,7 @@ const REUSE_PROCEDURES: Arm[] = [
 		kind: "task",
 		app: BENCH_APP,
 		task: CANONICAL_TASK,
-		n: 3,
+		n: TASK_SAMPLES,
 		dispatch: { backend, useProcedures: true, procedureLineage: "ungrounded" as const },
 		sourceArm: `${backend}-ungrounded`,
 		informs:
@@ -936,7 +982,7 @@ const REUSE_PROCEDURES: Arm[] = [
 	kind: "task",
 	app: BENCH_APP,
 	task: CANONICAL_TASK,
-	n: 3,
+	n: TASK_SAMPLES,
 	dispatch: { backend, useProcedures: true },
 	sourceArm: `${backend}-grounded`,
 	informs:
@@ -990,7 +1036,7 @@ const filmed = (arm: Arm): Arm => ({
 	...arm,
 	id: `${arm.id}-filmed`,
 	phase: 5,
-	n: 1,
+	n: TAKE_RUNS,
 	dispatch: { ...arm.dispatch, record: true },
 	informs: `filmed take — does this config survive demo conduct (mouse-first, no set_value)? ${arm.informs ?? ""}`.trim(),
 });
@@ -1089,17 +1135,19 @@ const GEN_TASK_AND_MODEL: Arm[] = [
  * discrepancy that appears only there is staging, and one in both is the transform.
  *
  * Their task outcome is close to irrelevant — the artifact is geometryBasis and the step rects.
- * n=2 because the offset is intermittent, and an intermittent fault seen once is a rumour.
+ * DIAGNOSTIC_SAMPLES (2), not TASK_SAMPLES: the offset is intermittent and an intermittent fault
+ * seen once is a rumour, but nothing here is resolving a success rate — the artifact is
+ * geometryBasis and the step rects, and the task outcome is close to irrelevant.
  */
 const DIAGNOSTICS: Arm[] = [
 	task("geometry-ax", { backend: "ax" }, "is the AX→screenshot transform sound when nothing stages the window", {
 		phase: 9,
-		n: 2,
+		n: DIAGNOSTIC_SAMPLES,
 		axRationale: "the transform under test IS the ax path's; cdp needs none (scale:\"css\" ties screenshot pixels to the coordinates act consumes)",
 	}),
 	task("geometry-ax-filmed", { backend: "ax", record: true }, "does staging the window perturb the geometry the harness reads", {
 		phase: 9,
-		n: 2,
+		n: DIAGNOSTIC_SAMPLES,
 		axRationale: "same transform, with the window resize --record performs — the difference between the two arms IS the measurement",
 	}),
 ];
@@ -1129,7 +1177,7 @@ const DISCOVERY_SECOND_APP: Arm[] = [
 		phase: 1,
 		kind: "explore",
 		app: SECOND_APP_URL,
-		n: 1,
+		n: EXPLORE_SAMPLES,
 		dispatch: { backend: "cdp", url: SECOND_APP_URL },
 		prereq: "Notion signed in to the RUNNER's Chrome profile (`./run browser-login`), not the Mac's — measured 2026-08-03, mac1 had no app.notion.com session while mac2/mac3 did",
 		informs: "does the discovery story hold on an app 3x Yarn's size that nobody tuned the harness against",
@@ -1139,7 +1187,7 @@ const DISCOVERY_SECOND_APP: Arm[] = [
 		phase: 1,
 		kind: "explore",
 		app: SECOND_APP_URL,
-		n: 1,
+		n: EXPLORE_SAMPLES,
 		dispatch: { backend: "cdp", noVision: true, url: SECOND_APP_URL },
 		prereq: "Notion signed in to the runner Chrome profile — same requirement as explore-notion-cdp",
 		informs: "the novision map the no-vision arm reads; also a second sample of what dropping screenshots costs during GROUNDING",
@@ -1292,7 +1340,30 @@ export const procedureArms = (phase?: Phase): Arm[] =>
  */
 export const armModel = (arm: Arm, passModel?: string): string | undefined => arm.dispatch.model ?? passModel;
 
-export const armById = (id: string): Arm | undefined => MATRIX.find((a) => a.id === id);
+/**
+ * An arm by id, resolving the PRE-STAGES spelling as well.
+ *
+ * Ids lost their phase prefix in the stages collapse (109bf7a, "Ids name the cell, not the
+ * stage") — `p2-ax-grounded` became `ax-grounded`. Every manifest written before that carries the
+ * old form, so a legacy entry handed to this function used to answer `undefined`: collect's
+ * grounding check and film gating, and the dash's detail pane, all silently treated those runs as
+ * "unknown arm" rather than as runs.
+ *
+ * NECESSARY BUT NOT SUFFICIENT, and worth stating so nobody reads more into it. Rendering a pass
+ * needs entries MATCHED to arms, and that happens in ~9 places that compare `e.armId === a.id`
+ * directly (report.ts, dash.ts's buildState, autopilot.ts) — none of them route through here. A
+ * pre-stages manifest therefore still renders as an empty board: measured 2026-08-03, the
+ * 2026-08-01 pass showed 0 arms and 0 of 198 entries under current code. Restoring that needs the
+ * armId canonicalised at the manifest-read boundary, which is a data migration and a separate
+ * decision.
+ *
+ * The fallback is one rule, applied only after an exact miss, and it reads legacy while nothing
+ * writes it — the same posture paths.ts takes toward the store's pre-`bench/` homes: reads walk
+ * the old locations, writes only ever use the current one. A future rename that is not "drop the
+ * phase prefix" will need its own line here, and will be just as visible when it does.
+ */
+export const armById = (id: string): Arm | undefined =>
+	MATRIX.find((a) => a.id === id) ?? (/^p[0-9]+-/.test(id) ? MATRIX.find((a) => a.id === id.replace(/^p[0-9]+-/, "")) : undefined);
 
 /** Total runs a phase performs, local compiles included — the per-phase figures `bench plan` prints. */
 export const phaseRunCount = (phase: Phase): number => phaseArms(phase).reduce((sum, a) => sum + a.n, 0);

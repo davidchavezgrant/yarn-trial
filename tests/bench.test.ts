@@ -7,7 +7,7 @@ import { auditTaskPrompt } from "../src/core/harness.js";
 import type { JobRecord } from "../src/remote/runner/jobs.js";
 import { collect, collectEntry, expectedProvenance, failureKind, jobTiming, journalScopes, parseAppmapStamp, parseGraphCounts, parseRunMetrics, poisonedHosts, technicalFailure } from "../src/bench/collect.js";
 import { archiveDirFor, entriesForArm, manifestPath, readManifest, recordSubmissions, submittedCount, type Manifest, type ManifestEntry, updateEntry, writeManifest } from "../src/bench/manifest.js";
-import { BACKENDS, BENCH_ALT_MODEL, BENCH_APP, BENCH_PRIMARY_MODEL, CREATION_EXCLUDED, armModel, MATRIX, armAppmapSlug, armById, armTitle, discoveryArmsFor, orderStages, perceptionLine, phaseArms, phaseRunCount, procedureArms, STAGES, stageNeedsMaps, stageOf, type Arm } from "../src/bench/matrix.js";
+import { BACKENDS, BENCH_ALT_MODEL, BENCH_APP, BENCH_PRIMARY_MODEL, CREATION_EXCLUDED, EXPLORE_SAMPLES, armModel, MATRIX, armAppmapSlug, armById, armTitle, discoveryArmsFor, orderStages, perceptionLine, phaseArms, phaseRunCount, procedureArms, STAGES, stageNeedsMaps, stageOf, type Arm } from "../src/bench/matrix.js";
 import type { DispatchOptions } from "../src/remote/control/dispatch.js";
 import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, auditPhase, dateArg, dispatchOptionsFor, findCompileSource, plannedRuns, runPhase } from "../src/bench/orchestrate.js";
 import { renderReport, reportFileName, writeReport } from "../src/bench/report.js";
@@ -54,7 +54,10 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// open what it clicked".
 	// +2 since 2026-08-03: the second app brings its own Discovery, full-perception and
 	// no-vision, because a map is per-target and Yarn's says nothing about Notion.
-	assert.equal(phaseRunCount(1), 11 + 2);
+	// EVERY explore arm at EXPLORE_SAMPLES since 2026-08-03 (the sampling policy): 10 arms
+	// x 2. It was 3 arms at n=2 and 7 at n=1, which left the widest-spread arm in the matrix
+	// (explore-vision, 9 vs 21 surfaces) as the one with no error bar.
+	assert.equal(phaseRunCount(1), 10 * EXPLORE_SAMPLES);
 	// Phase 2: core 2 backends × 2 grounding × 3, plus 6 slices × 3. Two blocks were cut
 	// 2026-07-31 after their prerequisites were CHECKED rather than assumed (matrix.ts holds
 	// the full reasoning at each site): the Notion Calendar slice (4 arms × 2 = 8 runs — the
@@ -92,7 +95,9 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// 51, not 45: the creation task derives from EVERY stage-2 config, so the two snap arms added
 	// there carry creation twins here automatically. That propagation is the derivation working —
 	// the alternative is remembering to add them.
-	assert.equal(phaseRunCount(4), 7 + 51 + 9 + 18);
+	// +3 since 2026-08-03: the three blur cells took TASK_SAMPLES like every other measured
+	// cell instead of the n=2 the old ~5-8 run budget bought.
+	assert.equal(phaseRunCount(4), 7 + 51 + 9 + 18 + 3);
 	// Stage 9 Diagnostics: the AX-offset pair at n=2. Off the ladder — it measures the rig.
 	assert.equal(phaseRunCount(9), 4);
 	// The collapse REGROUPED; it did not add or drop a run. This is the guard on that claim, and
@@ -103,7 +108,9 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// should.
 	assert.equal(
 		STAGES.reduce((t, st) => t + phaseRunCount(st.n), 0),
-		207 + 20 + 16,
+		// +10 since 2026-08-03: 7 explore repeats and 3 blur samples, from making the counts
+		// uniform per family rather than per arm.
+		207 + 20 + 16 + 10,
 	);
 	// Phase 5 (filmed): one take per phase-2 task config (14, including the minimum-context
 	// pair — derived from the phase-2 arms, so adding a config there adds a filmed take here)
@@ -412,12 +419,10 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		const fake = fakeDispatch();
 		const code = await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
 		assert.equal(code, EXIT_OK);
-		// Ten: the two reference arms twice each, five single-condition cells, and the
-		// vision-only cdp pass added 2026-08-02.
-		// Eleven: the two reference arms twice each, five single-condition cells, and the
-		// vision-only cdp pass at n=2 — three task arms ground on its map, and vision-only
-		// discovery has the widest spread in the matrix (9 surfaces then 21 on ax).
-		assert.equal(fake.calls.length, 13);
+		// Every discovery arm at EXPLORE_SAMPLES since 2026-08-03 — 8 Yarn cells and the second
+		// app's 2, twice each. Derived rather than counted: the whole point of the policy is that
+		// this number follows from the grid times one constant.
+		assert.equal(fake.calls.length, phaseRunCount(1));
 		// The two single-channel passes must differ ONLY in which channel they drop — same
 		// backend, same app — or they are not a comparison.
 		const single = fake.calls.filter((c) => c.noAx || c.noVision);
@@ -429,9 +434,11 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		// takes x/y — "pointer actions at viewport CSS-pixel coordinates read off the
 		// screenshot" — so pixel addressing was available on that backend all along. Running it
 		// on both is what separates vision-only's 0/3 into a perception result or an aiming one.
-		// Six CALLS, not five arms: the vision-only cdp pass is n=2, so it dispatches twice.
-		assert.equal(single.length, 7, "six on Yarn, plus the second app's no-vision discovery");
-		assert.equal(single.filter((c) => c.noAx).length, 3, "a screenshots-only pass per backend, cdp repeated for an error bar");
+		// CALLS, not arms: six single-channel arms — vision-only on both backends, ax-no-vision,
+		// ax-noaxdom-no-vision, cdp-no-vision, and the second app's no-vision — each at
+		// EXPLORE_SAMPLES.
+		assert.equal(single.length, 6 * EXPLORE_SAMPLES, "five single-channel cells on Yarn, plus the second app's no-vision discovery");
+		assert.equal(single.filter((c) => c.noAx).length, 2 * EXPLORE_SAMPLES, "a screenshots-only pass per backend, both repeated for an error bar");
 		// Backends PRESENT, not call counts — cdp repeats for an error bar and that is not a
 		// second condition.
 		assert.deepEqual(
@@ -439,13 +446,14 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 			["ax", "cdp"],
 			"vision-only must be measured on the actuator that aims AND the one that does not",
 		);
-		assert.equal(single.filter((c) => c.noVision).length, 4, "…plus the second app's no-vision pass");
+		assert.equal(single.filter((c) => c.noVision).length, 4 * EXPLORE_SAMPLES, "…plus the second app's no-vision pass");
 		// The perception grid must span BOTH backends, or the screenshot question is only
 		// answered on the fallback path and not on the one that ships.
 		assert.ok(single.some((c) => c.backend === "cdp" && c.noVision), "cdp gets a no-vision cell too");
 		// And the sidecar axis is present, which is the only test of whether axdom earns its
 		// keep at grounding time rather than only at run time.
-		assert.equal(fake.calls.filter((c) => c.axdomOff).length, 2);
+		// Two arms carry axdomOff (with and without Vision), each at EXPLORE_SAMPLES.
+		assert.equal(fake.calls.filter((c) => c.axdomOff).length, 2 * EXPLORE_SAMPLES);
 		// The vision-only pass is the one that drops the element list; it must still keep
 		// vision, which the explore CLI enforces (--no-ax --no-vision leaves nothing).
 		const visionPass = fake.calls.find((c) => c.noAx === true);
@@ -463,7 +471,7 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		// the SAME target as the app it declares, so a web arm can never silently ground one
 		// site's map onto another's runs.
 		const web = fake.calls.filter((c) => c.url);
-		assert.equal(web.length, 2, "the second app's full-perception and no-vision passes");
+		assert.equal(web.length, 2 * EXPLORE_SAMPLES, "the second app's full-perception and no-vision passes, each at EXPLORE_SAMPLES");
 		for (const c of web) assert.equal(c.app, c.url, `${c.url} dispatched under app ${c.app}`);
 		assert.ok(
 			fake.calls.every((c) => c.app === "Yarn" || c.url),
@@ -471,7 +479,7 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		);
 		// Every accepted job landed in the manifest, uncollected.
 		const m = readManifest(DATE, liveDir(dir));
-		assert.equal(m.entries.length, 13);
+		assert.equal(m.entries.length, phaseRunCount(1));
 		assert.ok(m.entries.every((e) => !e.collected && e.host === "mac1"));
 	});
 });
@@ -590,9 +598,10 @@ test("runPhase__SubmitsOnlyMissingSamples__When__ManifestAlreadyHoldsSome", asyn
 		const fake = fakeDispatch();
 		const code = await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
 		assert.equal(code, EXIT_OK);
-		// ax and cdp are n=2, so seeding one sample of each leaves one of each outstanding,
-		// plus the un-seeded no-vision pass and the vision-only cdp pass.
-		assert.equal(fake.calls.length, 7);
+		// Every explore arm is EXPLORE_SAMPLES now, so seeding ONE sample of six arms leaves one
+		// of each outstanding plus every sample of the un-seeded arms. Derived, not counted: a
+		// literal here would be a second place to edit whenever the policy or the grid changes.
+		assert.equal(fake.calls.length, phaseRunCount(1) - 6);
 	});
 });
 
@@ -1105,12 +1114,12 @@ test("runPhase__ScopesSampleCountsToTheModelPass__When__TwoModelsRunTheMatrix", 
 	await withTempAsync("bench-", async (dir) => {
 		const a = fakeDispatch();
 		await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: a.fn, log: () => {}, model: "openai/gpt-5.6-sol:nitro" });
-		assert.equal(a.calls.length, 13, "pass A submits the full phase");
+		assert.equal(a.calls.length, phaseRunCount(1), "pass A submits the full phase");
 		for (const c of a.calls) assert.equal(c.model, "openai/gpt-5.6-sol:nitro");
 
 		const b = fakeDispatch();
 		await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: b.fn, log: () => {}, model: "claude-fable-5" });
-		assert.equal(b.calls.length, 13, "pass B submits the full phase again — pass A's entries are not its samples");
+		assert.equal(b.calls.length, phaseRunCount(1), "pass B submits the full phase again — pass A's entries are not its samples");
 		for (const c of b.calls) assert.equal(c.model, "claude-fable-5");
 
 		// And a re-run of pass A tops up nothing.
