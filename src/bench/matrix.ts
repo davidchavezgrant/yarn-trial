@@ -278,7 +278,14 @@ const PHASE1: Arm[] = [
 		phase: 1,
 		kind: "explore",
 		app: BENCH_APP,
-		n: 1,
+		/**
+		 * TWO passes. It is a reference arm now — three task arms ground on its map — and
+		 * vision-only discovery is the widest-spread measurement in the matrix: the ax vision
+		 * pass gave 9 surfaces on one attempt and 21 on the next under identical code. Reading a
+		 * single draw of that as "vision-only discovers little" is what the repeats exist to
+		 * stop, and here a bad draw would also mis-grade every arm downstream of it.
+		 */
+		n: 2,
 		dispatch: { backend: "cdp", noAx: true },
 		informs: "does vision-only discovery improve when its clicks land — surfaces/nodes against p1-explore-vision on ax",
 	},
@@ -733,6 +740,24 @@ const PHASE7: Arm[] = [
 	task("p7-create-curated", { backend: "cdp", useRecipe: true }, "human notes on the product flow — the tier that won on scope", { phase: 7, task: CREATION_TASK }),
 	// Same three cells as Sol ran, one variable changed. Canonical task on purpose: it is the
 	// only task with 45 runs of Sol baseline behind it.
+	task("p7-vision-only-cdp-curated", { backend: "cdp", noAx: true, useRecipe: true }, "vision-only against the human-written tier — completes the grid ax already has", { phase: 7 }),
+	/**
+	 * An ELEMENT-perceiving agent reading a map written from PIXELS.
+	 *
+	 * Unmeasured on either backend, and it is the question that decides whether a vision-only
+	 * exploration pass is worth its 30-40 minutes at all. Every existing consumer of a
+	 * vision-written map is itself vision-only, so a poor result there is ambiguous: bad map, or
+	 * a reader that cannot act on a good one? Handing the same map to a reader with full
+	 * perception separates them.
+	 *
+	 * It also matters practically. If a pixel-written map grounds a normal agent about as well
+	 * as an element-written one, then onboarding an app whose AX tree is useless costs a vision
+	 * pass and nothing else — which is the native-app generalisation story, priced.
+	 */
+	task("p7-cdp-grounded-visionmap", { backend: "cdp" }, "is a map written from pixels any good to an agent that can see elements", {
+		phase: 7,
+		env: { APPMAP_VARIANT: "vision" },
+	}),
 	task("p7-claude-cdp-ungrounded", { backend: "cdp", noGrounding: true, model: BENCH_ALT_MODEL }, "is the ungrounded floor a model property or a general one", { phase: 7 }),
 	task("p7-claude-cdp-grounded", { backend: "cdp", model: BENCH_ALT_MODEL }, "does grounding lift Claude the way it lifts Sol", { phase: 7 }),
 	/**

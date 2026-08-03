@@ -52,7 +52,7 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// Ten since 2026-08-02: the vision-only cdp explore arm joined, both to write the map its
 	// task arm reads and to separate "vision-only discovers little" from "vision-only could not
 	// open what it clicked".
-	assert.equal(phaseRunCount(1), 10);
+	assert.equal(phaseRunCount(1), 11);
 	// Phase 2: core 2 backends × 2 grounding × 3, plus 6 slices × 3. Two blocks were cut
 	// 2026-07-31 after their prerequisites were CHECKED rather than assumed (matrix.ts holds
 	// the full reasoning at each site): the Notion Calendar slice (4 arms × 2 = 8 runs — the
@@ -258,7 +258,10 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		assert.equal(code, EXIT_OK);
 		// Ten: the two reference arms twice each, five single-condition cells, and the
 		// vision-only cdp pass added 2026-08-02.
-		assert.equal(fake.calls.length, 10);
+		// Eleven: the two reference arms twice each, five single-condition cells, and the
+		// vision-only cdp pass at n=2 — three task arms ground on its map, and vision-only
+		// discovery has the widest spread in the matrix (9 surfaces then 21 on ax).
+		assert.equal(fake.calls.length, 11);
 		// The two single-channel passes must differ ONLY in which channel they drop — same
 		// backend, same app — or they are not a comparison.
 		const single = fake.calls.filter((c) => c.noAx || c.noVision);
@@ -270,10 +273,13 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		// takes x/y — "pointer actions at viewport CSS-pixel coordinates read off the
 		// screenshot" — so pixel addressing was available on that backend all along. Running it
 		// on both is what separates vision-only's 0/3 into a perception result or an aiming one.
-		assert.equal(single.length, 5);
-		assert.equal(single.filter((c) => c.noAx).length, 2, "a screenshots-only pass per backend");
+		// Six CALLS, not five arms: the vision-only cdp pass is n=2, so it dispatches twice.
+		assert.equal(single.length, 6);
+		assert.equal(single.filter((c) => c.noAx).length, 3, "a screenshots-only pass per backend, cdp repeated for an error bar");
+		// Backends PRESENT, not call counts — cdp repeats for an error bar and that is not a
+		// second condition.
 		assert.deepEqual(
-			single.filter((c) => c.noAx).map((c) => c.backend).sort(),
+			[...new Set(single.filter((c) => c.noAx).map((c) => c.backend))].sort(),
 			["ax", "cdp"],
 			"vision-only must be measured on the actuator that aims AND the one that does not",
 		);
@@ -301,7 +307,7 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		assert.ok(fake.calls.every((c) => c.app === "Yarn"), "every phase-1 arm targets Yarn");
 		// Every accepted job landed in the manifest, uncollected.
 		const m = readManifest(DATE, liveDir(dir));
-		assert.equal(m.entries.length, 10);
+		assert.equal(m.entries.length, 11);
 		assert.ok(m.entries.every((e) => !e.collected && e.host === "mac1"));
 	});
 });
@@ -410,7 +416,7 @@ test("runPhase__SubmitsOnlyMissingSamples__When__ManifestAlreadyHoldsSome", asyn
 		assert.equal(code, EXIT_OK);
 		// ax and cdp are n=2, so seeding one sample of each leaves one of each outstanding,
 		// plus the un-seeded no-vision pass and the vision-only cdp pass.
-		assert.equal(fake.calls.length, 4);
+		assert.equal(fake.calls.length, 5);
 	});
 });
 
@@ -918,12 +924,12 @@ test("runPhase__ScopesSampleCountsToTheModelPass__When__TwoModelsRunTheMatrix", 
 	await withTempAsync("bench-", async (dir) => {
 		const a = fakeDispatch();
 		await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: a.fn, log: () => {}, model: "openai/gpt-5.6-sol:nitro" });
-		assert.equal(a.calls.length, 10, "pass A submits the full phase");
+		assert.equal(a.calls.length, 11, "pass A submits the full phase");
 		for (const c of a.calls) assert.equal(c.model, "openai/gpt-5.6-sol:nitro");
 
 		const b = fakeDispatch();
 		await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: b.fn, log: () => {}, model: "claude-fable-5" });
-		assert.equal(b.calls.length, 10, "pass B submits the full phase again — pass A's entries are not its samples");
+		assert.equal(b.calls.length, 11, "pass B submits the full phase again — pass A's entries are not its samples");
 		for (const c of b.calls) assert.equal(c.model, "claude-fable-5");
 
 		// And a re-run of pass A tops up nothing.
