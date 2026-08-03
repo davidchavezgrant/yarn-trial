@@ -28,11 +28,17 @@ services:
     # 401 forever under DASH_AUTH and Render would restart the service in a loop.
     healthCheckPath: /healthz
     envVars:
-      # sync: false = Render prompts for it and stores it as a secret. NEVER commit the value:
-      # it is the only thing between a public URL and Yarn's benchmark data.
-      - key: DASH_AUTH
-        sync: false
       # Belt and braces — Dockerfile.dash already sets it, but an operator reading only this
       # file should see the posture stated.
       - key: DASH_SHARE
+        value: "1"
+      # PUBLIC, on purpose (David, 2026-08-03): the benchmark data is not sensitive and the team
+      # should not have to authenticate to read the board. This replaces the DASH_AUTH secret that
+      # used to live here — dash.ts refuses to serve share mode with NEITHER set, so removing the
+      # secret without adding this would be a failed deploy rather than a silent exposure.
+      #
+      # What "public" includes, stated so the next person weighing this sees the whole list: the
+      # filmed takes of Yarn's product UI, per-run cost estimates, the appmaps of the app, and every
+      # run's console log. No robots.txt is served, so a link posted anywhere is crawlable.
+      - key: DASH_PUBLIC
         value: "1"

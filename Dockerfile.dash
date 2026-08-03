@@ -57,10 +57,24 @@ ARG SNAPSHOT_DIR=snapshots/current
 COPY ${SNAPSHOT_DIR}/ ./snapshot/
 ENV YARN_RUNNER_DATA=/app/snapshot
 
-# Share mode is the posture, not a suggestion: dash.ts refuses to start without DASH_AUTH, so a
-# missing secret is a failed deploy rather than a public dataset. Set DASH_AUTH in the platform's
-# own secret store — never here.
+# Share mode is the posture, not a suggestion: dash.ts refuses to start with neither DASH_AUTH nor
+# an explicit DASH_PUBLIC, so a missing secret is a failed deploy rather than an accidentally
+# public dataset. Set DASH_AUTH in the platform's own secret store — never here.
 ENV DASH_SHARE=1
+
+# PUBLIC IS A BUILD-TIME CHOICE, and defaults to off. `--build-arg DASH_PUBLIC=1` produces an
+# image that serves the board with no gate at all; without it the image still requires DASH_AUTH.
+#
+# An ARG rather than a bare `ENV DASH_PUBLIC=1`, because "who may read this" is a property of a
+# particular deployment, not of the Dockerfile — and a Dockerfile that hardcoded it would make
+# every future build of every snapshot public by inheritance. It also means the choice is visible
+# in the build command that produced a given tag, which is where someone auditing later will look.
+#
+# The 2026-08-03 deployment is built WITH it (David: the benchmark data is not sensitive and the
+# team should not have to authenticate). dash.ts logs loudly on the way up when this is set, and
+# it deliberately overrides any DASH_AUTH still present in the environment.
+ARG DASH_PUBLIC=
+ENV DASH_PUBLIC=${DASH_PUBLIC}
 # Unprivileged: nothing here writes, so nothing needs to own the filesystem.
 USER node
 EXPOSE 10000

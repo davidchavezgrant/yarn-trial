@@ -600,6 +600,24 @@ const plantRecording = (dir: string, jobId: string, file: string): void => {
 	fs.writeFileSync(path.join(rec, file), "BYTES");
 };
 
+test("ParseDashArgs__DeclaresPublic__When__TheFlagOrEnvSaysSo", () => {
+	const saved = process.env.DASH_PUBLIC;
+	try {
+		delete process.env.DASH_PUBLIC;
+		// Absent by default: "no auth configured" must never READ as "publish openly" — that is a
+		// misconfigured deploy, and main() refuses it.
+		assert.equal(parseDashArgs([]).public, undefined);
+		assert.equal(parseDashArgs(["--public"]).public, true);
+		process.env.DASH_PUBLIC = "1";
+		assert.equal(parseDashArgs([]).public, true);
+		// Only "1" arms it, like DASH_SHARE — a stray DASH_PUBLIC=false must not read as truthy.
+		process.env.DASH_PUBLIC = "false";
+		assert.equal(parseDashArgs([]).public, undefined);
+	} finally {
+		if (saved === undefined) delete process.env.DASH_PUBLIC; else process.env.DASH_PUBLIC = saved;
+	}
+});
+
 test("BuildState__CountsUnmatchedEntries__When__AnArmIdResolvesToNothing", () => {
 	const s = buildState(
 		manifest(

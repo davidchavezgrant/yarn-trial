@@ -2073,6 +2073,12 @@ export interface DashOptions {
 	 * costing a model call — and the snapshot already carries the notes the pass earned.
 	 */
 	share?: boolean;
+	/**
+	 * Serve with NO auth gate. Only ever true because someone SAID so — `--public` or
+	 * DASH_PUBLIC=1 — never inferred from a missing DASH_AUTH, which is the shape of a
+	 * misconfigured deploy rather than a decision. See main()'s isPublic.
+	 */
+	public?: boolean;
 }
 
 /**
@@ -2146,6 +2152,9 @@ export function parseDashArgs(args: string[]): DashOptions {
 		// Env as well as flag: a PaaS start command is a place where one env var beats arguing
 		// with argv quoting, and the Electron shell shares this parser.
 		...(args.includes("--share") || process.env.DASH_SHARE === "1" ? { share: true } : {}),
+		// Env as well as flag, like --share: on a PaaS the posture travels as an env var, and it
+		// must be as easy to declare "public on purpose" as it is to declare share mode.
+		...(args.includes("--public") || process.env.DASH_PUBLIC === "1" ? { public: true } : {}),
 	};
 }
 
@@ -2255,12 +2264,28 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	// every narrate tick read the key env vars this seeds.
 	loadEnvFallback();
 	const { port, autoCollect, share = false } = opts;
-	const authGate = basicAuthGate(process.env.DASH_AUTH);
+	/**
+	 * PUBLIC — serve the board with no gate at all (David, 2026-08-03: "the data isn't sensitive
+	 * and I'd rather the team not have to authenticate to view it").
+	 *
+	 * A SEPARATE, EXPLICIT declaration rather than "no DASH_AUTH means no auth", because those are
+	 * different situations and only one of them is a decision. An unset secret is the shape of a
+	 * misconfigured deploy — a rotated key, a forgotten env var on a new service — and the refusal
+	 * below exists to catch exactly that. Publishing openly is a choice someone has to make in so
+	 * many words, and this is the words.
+	 */
+	const isPublic = opts.public === true || process.env.DASH_PUBLIC === "1";
+	// Precedence, stated because the combination is contradictory config: an explicit DASH_PUBLIC
+	// wins over a DASH_AUTH left behind by an earlier posture, and says so on the way up. The
+	// alternative — refusing to start — would mean a deploy that cannot go public until someone
+	// with dashboard access removes a secret, which is a worse failure than a loud log line.
+	const authGate = isPublic ? undefined : basicAuthGate(process.env.DASH_AUTH);
+	if (isPublic && process.env.DASH_AUTH) console.warn("DASH_PUBLIC=1 — serving UNAUTHENTICATED; the DASH_AUTH value present in this environment is deliberately ignored");
 	// Two refusals rather than two silent downgrades, per env.ts's rule that a knob wrong enough
 	// to matter should be heard: a share-mode dash is reachable by people who are not the
-	// operator, so serving it unauthenticated or letting it WRITE to the store it is publishing
-	// are both worth dying over rather than logging.
-	if (share && !authGate) throw new Error("--share requires DASH_AUTH=user:pass — refusing to publish the store unauthenticated");
+	// operator, so serving it unauthenticated BY ACCIDENT or letting it WRITE to the store it is
+	// publishing are both worth dying over rather than logging.
+	if (share && !authGate && !isPublic) throw new Error("--share requires DASH_AUTH=user:pass, or DASH_PUBLIC=1 to publish it openly on purpose — refusing to serve the store unauthenticated by accident");
 	if (share && autoCollect) throw new Error("--share and --collect are contradictory: a published snapshot is read-only");
 	// Mutable: a dash that did not have its date named follows the newest drained pass, so a
 	// benchmark starting after the one it booted on does not leave it watching yesterday.
@@ -3881,7 +3906,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			// Share mode says what it withheld, not just what it is: "no fleet" is the difference
 			// between a dash that cannot reach the Macs and one that was told not to try.
 			console.log(share
-				? `DASH (share): http://localhost:${port}  (date ${date}, snapshot — no fleet, no peek, no narrator, auth ON)`
+				? `DASH (share): http://localhost:${port}  (date ${date}, snapshot — no fleet, no peek, no narrator, ${authGate ? "auth ON" : "PUBLIC — no auth, anyone with the URL can read this board"})`
 				: `DASH (David's Agent Supervision Hub): http://localhost:${port}  (date ${date}, fleet poll ${FLEET_POLL_SEC}s, ${autoCollect ? `auto-collect ${COLLECT_SEC}s` : "collect OFF — pure reader"}${authGate ? ", auth ON" : ""})`);
 			resolve();
 		});

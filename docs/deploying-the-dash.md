@@ -27,7 +27,7 @@ the local one or with the report over the same manifest.
 | `/api/logs` remote tier | ssh fallback | local files only |
 | detail checkpoint fetch | ssh on demand | local only |
 | narrator | mints notes | **off** (snapshot's notes still render) |
-| `DASH_AUTH` | optional | **required — refuses to start without it** |
+| `DASH_AUTH` | optional | **required, unless `DASH_PUBLIC=1` declares open access** |
 | `--collect` | opt-in | **refused** |
 
 The ssh-shelling branches all gate on the host inventory, so share mode simply withholds it —
@@ -50,10 +50,23 @@ traversal-shaped id, 404 for an unfilmed run, 401 unauthenticated, and the playe
 "expand all" revealing 183 run lines and 43 ▶, and playback surviving three forced re-renders
 (the player lives in a modal in the static page precisely so it can).
 
-**Posture note.** A frozen render is evidence, not a live capability — the same class as the run
-log text this dash already serves, and nothing like `/peek`, which reaches into a colo Mac. But it
-is video of Yarn's product UI on a public URL behind Basic auth, which is a deliberate choice
-rather than an implied one.
+**Posture note — the board is PUBLIC as of 2026-08-03.** David's call: the benchmark data is not
+sensitive and the team should not have to authenticate to read it. `DASH_PUBLIC=1` serves the board
+with no gate; `/healthz` stops being special because nothing else is gated either.
+
+What that publishes, listed so the next person weighing it sees all of it: the filmed takes of
+Yarn's product UI, per-run cost estimates, the appmaps of the app, and every run's console log. No
+`robots.txt` is served, so a link posted anywhere is crawlable.
+
+Two properties of the switch are deliberate. It is a SEPARATE declaration from "DASH_AUTH is
+unset", because an absent secret is the shape of a misconfigured deploy — a rotated key, a
+forgotten env var — and share mode still refuses to start on that. And it OVERRIDES a DASH_AUTH
+left behind by the previous posture, logging loudly on the way up, so going public never depends on
+someone with dashboard access first deleting a secret. `--public` is the CLI equivalent.
+
+`ARG DASH_PUBLIC=` in Dockerfile.dash defaults to OFF: an image is public only when built with
+`--build-arg DASH_PUBLIC=1`, so the choice lives in the build command that produced a tag rather
+than being inherited by every future build.
 
 **Frozen states.** The shipped 2026-08-01 manifest holds 173 done, 22 failed and **3 still
 mid-run** (nothing queued — the pass drained). A live dash resolves those against the fleet; a
