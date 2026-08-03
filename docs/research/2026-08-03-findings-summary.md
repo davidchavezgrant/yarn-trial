@@ -203,7 +203,9 @@ Full detail, including what a production build has to *add* that this never need
 - **Whether a map built from screenshots alone is useful.** That run went out without its map and
   was automatically disqualified. I reported it as a result first and had to retract it.
 - **Whether any of this transfers to a second app.** We measured a second *task*, never a second
-  application. [superseded 2026-08-03: a second app is now measured — Notion on the **web**, driven
+  application. [amended 2026-08-03: still true as a RESULT — a second app is now in the MATRIX but
+  has produced nothing yet (`out/bench/live/2026-08-03/manifest.json` is empty, 0/0 collected), so
+  no claim here transfers across apps. What is queued: Notion on the **web**, driven
   over CDP: 77 arms / 152 runs of the current 194-arm / 383-run matrix, against Yarn's 117 / 231.
   Three discovery explores, the configuration cells mirrored across two Notion tasks (a five-row
   table; a task database with a status property and a filtered board view), reuse and the Fable
