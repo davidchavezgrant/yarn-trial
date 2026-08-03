@@ -12,8 +12,9 @@
 # it — mid-dispatch, with runs on the fleet and nothing left watching to collect them. This adds
 # exactly the three things that makes it walk-away safe:
 #
-#   1. DETACHED. setsid + nohup, so no SIGHUP reaches it and it is not in the caller's process
-#      group. The pass keeps going when the terminal, the ssh session or the agent goes away.
+#   1. DETACHED. nohup plus a subshell that exits, so no SIGHUP reaches it and it is reparented
+#      to pid 1. The pass keeps going when the terminal, the ssh session or the agent goes away.
+#      (NOT setsid — see the launch line; it does not exist on macOS.)
 #   2. LOGGED. Everything to out/bench/full-pass-<date>.log, outside the live store so
 #      `runs purge` cannot take the record of what happened with it.
 #   3. LOCKED. One pass at a time. A second launch would double-dispatch every arm — the
@@ -35,16 +36,23 @@ REPO="$PWD"
 # whole time and refused by the validator).
 PHASES="${FULL_PASS_PHASES:-all}"
 
-# A hard spend ceiling, checked before every dispatch wave. The 2026-08-01 pass cost ~$302 for 198
-# runs; a full pass is 253 planned, so ~$400 is the expectation and this is roughly 1.5x that —
-# enough headroom for retries, low enough to stop a runaway while nobody is watching. There is no
-# default in the autopilot itself (it warns instead), which is correct for an attended run and
-# wrong for this one.
-MAX_USD="${FULL_PASS_MAX_USD:-600}"
+# NO SPEND CEILING BY DEFAULT — David's call, 2026-08-03. The pass is the point; a ceiling that
+# trips at 3am stops it partway and leaves stages unmeasured, which costs more than it saves
+# (the 2026-08-01 pass ran ~$302 for 198 runs, so a full 253-run pass is a ~$400 expectation).
+# The autopilot only enforces one when told, so this passes nothing and the run is unbounded.
+#
+# Still available for a pass you DO want bounded: FULL_PASS_MAX_USD=400 ./scripts/full-pass.sh --go
+MAX_USD="${FULL_PASS_MAX_USD:-}"
+
 
 # Pinned at launch and passed explicitly, so a pass that crosses UTC midnight keeps writing to the
 # manifest it started, and a relaunch resumes that pass instead of forking a fresh one.
 DATE="${FULL_PASS_DATE:-$(date -u +%Y-%m-%d)}"
+
+# Built once, used by both the preview and the launch, so the two can never disagree about what
+# the pass is bounded by.
+AUTOPILOT_ARGS=(--phases "$PHASES" --date "$DATE")
+[[ -n "$MAX_USD" ]] && AUTOPILOT_ARGS+=(--max-usd "$MAX_USD")
 
 LOG="$REPO/out/bench/full-pass-$DATE.log"
 LOCK="$REPO/out/bench/full-pass.lock"
@@ -53,10 +61,10 @@ mkdir -p "$REPO/out/bench"
 if [[ "${1:-}" != "--go" ]]; then
 	echo "PLAN ONLY — nothing will be dispatched. Add --go to launch."
 	echo
-	./run bench autopilot --phases "$PHASES" --date "$DATE" --max-usd "$MAX_USD"
+	./run bench autopilot "${AUTOPILOT_ARGS[@]}"
 	echo
 	echo "launch:  ./scripts/full-pass.sh --go"
-	echo "  stages come from the matrix's own dependency graph; spend ceiling \$$MAX_USD; log -> ${LOG#$REPO/}"
+	echo "  stages come from the matrix's own dependency graph; ${MAX_USD:+spend ceiling \$$MAX_USD; }${MAX_USD:-no spend ceiling; }log -> ${LOG#$REPO/}"
 	exit 0
 fi
 
@@ -99,7 +107,7 @@ echo "launching the full pass, detached."
 # and it would have failed with "setsid: command not found" at the moment of launch — a
 # fire-and-forget script that never fires, discovered only on getting back to a fleet that did
 # nothing for a day.
-( nohup ./run bench autopilot --phases "$PHASES" --date "$DATE" --max-usd "$MAX_USD" --go >>"$LOG" 2>&1 & echo $! >"$LOCK" )
+( nohup ./run bench autopilot "${AUTOPILOT_ARGS[@]}" --go >>"$LOG" 2>&1 & echo $! >"$LOCK" )
 PID="$(cat "$LOCK")"
 
 # Give it a moment to fail fast — a refusal (bad key, hinted prompt, adopted archive manifest)
