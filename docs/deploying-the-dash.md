@@ -1,6 +1,6 @@
 # Hosting the dash — sharing benchmark results
 
-Verified 2026-08-03 against the 2026-08-01 pass (187 entries, 151 collected, $220.04).
+Verified 2026-08-03 against the 2026-08-01 pass (198 entries, 195 collected, 43 filmed takes).
 
 The dash is a reader that normally sits beside the store it reads. Hosting it means separating
 the two, and the whole trick is that the separation is cheap: what the board *renders* is
@@ -42,19 +42,22 @@ The board carries a first-level **Take** column, beside Map and Graphs. It reads
 Map, unlike the per-arm Graphs page), and the ▶ appears only where the state frame said a render
 exists — `EntryView.video`, resolved by the same `hasTake` the route serves through, so a row
 never advertises a video the server cannot serve. Every other run shows an explicit `–`.
-Verified end to end on
-2026-08-03 against a share-mode dash over a real snapshot: 200 with `accept-ranges`, correct 206
-for head/tail/suffix ranges, 416 past EOF, 400 on a traversal-shaped id, 404 for an unfilmed run,
-and the player decoding a 45.65 s 1568×960 take.
+
+Verified end to end on 2026-08-03, against both a local share-mode dash and the pushed image:
+200 with `accept-ranges`, correct 206 for head/tail/suffix ranges, 416 past EOF, 400 on a
+traversal-shaped id, 404 for an unfilmed run, 401 unauthenticated, and the player decoding a
+45.65 s 1568×960 take. The board's own check: folded on load with the Take header present,
+"expand all" revealing 183 run lines and 43 ▶, and playback surviving three forced re-renders
+(the player lives in a modal in the static page precisely so it can).
 
 **Posture note.** A frozen render is evidence, not a live capability — the same class as the run
 log text this dash already serves, and nothing like `/peek`, which reaches into a colo Mac. But it
 is video of Yarn's product UI on a public URL behind Basic auth, which is a deliberate choice
 rather than an implied one.
 
-**Frozen states.** The 2026-08-01 manifest froze with 3 entries mid-run and 33 still queued. A
-live dash resolves those against the fleet; a snapshot has no fleet to ask, so without help it
-would claim three runs are executing forever. `freezeStates` retires them to `abandoned` and
+**Frozen states.** The shipped 2026-08-01 manifest holds 173 done, 22 failed and **3 still
+mid-run** (nothing queued — the pass drained). A live dash resolves those against the fleet; a
+snapshot has no fleet to ask, so without help it would claim three runs are executing forever. `freezeStates` retires them to `abandoned` and
 `never-ran` — display only, and `rollup()` reads neither, so no figure moves.
 
 **`/healthz`** is the one unauthenticated route: 200, the word `ok`, nothing else. A PaaS health
@@ -68,7 +71,7 @@ gets restarted forever.
 | | |
 |---|---|
 | output | `<dest>/out/bench/live/…` — the same layout the dash already reads, so no snapshot awareness is needed anywhere |
-| size | **30.7 MB**, 988 files, 184 of 198 run dirs, 20 cursor renders (14 entries never wrote a dir — queued, or evicted by collect). Measured 2026-08-03; it was 6.0 MB before the renders travelled, and the manifest has grown since the 187-entry figure |
+| size | **90.4 MB**, 1145 files, 195 of 198 run dirs, 43 cursor renders (3 entries never wrote a dir). Measured 2026-08-03 at the shipped snapshot; it was 6.0 MB before the renders travelled |
 | carries | manifest, per-run `run.json` / `events.jsonl` / `journal.jsonl` / `log.txt` / `appmap.*` / `checkpoint.json`, the per-arm appmap archive, the pass report, `narrative.jsonl`, and each filmed run's `recording/humanized.mp4` |
 | drops | `steps/`, and the rest of `recording/` — frames, `trajectory/`, and the raw cursorless `window.mp4`. ~36 MB per run of *evidence*; the board charts its *metrics* and shows the one artifact that is itself a result |
 
@@ -79,24 +82,30 @@ cursor in it (the fleet's capture draws none; `humanize` composites one from the
 points and typing timings), so shipping both would double the bytes to show a strictly worse
 video.
 
-Coverage is the honest caveat, and it is a property of the pass rather than of the dash. On
-2026-08-03 the 2026-08-01 pass held 198 entries, of which **48 are filmed arms and 30 had a
-render** — climbing while a collect was in flight, because `bench collect` composites on pull
-(`humanizePulled`, `HUMANIZE=0` disables). Two things cap it, and neither is fixable here:
+Coverage is a property of the pass, not of the dash. The 2026-08-01 pass shipped 2026-08-03 with
+198 entries, 195 collected, **48 filmed arms and 43 renders** — 43 of 198 rows offer a ▶, a bit
+over a fifth. Two caps, neither fixable here:
 
-- **17 of the 48 filmed entries were still queued** when the pass froze. A run that never
-  executed has no footage anywhere, on this machine or the fleet.
 - **Explores are deliberately never filmed.** `--record` swaps in demo rules and a demo act tool
   with no `set_value`, which changes what the pass DOES — a filmed explore would produce a
-  different map from the one every downstream arm is grounded on (`matrix.ts`'s `filmed`).
+  different map from the one every downstream arm is grounded on (`matrix.ts`'s `filmed`). Every
+  grounding-pass row therefore shows `–`, and those are the rows a folded board shows first.
+- **5 filmed entries have no render**: 3 left no run directory (evicted, or never wrote one) and
+  2 hold frames whose trajectory has no driver turns — `humanize` exits with "nothing to animate",
+  which is an honest answer rather than a failure to retry.
 
-So **collect before snapshotting**, and expect roughly a sixth of the rows to offer a ▶ — the rest
-show `–` because they were never filmed, not because anything is missing. Renders outside the
-published manifest (a `2026-08-02T18-51-*` batch, 13 of them at last count) appear on no board:
-the dash renders manifest entries, and those runs belong to no pass's manifest.
+**Collect before snapshotting.** `bench collect` composites on pull (`humanizePulled`, `HUMANIZE=0`
+disables), so the render count climbs as runs land: this pass went 20 → 28 → 33 → 43 over the
+half-hour a collect was draining it. A snapshot taken mid-drain is honest but stale, and
+redeploying is one `render deploys create --image`.
 
-If a future pass films everything, ~250 MB of video would land in the image and the renders should
-move to `assets.yarn.so` (already on CloudFront) with the board linking out instead.
+Renders outside the published manifest appear on no board — a `2026-08-02T18-51-*` batch of 13 at
+last count. The dash renders manifest entries, and those runs belong to no pass's manifest.
+
+**Image size is now the thing to watch: 584 MB**, of which ~95 MB is the snapshot and ~87 MB of
+that is video. One more filmed pass of this size doubles the video and the argument for moving
+renders to `assets.yarn.so` (already on CloudFront) with the board linking out becomes the
+cheaper option — see the pre-rendering note under Choosing.
 
 `snapshots/` is gitignored: it is a regenerable duplicate of manifests already tracked under
 `out/bench`, plus 800-odd run logs. Build the image locally and push it (below) and the bytes
@@ -105,8 +114,8 @@ never travel through git.
 ## Deploying
 
 `Dockerfile.dash` is platform-neutral — it binds `$PORT`, listens on `0.0.0.0`, runs as `node`,
-and carries the snapshot at `/app/snapshot`. Built and run end-to-end on 2026-08-03: 444 MB,
-all routes verified, page renders.
+and carries the snapshot at `/app/snapshot`. Built and run end-to-end on 2026-08-03: **584 MB**
+with the takes (444 MB before them), all routes verified, page renders.
 
 ```bash
 ./run dash:snapshot --date 2026-08-01 --dest snapshots/current
@@ -136,7 +145,7 @@ Live in the **Yarn** workspace (`tea-c9b5apvho1kjc8a5l9t0`), from a private imag
 |---|---|
 | URL | <https://yarn-bench-dash.onrender.com> (Basic auth) |
 | service | `srv-d9o382u7bikc73csivm0` · starter · oregon · `autoDeploy: no` |
-| image | `ghcr.io/davidchavezgrant/yarn-bench-dash:2026-08-01` (**private** package) |
+| image | `ghcr.io/davidchavezgrant/yarn-bench-dash:2026-08-03b` (**private** package) — 584 MB. Earlier tags stay pullable, so a rollback is one `render deploys create --image` |
 | registry credential | `rgc-d9o36ptaeets73cvdgl0` (`ghcr-davidchavezgrant`) |
 | health check | `/healthz` |
 
