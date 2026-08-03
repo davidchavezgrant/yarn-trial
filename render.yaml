@@ -1,0 +1,38 @@
+# Render Blueprint — the benchmark dash in share mode, over a frozen snapshot.
+#
+# This is the DECLARATIVE half of "programmatic deployment": committed here, Render applies it
+# on push (Blueprints → New Blueprint Instance, or `PATCH /v1/services/<id>` against the same
+# fields via the REST API with a RENDER_API_KEY). Nothing about the dash is Render-specific —
+# Dockerfile.dash also runs unchanged on Cloud Run and ECS/Fargate; see
+# docs/deploying-the-dash.md for those and for why a prebuilt image may suit this better than a
+# build-from-repo.
+#
+# PREREQUISITE, and the one step this file cannot do for you: the snapshot must exist in the
+# build context before Render builds, because a builder cannot reach the operator's laptop.
+#   ./run dash:snapshot --date 2026-08-01 --dest snapshots/current
+# `snapshots/` is gitignored (852 run-log files is not what git is for here), so a
+# build-from-repo needs it force-added — which is the argument for the prebuilt-image path.
+
+services:
+  - type: web
+    name: yarn-bench-dash
+    runtime: docker
+    dockerfilePath: ./Dockerfile.dash
+    dockerContext: .
+    # The board is a few MB of JSON and some SVG charts — the smallest paid plan is ample.
+    # Free tier also works, with the caveat that it sleeps and takes ~30s to wake, which is a
+    # poor first impression on a link you have just sent someone.
+    plan: starter
+    region: oregon
+    # /healthz is the ONLY unauthenticated route (see dash.ts). Pointing the check at "/" would
+    # 401 forever under DASH_AUTH and Render would restart the service in a loop.
+    healthCheckPath: /healthz
+    envVars:
+      # sync: false = Render prompts for it and stores it as a secret. NEVER commit the value:
+      # it is the only thing between a public URL and Yarn's benchmark data.
+      - key: DASH_AUTH
+        sync: false
+      # Belt and braces — Dockerfile.dash already sets it, but an operator reading only this
+      # file should see the posture stated.
+      - key: DASH_SHARE
+        value: "1"

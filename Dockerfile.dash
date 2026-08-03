@@ -1,0 +1,60 @@
+# The dash in SHARE mode: a read-only board over a frozen benchmark snapshot.
+#
+# One image, three targets — Render, Cloud Run and ECS/Fargate all consume a Dockerfile, and
+# this deliberately assumes nothing about which. It binds $PORT (parseDashArgs prefers it over
+# DASH_PORT for exactly this reason) and listens on 0.0.0.0, which is what every one of them
+# health-checks.
+#
+# WHAT MUST BE IN THE BUILD CONTEXT: the snapshot. A container cannot reach the operator's
+# laptop, so `./run dash:snapshot --date <d> --dest snapshots/<d>` runs FIRST and its output is
+# copied in below. ~6 MB for a 187-entry pass; see docs/deploying-the-dash.md.
+#
+# Compiled rather than run through tsx, for two reasons: tsx is a devDependency and pulling it
+# into the runtime drags Electron (~150 MB) along with it, and a compile is where a broken
+# deploy should fail — at build time, not on the first request.
+
+# ---- build: compile src/ to plain JS ---------------------------------------------------------
+FROM node:22-slim AS build
+WORKDIR /app
+# The lockfile alone first, so a source edit does not invalidate the dependency layer.
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY tsconfig.json tsconfig.electron.json ./
+COPY src/ ./src/
+COPY electron/ ./electron/
+RUN npx tsc -p tsconfig.electron.json
+
+# ---- runtime -------------------------------------------------------------------------------
+FROM node:22-slim AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+# --omit=dev drops Electron, tsx and typescript. The three runtime packages that remain
+# (@anthropic-ai/sdk, @trycua/cua-driver, playwright-core) are all reached by dash.ts's STATIC
+# import graph — via core/journal.ts's harness barrel and graphs.ts's cursor chain — so they
+# must resolve even though share mode never calls into any of them. All three publish
+# linux-x64 builds; cua-driver's optional @trycua/cua-driver-linux-x64-gnu is the one to watch
+# if this image is ever built for arm64.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+
+COPY --from=build /app/dist-electron/ ./dist-electron/
+# resolveHtml/serveGraphs look for the page BESIDE the compiled module first, then walk back to
+# a src/ checkout. Putting them beside the module satisfies the first candidate, so the image
+# needs no src/ tree at all.
+COPY src/bench/dash.html src/bench/graphs.html ./dist-electron/src/bench/
+# hosts.json is deliberately NOT copied: share mode withholds the inventory, and an image that
+# does not contain the fleet's addresses cannot leak them.
+
+# The frozen store. ARG so a build can point at a different pass without editing this file.
+ARG SNAPSHOT_DIR=snapshots/current
+COPY ${SNAPSHOT_DIR}/ ./snapshot/
+ENV YARN_RUNNER_DATA=/app/snapshot
+
+# Share mode is the posture, not a suggestion: dash.ts refuses to start without DASH_AUTH, so a
+# missing secret is a failed deploy rather than a public dataset. Set DASH_AUTH in the platform's
+# own secret store — never here.
+ENV DASH_SHARE=1
+# Unprivileged: nothing here writes, so nothing needs to own the filesystem.
+USER node
+EXPOSE 10000
+CMD ["node", "dist-electron/src/bench/dash.js"]

@@ -116,7 +116,12 @@ ${b}bench${n}
                                          as results land (pure reader by default; --collect arms
                                          the auto-collect loop; --web = headless server on
                                          localhost:4642; --dev = --web with hot reload — server
-                                         restarts on .ts changes, page reloads itself)
+                                         restarts on .ts changes, page reloads itself;
+                                         --share = hosted posture over a snapshot: no fleet,
+                                         no peek, no narrator, DASH_AUTH required)
+  dash:snapshot --date D --dest DIR      freeze that pass into a ~6 MB metadata-only store for
+                                         hosting (drops step frames + recordings). Serve it with
+                                         YARN_RUNNER_DATA=DIR ./run dash --share
 
 ${b}setup & health${n}
   doctor                                 check permissions, keys, deps before demoing
@@ -277,11 +282,22 @@ dash)
 		# attaches to this server instead of starting its own — or use a browser.
 		exec npx tsx watch src/bench/dash.ts "$@"
 	fi
-	if [[ " $* " == *" --web "* || ${1:-} == --web ]]; then
+	# --share implies headless: it is the posture for a HOSTED dash (a container has no
+	# display), and it withholds the fleet inventory so nothing in the process shells ssh.
+	# DASH_AUTH is mandatory in that mode — dash.ts refuses to start without it.
+	if [[ " $* " == *" --web "* || ${1:-} == --web || " $* " == *" --share "* || ${1:-} == --share ]]; then
 		exec npx tsx src/bench/dash.ts "$@"
 	fi
 	npx tsc -p tsconfig.electron.json
 	exec npx electron dist-electron/electron/dash.js "$@"
+	;;
+
+dash:snapshot)
+	# Freeze one pass into a metadata-only store a hosted dash can serve (src/bench/snapshot.ts).
+	# Pure reader over out/bench — it writes only under --dest. ~6 MB for a 187-entry pass,
+	# because the step frames and recordings stay behind; see docs/deploying-the-dash.md.
+	shift
+	exec npx tsx src/bench/snapshot.ts "$@"
 	;;
 
 browser-wipe)

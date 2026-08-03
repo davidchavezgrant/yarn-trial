@@ -221,6 +221,34 @@ export function archiveBench(date = utcDate(), outRoot = outDir()): string {
 
 export const manifestPath = (date = utcDate(), root = liveDir()): string => path.join(benchDir(date, root), "manifest.json");
 
+/**
+ * Where an explore arm's appmap pair is archived under the bench dir, keyed on
+ * (model, armId) — the pair the report compares. Exists because docs/appmaps/<slug>.* is
+ * ONE file per app by convention, so a second model's pass overwrites the first's on disk;
+ * the run logs pin each run's map by sha256, but the content itself would be gone.
+ *
+ * Here rather than in collect.ts (2026-08-03), where it lived until the dashboard needed it:
+ * it is a path builder over benchDir and belongs beside it, while collect.ts does I/O and
+ * reaches the core/harness barrel. dash.ts imported this ONE pure function and inherited the
+ * barrel with it, which is how a read-only dashboard came to statically require the Anthropic
+ * SDK, the cua driver and playwright-core.
+ *
+ * That is now one of three such paths rather than the only one, so moving it did NOT make the
+ * dash npm-free — `src/core/journal.ts` imports the barrel outright, and graphs.ts reaches
+ * playwright via cursor/track.ts → agent/recording.ts → backends/cdp.ts. Measure with a
+ * transitive trace before claiming otherwise: dash.ts's own header says it never imports the
+ * barrel, and that is true only of its DIRECT imports.
+ */
+export function archiveDirFor(benchRoot: string, entry: ManifestEntry): string {
+	const model = (entry.model ?? "default").replace(/[^A-Za-z0-9._-]+/g, "-");
+	// Per JOB, not per arm. An explore arm with n>1 runs the same pass twice, and both write
+	// the same live filename (yarn.ax.md) on their own Macs — so an arm-keyed archive keeps
+	// only whichever was collected last, discarding the second sample and with it the entire
+	// reason for repeating. The repeats exist to give the backend comparison an error bar;
+	// an archive that holds one of two is worse than not repeating, because it looks complete.
+	return path.join(benchRoot, "appmaps", model, entry.armId, entry.jobId);
+}
+
 export function readManifest(date = utcDate(), root = liveDir()): Manifest {
 	// Live, then the backup, then the store's pre-bench homes (out/live, out/archive — a few
 	// hours of passes landed there), then the legacy out/bench/<date> layout — the same fallback

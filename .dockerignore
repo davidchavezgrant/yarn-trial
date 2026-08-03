@@ -1,0 +1,22 @@
+# Keep the build context to what Dockerfile.dash actually COPYs. Without this, `out/` alone
+# (step frames, recordings, 1.4 GB on a working laptop) is uploaded to the builder on every
+# build — the exact bulk the snapshot exists to leave behind.
+.git
+node_modules
+dist-electron
+out
+tests
+docs
+native/axdom
+native/liveview
+native/default-browser
+tools
+*.png
+*.mp4
+.env
+.DS_Store
+# The fleet's addresses and pinned host keys have no business in an image that cannot use them.
+hosts.json
+# Snapshots other than the one being shipped (SNAPSHOT_DIR selects it; the rest are noise).
+snapshots/*
+!snapshots/current

@@ -70,3 +70,11 @@ data/cursor-smoothed-dataset/
 # Backups the claude-use-subscription script writes beside settings.local.json —
 # same secret-bearing content as the ignored original, so they must never track.
 .claude/settings.local.json.bak-*
+
+# Frozen dash snapshots (./run dash:snapshot) — a metadata-only copy of a pass, built to be
+# COPYied into a container image. The manifests inside are worth keeping, but they are already
+# tracked at their source under out/bench; this is a derived, regenerable duplicate of them
+# plus 800-odd run logs, and the deploy path that needs it (docs/deploying-the-dash.md) builds
+# the image locally and pushes it, so the bytes never need to travel through git.
+# A build-from-repo deploy is the exception and needs `git add -f snapshots/<name>`.
+snapshots/

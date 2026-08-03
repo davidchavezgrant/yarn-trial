@@ -868,7 +868,10 @@ function renderFleet() {
 			rows.push({ name: h, reachable: false, state: "unknown", reason: "not in the fleet poll" });
 	const box = $("fleet");
 	if (!rows.length) {
-		box.innerHTML = `<div class="card empty">fleet: ${esc(f.error || "no poll yet")}</div>`;
+		// On a snapshot there is no fleet and never will be — share mode does not poll. An empty
+		// "fleet: no poll yet" card promises a row that cannot arrive, so the section collapses
+		// instead. A LIVE dash keeps the placeholder: there, "no poll yet" is real news.
+		box.innerHTML = isSnapshot ? "" : `<div class="card empty">fleet: ${esc(f.error || "no poll yet")}</div>`;
 		return;
 	}
 	// Clear the rowless placeholder (the only non-.host child this container ever holds).
@@ -2760,9 +2763,16 @@ function setConn(mode, tip) {
 	el.classList.toggle("ok", mode === "ok");
 	el.classList.toggle("stale", mode === "stale");
 	el.dataset.tip = tip;
-	$("conn-word").textContent = mode === "ok" ? "live" : mode === "stale" ? "stale" : "down";
-	$("conn-word").dataset.tip = tip;
+	// On a shared snapshot (state.share) a healthy socket does NOT mean moving numbers, and
+	// "live" beside a frozen board is the one reading that would mislead a viewer who was sent
+	// the link. stale/down still say stale/down — those are facts about the socket either way,
+	// and a snapshot whose server has gone away is worth showing as such.
+	$("conn-word").textContent = mode === "ok" ? (isSnapshot ? "snapshot" : "live") : mode === "stale" ? "stale" : "down";
+	$("conn-word").dataset.tip = isSnapshot && mode === "ok" ? "a frozen benchmark snapshot — these numbers do not change" : tip;
 }
+// Latched, never un-latched: a snapshot server cannot become a live one mid-session, and a
+// dropped frame must not flip the word back to "live".
+var isSnapshot = false;
 setConn("down", "connecting…");
 
 // The displayed mode derives from what is KNOWN at call time — no path writes the dot from a
@@ -2787,6 +2797,9 @@ function connectES() {
 		if (d && d.reload === true) { location.reload(); return; } // never falls through to render with a non-state object
 		if (d && d.ev === "hb") { syncConn(); return; } // liveness only — never touches state or receivedAt (the elapsed tickers' base)
 		lastStateAt = Date.now();
+		// Before syncConn: it reads isSnapshot to choose the badge word, and the first state
+		// frame is what tells us which kind of server this is.
+		if (d && d.share === true) isSnapshot = true;
 		syncConn();
 		state = d;
 		receivedAt = Date.now();

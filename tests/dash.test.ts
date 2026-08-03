@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { aggregateRunEvents, appendNarrativeEvent, buildDetail, buildState, type DashEvent, defaultDashDate, exploreSeries, type FleetView, fromStore, groundingArmId, legacyNarrativeLogPath, loadEnvFallback, localRunProgress, matchPath, narrativeLogPath, type NarrativeEvent, narratorPrompt, notedRunKeys, parseDashArgs, parseEnvLine, parseLogFrames, parseRunEvents, rankExplore, readPersistedNarrative, runEventLine, type RunProgress, storeEvents, utf8Tail, watchStoreChain } from "../src/bench/dash.js";
+import { aggregateRunEvents, appendNarrativeEvent, basicAuthGate, buildDetail, buildState, type DashEvent, defaultDashDate, exploreSeries, type FleetView, freezeStates, fromStore, groundingArmId, legacyNarrativeLogPath, loadEnvFallback, localRunProgress, matchPath, narrativeLogPath, type NarrativeEvent, narratorPrompt, notedRunKeys, parseDashArgs, parseEnvLine, parseLogFrames, parseRunEvents, rankExplore, readPersistedNarrative, runEventLine, type RunProgress, storeEvents, utf8Tail, watchStoreChain } from "../src/bench/dash.js";
+import { exportSnapshot } from "../src/bench/snapshot.js";
 // The submodule, not the core/harness.ts barrel: the barrel loads the Anthropic SDK and the
 // cua driver, which a unit test of a 30-line appender has no business paying for.
 import { runEvent, usageEvent } from "../src/core/harness/run-events.js";
@@ -1641,5 +1642,180 @@ test("StoreEvents__MergesRemoteTails__When__ExtraEventsPassed", () => {
 		assert.equal(merged[1]?.source, "run");
 	} finally {
 		fs.rmSync(out, { recursive: true, force: true });
+	}
+});
+
+/*
+ * ---- share mode: the posture a HOSTED dash runs in -----------------------------------------
+ *
+ * Three separable pieces, tested separately because they fail separately: the credential
+ * check, the retirement of states a snapshot can no longer resolve, and the flag/env parsing
+ * that turns the posture on. The ssh-branch disarming is NOT unit-tested here — it is the
+ * absence of an `inventory`, which startDash owns and dash.test.ts has no server for.
+ */
+
+test("BasicAuthGate__ReturnsUndefined__When__SpecIsUnset", () => {
+	// Undefined means WIDE OPEN, which is the correct default for a laptop-bound dash — and the
+	// reason startDash refuses to pair it with --share.
+	assert.equal(basicAuthGate(undefined), undefined);
+	assert.equal(basicAuthGate(""), undefined);
+});
+
+test("BasicAuthGate__AcceptsCredential__When__HeaderMatchesTheSpec", () => {
+	const gate = basicAuthGate("yarn:trial2026");
+	assert.ok(gate);
+	const header = `Basic ${Buffer.from("yarn:trial2026", "utf8").toString("base64")}`;
+	assert.equal(gate(header), true);
+	// Scheme match is case-insensitive per RFC 7617; the credential itself is not.
+	assert.equal(gate(header.replace("Basic", "basic")), true);
+});
+
+test("BasicAuthGate__Rejects__When__CredentialOrHeaderIsWrong", () => {
+	const gate = basicAuthGate("yarn:trial2026");
+	assert.ok(gate);
+	assert.equal(gate(`Basic ${Buffer.from("yarn:wrong", "utf8").toString("base64")}`), false);
+	// A shorter/longer credential must return false, not throw — timingSafeEqual raises on a
+	// length mismatch, so the gate has to check lengths before comparing.
+	assert.equal(gate(`Basic ${Buffer.from("y", "utf8").toString("base64")}`), false);
+	assert.equal(gate(undefined), false);
+	assert.equal(gate("Bearer abc"), false);
+	assert.equal(gate("Basic !!!not-base64!!!"), false);
+});
+
+test("FreezeStates__RetiresRunningAndQueued__When__EntryIsUncollected", () => {
+	const frozen = freezeStates(manifest(
+		entry({ jobId: "a", state: "running", collected: false }),
+		entry({ jobId: "b", state: "queued", collected: false }),
+	));
+	// The names are outside collect's failure vocabulary on purpose: nobody diagnosed these.
+	assert.deepEqual(frozen.entries.map((e) => e.state), ["abandoned", "never-ran"]);
+});
+
+test("FreezeStates__LeavesEntryAlone__When__ItIsCollectedOrAlreadyTerminal", () => {
+	const frozen = freezeStates(manifest(
+		// A collected entry's status comes from its metrics, never from state — so state must not
+		// be rewritten under it, or a run that finished would read as abandoned.
+		entry({ jobId: "a", state: "running", collected: true }),
+		entry({ jobId: "b", state: "done", collected: true }),
+		entry({ jobId: "c", state: "failed", collected: false }),
+	));
+	assert.deepEqual(frozen.entries.map((e) => e.state), ["running", "done", "failed"]);
+});
+
+test("FreezeStates__MovesNoNumber__When__ManifestIsFrozen", () => {
+	// The load-bearing property: rollup() reads `collected` and `metrics` only, so retiring a
+	// state cannot move a figure the report and the dashboard have to agree on.
+	const m = manifest(
+		entry({ jobId: "a", state: "running", collected: false }),
+		entry({ jobId: "b", state: "done", collected: true, metrics: { success: true, steps: 4, outputTokens: 100 } }),
+	);
+	const before = buildState(m, fleet([]), [], false);
+	const after = buildState(freezeStates(m), fleet([]), [], false);
+	assert.deepEqual(after.progress.collected, before.progress.collected);
+	assert.deepEqual(after.progress.successes, before.progress.successes);
+	assert.equal(after.cost.totalUsd, before.cost.totalUsd);
+});
+
+test("ParseDashArgs__PrefersPortOverDashPort__When__BothEnvVarsAreSet", () => {
+	const saved = { PORT: process.env.PORT, DASH_PORT: process.env.DASH_PORT };
+	try {
+		// A PaaS assigns PORT and expects the process to take it; DASH_PORT is the operator's
+		// own preference and must not win on a host that already chose.
+		process.env.PORT = "10000";
+		process.env.DASH_PORT = "4642";
+		assert.equal(parseDashArgs([]).port, 10000);
+		// An explicit flag still outranks both.
+		assert.equal(parseDashArgs(["--port", "5000"]).port, 5000);
+	} finally {
+		if (saved.PORT === undefined) delete process.env.PORT; else process.env.PORT = saved.PORT;
+		if (saved.DASH_PORT === undefined) delete process.env.DASH_PORT; else process.env.DASH_PORT = saved.DASH_PORT;
+	}
+});
+
+test("ParseDashArgs__SetsShare__When__FlagOrEnvAsksForIt", () => {
+	const saved = process.env.DASH_SHARE;
+	try {
+		delete process.env.DASH_SHARE;
+		assert.equal(parseDashArgs([]).share, undefined);
+		assert.equal(parseDashArgs(["--share"]).share, true);
+		process.env.DASH_SHARE = "1";
+		assert.equal(parseDashArgs([]).share, true);
+		// Only "1" arms it — a stray DASH_SHARE=false must not read as truthy.
+		process.env.DASH_SHARE = "false";
+		assert.equal(parseDashArgs([]).share, undefined);
+	} finally {
+		if (saved === undefined) delete process.env.DASH_SHARE; else process.env.DASH_SHARE = saved;
+	}
+});
+
+/* ---- the snapshot exporter ----------------------------------------------------------------- */
+
+test("ExportSnapshot__CopiesMetricsAndDropsEvidence__When__RunHasStepsAndRecording", () => {
+	const src = fs.mkdtempSync(path.join(os.tmpdir(), "snap-src-"));
+	const dest = fs.mkdtempSync(path.join(os.tmpdir(), "snap-dest-"));
+	try {
+		const m = manifest(entry({ jobId: "run-1", state: "done", collected: true, metrics: { success: true, steps: 3 } }));
+		plant(src, ["out", "bench", "live", "2026-07-31", "manifest.json"], JSON.stringify(m));
+		plant(src, ["out", "bench", "live", "2026-07-31", "appmaps", "default", "p2-ax-grounded", "run-1", "appmap.md"], "# map");
+		plant(src, ["out", "bench", "live", "run-1", "run.json"], JSON.stringify({ success: true }));
+		plant(src, ["out", "bench", "live", "run-1", "events.jsonl"], `${JSON.stringify({ t: "2026-07-31T20:00:00.000Z", kind: "start", detail: {} })}\n`);
+		plant(src, ["out", "bench", "live", "run-1", "log.txt"], "console output");
+		// The bulk the exporter exists to leave behind.
+		plant(src, ["out", "bench", "live", "run-1", "steps", "001.png"], "PNGDATA");
+		plant(src, ["out", "bench", "live", "run-1", "recording", "take.mp4"], "MP4DATA");
+		plant(src, ["out", "bench", "live", "narrative.jsonl"], `${JSON.stringify({ t: "2026-07-31T20:00:00.000Z", text: "a note" })}\n`);
+
+		const r = exportSnapshot({ date: "2026-07-31", srcRoot: path.join(src, "out"), dest });
+
+		assert.equal(r.entries, 1);
+		assert.equal(r.runsCopied, 1);
+		assert.equal(r.runsMissing, 0);
+		const live = path.join(dest, "out", "bench", "live");
+		// Metrics travel...
+		assert.ok(fs.existsSync(path.join(live, "2026-07-31", "manifest.json")));
+		assert.ok(fs.existsSync(path.join(live, "2026-07-31", "appmaps", "default", "p2-ax-grounded", "run-1", "appmap.md")));
+		assert.ok(fs.existsSync(path.join(live, "run-1", "run.json")));
+		assert.ok(fs.existsSync(path.join(live, "run-1", "events.jsonl")));
+		assert.ok(fs.existsSync(path.join(live, "run-1", "log.txt")));
+		assert.ok(fs.existsSync(path.join(live, "narrative.jsonl")));
+		// ...evidence does not.
+		assert.equal(fs.existsSync(path.join(live, "run-1", "steps")), false);
+		assert.equal(fs.existsSync(path.join(live, "run-1", "recording")), false);
+	} finally {
+		fs.rmSync(src, { recursive: true, force: true });
+		fs.rmSync(dest, { recursive: true, force: true });
+	}
+});
+
+test("ExportSnapshot__CountsEntryAsMissing__When__ItsRunDirectoryWasNeverWritten", () => {
+	const src = fs.mkdtempSync(path.join(os.tmpdir(), "snap-src-"));
+	const dest = fs.mkdtempSync(path.join(os.tmpdir(), "snap-dest-"));
+	try {
+		// A queued entry that never ran, and a failed one collect evicted — both legitimate.
+		const m = manifest(entry({ jobId: "gone", state: "queued", collected: false }));
+		plant(src, ["out", "bench", "live", "2026-07-31", "manifest.json"], JSON.stringify(m));
+
+		const r = exportSnapshot({ date: "2026-07-31", srcRoot: path.join(src, "out"), dest });
+
+		assert.equal(r.runsMissing, 1);
+		assert.equal(r.runsCopied, 0);
+		// The manifest still travels: the entry renders from metrics (or their absence) alone.
+		assert.ok(fs.existsSync(path.join(dest, "out", "bench", "live", "2026-07-31", "manifest.json")));
+	} finally {
+		fs.rmSync(src, { recursive: true, force: true });
+		fs.rmSync(dest, { recursive: true, force: true });
+	}
+});
+
+test("ExportSnapshot__Throws__When__TheDatesManifestIsEmpty", () => {
+	const src = fs.mkdtempSync(path.join(os.tmpdir(), "snap-src-"));
+	const dest = fs.mkdtempSync(path.join(os.tmpdir(), "snap-dest-"));
+	try {
+		plant(src, ["out", "bench", "live", "2026-07-31", "manifest.json"], JSON.stringify({ date: "2026-07-31", createdAt: "", entries: [] }));
+		// Publishing an empty board is a mistake worth hearing about, not a 0-byte snapshot.
+		assert.throws(() => exportSnapshot({ date: "2026-07-31", srcRoot: path.join(src, "out"), dest }), /nothing to snapshot/);
+	} finally {
+		fs.rmSync(src, { recursive: true, force: true });
+		fs.rmSync(dest, { recursive: true, force: true });
 	}
 });

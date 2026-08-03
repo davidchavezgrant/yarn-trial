@@ -1,4 +1,5 @@
 import { type ChildProcess, execFile, spawn } from "node:child_process";
+import { timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -16,10 +17,9 @@ import { appmapSlug, type Target, targetVocabulary, webTarget } from "../core/ta
 import { DESCENT_ON } from "../core/explore/config.js";
 import { systemPrompt } from "../core/explore/prompt.js";
 import { DRIVER_RULES, VISION_ONLY_RULES } from "../core/harness/actions.js";
-import { archiveDirFor } from "./collect.js";
 import { estimateCost } from "./cost.js";
 import { BENCH_PRIMARY_MODEL, MATRIX, armAppmapSlug, armById, armTitle, flagsLine, perceptionLine, phaseArms, type Arm, type Phase } from "./matrix.js";
-import { benchDir, type Manifest, type ManifestEntry, readManifest, utcDate } from "./manifest.js";
+import { archiveDirFor, benchDir, type Manifest, type ManifestEntry, readManifest, utcDate } from "./manifest.js";
 // Deliberate call-time cycle: graphs.ts imports this module's exported functions (buildDetail,
 // exploreSeries) — safe because both sides only call across the boundary at request time.
 import { serveGraphs } from "./graphs.js";
@@ -276,6 +276,12 @@ export interface DashState {
 	};
 	/** The narrator's newest per-run note (see narrate()). Model-written; verify before quoting. */
 	narrative?: Narrative;
+	/**
+	 * This board is a FROZEN SNAPSHOT, not a live drain (DashOptions.share). Set so the page can
+	 * say so where it otherwise says "live" — the connection badge reports SSE health, and on a
+	 * published link a healthy socket must not be mistaken for moving numbers.
+	 */
+	share?: boolean;
 	events: DashEvent[];
 }
 
@@ -607,6 +613,31 @@ export function fromStore(relParts: string[], outRoot = outDir()): string {
  * out/bench/archive, or plain out) under which that file currently exists.
  */
 const readStoredManifest = (date: string): Manifest => readManifest(date, storeRoot([date, "manifest.json"]));
+
+/**
+ * Retire the manifest's non-terminal states for a SNAPSHOT (share mode only).
+ *
+ * A live dash resolves "running" against the fleet: liveFor asks the hosts, and an absent job
+ * on a fresh-enough poll means it finished. A snapshot has no fleet to ask, so liveFor falls
+ * through to the manifest's last-known state — and the 2026-08-01 pass froze with 3 entries
+ * mid-run and 33 still queued. Published unchanged, that dash claims three runs are executing
+ * right now, forever. The runs are not in an unknown state; they are in a KNOWN one, which is
+ * that the pass ended without them, and the display should say so.
+ *
+ * Uncollected entries only, and `state` only — every number the page and the report share
+ * comes from `collected` + `metrics` (rollup reads nothing else), so this can rename a status
+ * without moving a single figure. The two names are deliberately outside collect's failure
+ * vocabulary: these are not failures anyone diagnosed, and the page renders an unmapped
+ * status as a hollow dot, which is the honest shape for "no verdict was ever reached".
+ */
+export function freezeStates(m: Manifest): Manifest {
+	const FROZEN: Record<string, string> = { running: "abandoned", queued: "never-ran" };
+
+	return {
+		...m,
+		entries: m.entries.map((e) => (!e.collected && FROZEN[e.state] ? { ...e, state: FROZEN[e.state] as string } : e)),
+	};
+}
 
 /**
  * The manifest watcher — a self-healing CHAIN of non-recursive fs.watches over the path
@@ -1886,6 +1917,23 @@ export interface DashOptions {
 	autoCollect: boolean;
 	/** Set when --date was passed: pin to it. Absent/false means follow the newest pass. */
 	dateExplicit?: boolean;
+	/**
+	 * SHARE MODE — the posture for a dash serving a frozen snapshot to people who are not at
+	 * this machine (see the hosting note in docs/deploying-the-dash.md).
+	 *
+	 * The local dash is a reader over a store it sits beside, and everything it does BEYOND
+	 * reading that store reaches the colo Macs: the fleet poll ssh's every 5s, the detail pane
+	 * fetches a running explore's checkpoint, the log pane falls through to `runnerctl logs`,
+	 * and /peek opens tunnels and streams a Mac's screen. None of that has any meaning against
+	 * a snapshot, and all of it is a live capability nobody viewing a published result should
+	 * hold — so share mode withholds the inventory those branches gate on, silences the poll,
+	 * and rejects /peek outright.
+	 *
+	 * It also stops the narrator, which is the one thing the default posture WRITES. A hosted
+	 * container's disk is ephemeral, so a note minted there is lost on the next deploy while
+	 * costing a model call — and the snapshot already carries the notes the pass earned.
+	 */
+	share?: boolean;
 }
 
 /**
@@ -1936,7 +1984,10 @@ export function parseDashArgs(args: string[]): DashOptions {
 	const explicit = flag("--date");
 
 	return {
-		port: Number(flag("--port") ?? process.env.DASH_PORT ?? 4642),
+		// PORT before DASH_PORT: a PaaS assigns the port and expects the process to take it
+		// (Render, Heroku, Fly all inject PORT), while DASH_PORT is the operator's own choice on
+		// a machine where 4642 might be taken. An explicit --port still outranks both.
+		port: Number(flag("--port") ?? process.env.PORT ?? process.env.DASH_PORT ?? 4642),
 		date: explicit ?? defaultDashDate(),
 		/**
 		 * Whether the operator NAMED a date. Without this the resolved date is indistinguishable
@@ -1953,6 +2004,42 @@ export function parseDashArgs(args: string[]): DashOptions {
 		// opt-out `--no-collect` is deliberately still accepted (as a no-op): launchers and
 		// muscle memory that pass it must keep meaning what they always meant, a pure reader.
 		autoCollect: args.includes("--collect"),
+		// Env as well as flag: a PaaS start command is a place where one env var beats arguing
+		// with argv quoting, and the Electron shell shares this parser.
+		...(args.includes("--share") || process.env.DASH_SHARE === "1" ? { share: true } : {}),
+	};
+}
+
+/**
+ * HTTP Basic auth from `DASH_AUTH=user:pass`, or `undefined` when the variable is unset —
+ * which means WIDE OPEN, and is the right default for a dash bound to a laptop.
+ *
+ * Basic rather than a token in the query string, deliberately: the browser prompts once and
+ * remembers, which is what makes a link shareable with a colleague, and a URL that carries
+ * its own credential leaks it into history, referrers and any screenshot of the address bar.
+ * Both halves are compared timing-safely — the header is attacker-controlled and the
+ * comparison is the only thing standing in front of the data.
+ *
+ * Only the transport is trusted-by-assumption here: Basic sends the credential base64'd, not
+ * encrypted, so this is safe exactly to the extent the connection is TLS. Render terminates
+ * TLS on its own edge, which is the deployment this was written for.
+ */
+export function basicAuthGate(spec: string | undefined): ((header: string | undefined) => boolean) | undefined {
+	if (!spec) return undefined;
+	const expected = Buffer.from(spec, "utf8");
+
+	return (header: string | undefined): boolean => {
+		const m = /^Basic\s+(.+)$/i.exec(header ?? "");
+		if (!m) return false;
+		let got: Buffer;
+		try {
+			got = Buffer.from(Buffer.from(m[1] as string, "base64").toString("utf8"), "utf8");
+		} catch {
+			return false;
+		}
+		// timingSafeEqual THROWS on a length mismatch rather than returning false, so the lengths
+		// are checked first — and a wrong length is not a secret worth hiding, only its contents.
+		return got.length === expected.length && timingSafeEqual(got, expected);
 	};
 }
 
@@ -2028,12 +2115,22 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	// Before ANYTHING that calls makeClient — the defaultModel resolution just below and
 	// every narrate tick read the key env vars this seeds.
 	loadEnvFallback();
-	const { port, autoCollect } = opts;
+	const { port, autoCollect, share = false } = opts;
+	const authGate = basicAuthGate(process.env.DASH_AUTH);
+	// Two refusals rather than two silent downgrades, per env.ts's rule that a knob wrong enough
+	// to matter should be heard: a share-mode dash is reachable by people who are not the
+	// operator, so serving it unauthenticated or letting it WRITE to the store it is publishing
+	// are both worth dying over rather than logging.
+	if (share && !authGate) throw new Error("--share requires DASH_AUTH=user:pass — refusing to publish the store unauthenticated");
+	if (share && autoCollect) throw new Error("--share and --collect are contradictory: a published snapshot is read-only");
 	// Mutable: a dash that did not have its date named follows the newest drained pass, so a
 	// benchmark starting after the one it booted on does not leave it watching yesterday.
 	let date = opts.date;
 
-	let manifest = readStoredManifest(date);
+	// The ONE manifest read for this process — share mode retires the non-terminal states as the
+	// bytes come in, so no downstream reader has to know whether it is looking at a snapshot.
+	const readCurrentManifest = (d: string): Manifest => (share ? freezeStates(readStoredManifest(d)) : readStoredManifest(d));
+	let manifest = readCurrentManifest(date);
 	let fleet: FleetView = { rows: [] };
 	const events: DashEvent[] = [];
 	const addEventLater: string[] = [];
@@ -2096,7 +2193,12 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	const { loadHosts, resolveHost } = await import("../remote/control/hosts.js");
 	let inventory: Inventory | undefined;
 	try {
-		inventory = loadHosts();
+		// Share mode leaves it undefined ON PURPOSE. Every branch in this file that shells ssh —
+		// the remote event tail below, serveDetail's checkpoint fetch, serveLogs' remote tier —
+		// already guards on `inventory` because a laptop-only checkout has no hosts.json, so
+		// withholding it here disarms all three at once instead of three separate `if (share)`
+		// checks that a fourth ssh call site could later forget to add.
+		if (!share) inventory = loadHosts();
 	} catch {
 		// No hosts.json (a laptop-only checkout) — local runs still get live counters.
 	}
@@ -2190,6 +2292,12 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	const currentState = (): DashState => {
 		const state = buildState(manifest, fleet, storeEvents(events, 200, outDir(), remoteFeed()), autoCollect, defaultModel, liveProgress());
 		if (narrative) state.narrative = narrative;
+		// Grafted here rather than threaded through buildState: the posture is a property of THIS
+		// server, not of the manifest+fleet pair buildState is a pure function of. The page needs
+		// it because its connection badge reads "live" off a healthy SSE socket — which is true of
+		// the socket and misleading about the data, and "misleading about the data" is the one
+		// thing a published board cannot be.
+		if (share) state.share = true;
 
 		return state;
 	};
@@ -2323,7 +2431,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		() => {
 			clearTimeout(watchTimer);
 			watchTimer = setTimeout(() => {
-				manifest = readStoredManifest(date);
+				manifest = readCurrentManifest(date);
 				clearStaleNarrative();
 				push();
 			}, 300);
@@ -2425,7 +2533,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 					date = newest;
 				}
 			}
-			manifest = readStoredManifest(date);
+			manifest = readCurrentManifest(date);
 			// After the fleet snapshot and the manifest, before the push: the tail wants the
 			// fresh busy set (which jobs to fetch) and the fresh manifest (which to drop), and
 			// the push wants the tail's counters on the frame it is about to send.
@@ -2457,7 +2565,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 				} finally {
 					collecting = false;
 				}
-				manifest = readStoredManifest(date);
+				manifest = readCurrentManifest(date);
 				push();
 			};
 
@@ -3391,6 +3499,30 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 
 	const server = http.createServer((req, res) => {
 		const url = req.url ?? "/";
+		// The ONE route in front of the auth gate, and the only one that may be.
+		//
+		// A PaaS health check is an unauthenticated GET that must answer 200 or the platform
+		// concludes the service is down and restarts it forever — so a dash behind DASH_AUTH
+		// would fail its own health check with a 401 and never come up. This answers the
+		// liveness question and NOTHING else: no date, no counts, no store paths, nothing that
+		// distinguishes one deployment from another. Everything a viewer would actually want is
+		// on the far side of the gate.
+		if (url === "/healthz") {
+			res.writeHead(200, { "content-type": "text/plain" });
+			res.end("ok");
+
+			return;
+		}
+		// Before the route table, with no exemptions — not the page, not /api/state, not the SSE
+		// stream. An unauthenticated "just the dashboard" route is the whole dataset, because the
+		// page's only job is to render /api/state.
+		if (authGate && !authGate(req.headers.authorization)) {
+			// The realm string is what the browser shows in its prompt, so it names the thing.
+			res.writeHead(401, { "www-authenticate": 'Basic realm="dash", charset="UTF-8"' });
+			res.end("unauthorized");
+
+			return;
+		}
 		if (url === "/" || url === "/index.html") {
 			res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
 			res.end(fs.readFileSync(htmlPath));
@@ -3425,7 +3557,19 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	server.on("upgrade", async (req, socket: Duplex) => {
 		const url = new URL(req.url ?? "/", "http://127.0.0.1");
 		const key = req.headers["sec-websocket-key"];
-		if (url.pathname !== "/peek" || typeof key !== "string") {
+		// Share mode never streams a screen. The peek is the one dash capability that reaches
+		// INTO a colo Mac and pulls live pixels off it, and a published URL must not be a window
+		// into the fleet no matter who is behind the password. Destroyed rather than politely
+		// closed: there is no session to explain, and the armed client treats a dead upgrade as
+		// "no peek here", which is exactly true.
+		if (share || url.pathname !== "/peek" || typeof key !== "string") {
+			socket.destroy();
+
+			return;
+		}
+		// The upgrade path carries the same credential as every other route — a WebSocket is not
+		// a side door, and the browser sends Authorization on an upgrade it initiated.
+		if (authGate && !authGate(req.headers.authorization)) {
 			socket.destroy();
 
 			return;
@@ -3530,7 +3674,11 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		server.once("error", reject);
 		server.listen(port, () => {
 			server.removeListener("error", reject);
-			console.log(`DASH (David's Agent Supervision Hub): http://localhost:${port}  (date ${date}, fleet poll ${FLEET_POLL_SEC}s, ${autoCollect ? `auto-collect ${COLLECT_SEC}s` : "collect OFF — pure reader"})`);
+			// Share mode says what it withheld, not just what it is: "no fleet" is the difference
+			// between a dash that cannot reach the Macs and one that was told not to try.
+			console.log(share
+				? `DASH (share): http://localhost:${port}  (date ${date}, snapshot — no fleet, no peek, no narrator, auth ON)`
+				: `DASH (David's Agent Supervision Hub): http://localhost:${port}  (date ${date}, fleet poll ${FLEET_POLL_SEC}s, ${autoCollect ? `auto-collect ${COLLECT_SEC}s` : "collect OFF — pure reader"}${authGate ? ", auth ON" : ""})`);
 			resolve();
 		});
 	});
@@ -3555,16 +3703,24 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		const beat = `data: {"ev":"hb","t":"${new Date().toISOString()}"}\n\n`;
 		for (const res of clients) res.write(beat);
 	}, SSE_HEARTBEAT_MS);
-	setInterval(pollFleet, FLEET_POLL_SEC * 1000);
-	void pollFleet();
+	// Share mode runs NEITHER loop. The fleet poll is the dash's steadiest outbound act — an ssh
+	// fan-out to three colo Macs every 5s — and against a snapshot it can only ever report the
+	// hosts as unreachable, which is noise dressed as a finding. The narrator is skipped because
+	// it is the one thing that writes; the notes the pass earned already rode in with it.
+	if (!share) {
+		setInterval(pollFleet, FLEET_POLL_SEC * 1000);
+		void pollFleet();
+	}
 	if (runCollect) {
 		setInterval(runCollect, COLLECT_SEC * 1000);
 		void runCollect();
 	}
 	// Piggybacks the collect cadence: a tick only calls the model when a run collected that
 	// has no note yet, so a quiet hour costs nothing.
-	setInterval(() => void narrate(), COLLECT_SEC * 1000);
-	void narrate();
+	if (!share) {
+		setInterval(() => void narrate(), COLLECT_SEC * 1000);
+		void narrate();
+	}
 
 	return server;
 }

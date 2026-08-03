@@ -7,7 +7,7 @@ import { ARCHIVE_DIR, LIVE_DIR, RUN_FILES, appSlug, dataRoot as dataRootDir, liv
 import { appmapSlug } from "../core/target.js";
 import type { JobRecord } from "../remote/runner/jobs.js";
 import { type Arm, armAppmapSlug, armById } from "./matrix.js";
-import { archiveBench, benchDir, readManifest, type Manifest, type ManifestEntry, type RunMetrics, updateEntry, utcDate, writeManifest } from "./manifest.js";
+import { archiveBench, archiveDirFor, benchDir, readManifest, type Manifest, type ManifestEntry, type RunMetrics, updateEntry, utcDate, writeManifest } from "./manifest.js";
 import { writeReport } from "./report.js";
 
 /**
@@ -331,22 +331,6 @@ export async function collect(opts: CollectOptions = {}): Promise<CollectOutcome
 	}
 
 	return { manifest, collected, pending, reportPath };
-}
-
-/**
- * Where an explore arm's appmap pair is archived under the bench dir, keyed on
- * (model, armId) — the pair the report compares. Exists because docs/appmaps/<slug>.* is
- * ONE file per app by convention, so a second model's pass overwrites the first's on disk;
- * the run logs pin each run's map by sha256, but the content itself would be gone.
- */
-export function archiveDirFor(benchRoot: string, entry: ManifestEntry): string {
-	const model = (entry.model ?? "default").replace(/[^A-Za-z0-9._-]+/g, "-");
-	// Per JOB, not per arm. An explore arm with n>1 runs the same pass twice, and both write
-	// the same live filename (yarn.ax.md) on their own Macs — so an arm-keyed archive keeps
-	// only whichever was collected last, discarding the second sample and with it the entire
-	// reason for repeating. The repeats exist to give the backend comparison an error bar;
-	// an archive that holds one of two is worse than not repeating, because it looks complete.
-	return path.join(benchRoot, "appmaps", model, entry.armId, entry.jobId);
 }
 
 /**
