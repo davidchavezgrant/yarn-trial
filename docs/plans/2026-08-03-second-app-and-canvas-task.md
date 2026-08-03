@@ -1,163 +1,239 @@
-# Phase 8 (second app) and the canvas task — drafted, not wired
+# Phase 8 (Notion web) and the canvas task — drafted, not wired
 
 **Status**: draft. Nothing is in `matrix.ts` yet, deliberately — the 203-run pass is draining and
-the fleet rsyncs the checkout per phase. Moving HEAD mid-pass is the defect this repo already
-warns about; wire this after the drain.
+the fleet rsyncs the checkout per phase. Moving HEAD mid-pass is the defect the methodology review
+just wrote up.
 
-**Why these two**: the matrix is at its ceiling (11 of 15 phase-2 arms at 3/3), and the axis the
-brief cares most about is unmeasured. Jasper's brief: *"This should theoretically work on
-arbitrary apps, although we'd budget some setup time (e.g. 24 hours)."* Nothing in 203 runs
-touches cross-app transfer. Every finding so far — CDP beats AX, lean beats rich, the sidecar is
-worthless — is currently indistinguishable from a fact about Yarn's DOM.
+**Target**: `app.notion.com` in Chrome. David's call (2026-08-03), and the brief's own example —
+Jasper named Notion Calendar as the canonical case. GitHub Desktop was drafted first and is kept
+as an appendix, because two things it surfaced are worth keeping on record.
+
+**Why a second app at all**: the matrix is at its ceiling (11 of 15 phase-2 arms at 3/3), and
+nothing in 203 runs touches cross-app transfer. Every finding — CDP beats AX, lean beats rich, the
+sidecar is worthless — is currently indistinguishable from a fact about Yarn's DOM.
 
 ---
 
-## Part 1 — Phase 8: the second app
+## Part 1 — Phase 8: Notion web
 
-### Which app, and why it is GitHub Desktop
+### What the target supports, measured before designing around it
 
-Inventoried across the fleet (2026-08-03, read-only ssh):
+Three checks against the code and the existing artifacts, because each one moves the arm list:
 
-| app | mac1 | mac2 | mac3 |
-|---|---|---|---|
-| Yarn | ✓ | ✓ | ✓ |
-| **GitHub Desktop** | ✓ | ✓ | ✓ |
-| Claude | ✓ | ✓ | ✓ |
-| Chrome / Safari | ✓ | ✓ | ✓ |
-| Cursor | ✓ | — | — |
-| Codex | — | ✓ | ✓ |
-| Warp | ✓ | ✓ | — |
-| After Effects, Cinema 4D | ✓ | — | — |
+**1. The AX backend refuses web targets outright.** `run.ts:395`:
 
-Only GitHub Desktop and Claude are Electron *and* on all three. This is the same wall that killed
-the Notion slice — `matrix.ts:140` records it as logistical, not conceptual — so start from what
-is installed rather than from what would be ideal.
+```ts
+} else if (target.kind === "web") {
+    throw new Error("web targets run on the cdp backend — pass --backend cdp …");
+}
+```
 
-GitHub Desktop wins on three counts, and the third is the important one:
+So on Notion web the backend axis is **gone**. Four of the six arms drafted for GitHub Desktop —
+`ax-ungrounded`, `ax-grounded`, `ax-grounded-axdom-off`, `min-context-grounded` — are impossible by
+construction, not merely worse. "Is grounding backend-dependent?" cannot be re-tested here. If that
+question matters more than the brief's app, the target has to be an installed Electron app instead.
 
-1. **Electron, so the whole matrix runs unchanged.** `electron-attach.ts` resolves any `.app`
-   bundle by name and relaunches it with `--remote-debugging-port`; there is no app allowlist.
-   Both backends work without a harness change.
-2. **It has the same dual-scope failure class Yarn has.** Git config is global (`~/.gitconfig`)
-   versus repository-local (`<repo>/.git/config`) — structurally identical to Yarn's brand
-   default versus per-document override, which is the correctness half of every phase-2 finding.
-   Phase 4 chose motion blur over auto-zoom on exactly this criterion.
-3. **The two scopes write to two different files, so the wrong-scope failure has objective ground
-   truth for the first time.** LIMITATIONS §8 is the standing blocker on every correctness claim
-   in this project: `verify()` proves *a* control reads the target value, never that it is the
-   *intended* one, and the offline judge patching it is one model's opinion. Here the check is
-   `git config --global --get user.email` against `git config --local --get user.email` over the
-   ssh the collector already holds. No model in the loop.
+**2. Vision-only still works.** The throw sits in the non-cdp branch, so `cdp + noAx` is reachable.
+The vision-only arms transfer intact.
 
-That third point is worth more than the cross-app evidence. It is the only task in the matrix
-whose correctness can be settled without asking a model.
+**3. Sign-in is a one-time setup, not per-run friction.** The consent-token problem
+(LIMITATIONS §13) applies to cua-driver's `browser_prepare` path and is explicitly moot on
+`--backend cdp`, which launches its own Chrome against a **persistent** profile
+(`out/chrome-profile/yarn-runner`, `cdp.ts:57`) built so a human signs in once and every later run
+reattaches. Same shape as the Yarn sign-ins — phase 0, per Mac.
+
+### What is lost, and the better question it buys
+
+Losing the backend axis is a real cost. What replaces it is arguably a more valuable question.
+
+On Yarn, `cdp-ungrounded` and `cdp-grounded` both scored 3/3. That has two readings and one app
+cannot separate them:
+
+- **(a)** cdp doesn't need grounding — the shippable conclusion as currently written.
+- **(b)** Yarn is too small for grounding to matter on any capable backend.
+
+Notion web is a much larger target. From its own explore stamp (`web-app.notion.com.cdp.json`):
+
+| | Yarn (cdp) | Notion web (cdp) |
+|---|---|---|
+| graph nodes | 144–207 | **471** |
+| surfaces | 12–44 | **119** |
+| controls seen | 293–6609 | 1238 |
+| actuated / dismissed | 119–136 / 32–135 | 167 / 1075 |
+| chapters | — | 34 |
+| pass duration | 29–49 min | **1h14m** |
+
+If grounding separates the arms here where it tied on Yarn, reading (b) wins and the headline
+recommendation changes from "skip grounding on cdp" to "grounding's value scales with app size."
+That directly attacks the confound in the one conclusion Aman would otherwise build on.
+
+### Scope ambiguities: the correctness half does not transfer cleanly
+
+Ran `findScopeAmbiguities()` over both committed maps rather than assuming — the same evidence-first
+move phase 4 made when it chose motion blur over auto-zoom.
+
+**Yarn**: 14 ambiguities, every one a clean two-store pair of the same setting.
+
+```
+screen-clip-cursor-style: brand-kit/screen-clips/cursor-style [brand] | draft-editor/screen-clips/cursor-style [document]
+screen-clip-motion-blur:  brand-kit/screen-clips/motion-blur  [brand] | draft-editor/screen-clips/motion-blur  [document]
+… 12 more, all the same shape
+```
+
+**Notion web**: 11 ambiguities, and most are **false positives**.
+
+```
+groups-sort:  settings/people/groups/sort [workspace] | page/to-do-list/database/sort [document] | … 8 more
+search-filter: sidebar/search-overlay/filter [workspace] | library/filter [workspace] | … 7 more
+library-group, library-property-visibility, people-search …
+```
+
+Those are not one setting at two scopes. They are generic UI verbs — sort, filter, group, search —
+that the explore model happened to give the same `settingKey` on unrelated surfaces. `settingKey`
+is free text the model invents and nothing validates it (`appmap.ts:340`), and on an app with
+repeated database chrome the detector collides constantly. Only `open-settings`,
+`view-history-visibility`, and possibly `calendar-connection` look structurally real, and none is a
+value with two independent stores.
+
+Two consequences:
+
+- **The wrong-scope correctness test needs a hand-validated pair before it means anything here.**
+  Notion does have genuine account-vs-workspace splits (Language & region, notification defaults),
+  and the detector missed them — so it has false negatives on this app too. Ten minutes against the
+  live app picks a real pair; do not take the list at face value.
+- **This is itself a production finding.** The scope mechanism — grounding's strongest measured win
+  — is tuned to Yarn's shape and degrades to noise on a database-heavy app. Aman needs to know that
+  before shipping it as a general capability.
 
 ### The task
 
+Default, pending the hand check above:
+
 ```ts
-export const SECOND_APP = "GitHub Desktop";
+export const SECOND_APP_URL = "https://app.notion.com";
 
 /**
- * Goal-only, and dual-scope by construction: git config is global or repository-local, and
- * GitHub Desktop exposes both (Preferences ▸ Git, Repository settings). Naming no repository
- * implies the global scope, the same way the cursor task implies the brand default.
+ * The brief's own example, adapted from Notion Calendar to Notion web (My settings ▸ Language &
+ * region). Goal-only, names the outcome and never the route.
  *
- * Chosen for the same reason phase 4 chose motion blur over auto-zoom: a single-scope task can
- * generalise the actions/tokens half of phase 2 and none of the correctness half.
+ * Whether it is DUAL-SCOPE is unverified: the detector's list for this map is mostly generic-verb
+ * collisions, and the account-vs-workspace splits it should have caught are absent. Validate one
+ * real pair against the live app before treating any wrong-scope number from these arms as
+ * meaningful; the actions/tokens half stands either way.
  */
-export const SECOND_APP_TASK = "show me how to change the email address used for commits";
+export const SECOND_APP_TASK = "show me how to change the timezone";
 ```
 
 ### The arms
 
-Derived from the phase-2 grid rather than hand-written, the rule `creationArms()` and `filmed()`
-already follow — but a deliberate subset, because the point is to re-test the three findings that
-would change what Aman builds, not to re-run everything.
+Derived from the phase-2/7 grid rather than hand-written — the rule `creationArms()` and `filmed()`
+already follow. Every surviving cell is cdp, per the constraint above.
 
 ```ts
-/**
- * The six cells that produced phase 2's shippable conclusions. Re-run on a second app, they
- * answer the only question the matrix cannot currently answer: is any of this about the METHOD,
- * or is it about Yarn's DOM?
- */
 const TRANSFER_CELLS = [
-	"p2-ax-ungrounded",           // does ax need grounding — the 1/3 that started everything
-	"p2-ax-grounded",             //   "
-	"p2-cdp-ungrounded",          // is cdp grounding-independent, or is Yarn just easy on cdp
-	"p2-cdp-grounded",            //   "
-	"p2-min-context-grounded",    // does lean-beats-rich transfer, or is it a Yarn artifact
-	"p2-ax-grounded-axdom-off",   // is the sidecar still worth nothing off its home app
+	"p2-cdp-ungrounded",              // does grounding matter on a BIG app — the reason to do this
+	"p2-cdp-grounded",                //   "
+	"p2-cdp-grounded-no-vision",      // does lean-beats-rich transfer off Yarn
+	"p7-vision-only-cdp-ungrounded",  // the vision-only floor on a second app
+	"p7-vision-only-cdp-grounded",    // does grounding rescue vision-only where it did not on Yarn
 ];
 
-const secondAppArms = (): Arm[] =>
-	[...PHASE2_CORE, ...PHASE2_SLICES]
+const notionArms = (): Arm[] =>
+	[...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE7]
 		.filter((a) => TRANSFER_CELLS.includes(a.id))
 		.map((a) => ({
 			...a,
-			id: a.id.replace(/^p2-/, "p8-"),
+			id: a.id.replace(/^p[27]-/, "p8-"),
 			phase: 8 as Phase,
-			app: SECOND_APP,
+			app: "app.notion.com",
 			task: SECOND_APP_TASK,
+			dispatch: { ...a.dispatch, url: SECOND_APP_URL },
 		}));
 
 const PHASE8: Arm[] = [
-	// Three passes, not two: min-context consumes APPMAP_VARIANT=novision, which only exists if
-	// a no-vision pass wrote one. Grounding an arm on a map its treatment did not produce is
-	// LIMITATIONS §23 with the sign flipped.
-	...(["ax", "cdp"] as const).map((backend): Arm => ({
-		id: `p8-explore-${backend}`,
-		phase: 8, kind: "explore", app: SECOND_APP, n: 1,
-		dispatch: { backend },
-		informs: "does the discovery story hold on an app nobody tuned the harness against",
-	})),
+	// Two passes: full perception, and the novision map that p8-cdp-grounded-no-vision consumes.
+	// Grounding an arm on a map its own treatment did not produce is LIMITATIONS §23 with the
+	// sign flipped.
 	{
-		id: "p8-explore-no-vision",
-		phase: 8, kind: "explore", app: SECOND_APP, n: 1,
-		dispatch: { backend: "ax", noVision: true },
-		informs: "the novision map min-context needs; also the second sample of vision's cost in discovery",
+		id: "p8-explore-cdp",
+		phase: 8, kind: "explore", app: "app.notion.com", n: 1,
+		dispatch: { backend: "cdp", url: SECOND_APP_URL },
+		informs: "does the discovery story hold on an app 3x Yarn's size that nobody tuned the harness against",
 	},
-	...secondAppArms(),
+	{
+		id: "p8-explore-cdp-no-vision",
+		phase: 8, kind: "explore", app: "app.notion.com", n: 1,
+		dispatch: { backend: "cdp", noVision: true, url: SECOND_APP_URL },
+		informs: "the novision map the no-vision arm needs; second sample of vision's cost in discovery",
+	},
+	...notionArms(),
 ];
 ```
 
-**One test to add.** `TRANSFER_CELLS` names arm ids as strings, and a typo silently drops a cell —
-a smaller version of the `dispatchOptionsFor` failure that bit this repo three times. Assert every
-id in the list resolves to an arm.
+**One test to add.** `TRANSFER_CELLS` names arm ids as strings and a typo silently drops a cell — a
+smaller version of the `dispatchOptionsFor` failure that bit this repo three times. Assert every id
+in the list resolves to an arm.
 
 ### What this costs
 
 | | runs | wall clock | est. $ |
 |---|---|---|---|
-| 3 explore passes | 3 | 40–60 min (parallel, one per Mac) | $15–50 |
-| 6 task arms × n=3 | 18 | ~45 min | $25–50 |
-| **total** | **21** | **~2 h** | **$40–100** |
+| 2 explore passes | 2 | ~1h15m (parallel, one per Mac) | $20–40 |
+| 5 task arms × n=3 | 15 | ~30 min | $15–35 |
+| **total** | **17** | **~2 h** | **$35–75** |
 
-Cut to the four core cells (12 runs, 2 explores) if the budget is tight; that still answers the
-headline. The last two arms are what turn "grounding is backend-dependent" and "don't ship the
-sidecar" from Yarn facts into method facts.
+The explores dominate, and Notion's was the longest pass in the matrix at 1h14m — that number is
+the reason the slice was cut the first time.
 
-### Prerequisites, and one genuinely new risk
+**Reuse or re-run?** `web-app.notion.com.cdp.json` already exists (2026-07-31, `provenance: explore`,
+`frontier-empty`, 471 nodes). It predates the prompt and frontier fixes that forced a re-run of
+every Yarn phase-1 pass, so reusing it means phase 8 grounds on code that no other arm ran.
+Re-running is the clean call; if the 1h14m is not affordable, reuse it and label the row loudly.
 
-- **Sign-in and a known repo, on all three Macs.** GitHub Desktop needs an account and one cloned
-  repository in a known state, or every run dies at the equivalent of the exit-3 gate that killed
-  29% of archived runs. Phase 0, not a benchmark step.
-- **Confirm the debug port opens.** GitHub Desktop is Electron, but a hardened build can strip
-  `--remote-debugging-port` — the same fuse problem the peek sentinel works around. Five minutes
-  on a free Mac settles it, and if it fails the cdp arms are void, not merely worse.
-- **NEW: teardown does not reach outside the app.** Cleanup restores in-app mutations from the
-  journal. A run that rewrites `~/.gitconfig` leaves it rewritten for the next run on that Mac —
-  start-state contamination that propagates *between arms*, which is worse than §23's version
-  because it crosses runs rather than beginning them. Needs an explicit reset of both config
-  scopes before each run, and it should be the same code that reads them for the ground-truth
-  check.
+### Prerequisites
 
-### The honest limit of this evidence
+- **Sign in to Notion once per Mac**, in the runner's persistent Chrome profile
+  (`out/chrome-profile/yarn-runner`). Without it every run maps the login wall — which is exactly
+  what the 07-30 `www.notion.so` pass did.
+- **A workspace in a known state.** Notion mutates easily; the explore stamp already shows one
+  accidentally created blank private page. Decide what "put it back" means before running, because
+  teardown restores what the journal recorded and nothing else.
+- **Delete the legacy plain-slug map.** `docs/appmaps/web-app.notion.com.json` (19:13) sits beside
+  `…cdp.json` (20:57) at identical size. LIMITATIONS §21 is precisely about a stale plain-slug file
+  being silently picked up as an answer key.
 
-GitHub Desktop is Electron. This measures transfer *within* the class the method was built for —
-Chromium, DOM-rich, AX-backed. It does not test the class boundary. The apps that would are on the
-fleet (After Effects, Cinema 4D, both native and custom-drawn), both on mac1 only, and native is
-out of scope per the 07-30 decision. Say so in the report rather than letting "it transferred"
-carry more weight than it earns.
+### The honest limits of this evidence
+
+- **No backend comparison.** Stated above; it is the price of the target.
+- **Notion web is a browser tab, not an app with AX permissions.** This measures transfer to another
+  Chromium DOM surface — the class the cdp backend was built for. It does not test the class
+  boundary (native, custom-drawn), and it does not test the AX path at all.
+- **n=3 against a ceiling, still.** If Notion also comes back 3/3 across the board, the result is
+  "the method survives a bigger app", which is worth knowing and is not a comparison.
+
+### Appendix — GitHub Desktop, considered and set aside
+
+Recorded rather than deleted, the way `matrix.ts:140` recorded Notion, because two findings outlive
+the decision.
+
+**Fleet inventory** (read-only ssh, 2026-08-03) — only GitHub Desktop and Claude are Electron *and*
+installed on all three Macs:
+
+| app | mac1 | mac2 | mac3 |
+|---|---|---|---|
+| Yarn, Claude, GitHub Desktop, Chrome, Safari | ✓ | ✓ | ✓ |
+| Cursor | ✓ | — | — |
+| Codex | — | ✓ | ✓ |
+| Warp | ✓ | ✓ | — |
+| After Effects, Cinema 4D | ✓ | — | — |
+
+**The idea worth keeping**: git config is global (`~/.gitconfig`) or repository-local
+(`<repo>/.git/config`) — the same dual-scope shape as Yarn's brand-vs-document override, except the
+two scopes write to **two different files**. That would have made it the only task in the matrix
+whose correctness could be settled by reading a file instead of asking a model, which is
+LIMITATIONS §8 — the standing blocker on every correctness claim here. If the wrong-scope question
+ever needs an objective answer, this is where to get one. An Electron target also keeps the AX
+backend, which Notion web cannot.
 
 ---
 
@@ -166,9 +242,9 @@ carry more weight than it earns.
 ### The gap
 
 **Nothing in the matrix has tested the vision axis.** Cursor type, motion blur, and the creation
-task all route through menus, dropdowns, and text fields — surfaces that are pure text in both AX
-and DOM. Dropping screenshots costs nothing on such a task, which is exactly what phase 2 measured:
-`min-context` (no vision, no DOM attrs) was the cheapest arm *and* the shortest at 7.3 steps.
+task all route through menus, dropdowns, and text fields — pure text in both AX and DOM. Dropping
+screenshots costs nothing on such a task, which is exactly what phase 2 measured: `min-context`
+(no vision, no DOM attrs) was the cheapest arm *and* the shortest at 7.3 steps.
 
 That result is currently unfalsifiable rather than strong. It says vision is worthless on tasks
 where vision is irrelevant.
@@ -193,19 +269,19 @@ expensive one; otherwise you stack a second measurement problem on the first.
 "show me how to give the canvas a radial gradient background"
 ```
 
-The terminal state is a background type — a value, checkable. The route passes through the canvas
-paint picker, which is the part no text channel describes.
+Terminal state is a background type — a value, checkable. The route passes through the canvas paint
+picker, which is the part no text channel describes.
 
-### Settle this before spending 45 runs
+### Settle this before spending runs
 
 If "Radial" turns out to be a labeled button and clicking it completes the task, the route never
 leaves text and the arm measures nothing new. That is a measurement, not a guess, and it costs one
 CDP observation with the paint picker open, counting how many controls on the route carry a name —
 two minutes on a free Mac. Same discipline the `seen`-is-list-rows hypothesis needs.
 
-Only if the probe confirms unnamed controls on the route is the task worth arms. And then: **add
-it to the four or five configs that still differ, not all fifteen.** Adding every task to every
-config is how the plan reached 203 runs, most of them re-confirming a pass.
+Only if the probe confirms unnamed controls on the route is the task worth arms. And then: **add it
+to the four or five configs that still differ, not all fifteen.** Adding every task to every config
+is how the plan reached 203 runs, most of them re-confirming a pass.
 
 ---
 
@@ -214,7 +290,9 @@ config is how the plan reached 203 runs, most of them re-confirming a pass.
 1. **Now** — nothing. The pass is draining; the probe reports when it ends.
 2. **On drain** — fix the dangling `if` at `run.ts:898`, collect, judge, read phase 7. It may have
    restored dynamic range on its own, which changes what comes next.
-3. **Then** — phase 8. Highest value per run in the project, and the only thing that speaks to the
-   brief's central promise.
-4. **Then, conditionally** — the canvas task, if phase 7 came back at ceiling and the paint-picker
+3. **Before phase 8 fires** — sign Notion in on three Macs, hand-validate one real dual-scope pair
+   (or accept that the correctness half is out of scope for this app), delete the legacy plain-slug
+   map.
+4. **Then** — phase 8, ~17 runs, ~2h.
+5. **Then, conditionally** — the canvas task, if phase 7 came back at ceiling and the paint-picker
    probe confirms the route leaves the text channel.
