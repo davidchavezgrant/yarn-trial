@@ -162,6 +162,27 @@ function main(): void {
 		console.log(`no run log at ${runLogPath} — pointer types will default to arrow`);
 	}
 
+	/**
+	 * Which steps actually changed something, from the run's own mutation journal. Only used to
+	 * PROTECT steps from the verification-tail trim, so a missing or half-written journal (a
+	 * crashed run, or CLEANUP=off, which skips journaling entirely) can only make the trim more
+	 * conservative — never cut work.
+	 */
+	const mutatedSteps: number[] = [];
+	const journalPath = runFile(stamp, RUN_FILES.journal);
+	if (fs.existsSync(journalPath)) {
+		for (const line of fs.readFileSync(journalPath, "utf8").split("\n")) {
+			if (!line.trim()) continue;
+			try {
+				const entry = JSON.parse(line);
+				if (typeof entry.step === "number") mutatedSteps.push(entry.step);
+			} catch {
+				// A journal is appended the instant a mutation is detected, so a killed run can
+				// leave a torn last line. The entries before it are still good.
+			}
+		}
+	}
+
 	const allFrames = fs.existsSync(framesDir)
 		? fs.readdirSync(framesDir).filter((f) => f.startsWith("f-") && f.endsWith(".png")).sort()
 		: [];
@@ -238,6 +259,7 @@ function main(): void {
 		task,
 		backend,
 		demoDwellMs,
+		mutatedSteps,
 		runLog: fs.existsSync(runLogPath) ? path.relative(process.cwd(), runLogPath) : "",
 		steps,
 		turns,

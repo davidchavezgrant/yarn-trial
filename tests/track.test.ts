@@ -17,6 +17,7 @@ import {
 	samplePercentile,
 	springSmooth,
 	synthesizeMove,
+	verificationTailSteps,
 	toFramePixels,
 	toOutputMs,
 	warpSegment,
@@ -450,6 +451,64 @@ test("buildTrack__WaitsAtTheNextTarget__When__ModelThinksBetweenActions", () => 
 		Math.abs(longest.x - second.x) < 50,
 		`the longest wait should be at the NEXT target (x=${second.x}), not at x=${longest.x}`,
 	);
+});
+
+/** The real shape from run 2026-08-03T04-57-06-276: create, rename, menu, panel, dropdown,
+ *  pick (the one journaled mutation), Done — then menu and panel AGAIN, purely to put the
+ *  committed value back on screen for the final goal check. */
+const cursorTaskSteps = (): RunLogStep[] =>
+	[
+		["New draft", 13, 427, 188, 28],
+		["Untitled", 241, 18, 405, 28],
+		["Project actions", 612, 47, 32, 28],
+		["Screen Clip Settings...", 462, 196, 185, 25],
+		["Cursor Style", 1433, 224, 112, 25],
+		["Pointer-first", 1434, 248, 116, 24],
+		["Done", 1449, 852, 96, 28],
+		["Project actions", 612, 47, 32, 28],
+		["Screen Clip Settings...", 462, 196, 185, 25],
+	].map(([name, x, y, w, h], i) => ({
+		index: i + 1,
+		timestamp: "",
+		action: { kind: "tool", name: "click" },
+		targetName: name as string,
+		targetRect: { x: x as number, y: y as number, w: w as number, h: h as number },
+	}));
+
+test("verificationTailSteps__TrimsTheReopen__When__TrailingStepsRevisitShownSurfaces", () => {
+	// Steps 8 and 9 repeat steps 3 and 4 exactly and change nothing — the agent buying back the
+	// evidence that clicking Done removed from the screen. Step 7 (Done) appears once, so the
+	// walk stops there and the commit stays in the video.
+	const tail = verificationTailSteps(cursorTaskSteps(), [6]);
+	assert.deepEqual([...tail].sort((a, b) => a - b), [8, 9]);
+});
+
+test("verificationTailSteps__KeepsTrailingRepeats__When__TheyChangedSomething", () => {
+	// "Set the timezone to Paris and back" ends on the same controls it started with, and those
+	// closing steps ARE the task. A journaled mutation stops the walk.
+	assert.equal(verificationTailSteps(cursorTaskSteps(), [6, 8, 9]).size, 0);
+});
+
+test("verificationTailSteps__TrimsNothing__When__TheRunEndsOnNewWork", () => {
+	const steps = cursorTaskSteps();
+	steps.push({ index: 10, timestamp: "", action: { kind: "tool", name: "click" }, targetName: "Export", targetRect: { x: 5, y: 5, w: 40, h: 20 } });
+	assert.equal(verificationTailSteps(steps, [6]).size, 0);
+});
+
+test("verificationTailSteps__TrimsNothing__When__TrailingStepsHaveNoRecordedTarget", () => {
+	// A step with no target (typing at the caret, a wait) cannot be shown to be a repeat, and
+	// guessing would cut real footage off the end of the take.
+	const steps = cursorTaskSteps();
+	steps.push({ index: 10, timestamp: "", action: { kind: "tool", name: "type_text" } });
+	assert.equal(verificationTailSteps(steps, [6]).size, 0);
+});
+
+test("verificationTailSteps__StopsAtTheFirstStep__When__EveryStepRepeatsAnother", () => {
+	// A pathological all-identical run must still leave something to render, not trim itself to
+	// nothing — the walk never claims index 0 and never lets a claimed step justify the next.
+	const same = [1, 2, 3].map((index) => ({ index, timestamp: "", action: { kind: "tool", name: "click" }, targetName: "Tick", targetRect: { x: 0, y: 0, w: 8, h: 8 } }));
+	const tail = verificationTailSteps(same);
+	assert.ok(tail.size < same.length, "the whole take must not be trimmed away");
 });
 
 test("buildTrack__EmitsHoverSpans__When__TheActuationPaintsNoHoverItself", () => {

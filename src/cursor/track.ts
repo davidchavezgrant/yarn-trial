@@ -161,6 +161,7 @@ export interface RunLogStep {
 	timestamp: string;
 	action: { kind: string; name?: string; args?: Record<string, unknown> };
 	targetRole?: string;
+	targetName?: string;
 	targetRect?: { x: number; y: number; w: number; h: number };
 	/** Fraction of pixels that changed after this action. 0 means the screen did not react. */
 	pixelDelta?: number;
@@ -854,6 +855,43 @@ export function toOutputMs(
  */
 export const CLICK_LEAD_MS = 220;
 
+/**
+ * Trailing steps that re-open a surface the take has already shown, purely to put the task's
+ * evidence back on screen. Returned as step indices to drop from the VIDEO — never from the run.
+ *
+ * They exist for a good reason and cannot be prompted away. Committing a change usually closes
+ * the surface that displays it (Yarn's Done button shuts the settings panel), and `done` evidence
+ * is machine-checked against a FRESH final observation — the 2026-07-29 hole that made
+ * grounded-vs-ungrounded numbers trustworthy. So at the moment the task completes, the proof it
+ * completed is no longer on screen, and the agent has to navigate back to buy it. Loosening the
+ * check to make the video end cleanly would trade the measurement for the cinematography; cutting
+ * the footage costs nothing, exactly like stopping the recording before teardown.
+ *
+ * Three conditions, all required, so this only ever removes re-navigation:
+ *  - a trailing run: the first step that fails any test stops the walk, so anything before new
+ *    work survives;
+ *  - MUTATED NOTHING. "Set the timezone to Paris and back" ends on repeated targets that ARE the
+ *    task; a journaled value change means the step did work and the walk stops there;
+ *  - repeats an EARLIER step's exact target (name and rect). New work at the end is never a tail,
+ *    and a step with no recorded target is never assumed to be one.
+ */
+export function verificationTailSteps(steps: RunLogStep[], mutatedSteps: Iterable<number> = []): Set<number> {
+	const mutated = new Set(mutatedSteps);
+	const key = (s: RunLogStep): string | undefined =>
+		s.targetName && s.targetRect ? `${s.targetName}@${s.targetRect.x},${s.targetRect.y},${s.targetRect.w},${s.targetRect.h}` : undefined;
+	const tail = new Set<number>();
+	for (let i = steps.length - 1; i > 0; i--) {
+		const k = key(steps[i]);
+		if (!k || mutated.has(steps[i].index)) break;
+		// Earlier by POSITION, and only among steps this walk has not already claimed — otherwise
+		// two identical trailing steps would justify each other and the walk would never stop.
+		if (!steps.slice(0, i).some((e) => key(e) === k && !tail.has(e.index))) break;
+		tail.add(steps[i].index);
+	}
+
+	return tail;
+}
+
 export interface BuildTrackInput {
 	stamp: string;
 	app: string;
@@ -864,6 +902,10 @@ export interface BuildTrackInput {
 	 *  `backend` this decides whether the app painted its own hover into the frames; see the hover
 	 *  block in buildTrack. Absent (unrecorded, or a log written before 2026-08-03) means no. */
 	demoDwellMs?: number;
+	/** Step indices that changed a control's value, from the run's journal.jsonl. Feeds
+	 *  verificationTailSteps, which will not trim a step that did work. Absent means none are
+	 *  known, which only ever makes the trim more conservative. */
+	mutatedSteps?: number[];
 	runLog: string;
 	steps: RunLogStep[];
 	turns: TrajectoryTurn[];
@@ -926,8 +968,21 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 	 */
 	const startMs = Math.max(firstFrameMs, input.recordedFromMs ?? 0);
 	const dropped: Array<{ from: number; to: number }> = [];
+	const tail = verificationTailSteps(input.steps, input.mutatedSteps);
 	const joined = allJoined.filter((entry) => {
 		const { step, turn } = entry;
+		/**
+		 * The take ends at the last real work, not at the last action.
+		 *
+		 * Unbounded `to`, unlike every other drop below: the frames AFTER a re-navigation are the
+		 * reopened panel sitting there, which is the thing being cut. A bounded window would drop
+		 * the pointer and keep the scenery.
+		 */
+		if (step && tail.has(step.index)) {
+			dropped.push({ from: turn.epochMs - (turn.endMs - turn.startMs), to: Infinity });
+
+			return false;
+		}
 		// A click the driver warned about that also failed verification is a no-op: the agent
 		// pressed something that does not advertise AXPress and the expected result never appeared.
 		const noop = turn.warned && step?.verified === false;
