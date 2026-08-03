@@ -2422,13 +2422,32 @@ function groundingChart(el, pick, fmt) {
 			groups.push({ label: b, ...(m !== "(default)" ? { sub: friendlyModel(m) } : {}), values: [v(true), v(false)] });
 		}
 	}
-	if (!groups.some((g) => g.values.some((v) => v != null))) { $(el).innerHTML = `<div class="empty">waiting for phase-2 core runs…</div>`; return; }
+	if (!groups.some((g) => g.values.some((v) => v != null))) {
+		// Two different empty states, because they call for different actions. This chart pairs
+		// arms by the CANONICAL ids (`cdp-grounded` / `cdp-ungrounded`), which exist only on the
+		// product app — a second target's cells are named for their own app and task. Saying
+		// "waiting for runs" there would promise runs that are never coming.
+		const canonical = visibleArms().some((a) => /^(ax|cdp)-(un)?grounded$/.test(a.id));
+		$(el).innerHTML = canonical
+			? `<div class="empty">waiting for stage-2 core runs…</div>`
+			: `<div class="empty">no core grounded/ungrounded pair on this target — this chart reads the product app's canonical cells</div>`;
+
+		return;
+	}
 	$(el).innerHTML = hBars(groups, [{ name: "Explored", color: SERIES[0] }, { name: "Unexplored", color: SERIES[1] }], { fmt, padL: 90 });
 }
 
 function renderAttention() {
 	const arms = visibleArms().filter((a) => /^(ax|cdp)-(un)?grounded$/.test(a.id) && a.passes.some((p) => p.meanObsNodes != null));
-	if (!arms.length) { $("chart-attention").innerHTML = `<div class="empty">waiting for phase-2 runs…</div>`; return; }
+	if (!arms.length) {
+		// Same split as groundingChart: absent-on-this-target is not the same fact as not-yet-run.
+		const canonical = visibleArms().some((a) => /^(ax|cdp)-(un)?grounded$/.test(a.id));
+		$("chart-attention").innerHTML = canonical
+			? `<div class="empty">waiting for stage-2 runs…</div>`
+			: `<div class="empty">no core cells on this target — observation size is charted on the product app</div>`;
+
+		return;
+	}
 	// One group per (arm × model pass) — passes[0] alone dropped every later model pass.
 	const groups = arms.flatMap((a) => a.passes.filter((p) => p.meanObsNodes != null).map((p) => ({
 		label: a.id,
