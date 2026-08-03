@@ -53,7 +53,63 @@ export interface FreshSnapshot {
  * screenshot come from the same driver call, so a click point computed from them cannot
  * disagree with what the video shows the way a stale observation's frame can.
  */
+/**
+ * Read until the layout stops moving, then return.
+ *
+ * A single snapshot can be taken mid-relayout, and a demo run makes that likely: `--record`
+ * STAGES the window to fill its display at run start, so the first read lands while Chromium is
+ * still reflowing. Measured on 2026-08-03 (run 2026-08-03T00-04-39-239): the SAME "New Draft"
+ * button reported y=21 on the first observation and y=74 on the next. Step 1 clicked 53px above
+ * the button and failed; step 2 clicked the settled rect and worked.
+ *
+ * That is the whole of the "~43px Library-page AX offset" that had been open since 07-31 and
+ * read as a coordinate-mapping bug. It is not a mapping bug: the transform is identical on both
+ * reads and its inputs check out (window 1570x970, shot 1568x969, heightGap 0.24pt). It is a
+ * snapshot of a page that had not finished moving. AXPress hid it for unfilmed runs — it
+ * actuates by identity and ignores coordinates — which is exactly why filmed ax collapsed to
+ * 2/13 while unfilmed ax held 26/39.
+ *
+ * Two reads that AGREE, rather than a fixed sleep: a sleep long enough for the worst case is
+ * paid by every step, and one tuned to the average still misses. Bounded, and the last read is
+ * used regardless — a page that never settles must not hang the run.
+ */
 export async function freshSnapshot(driver: Driver, win: WindowRef, shotPath: string): Promise<FreshSnapshot> {
+	const tries = Number(process.env.FRESH_SNAPSHOT_TRIES ?? 3);
+	const waitMs = Number(process.env.FRESH_SNAPSHOT_SETTLE_MS ?? 250);
+	let prev: FreshSnapshot | undefined;
+	for (let i = 0; i < Math.max(1, tries); i++) {
+		const shot = await freshSnapshotOnce(driver, win, shotPath);
+		if (prev && geometryAgrees(prev.elements, shot.elements)) return shot;
+		prev = shot;
+		if (i < tries - 1) await new Promise((r) => setTimeout(r, waitMs));
+	}
+
+	return prev as FreshSnapshot;
+}
+
+/**
+ * Do two reads describe the same layout? Compared over NAMED elements by (name, role) so a
+ * list that merely reordered does not read as movement, and by position only — a control whose
+ * rect is unchanged is settled whatever else the page did. One point of tolerance absorbs
+ * rounding in the points→pixels scale.
+ */
+function geometryAgrees(a: FreshElement[], b: FreshElement[]): boolean {
+	const key = (e: FreshElement): string => `${e.role}\u0000${e.name}`;
+	const before = new Map(a.filter((e) => e.name).map((e) => [key(e), e]));
+	let compared = 0;
+	for (const e of b) {
+		if (!e.name) continue;
+		const was = before.get(key(e));
+		if (!was) continue;
+		compared++;
+		if (Math.abs(was.x - e.x) > 1 || Math.abs(was.y - e.y) > 1) return false;
+	}
+
+	// Nothing comparable means nothing to trust — treat it as unsettled and read again.
+	return compared > 0;
+}
+
+async function freshSnapshotOnce(driver: Driver, win: WindowRef, shotPath: string): Promise<FreshSnapshot> {
 	// Shot names carry no run stamp, so a PNG from an earlier step sits at this exact path
 	// and would aim the centroid at the previous screen (the trap observe() documents).
 	try {

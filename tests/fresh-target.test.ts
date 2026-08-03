@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { executeAction } from "../src/core/agent/step.js";
+import { freshSnapshot } from "../src/core/harness/fresh-target.js";
 import type { Driver } from "../src/core/driver.js";
 import { ACT_TOOL, DEMO_ACT_TOOL, DEMO_DRIVER_RULES, DRIVER_RULES } from "../src/core/harness.js";
 import type { InteractiveElement, ObservationBundle } from "../src/core/harness.js";
@@ -269,4 +270,54 @@ test("executeAction__RecordsTheTargetSurface__When__TheElementHasOne", async () 
 	// The field a compiled recipe carries into resolveTarget's narrowing branch. Without it,
 	// two same-named controls are unresolvable and the replay errors instead of running.
 	assert.equal(records[0].targetSurface, "Brand Kit");
+});
+
+test("freshSnapshot__ReadsAgain__When__TheLayoutIsStillMoving", async () => {
+	/**
+	 * The "~43px Library-page AX offset", open since 2026-07-31 and read all that time as a
+	 * coordinate-mapping bug. It is not one. Measured on 2026-08-03 (2026-08-03T00-04-39-239):
+	 * the SAME "New Draft" button reported y=21 on one observation and y=74 on the next, the
+	 * transform identical across both and its inputs sound (window 1570x970, shot 1568x969,
+	 * heightGap 0.24pt). A demo run STAGES the window to fill the display at start, so the first
+	 * read lands mid-reflow — step 1 clicked 53px high and failed, step 2 clicked the settled
+	 * rect and worked.
+	 *
+	 * AXPress hid this for unfilmed runs by actuating on identity and ignoring coordinates,
+	 * which is why filmed ax fell to 2/13 while unfilmed ax held 26/39.
+	 */
+	const reads = [
+		[{ role: "AXButton", name: "New Draft", x: 1372, y: 21, w: 111, h: 28 }],
+		[{ role: "AXButton", name: "New Draft", x: 1381, y: 74, w: 111, h: 29 }],
+		[{ role: "AXButton", name: "New Draft", x: 1381, y: 74, w: 111, h: 29 }],
+	];
+	let n = 0;
+	const driver = {
+		act: async () => {
+			const elements = reads[Math.min(n++, reads.length - 1)].map((e) => ({
+				role: e.role,
+				label: e.name,
+				frame: { x: e.x, y: e.y, w: e.w, h: e.h },
+			}));
+			return {
+				structuredJson: JSON.stringify({
+					screenshot_width: 1000,
+					elements: [{ role: "AXWindow", frame: { x: 0, y: 0, w: 1000, h: 800 } }, ...elements],
+				}),
+			};
+		},
+	} as never;
+
+	const prevWait = process.env.FRESH_SNAPSHOT_SETTLE_MS;
+	process.env.FRESH_SNAPSHOT_SETTLE_MS = "0";
+	let snap: Awaited<ReturnType<typeof freshSnapshot>>;
+	try {
+		snap = await freshSnapshot(driver, { pid: 1, windowId: 2 } as never, path.join(os.tmpdir(), "fresh-settle.png"));
+	} finally {
+		if (prevWait === undefined) delete process.env.FRESH_SNAPSHOT_SETTLE_MS;
+		else process.env.FRESH_SNAPSHOT_SETTLE_MS = prevWait;
+	}
+	// The SETTLED rect, not the first one read — two agreeing reads, not a fixed sleep, because
+	// a sleep long enough for the worst case is paid by every step.
+	assert.equal(snap.elements.find((e) => e.name === "New Draft")?.y, 74);
+	assert.equal(n, 3, "reads until two agree");
 });
