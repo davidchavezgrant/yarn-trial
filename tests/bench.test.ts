@@ -7,7 +7,7 @@ import { auditTaskPrompt } from "../src/core/harness.js";
 import type { JobRecord } from "../src/remote/runner/jobs.js";
 import { collect, collectEntry, expectedProvenance, failureKind, jobTiming, journalScopes, parseAppmapStamp, parseGraphCounts, parseRunMetrics, poisonedHosts, technicalFailure } from "../src/bench/collect.js";
 import { archiveDirFor, entriesForArm, manifestPath, readManifest, recordSubmissions, submittedCount, type Manifest, type ManifestEntry, updateEntry, writeManifest } from "../src/bench/manifest.js";
-import { BACKENDS, BENCH_ALT_MODEL, BENCH_PRIMARY_MODEL, CREATION_EXCLUDED, armModel, MATRIX, armAppmapSlug, armById, armTitle, orderStages, perceptionLine, phaseArms, phaseRunCount, procedureArms, STAGES, stageNeedsMaps, stageOf, type Arm } from "../src/bench/matrix.js";
+import { BACKENDS, BENCH_ALT_MODEL, BENCH_APP, BENCH_PRIMARY_MODEL, CREATION_EXCLUDED, armModel, MATRIX, armAppmapSlug, armById, armTitle, discoveryArmsFor, orderStages, perceptionLine, phaseArms, phaseRunCount, procedureArms, STAGES, stageNeedsMaps, stageOf, type Arm } from "../src/bench/matrix.js";
 import type { DispatchOptions } from "../src/remote/control/dispatch.js";
 import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, auditPhase, dateArg, dispatchOptionsFor, findCompileSource, plannedRuns, runPhase } from "../src/bench/orchestrate.js";
 import { renderReport, reportFileName, writeReport } from "../src/bench/report.js";
@@ -52,7 +52,9 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// Ten since 2026-08-02: the vision-only cdp explore arm joined, both to write the map its
 	// task arm reads and to separate "vision-only discovers little" from "vision-only could not
 	// open what it clicked".
-	assert.equal(phaseRunCount(1), 11);
+	// +2 since 2026-08-03: the second app brings its own Discovery, full-perception and
+	// no-vision, because a map is per-target and Yarn's says nothing about Notion.
+	assert.equal(phaseRunCount(1), 11 + 2);
 	// Phase 2: core 2 backends × 2 grounding × 3, plus 6 slices × 3. Two blocks were cut
 	// 2026-07-31 after their prerequisites were CHECKED rather than assumed (matrix.ts holds
 	// the full reasoning at each site): the Notion Calendar slice (4 arms × 2 = 8 runs — the
@@ -82,14 +84,15 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// them. Recipes (2 local compiles + 6 replays + 3 no-rescue) and procedures (4 arms x 3).
 	assert.equal(phaseRunCount(3), 11 + 12);
 	// Stage 4 Generalization: second task (7), the creation task on every stage-2 config
-	// carried over from phase 7 (15 x 3), and the model axis (3 x 3).
-	assert.equal(phaseRunCount(4), 7 + 45 + 9);
+	// carried over from phase 7 (15 x 3), the model axis (3 x 3), and — since 2026-08-03 — the
+	// second APP: three cdp cells crossed with a simple and a complex task (6 x 3).
+	assert.equal(phaseRunCount(4), 7 + 45 + 9 + 18);
 	// Stage 9 Diagnostics: the AX-offset pair at n=2. Off the ladder — it measures the rig.
 	assert.equal(phaseRunCount(9), 4);
 	// The collapse REGROUPED; it did not add or drop a run. This is the guard on that claim.
 	assert.equal(
 		STAGES.reduce((t, st) => t + phaseRunCount(st.n), 0),
-		207,
+		207 + 20,
 	);
 	// Phase 5 (filmed): one take per phase-2 task config (14, including the minimum-context
 	// pair — derived from the phase-2 arms, so adding a config there adds a filmed take here)
@@ -101,7 +104,8 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// Phase 8 is excluded: it is a diagnostics PAIR (one plain arm, one filmed) and the filmed
 	// half is the measurement, not a take of the other. Deriving a twin for it would film the
 	// same config twice and compare a run against itself.
-	const filmable = MATRIX.filter((a) => stageOf(a.phase)?.kind === "measurement" && (a.kind === "task" || a.kind === "replay"));
+	// BENCH_APP-scoped, matching production: the second app is measured and deliberately unfilmed.
+	const filmable = MATRIX.filter((a) => a.app === BENCH_APP && stageOf(a.phase)?.kind === "measurement" && (a.kind === "task" || a.kind === "replay"));
 	assert.equal(phaseRunCount(5), filmable.length);
 });
 
@@ -194,6 +198,33 @@ test("CreationExcluded__NamesLiveStageTwoCells__When__TheTaskAxisIsNarrowed", ()
 	assert.equal(twins.length, s2.size - CREATION_EXCLUDED.length, "every stage-2 cell that is not excluded has exactly one creation twin");
 });
 
+test("GroundedArms__ReadAMapSomeExploreWrites__When__EveryArmIsResolved", () => {
+	// The guard the second app needed immediately: its two vision-only cells resolved to
+	// `web-app.notion.com.cdp.vision`, a map no explore arm in the matrix produces, so they
+	// would have dispatched and loaded nothing — provenance "none" under a grounded label, the
+	// failure that cost six runs last pass and was only caught at collect.
+	const written = new Set(MATRIX.filter((a) => a.kind === "explore").map(armAppmapSlug));
+	for (const a of MATRIX) {
+		if (a.kind !== "task" || a.dispatch.noGrounding || a.dispatch.useRecipe || a.dispatch.useProcedures) continue;
+		const wanted = a.env?.APPMAP_VARIANT ? undefined : armAppmapSlug(a);
+		// Arms pinned to an explicit variant resolve through APPMAP_VARIANT, not the slug.
+		if (!wanted) continue;
+		assert.ok(written.has(wanted), `${a.id} grounds on ${wanted}, which no explore arm writes`);
+	}
+});
+
+test("SecondAppArms__AreCdpOnlyAndUnfilmed__When__TheTargetIsAUrl", () => {
+	const web = MATRIX.filter((a) => a.dispatch.url);
+	assert.ok(web.length > 0, "guard assumes a web target exists");
+	for (const a of web) {
+		// run.ts throws "web targets run on the cdp backend" — an ax web arm is not a worse
+		// measurement, it is a guaranteed crash.
+		assert.equal(a.dispatch.backend, "cdp", `${a.id} targets a URL on the ${a.dispatch.backend} backend`);
+		assert.notEqual(a.dispatch.record, true, `${a.id} films a second app; the deliverable is footage of the product`);
+	}
+	assert.equal(MATRIX.filter((x) => x.app !== BENCH_APP && x.id.endsWith("-filmed")).length, 0);
+});
+
 test("MATRIX__UsesOnlyAxAndCdp__When__DomIsDeleted", () => {
 	assert.deepEqual([...BACKENDS], ["ax", "cdp"]);
 	for (const arm of MATRIX) assert.notEqual(arm.dispatch.backend, "dom", `${arm.id} names the deleted dom backend`);
@@ -234,12 +265,18 @@ test("MATRIX__LinksSourceArms__When__CompileOrReplay", () => {
 });
 
 test("MATRIX__CarriesNoUnmetPrereqs__When__ArmsTargetASecondApp", () => {
-	// The Notion Calendar slice is gone (see the phase-2 note above), so nothing in the
-	// matrix should target a second app. This guards the restore path as much as the cut: an
-	// arm reintroduced for an app the fleet does not have must carry its prereq, because the
-	// prereq is what made the cut decidable instead of a surprise at run time.
+	// A second app is BACK (2026-08-03, Notion web) — but as a URL, not an install. The Notion
+	// Calendar app slice stays cut for the reason it was cut: it is installed on none of the
+	// three Macs. The rule the cut established still binds the restore — an arm for a target the
+	// fleet may not be ready for must carry its prereq, because the prereq is what makes that
+	// decidable at plan time instead of a surprise at run time.
 	assert.deepEqual(MATRIX.filter((a) => a.app === "Notion Calendar"), []);
 	for (const arm of MATRIX.filter((a) => a.prereq)) assert.match(arm.prereq ?? "", /signed in|installed/i, `${arm.id} prereq must name what is missing`);
+	// Every second-app EXPLORE carries one: the map is the artifact everything downstream reads,
+	// and a signed-out pass maps the login wall — which is exactly what the 07-30 notion.so pass
+	// did before anyone noticed.
+	for (const arm of MATRIX.filter((a) => a.kind === "explore" && a.app !== BENCH_APP))
+		assert.ok(arm.prereq, `${arm.id} explores a second app and must declare its sign-in prereq`);
 });
 
 test("MATRIX__ConfinesRecordingToTheFilmedPhase__When__ArmsAreDeclared", () => {
@@ -369,7 +406,7 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		// Eleven: the two reference arms twice each, five single-condition cells, and the
 		// vision-only cdp pass at n=2 — three task arms ground on its map, and vision-only
 		// discovery has the widest spread in the matrix (9 surfaces then 21 on ax).
-		assert.equal(fake.calls.length, 11);
+		assert.equal(fake.calls.length, 13);
 		// The two single-channel passes must differ ONLY in which channel they drop — same
 		// backend, same app — or they are not a comparison.
 		const single = fake.calls.filter((c) => c.noAx || c.noVision);
@@ -382,7 +419,7 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		// screenshot" — so pixel addressing was available on that backend all along. Running it
 		// on both is what separates vision-only's 0/3 into a perception result or an aiming one.
 		// Six CALLS, not five arms: the vision-only cdp pass is n=2, so it dispatches twice.
-		assert.equal(single.length, 6);
+		assert.equal(single.length, 7, "six on Yarn, plus the second app's no-vision discovery");
 		assert.equal(single.filter((c) => c.noAx).length, 3, "a screenshots-only pass per backend, cdp repeated for an error bar");
 		// Backends PRESENT, not call counts — cdp repeats for an error bar and that is not a
 		// second condition.
@@ -391,7 +428,7 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 			["ax", "cdp"],
 			"vision-only must be measured on the actuator that aims AND the one that does not",
 		);
-		assert.equal(single.filter((c) => c.noVision).length, 3);
+		assert.equal(single.filter((c) => c.noVision).length, 4, "…plus the second app's no-vision pass");
 		// The perception grid must span BOTH backends, or the screenshot question is only
 		// answered on the fallback path and not on the one that ships.
 		assert.ok(single.some((c) => c.backend === "cdp" && c.noVision), "cdp gets a no-vision cell too");
@@ -409,13 +446,21 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		assert.equal(ax?.host, "auto");
 		assert.equal(ax?.queue, true);
 		assert.equal(ax?.app, "Yarn");
-		// Phase 1 is Yarn-only since 2026-08-01: no arm carries a URL, and every one targets
-		// the same app so the four differ ONLY in perception and backend.
-		assert.deepEqual(fake.calls.filter((c) => c.url), []);
-		assert.ok(fake.calls.every((c) => c.app === "Yarn"), "every phase-1 arm targets Yarn");
+		// Discovery stopped being Yarn-only on 2026-08-03: the second app brings its own passes,
+		// because a map is per-target and Yarn's says nothing about Notion. What still holds is
+		// the property the old assertion was really protecting — every URL-carrying pass names
+		// the SAME target as the app it declares, so a web arm can never silently ground one
+		// site's map onto another's runs.
+		const web = fake.calls.filter((c) => c.url);
+		assert.equal(web.length, 2, "the second app's full-perception and no-vision passes");
+		for (const c of web) assert.equal(c.app, c.url, `${c.url} dispatched under app ${c.app}`);
+		assert.ok(
+			fake.calls.every((c) => c.app === "Yarn" || c.url),
+			"a Discovery arm targets Yarn or declares the URL it targets — never neither",
+		);
 		// Every accepted job landed in the manifest, uncollected.
 		const m = readManifest(DATE, liveDir(dir));
-		assert.equal(m.entries.length, 11);
+		assert.equal(m.entries.length, 13);
 		assert.ok(m.entries.every((e) => !e.collected && e.host === "mac1"));
 	});
 });
@@ -532,7 +577,7 @@ test("runPhase__SubmitsOnlyMissingSamples__When__ManifestAlreadyHoldsSome", asyn
 		assert.equal(code, EXIT_OK);
 		// ax and cdp are n=2, so seeding one sample of each leaves one of each outstanding,
 		// plus the un-seeded no-vision pass and the vision-only cdp pass.
-		assert.equal(fake.calls.length, 5);
+		assert.equal(fake.calls.length, 7);
 	});
 });
 
@@ -1045,12 +1090,12 @@ test("runPhase__ScopesSampleCountsToTheModelPass__When__TwoModelsRunTheMatrix", 
 	await withTempAsync("bench-", async (dir) => {
 		const a = fakeDispatch();
 		await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: a.fn, log: () => {}, model: "openai/gpt-5.6-sol:nitro" });
-		assert.equal(a.calls.length, 11, "pass A submits the full phase");
+		assert.equal(a.calls.length, 13, "pass A submits the full phase");
 		for (const c of a.calls) assert.equal(c.model, "openai/gpt-5.6-sol:nitro");
 
 		const b = fakeDispatch();
 		await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: b.fn, log: () => {}, model: "claude-fable-5" });
-		assert.equal(b.calls.length, 11, "pass B submits the full phase again — pass A's entries are not its samples");
+		assert.equal(b.calls.length, 13, "pass B submits the full phase again — pass A's entries are not its samples");
 		for (const c of b.calls) assert.equal(c.model, "claude-fable-5");
 
 		// And a re-run of pass A tops up nothing.
@@ -1319,7 +1364,9 @@ test("MATRIX__FilmsEveryMeasuredConfig__When__PhaseFiveIsDerived", () => {
 	// Phase 8 is excluded: it is a diagnostics PAIR (one plain arm, one filmed) where the filmed
 	// half IS the measurement — staging the window is the perturbation under test. Deriving a
 	// twin would film the same config twice and compare a run against itself.
-	const measured = MATRIX.filter((a) => stageOf(a.phase)?.kind === "measurement" && (a.kind === "task" || a.kind === "replay"));
+	// Scoped to BENCH_APP since 2026-08-03: the deliverable is footage of the PRODUCT, so the
+	// second-app arms are measured and deliberately unfilmed.
+	const measured = MATRIX.filter((a) => a.app === BENCH_APP && stageOf(a.phase)?.kind === "measurement" && (a.kind === "task" || a.kind === "replay"));
 	const filmed = MATRIX.filter((a) => a.phase === 5);
 	const shape = (a: Arm) => JSON.stringify({ ...a.dispatch, record: undefined, env: a.env ?? null });
 
@@ -1722,11 +1769,11 @@ test("runPhase__RecordsTheArmsOwnModel__When__AnArmIsPinnedToAnother", async () 
 		// Generalization is map-gated now (2026-08-03): its creation arms are grounded, and
 		// dispatching them before Discovery lands would run them on provenance "none" under a
 		// grounded label. The old `phase === 2 || phase === 5` check missed this stage entirely.
+		// Seed the stage's OWN discovery dependencies. Hardcoding the Yarn explores broke the
+		// moment a second app joined Generalization — which is the point of discoveryArmsFor.
 		const seeded = recordSubmissions(
 			readManifest(DATE, liveDir(dir)),
-			phaseArms(1)
-				.filter((a) => a.app === "Yarn")
-				.map((a) => entry(a.id, `explore-${a.id}`, { collected: true, state: "done" })),
+			discoveryArmsFor(4).map((a) => entry(a.id, `explore-${a.id}`, { collected: true, state: "done" })),
 		);
 		writeManifest(seeded, liveDir(dir));
 

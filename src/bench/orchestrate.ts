@@ -6,7 +6,7 @@ import { CHALLENGER_N, challengerNeedsExplore, planChallenger } from "./challeng
 import { collect } from "./collect.js";
 import { manifestCost } from "./cost.js";
 import { fetchTrueCost, reconcile } from "./truecost.js";
-import { BENCH_APP, BENCH_PRIMARY_MODEL, MATRIX, PHASES, armById, flagsLine, isPhase, perceptionLine, armModel, phaseArms, phaseRunCount, procedureArms, stageCompiles, stageNeedsMaps, stageOf, type Arm, type Phase } from "./matrix.js";
+import { BENCH_APP, BENCH_PRIMARY_MODEL, MATRIX, PHASES, armById, discoveryArmsFor, flagsLine, isPhase, perceptionLine, armModel, phaseArms, phaseRunCount, procedureArms, stageCompiles, stageNeedsMaps, stageOf, type Arm, type Phase } from "./matrix.js";
 import {
 	entriesForArm,
 	type Manifest,
@@ -92,7 +92,8 @@ export const EXIT_REFUSED = 1;
 export const EXIT_NEEDS_GO = 2;
 
 /** Phase-1 arms whose collected maps gate phase 2 — the Yarn explores, not the web check. */
-const phase1GateArms = (): Arm[] => phaseArms(1).filter((a) => a.app === BENCH_APP);
+// Per-app since 2026-08-03 — see discoveryArmsFor. Kept as a named local for the gate below.
+const phase1GateArms = (phase: Phase): Arm[] => discoveryArmsFor(phase);
 
 /**
  * Interleaved submission order, minus samples the manifest already holds. Compile arms are
@@ -407,7 +408,7 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 	// the preview is how an operator finds out what phase 2 needs before phase 1 has run.
 	const missingMaps =
 		stageNeedsMaps(phase) && !opts.force
-			? phase1GateArms().filter((a) => !entriesForArm(manifest, a.id, opts.model).some((e) => e.collected))
+			? phase1GateArms(phase).filter((a) => !entriesForArm(manifest, a.id, opts.model).some((e) => e.collected))
 			: [];
 	if (missingMaps.length && opts.go) {
 		log(`REFUSED: phase ${phase}'s grounded arms need phase-1 maps${opts.model ? ` from THIS model's pass (${opts.model} grounds itself)` : ""}, and today's manifest has no collected explore for: ${missingMaps.map((a) => a.id).join(", ")}`);

@@ -292,6 +292,61 @@ export const PHASE4_TASK = "show me how to change the motion blur";
  */
 export const CREATION_TASK =
 	"Make a two-scene video script for a coffee ordering app called Brew, narrated by Cassidy. Do not publish, export, or share it.";
+
+/**
+ * The second APP — the axis 207 runs never varied, and the one the brief actually promises:
+ * "This should theoretically work on arbitrary apps, although we'd budget some setup time."
+ *
+ * Every finding so far is indistinguishable from a fact about Yarn's DOM. Notion web is the
+ * brief's own example, needs no install (the cdp backend drives its own persistent Chrome), and
+ * already has a stamped explore map from 2026-07-31.
+ *
+ * The FULL URL, not a host: `appmapSlug` recognises a target by being a URL and slugs it to
+ * `web-app.notion.com`, which is what the committed map is called. A bare host would slug to
+ * `app.notion.com` and silently miss it — the arm would load nothing and run ungrounded under a
+ * grounded label, which is this repo's most-repeated failure and the one `groundingChecked`
+ * caught six times in the last pass.
+ */
+export const SECOND_APP_URL = "https://app.notion.com";
+
+/**
+ * TWO tasks, spanning difficulty on purpose (David, 2026-08-03).
+ *
+ * A settings toggle was the obvious choice and would have been the wrong one: Yarn's settings
+ * task finished this pass at ceiling in eleven of twelve arms, so a third one buys nothing. The
+ * pass's most useful finding was that grounding's value tracks the TASK — cdp needs none on a
+ * dropdown (3/3 either way) and 0/3 without it on the product flow. A simple and a complex task
+ * on a second app tests whether that PATTERN transfers, which is a sharper question than whether
+ * one more toggle works.
+ *
+ * Both are goal-only: they name an outcome and never a route. Both mutate, which is safe here —
+ * the workspace is a throwaway account — but see the reset note on the arms below, because
+ * teardown restores what the mutation journal recorded and page creation is not that.
+ *
+ * NOT known to be dual-scope, either of them. `findScopeAmbiguities()` over the committed Notion
+ * map returns 11 collisions and most are false positives — generic verbs (sort, filter, group)
+ * the explore model gave one `settingKey` across unrelated database surfaces. The real
+ * account-vs-workspace splits are missing from it, so the detector has both error kinds here.
+ * Consequence, to be stated wherever these arms are reported: the actions/tokens half of the
+ * comparison stands, the wrong-scope half does not until someone hand-validates a pair. That
+ * degradation is itself a finding — the scope mechanism is grounding's strongest measured win on
+ * Yarn and it does not survive contact with a database-shaped app.
+ */
+export const SECOND_APP_SIMPLE_TASK = "Create a table with five rows and populate every row.";
+
+/**
+ * The complex half: multi-surface, deeply nested, and still checkable at the end.
+ *
+ * Chosen against the Notion map's own shape — its dismissal log is dominated by view-settings,
+ * filter, sort, group and property panels, which is where the app's real depth lives and where
+ * nothing in this matrix has ever driven an agent. It needs a schema change, five records with
+ * varied values, a second view, a grouping and a filter: six distinct surfaces against the
+ * simple task's one, and no single control completes it.
+ *
+ * Deliberately free of externality verbs — nothing here shares, publishes, invites or deletes.
+ */
+export const SECOND_APP_COMPLEX_TASK =
+	"Make a task database with a status property, add five tasks across different statuses, then give it a board view grouped by status that shows only the unfinished ones.";
 /**
  * The comparison model. Every one of the first 115 runs was Sol; nothing tested a second.
  *
@@ -1023,7 +1078,107 @@ const DIAGNOSTICS: Arm[] = [
  * Everything declared directly, before the two derived stages. Deliverables is derived FROM it,
  * so it cannot appear here.
  */
-const DECLARED: Arm[] = [...DISCOVERY, ...CONFIG_CORE, ...CONFIG_SLICES, ...REUSE_RECIPES, ...REUSE_PROCEDURES, ...GEN_SECOND_TASK, ...GEN_TASK_AND_MODEL, ...DIAGNOSTICS];
+/**
+ * Discovery for the second app. Two passes, both cdp — `run.ts` REFUSES a web target on the ax
+ * backend ("web targets run on the cdp backend"), so the backend axis simply does not exist
+ * here. That is the price of choosing the brief's app over an installed one, and it is why these
+ * arms cannot re-test "is grounding backend-dependent".
+ *
+ * The no-vision pass exists because `notion-cdp-grounded-no-vision` consumes an
+ * APPMAP_VARIANT=novision map. Grounding an arm on a map its own treatment did not produce is
+ * LIMITATIONS §23 with the sign flipped.
+ *
+ * A stamped map from 2026-07-31 already exists (471 nodes, 119 surfaces, frontier-empty, 1h14m).
+ * It predates the prompt and frontier fixes that forced a re-run of every Yarn pass, so these
+ * arms re-run it rather than grounding on code no other arm executed. Skip them with `--force`
+ * and reuse the old map if the 1h14m is not affordable — but label the rows if you do.
+ */
+const DISCOVERY_SECOND_APP: Arm[] = [
+	{
+		id: "explore-notion-cdp",
+		phase: 1,
+		kind: "explore",
+		app: SECOND_APP_URL,
+		n: 1,
+		dispatch: { backend: "cdp", url: SECOND_APP_URL },
+		prereq: "Notion signed in to the RUNNER's Chrome profile (`./run browser-login`), not the Mac's — measured 2026-08-03, mac1 had no app.notion.com session while mac2/mac3 did",
+		informs: "does the discovery story hold on an app 3x Yarn's size that nobody tuned the harness against",
+	},
+	{
+		id: "explore-notion-cdp-no-vision",
+		phase: 1,
+		kind: "explore",
+		app: SECOND_APP_URL,
+		n: 1,
+		dispatch: { backend: "cdp", noVision: true, url: SECOND_APP_URL },
+		prereq: "Notion signed in to the runner Chrome profile — same requirement as explore-notion-cdp",
+		informs: "the novision map the no-vision arm reads; also a second sample of what dropping screenshots costs during GROUNDING",
+	},
+];
+
+/**
+ * The second APP crossed with a simple and a complex task.
+ *
+ * Derived from the stage-2 cells rather than hand-written, so a config added there is not
+ * silently missing here — but from a NAMED subset, because every ax cell is impossible on a web
+ * target and running all twenty would be twelve arms of guaranteed refusal.
+ *
+ * The five are the cdp cells that carry a finding worth re-testing: the grounding pair (does
+ * cdp's task-dependence reproduce off Yarn), the no-vision cell (does lean-beats-rich transfer),
+ * and the two vision-only cells (the floor, and whether a map lifts it).
+ *
+ * RESET NOTE: both tasks create workspace content, and teardown only restores what the mutation
+ * journal recorded — page and database creation is not that. Seed the workspace to a known state
+ * and clear it between passes, or run n+1 and read the first sample as contaminated.
+ */
+/**
+ * THREE cells, not five. The two vision-only cells were drafted and cut on the evidence.
+ *
+ * They would need a third explore pass — a vision-only cdp sweep to write the `.vision` map they
+ * resolve to, ~1h15m and $10-20 — and the thing it would buy is a second sample of a floor. All
+ * four vision-only cdp cells on Yarn came back 0/3 this pass, two of them void on
+ * grounding-mismatch. The vision-only result that DID work (a pixel-written map lifts a
+ * pixel-only reader from 0/3 to 2/3) happened on the AX backend, and ax is impossible against a
+ * web target — so the transferable half of that finding cannot be tested here at all.
+ *
+ * Add them back with `explore-notion-cdp-vision` if the vision-only deploy story ever needs a
+ * second app behind it.
+ */
+const SECOND_APP_CELLS = ["cdp-ungrounded", "cdp-grounded", "cdp-grounded-no-vision"] as const;
+
+const secondAppArms = (): Arm[] =>
+	[...CONFIG_CORE, ...CONFIG_SLICES]
+		.filter((a) => (SECOND_APP_CELLS as readonly string[]).includes(a.id))
+		.flatMap((a) => [
+			{
+				...a,
+				id: `notion-${a.id}`,
+				phase: 4 as Phase,
+				app: SECOND_APP_URL,
+				task: SECOND_APP_SIMPLE_TASK,
+				// 30 against Yarn's settings tasks at 5-13: a table with five populated rows is
+				// more typing than a dropdown, and the stall detector is what actually ends a
+				// run now — the budget only has to be too big to bind.
+				dispatch: { ...a.dispatch, url: SECOND_APP_URL, steps: 30 },
+				informs: `does ${a.id}'s result transfer to a second app on a SIMPLE task`,
+			},
+			{
+				...a,
+				id: `notion-complex-${a.id}`,
+				phase: 4 as Phase,
+				app: SECOND_APP_URL,
+				task: SECOND_APP_COMPLEX_TASK,
+				// 60: six surfaces, a schema change and five records. The creation task needed 30
+				// against a known-good 19, and this is longer than that with no known-good run at
+				// all — so the budget is set not to bind rather than to a measured number.
+				dispatch: { ...a.dispatch, url: SECOND_APP_URL, steps: 60 },
+				informs: `does ${a.id}'s result transfer to a second app on a COMPLEX task — and does Yarn's task-dependence reproduce`,
+			},
+		]);
+
+const GEN_SECOND_APP: Arm[] = secondAppArms();
+
+const DECLARED: Arm[] = [...DISCOVERY, ...DISCOVERY_SECOND_APP, ...CONFIG_CORE, ...CONFIG_SLICES, ...REUSE_RECIPES, ...REUSE_PROCEDURES, ...GEN_SECOND_TASK, ...GEN_TASK_AND_MODEL, ...GEN_SECOND_APP, ...DIAGNOSTICS];
 
 /**
  * Filmed twins come from MEASUREMENT stages only, read off `StageDef.kind`.
@@ -1034,7 +1189,14 @@ const DECLARED: Arm[] = [...DISCOVERY, ...CONFIG_CORE, ...CONFIG_SLICES, ...REUS
  * rather than a special case, and a future non-measurement stage is excluded before anyone
  * remembers to exclude it.
  */
-const FILMABLE: Arm[] = DECLARED.filter((a) => stageOf(a.phase)?.kind === "measurement" && (a.kind === "task" || a.kind === "replay"));
+const FILMABLE: Arm[] = DECLARED.filter(
+	// BENCH_APP only. The deliverable is footage of the PRODUCT — a filmed take of the agent
+	// driving someone else's web app demonstrates nothing Yarn wants to show, and the second-app
+	// arms would have added ten n=1 takes to a corpus nobody would cut from. Keyed on the app
+	// rather than on an exclusion list, so a third app inherits the rule; delete this clause to
+	// film everything.
+	(a) => a.app === BENCH_APP && stageOf(a.phase)?.kind === "measurement" && (a.kind === "task" || a.kind === "replay"),
+);
 
 const DELIVERABLES: Arm[] = FILMABLE.map(filmed);
 
@@ -1073,6 +1235,21 @@ const readsAMap = (a: Arm): boolean => a.kind === "task" && !a.dispatch.noGround
  * old `phase === 2 || phase === 5` check missed entirely.
  */
 export const stageNeedsMaps = (phase: Phase): boolean => stageOf(phase)?.kind !== "diagnostic" && phaseArms(phase).some(readsAMap);
+
+/**
+ * The Discovery arms a stage's grounded arms actually depend on — PER APP.
+ *
+ * The gate used to be `phaseArms(1).filter(a => a.app === BENCH_APP)`, which was correct while
+ * everything was Yarn and wrong the moment it was not: Generalization's Notion arms would have
+ * been held up by Yarn explores they never read, and — far worse — would have dispatched with
+ * their OWN app's map missing, since nothing checked for it. That is the same shape as the six
+ * grounding-mismatch runs the last pass paid for and only detected at collect.
+ */
+export const discoveryArmsFor = (phase: Phase): Arm[] => {
+	const apps = new Set(phaseArms(phase).filter(readsAMap).map((a) => a.app));
+
+	return phaseArms(1).filter((a) => apps.has(a.app));
+};
 
 export const procedureArms = (phase?: Phase): Arm[] =>
 	MATRIX.filter((a) => a.dispatch.useProcedures && (phase === undefined || a.phase === phase));
