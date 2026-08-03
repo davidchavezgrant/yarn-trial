@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { appmapsDir, outDir, recipesDir, proceduresDir } from "../../paths.js";
 
 import { readJsonOr } from "../../fsutil.js";
-import { readCapturedAt } from "../../core/apps.js";
+import { readCapturedAt, readGraphStamp } from "../../core/apps.js";
 import { type HostEntry, type Inventory, loadHosts } from "./hosts.js";
 import { assertSafeRemotePath, firstLine, remoteDataRoot, type RsyncRunner, runRsync, runSsh, rsyncShell, type SshRunner } from "./ssh.js";
 
@@ -57,6 +57,8 @@ export interface MapVersion {
 	slug: string;
 	/** From the graph. Absent on prose-only maps, which predate it. */
 	capturedAt?: string;
+	/** Graph node count — how much of the app this map covers. Absent on prose-only maps. */
+	nodes?: number;
 	/** Whether a `.json` sits beside the `.md`. */
 	hasGraph: boolean;
 	/** Basenames present, both halves when there are two. */
@@ -86,10 +88,11 @@ export function readAppmaps(dir: string): Map<string, MapVersion> {
 		const v = out.get(slug) ?? { slug, hasGraph: false, files: [] };
 		v.files.push(file);
 		if (ext === "json") {
-			const stamp = readCapturedAt(path.join(dir, file));
-			if (stamp) {
+			const { capturedAt, nodes } = readGraphStamp(path.join(dir, file));
+			if (capturedAt) {
 				v.hasGraph = true;
-				v.capturedAt = stamp;
+				v.capturedAt = capturedAt;
+				if (nodes !== undefined) v.nodes = nodes;
 			}
 		}
 		out.set(slug, v);
@@ -185,6 +188,28 @@ export function readRecipes(dir: string): Map<string, MapVersion> {
  * replaced by a worse one.
  */
 export function beats(a: MapVersion, b: MapVersion): boolean {
+	// COVERAGE FIRST, recency second (David, 2026-08-03). Two samples of one arm land minutes
+	// apart on different Macs, and the old rule handed the slot to whichever finished later —
+	// which is run duration, not map quality. It matched the larger map about two thirds of the
+	// time by accident: on 2026-08-01 `explore-cdp` and `explore-vision-cdp` both had the longer
+	// pass produce more nodes, while `explore-ax` had the shorter one produce 166 against 120,
+	// so recency picked the map with 46 fewer nodes.
+	//
+	// Measured caveat, recorded so nobody re-derives it as a discovery: map size does NOT predict
+	// how a grounded run goes. Across 86–234 nodes on the 08-01 pass the correlation with success
+	// is 0.068 on the setting task and 0.063 on the create task, and NEGATIVE (-0.511) on
+	// vision-only arms, where matching the map's perception channel matters more than its size.
+	// This is a data-hygiene rule — the better sample should be the one that survives — not a
+	// performance fix, and it should not be cited as one.
+	//
+	// The freshness the old rule guaranteed is given up knowingly: the fleet pins one app build
+	// (0.0.119 on all three Macs, checked) and these maps are structural, so a larger older map
+	// does not describe a UI that has moved. If the target app ever ships a UI change mid-pass,
+	// this rule will hold the pre-change map until someone promotes the new one by hand.
+	if (a.nodes !== undefined && b.nodes !== undefined && a.nodes !== b.nodes) return a.nodes > b.nodes;
+	// Equal coverage, or either side prose-only: fall back to the stamp. Strictly-greater keeps
+	// the tie behaviour the transfer planner depends on — ties go to the earlier source, and
+	// `local` is passed first, so two maps stamped in the same millisecond do not ping-pong.
 	if (a.capturedAt && b.capturedAt) return a.capturedAt > b.capturedAt;
 
 	return !!a.capturedAt && !b.capturedAt;

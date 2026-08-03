@@ -198,7 +198,26 @@ export const writeArtifacts = (p: Pass, out: FinishInput, stopped: StopReason, s
 	// old map" is not the question here — a pass that surrendered because the app went dark has
 	// a hole in it exactly where the app stopped answering, which is precisely the region the
 	// next run needs mapped.
-	const demoted = salvaged || stopped === "frontier-conceded" || (!modelFinished && !beatsBaseline);
+	/**
+	 * COVERAGE WINS over recency (David, 2026-08-03) — the local half of the same rule `beats()`
+	 * applies across the fleet. The two must agree: if publication preferred the larger map and
+	 * convergence preferred the newer one, the next sync would hand the slot straight back.
+	 *
+	 * What it replaces: an arm runs EXPLORE_SAMPLES=2 passes minutes apart on different Macs, both
+	 * publish, and the slot went to whichever finished LATER — which is run duration, not map
+	 * quality. On the 08-01 pass that picked the larger map two times in three; the third,
+	 * `explore-ax`, published 120 nodes over a 166-node sibling.
+	 *
+	 * Deliberately `<` and not `<=`: an equal-sized map still publishes, refreshing `capturedAt`
+	 * so a re-run of the same arm is not silently ignored.
+	 *
+	 * Known cost, accepted: this rule has no expiry. A map only ever gets replaced by a bigger
+	 * one, so if the target app ships a UI change the pre-change map stays until someone promotes
+	 * the new one by hand — the `cp` lines below are that path. Safe here because the fleet pins
+	 * one build and these maps are structural rather than instance-bound.
+	 */
+	const smallerThanCommitted = committedNodes > 0 && p.graphNodes.size < committedNodes;
+	const demoted = salvaged || stopped === "frontier-conceded" || (!modelFinished && !beatsBaseline) || smallerThanCommitted;
 	// The run's own copy is written ALWAYS, and first: whatever this pass produced belongs with
 	// the pass, at a path nothing later can overwrite. Publishing to docs/appmaps is the separate,
 	// conditional step below — that path is keyed by app, so the next pass on the same variant
@@ -238,7 +257,17 @@ export const writeArtifacts = (p: Pass, out: FinishInput, stopped: StopReason, s
 	const ambiguities = findScopeAmbiguities(graph);
 	console.log(`structured graph: ${jsonPath} (${graph.nodes.length} nodes, ${graph.edges.length} edges)`);
 	if (demoted) {
-		console.log(`kept OUT of docs/appmaps/ (${salvaged ? "pass did not finish on its own" : `${p.graphNodes.size} nodes vs ${committedNodes} committed`}); promote by hand if it is the better map:`);
+		// Name the rule that withheld it. "smaller than committed" and "cut short and under half"
+		// both read as a node-count comparison, and an operator who cannot tell them apart cannot
+		// tell a thin pass from a complete pass that simply lost to a better one.
+		const why = salvaged
+			? "pass did not finish on its own"
+			: stopped === "frontier-conceded"
+				? "pass conceded"
+				: smallerThanCommitted
+					? `${p.graphNodes.size} nodes vs ${committedNodes} committed — the larger map stays`
+					: `cut short at ${p.graphNodes.size} nodes vs ${committedNodes} committed`;
+		console.log(`kept OUT of docs/appmaps/ (${why}); promote by hand if it is the better map:`);
 		console.log(`  cp ${prosePath} ${p.outPath}`);
 		console.log(`  cp ${jsonPath} ${p.graphPath}`);
 	}

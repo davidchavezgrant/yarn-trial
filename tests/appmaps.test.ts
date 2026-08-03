@@ -29,8 +29,8 @@ function writeMap(dir: string, slug: string, capturedAt?: string): void {
 	if (capturedAt) fs.writeFileSync(path.join(dir, `${slug}.json`), JSON.stringify({ app: slug, capturedAt, nodes: [] }));
 }
 
-function version(slug: string, capturedAt?: string): MapVersion {
-	return { slug, capturedAt, hasGraph: !!capturedAt, files: capturedAt ? [`${slug}.md`, `${slug}.json`] : [`${slug}.md`] };
+function version(slug: string, capturedAt?: string, nodes?: number): MapVersion {
+	return { slug, capturedAt, ...(nodes !== undefined ? { nodes } : {}), hasGraph: !!capturedAt, files: capturedAt ? [`${slug}.md`, `${slug}.json`] : [`${slug}.md`] };
 }
 
 function source(name: string, ...maps: MapVersion[]): Source {
@@ -105,6 +105,36 @@ test("beats__HoldsThemEqual__When__NeitherIsStamped", () => {
 test("beats__HoldsThemEqual__When__TheStampsAreIdentical", () => {
 	const stamp = "2026-07-30T11:03:00.000Z";
 	assert.equal(beats(version("yarn", stamp), version("yarn", stamp)), false);
+});
+
+/**
+ * Coverage beats recency (David, 2026-08-03).
+ *
+ * The two samples of one arm finish minutes apart on different Macs, and the old rule gave the
+ * slot to whichever finished later — run duration, not map quality. On 2026-08-01 that published
+ * `explore-ax`'s 120-node map over its 166-node sibling.
+ */
+test("beats__PrefersTheLargerMap__When__BothCarryNodeCounts", () => {
+	const bigOld = version("yarn", "2026-07-29T09:00:00.000Z", 166);
+	const smallNew = version("yarn", "2026-07-30T11:03:00.000Z", 120);
+	assert.equal(beats(bigOld, smallNew), true, "the larger map wins even though it is older");
+	assert.equal(beats(smallNew, bigOld), false, "and the newer smaller one does not take the slot back");
+});
+
+/** Equal coverage carries no signal, so the stamp decides — and a re-run of an arm still lands. */
+test("beats__FallsBackToRecency__When__NodeCountsAreEqual", () => {
+	const older = version("yarn", "2026-07-29T09:00:00.000Z", 144);
+	const newer = version("yarn", "2026-07-30T11:03:00.000Z", 144);
+	assert.equal(beats(newer, older), true);
+	assert.equal(beats(older, newer), false);
+});
+
+/** Prose-only maps and pre-nodes graphs have no count; comparing against undefined must not win. */
+test("beats__FallsBackToRecency__When__EitherMapHasNoNodeCount", () => {
+	const counted = version("yarn", "2026-07-29T09:00:00.000Z", 200);
+	const uncounted = version("yarn", "2026-07-30T11:03:00.000Z");
+	assert.equal(beats(counted, uncounted), false, "an older counted map must not beat a newer uncounted one on size alone");
+	assert.equal(beats(uncounted, counted), true, "recency still decides when one side cannot be compared");
 });
 
 // ── planning ─────────────────────────────────────────────────────────────────────────────

@@ -138,6 +138,45 @@ test("writeArtifacts__PublishesTheMap__When__ThePassSweptTheFrontier", () => {
 	});
 });
 
+/** Seed a committed graph so the coverage comparison has a baseline to run against. */
+function commitGraph(p: { graphPath: string; outPath: string }, nodes: number): void {
+	fs.mkdirSync(path.dirname(p.graphPath), { recursive: true });
+	fs.writeFileSync(p.outPath, "# committed map\n");
+	fs.writeFileSync(
+		p.graphPath,
+		JSON.stringify({ app: "Yarn", capturedAt: "2026-08-01T00:00:00.000Z", provenance: "explore", nodes: Array.from({ length: nodes }, (_, i) => ({ id: `n${i}` })), edges: [] }),
+	);
+}
+
+/**
+ * Coverage beats recency, and this is the local half — it has to agree with `beats()` in
+ * remote/control/appmaps.ts. If publication preferred the larger map and fleet convergence
+ * preferred the newer one, the next sync would hand the slot straight back.
+ */
+test("writeArtifacts__WithholdsTheMap__When__ItIsSmallerThanTheCommittedOne", () => {
+	inTempRoot(() => {
+		const p = newPass({ kind: "app", name: "Yarn" }, "Yarn", "ax", true, undefined, false);
+		commitGraph(p, 3);
+		// A clean pass — swept the frontier — that simply mapped less than the sibling already on
+		// disk. Before this rule it published anyway, purely for finishing later.
+		writeArtifacts(p, { document: "# thinner map", findings: [] } as never, "frontier-empty");
+		assert.equal(fs.readFileSync(p.outPath, "utf8"), "# committed map\n", "the larger committed map must survive");
+		assert.equal(fs.existsSync(p.appmapProsePath), true, "the run keeps its own copy either way");
+	});
+});
+
+test("writeArtifacts__PublishesTheMap__When__ItIsLargerThanTheCommittedOne", () => {
+	inTempRoot(() => {
+		const p = newPass({ kind: "app", name: "Yarn" }, "Yarn", "ax", true, undefined, false);
+		commitGraph(p, 1);
+		p.graphNodes.set("a", { id: "a" } as never);
+		p.graphNodes.set("b", { id: "b" } as never);
+		writeArtifacts(p, { document: "# fuller map", findings: [] } as never, "frontier-empty");
+		// The published file is the prose UNDER a provenance stamp, so match on the body.
+		assert.match(fs.readFileSync(p.outPath, "utf8"), /# fuller map/, "the larger map takes the slot");
+	});
+});
+
 /**
  * The gap the ladder above could not see, and the reason a 47-minute pass died on 2026-08-03.
  *

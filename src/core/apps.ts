@@ -57,9 +57,24 @@ export interface AppEntry {
  * the lower layer, or the runner daemon inherits the fleet's ssh machinery to read a JSON key.
  */
 export function readCapturedAt(file: string): string | undefined {
-	const parsed = readJsonOr<{ capturedAt?: unknown } | undefined>(file, undefined);
+	return readGraphStamp(file).capturedAt;
+}
 
-	return typeof parsed?.capturedAt === "string" && parsed.capturedAt ? parsed.capturedAt : undefined;
+/**
+ * Both facts the sync compares, out of ONE parse: when the pass finished, and how much of the
+ * app it mapped.
+ *
+ * They are read together because they are used together — `beats()` prefers the larger map and
+ * falls back to recency — and reading them separately would parse the same file twice per host
+ * per sync. `nodes` is absent on prose-only maps and on graphs written before nodes existed,
+ * which is what makes the recency fallback load-bearing rather than decorative.
+ */
+export function readGraphStamp(file: string): { capturedAt?: string; nodes?: number } {
+	const parsed = readJsonOr<{ capturedAt?: unknown; nodes?: unknown } | undefined>(file, undefined);
+	const capturedAt = typeof parsed?.capturedAt === "string" && parsed.capturedAt ? parsed.capturedAt : undefined;
+	const nodes = Array.isArray(parsed?.nodes) ? parsed.nodes.length : undefined;
+
+	return { ...(capturedAt ? { capturedAt } : {}), ...(nodes !== undefined ? { nodes } : {}) };
 }
 
 /**
