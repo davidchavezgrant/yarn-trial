@@ -313,8 +313,12 @@ export async function collect(opts: CollectOptions = {}): Promise<CollectOutcome
 	// is READ (committed, linked, shared); this one keeps the pass folder self-contained, so
 	// handing someone out/bench/archive/<date>/ hands them the numbers and their provenance
 	// together rather than a manifest plus instructions.
+	// Skip when there is no report to copy. writeReport returns its PATH even when it declined
+	// to write — an empty manifest gets no report — so copying unconditionally turned that
+	// deliberate silence into an ENOENT on every dateless collect. A guard that produces a new
+	// error message has not finished being a guard.
 	try {
-		fs.copyFileSync(reportPath, path.join(benchDir(date, liveRoot), path.basename(reportPath)));
+		if (fs.existsSync(reportPath)) fs.copyFileSync(reportPath, path.join(benchDir(date, liveRoot), path.basename(reportPath)));
 	} catch (err) {
 		log(`report copy into the pass folder failed: ${err instanceof Error ? err.message : String(err)}`);
 	}
