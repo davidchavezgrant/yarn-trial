@@ -2,7 +2,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import fs from "node:fs";
 import path from "node:path";
 import { envNum } from "../env.js";
-import { appSlug, archiveDir, liveDir, outDir, RUN_FILES, runDir, runFile, runPath } from "../paths.js";
+import { appSlug, archiveDir, archiveRun, liveDir, outDir, resolveRunDir, RUN_FILES, runFile, runPath } from "../paths.js";
 import type { ActionRequest, StepRecord } from "../types.js";
 import { findScopeAmbiguities, loadAppMapGraph, makeClient, retryTransient, routeTo } from "./harness.js";
 
@@ -338,18 +338,42 @@ export function parseJudgeVerdict(
 }
 
 /**
- * Where a run's verdict lands: `judge.json` in the run's OWN folder (runPath — the writer side
- * of the store, always the live tree), never inside the run log. For a legacy run this is the
- * key's first artifact in the consolidated store; readers resolve through runFile, so the
- * verdict is found live-first either way.
+ * Where a run's verdict lands: `judge.json` in the run's OWN folder, never inside the run log.
+ * Readers resolve through runFile, so the verdict is found live-first wherever it was written.
  *
  * `tag` gives a SECOND judge its own artifact (`judge.<tag>.json` — tag "cross" is
  * RUN_FILES.judgeCross) instead of overwriting the first. That is what makes cross-judging
  * possible: when a contestant model shares lineage with the judge, one grader is a conflict,
  * and two verdicts that disagree are worth more than either alone.
+ *
+ * IT USED TO BE `runPath(key, …)` — the writer side of the store, which is defined as always the
+ * live tree. That is the right default for a run writing its own artifacts as it finishes, and the
+ * wrong one here, because judging happens LONG after the run terminated and the run may no longer
+ * live where it was born: collect's `evictFailedRun` moves a failed run's directory out of live the
+ * moment its metrics are banked. Judging an evicted run then recreated `out/bench/live/<key>/`
+ * holding one file, and the store was inconsistent in a way that took a human to undo — `runs list`
+ * reported the run live-with-no-log (indistinguishable at a glance from a crash still in flight),
+ * collect would not re-evict it because it skips `collected` entries, and `runs drop` had to be
+ * typed by hand. Nothing was LOST either way: `runFile` resolves each artifact independently
+ * through the live→archive ladder, so the verdict was always readable. The cost was consistency,
+ * which is enough — a store that needs manual repair after a supported operation is a store nobody
+ * trusts to be complete.
+ *
+ * `resolveRunDir` is the same answer bench/dash.ts:1218 already reached for the narrator's
+ * per-run note, which is post-terminal for exactly the same reason. One mechanism, in paths.ts.
+ *
+ * The existence check is what `resolveRunDir` alone cannot express: it falls back to the ARCHIVE
+ * for a key with no directory anywhere, and a legacy run (artifacts still in the pre-consolidation
+ * `out/runs/<key>.json`) is precisely that case. Its verdict is its FIRST artifact in the
+ * consolidated store, and a first artifact belongs in live — the archive is a backup of live, so
+ * writing only into it would invent a backup of nothing and list the run as archived-only when it
+ * was never archived. Resolve when the run has a home; fall back to live when it has none.
  */
 export function judgeReportPath(key: string, tag?: string): string {
-	return runPath(key, tag ? `judge.${tag}.json` : RUN_FILES.judge);
+	const name = tag ? `judge.${tag}.json` : RUN_FILES.judge;
+	const home = resolveRunDir(key);
+
+	return fs.existsSync(home) ? path.join(home, name) : runPath(key, name);
 }
 
 /**
@@ -419,9 +443,22 @@ export async function judgeRun(stamp: string, opts?: { noFrames?: boolean; model
 		framesStale: gathered.stale,
 		raw,
 	};
-	// A legacy run has no directory in the store yet; the verdict is its first artifact there.
-	fs.mkdirSync(runDir(key), { recursive: true });
-	fs.writeFileSync(judgeReportPath(key, opts?.tag), `${JSON.stringify(report, null, "\t")}\n`);
+	// mkdir the destination's OWN directory, not runDir(key): the destination is wherever the run
+	// currently lives (see judgeReportPath), and mkdir-ing live unconditionally would recreate the
+	// stub directory for an evicted run that the resolving path exists to avoid — the write would
+	// land in the archive while live gained an empty folder, which is the same inconsistency wearing
+	// a different hat. A legacy run still gets its live directory created here, because that is what
+	// judgeReportPath resolves to for a key with no home yet.
+	const dest = judgeReportPath(key, opts?.tag);
+	fs.mkdirSync(path.dirname(dest), { recursive: true });
+	fs.writeFileSync(dest, `${JSON.stringify(report, null, "\t")}\n`);
+	// And re-link the backup, the obligation `compileFromStamp` states for every post-terminal
+	// writer (procedure-cli.ts): this lands long after the run terminated and took its backup, so
+	// without it the verdict exists in live and not in archive — and the archive's whole promise is
+	// that dropping the live copy loses nothing. Safe unconditionally: archiveRun returns undefined
+	// when the key has no live directory (the evicted run whose verdict just went to the archive
+	// directly), and otherwise links only what the archive is missing.
+	archiveRun(key);
 
 	return report;
 }

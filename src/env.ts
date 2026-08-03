@@ -56,7 +56,16 @@ const RETIRED_ENV: Record<string, string> = {
 	RECIPE_RESCUE_STEPS: "PROCEDURE_RESCUE_STEPS",
 };
 
-/** Throw if the environment sets a name the rename retired. Called wherever a tier is chosen. */
+/**
+ * Throw if the environment sets a name the rename retired.
+ *
+ * Called by every operator-facing ENTRY POINT, which is a wider rule than the one this comment used
+ * to state ("wherever a tier is chosen"). That rule was wrong twice over: rescue and settle are not
+ * tier choices, and the only caller was `loadGrounding` — which replay and harvest never reach. So
+ * the three names an operator types on a replay were unreachable by the guard on the one path they
+ * get typed, which is precisely the silent no-op it exists to prevent. A guard that is not on the
+ * path where a name gets typed cannot fire.
+ */
 export function refuseRetiredEnv(env: NodeJS.ProcessEnv = process.env): void {
 	const stale = Object.keys(RETIRED_ENV).filter((k) => env[k] !== undefined && env[k] !== "");
 	if (!stale.length) return;

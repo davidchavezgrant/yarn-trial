@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import { Driver } from "./driver.js";
-import { envNum } from "../env.js";
+import { envNum, refuseRetiredEnv } from "../env.js";
 import {
 	appSlug,
 	ensureObservable,
@@ -111,6 +111,26 @@ function procedureFor(arg: string): Procedure {
 }
 
 async function main(): Promise<void> {
+	/**
+	 * FIRST, before argv is even read.
+	 *
+	 * The guard's own comment in src/env.ts says it is "called wherever a tier is chosen", and that
+	 * description was the bug: it had exactly one caller, `loadGrounding` (src/core/agent/grounding.ts:28),
+	 * which a replay never reaches — a replay executes frozen steps with no model in the loop and so
+	 * chooses no grounding tier at all. But three of the retired names are REPLAY-side knobs
+	 * (RECIPE_RESCUE, RECIPE_RESCUE_STEPS, RECIPE_SETTLE_MS), and the only command an operator would
+	 * ever set them for is this one. So on the single code path where those names get typed, the guard
+	 * could not fire, and setting one did what an unset variable does: replay took the 900ms default
+	 * and rescue stayed on, quietly, which is the exact silent no-op the guard exists to prevent.
+	 *
+	 * "Where a tier is chosen" is therefore the wrong rule. The rule is WHERE A RETIRED NAME COULD BE
+	 * SET — every operator-facing entry point owns the guard for the names its command reads, and an
+	 * entry point cannot delegate that to a function it does not call.
+	 *
+	 * Ahead of the verb parse rather than inside the replay branch: `compile` is typed by the same
+	 * operator out of the same shell, and a stale name in that environment is just as wrong there.
+	 */
+	refuseRetiredEnv();
 	const argv = process.argv.slice(2);
 	const verb = argv[0];
 	if (verb === "compile") {

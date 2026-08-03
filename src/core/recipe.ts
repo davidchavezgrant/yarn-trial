@@ -27,7 +27,6 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { recipesDir } from "../paths.js";
 import { taskHash } from "./procedure.js";
 
 export class RecipeError extends Error {}
@@ -212,5 +211,26 @@ export function writeRecipe(file: string, body: string): string {
 	return file;
 }
 
-/** Where this run's recipe would be promoted to, once harvested. */
-export const promotedPath = (run: HarvestSource, slug: string): string => recipeFileFor(recipesDir(), slug, run.task ?? "", run.backend, lineageOf(run));
+/**
+ * `promotedPath(run, slug)` USED TO LIVE HERE — `recipeFileFor(recipesDir(), slug, run.task ?? "",
+ * run.backend, lineageOf(run))`, a one-liner that bundled the recipe directory and the lineage
+ * derivation so a caller only had to supply the slug. It had no callers, and it is deleted rather
+ * than kept for the next one, because the parameter it left to the caller is the one the caller
+ * gets wrong.
+ *
+ * The slug of a recipe file must come from `appmapSlug` (src/core/target.ts) and never from
+ * `appSlug`. `appSlug` merely makes a string filename-safe, so a web arm's `app` — a URL — slugs
+ * to `https-app.notion.com`, while the run looks its grounding up under `web-app.notion.com`. The
+ * promote then writes a file no run will ever read: the arm grounds on nothing, silently falls
+ * through to the appmap tier, and reports clean numbers under a recipe label. That cost a
+ * benchmark pass, and the fix had to be made in three places at once (bench/orchestrate.ts:460,
+ * bench/autopilot.ts:350, core/recipe-cli.ts:185) precisely because the derivation was spelled at
+ * each call site.
+ *
+ * A helper whose only remaining parameter is the exact thing that was just wrong three times is a
+ * trap: it looks like the safe path, and `promotedPath(run, appSlug(run.app))` type-checks and
+ * re-arms the bug with the helper's blessing. Call `recipeFileFor(recipesDir(), appmapSlug(...), …)`
+ * directly, where the slug's provenance is visible in the line that writes the file. If a fourth
+ * call site ever needs this, the version worth adding takes the RUN and derives the slug itself —
+ * not one that accepts any slug a caller hands it.
+ */

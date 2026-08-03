@@ -17,6 +17,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type Anthropic from "@anthropic-ai/sdk";
+import { refuseRetiredEnv } from "../env.js";
 import { archiveRun, recipesDir, RUN_FILES, runFile, runPath } from "../paths.js";
 import { makeClient, retryTransient } from "./harness.js";
 import { readJsonOr } from "../fsutil.js";
@@ -102,6 +103,13 @@ function usage(): never {
 }
 
 async function main(): Promise<void> {
+	// The same obligation the replay entry point has, for the same reason. `RECIPE_MODEL` is read at
+	// the top of this file; its retired name `PROCEDURE_MODEL` is one an operator types on a HARVEST,
+	// and harvest never calls `loadGrounding` either — so before this, `PROCEDURE_MODEL=<id> ./run
+	// recipes harvest` silently harvested on the default model. That is the exact failure the retired
+	// map was extended to catch, arriving through the one door with no guard on it.
+	refuseRetiredEnv();
+
 	const argv = process.argv.slice(2);
 	const [verb, arg] = argv;
 

@@ -12,7 +12,7 @@ import { JUDGE_SYSTEM,
 	sampleFrames,
 	trustedFrames,
 } from "../src/core/judge.js";
-import { RUN_FILES, archiveRunDir, runDir, runPath } from "../src/paths.js";
+import { RUN_FILES, archiveRunDir, runDir, runFile, runPath } from "../src/paths.js";
 import type { AppMap } from "../src/types.js";
 
 /**
@@ -419,6 +419,49 @@ test("judgeReportPath__MatchesJudgeCrossName__When__TaggedCross", () => {
 	// check reads a written verdict as missing and re-judges (re-bills) every pass.
 	inTempData(() => {
 		assert.equal(judgeReportPath("2026-07-29T18-58-28-yarn", "cross"), runPath("2026-07-29T18-58-28-yarn", RUN_FILES.judgeCross));
+	});
+});
+
+test("judgeReportPath__WritesBesideTheArchivedArtifacts__When__TheRunWasEvictedFromLive", () => {
+	// Judging happens long after a run terminates, and collect's evictFailedRun moves a failed run's
+	// directory out of live the moment its metrics are banked. The old runPath write — "the writer
+	// side of the store is always live" — therefore recreated out/bench/live/<key>/ holding nothing
+	// but judge.json: `runs list` then read the run as live-with-no-log (a crash still in flight, at
+	// a glance), collect would not re-evict it because it skips collected entries, and a human had
+	// to type `runs drop`. Nothing was lost — runFile resolves through the live→archive ladder — so
+	// what is asserted here is CONSISTENCY: the verdict joins its siblings, and live stays empty.
+	inTempData(() => {
+		const key = "2026-08-02T10-00-00-yarn";
+		fs.mkdirSync(archiveRunDir(key), { recursive: true });
+		fs.writeFileSync(path.join(archiveRunDir(key), RUN_FILES.log), JSON.stringify(makeRunLog({ success: false })));
+
+		const dest = judgeReportPath(key);
+		assert.equal(dest, path.join(archiveRunDir(key), RUN_FILES.judge));
+		// The tagged cross-verdict follows the run for the same reason — two verdicts about one run
+		// must not end up in two different trees.
+		assert.equal(judgeReportPath(key, "cross"), path.join(archiveRunDir(key), RUN_FILES.judgeCross));
+
+		fs.mkdirSync(path.dirname(dest), { recursive: true });
+		fs.writeFileSync(dest, "{}");
+		assert.equal(fs.existsSync(runDir(key)), false, "judging an evicted run must not recreate its live directory");
+		// And the readers still find it, which is the property that made the old behaviour merely
+		// inconsistent rather than lossy.
+		assert.equal(runFile(key, RUN_FILES.judge), dest);
+	});
+});
+
+test("judgeReportPath__StaysInLive__When__TheRunHasNoDirectoryInTheStore", () => {
+	// The other half of the resolve. resolveRunDir answers with the ARCHIVE for a key that lives
+	// nowhere, and a legacy run — artifacts still in the pre-consolidation out/runs/<key>.json — is
+	// exactly that key. Its verdict is its first artifact in the consolidated store, and a first
+	// artifact belongs in live: the archive is a backup OF live, so writing only there would invent
+	// a backup of nothing and make `runs list` report the run as archived-only when it was never
+	// archived.
+	inTempData((dir) => {
+		const key = "2026-07-20T09-00-00-yarn";
+		writeRunFixture(dir, key, makeRunLog());
+		assert.equal(judgeReportPath(key), runPath(key, RUN_FILES.judge));
+		assert.equal(fs.existsSync(archiveRunDir(key)), false);
 	});
 });
 

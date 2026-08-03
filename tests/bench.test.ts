@@ -2011,6 +2011,21 @@ test("agentLoop__KeepsTheStallVerdict__When__ItStopsBeforeTheBackstop", () => {
 	// long one — the whole reason stopReason exists.
 	assert.match(src, /stopReason: "stalled"/);
 	assert.match(src, /stopReason: "step-ceiling"/);
+	// A verified `wait` must NOT reset the stall counter. `wait` is exempt from the discrimination
+	// requirement (step.ts passes no prevHaystack for it), so a wait whose expectation text is
+	// already on screen verifies against a screen nothing changed on — and a model alternating
+	// `wait` with unproductive actions would never stall, riding the 100-step backstop to the end
+	// while the detector that exists to stop it counted zero. Waiting is not progress.
+	//
+	// Asserted against source rather than behaviour for the same reason as the braces above: the
+	// step loop lives inside `main()` and cannot be driven without a full harness. That is a real
+	// limitation of this test, not a preference — the snap fixes had to be extracted to module
+	// scope before they were testable, and this loop has not had that treatment.
+	assert.match(
+		src,
+		/stepRec\.verified && input\.action\.name !== "wait"/,
+		"a verified wait must not reset the stall counter, or wait-alternation never stalls",
+	);
 });
 
 test("visionOnly__IsAllowedOnCdp__When__EitherEntryPointDispatchesIt", () => {

@@ -1135,6 +1135,30 @@ const filmed = (arm: Arm): Arm => ({
  * Delete an entry here to widen the axis deliberately. A test asserts every id still resolves,
  * so a cell renamed out from under this list fails the build instead of quietly rejoining.
  */
+/**
+ * The stall window for tasks whose legitimate progress the TEXT channel cannot see, widened from
+ * the default 8. Shared by the creation arms and the complex second-app arms.
+ *
+ * Not a guess dressed as a number, but not a measurement either — it is a bound read off the nearest
+ * evidence, and the evidence is specific: Yarn's creation task carried **8-14 consecutive unverified
+ * steps in a run that nonetheless succeeded** (the only known-good run of that flow had 11 of its 19
+ * steps unverified, because typing a script into a rich editor puts almost no checkable text on
+ * screen). A window of 8 therefore demonstrably ends work that would have finished. 16 clears the
+ * observed 14 with margin.
+ *
+ * ONE constant for both task families, because the failure mode is the same one and this file has
+ * already been burned by per-arm numbers drifting apart (see THE SAMPLING POLICY). The complex Notion
+ * task is strictly longer than the creation task — a schema change, five records, a second view, a
+ * grouping, a filter, six surfaces — and has no known-good run at all, so if the two ever need to
+ * differ it is that one that needs more, not the creation arms that need less.
+ *
+ * This is the deliberate trade for deleting the step pins: a stall window too small ends working
+ * runs, where a budget too small ends them AND reports the ending as the agent's own verdict. If
+ * these arms come back `stalled` with verified steps inside their last sixteen, raise it — that
+ * signature means the detector fired on a run that was still working, exactly as 15, 30 and 60 did.
+ */
+const LONG_UNVERIFIED_STALL = 16;
+
 export const CREATION_EXCLUDED: readonly string[] = [
 	"vision-only-cdp-ungrounded",
 	"vision-only-cdp-grounded",
@@ -1157,7 +1181,15 @@ const creationArms = (): Arm[] =>
 			// a verdict, one layer down. Three runs hit 30 with verified steps inside their last
 			// eight — still working, cut off anyway. They inherit the backstop and stop when they
 			// stall, which is the whole point of having a stall detector.
-			dispatch: { ...a.dispatch },
+			//
+			// But a WIDER STALL WINDOW, added 2026-08-03, because deleting the budget alone left
+			// these arms exposed to the other end of the same mistake. This is the task family the
+			// 8-14-consecutive-unverified evidence comes from — a successful creation run carried 11
+			// unverified steps out of 19 — so the default 8 was the tightest constraint on the arms
+			// least able to satisfy it, and it would have ended those runs as `stalled` instead of
+			// `step-ceiling`: the same truncation under a new label. Shared with the complex
+			// second-app arms; see LONG_UNVERIFIED_STALL for the number's derivation.
+			dispatch: { ...a.dispatch, stallSteps: LONG_UNVERIFIED_STALL },
 		}));
 
 const GEN_TASK_AND_MODEL: Arm[] = [
@@ -1328,22 +1360,6 @@ const SECOND_APP_CELLS: readonly string[] = [...CONFIG_CORE, ...CONFIG_SLICES]
 	.filter((a) => a.kind === "task" && a.dispatch.backend === "cdp")
 	.map((a) => a.id);
 
-/**
- * The complex task's stall window, widened from the default 8.
- *
- * Not a guess dressed as a number, but not a measurement either — it is a bound read off the
- * nearest evidence. Yarn's creation task carried 8-14 CONSECUTIVE unverified steps in a run that
- * nonetheless succeeded, so 8 demonstrably ends work that would have finished on a flow whose
- * progress the text channel cannot see. The complex Notion task is strictly longer than that
- * (a schema change, five records, a second view, a grouping, a filter — six surfaces) and has no
- * known-good run at all, so it gets double the default rather than a number pretending to precision.
- *
- * This is the deliberate trade for deleting the step pin: a stall window too small ends working
- * runs, where a budget too small ends them AND reports the ending as the agent's verdict. If these
- * arms come back `stalled` with verified steps inside their last sixteen, raise it again — that
- * signature means the detector fired on a working run, exactly as 30 and 60 did before it.
- */
-const SECOND_APP_COMPLEX_STALL = 16;
 
 const secondAppArms = (): Arm[] =>
 	[...CONFIG_CORE, ...CONFIG_SLICES]
@@ -1365,7 +1381,7 @@ const secondAppArms = (): Arm[] =>
 				phase: 4 as Phase,
 				app: SECOND_APP_URL,
 				task: SECOND_APP_COMPLEX_TASK,
-				dispatch: { ...a.dispatch, url: SECOND_APP_URL, stallSteps: SECOND_APP_COMPLEX_STALL },
+				dispatch: { ...a.dispatch, url: SECOND_APP_URL, stallSteps: LONG_UNVERIFIED_STALL },
 				prereq: NOTION_PREREQ,
 				informs: `does ${a.id}'s result transfer to a second app on a COMPLEX task — and does Yarn's task-dependence reproduce`,
 			},
@@ -1394,7 +1410,7 @@ const secondAppArms = (): Arm[] =>
 const secondAppReuseArms = (): Arm[] =>
 	[
 		{ suffix: "", task: SECOND_APP_SIMPLE_TASK, stall: undefined as number | undefined },
-		{ suffix: "complex-", task: SECOND_APP_COMPLEX_TASK, stall: SECOND_APP_COMPLEX_STALL },
+		{ suffix: "complex-", task: SECOND_APP_COMPLEX_TASK, stall: LONG_UNVERIFIED_STALL },
 	].flatMap(({ suffix, task: armTask, stall }): Arm[] => {
 		const id = (rest: string): string => `notion-${suffix}${rest}`;
 		const web = { backend: "cdp" as const, url: SECOND_APP_URL, ...(stall !== undefined ? { stallSteps: stall } : {}) };
@@ -1475,7 +1491,7 @@ const secondAppReuseArms = (): Arm[] =>
 const secondAppModelArms = (): Arm[] =>
 	[
 		{ suffix: "", task: SECOND_APP_SIMPLE_TASK, stall: undefined as number | undefined },
-		{ suffix: "complex-", task: SECOND_APP_COMPLEX_TASK, stall: SECOND_APP_COMPLEX_STALL },
+		{ suffix: "complex-", task: SECOND_APP_COMPLEX_TASK, stall: LONG_UNVERIFIED_STALL },
 	].flatMap(({ suffix, task: armTask, stall }): Arm[] => {
 		const web = { backend: "cdp" as const, url: SECOND_APP_URL, model: BENCH_ALT_MODEL, ...(stall !== undefined ? { stallSteps: stall } : {}) };
 		const cell = (rest: string, dispatch: ArmDispatch, informs: string, sourceArm: string): Arm => ({

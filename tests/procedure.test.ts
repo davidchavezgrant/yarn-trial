@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -493,6 +494,55 @@ test("replay__WaitsForTheAppToPaint__When__TheColdStartJustRelaunchedIt", () => 
 	const poll = src.indexOf("FIRST_OBSERVATION_TRIES; attempt++");
 	assert.ok(poll > 0, "replay must poll for first paint after the cold start");
 	assert.ok(poll < src.indexOf("await replayProcedure("), "the paint wait must precede the step loop");
+});
+
+/**
+ * Invoke the real CLI as a child process, exactly as an operator would. In-process this test
+ * cannot exist: `main` is not exported, and the thing under test is the guard's POSITION relative
+ * to everything else main does, which only a real entry point can show.
+ *
+ * A bogus stamp is deliberate. It gives the run a second, LOUDER failure to race — resolving the
+ * argument — so "which error came out" answers "did the guard run first" without asserting on line
+ * numbers or reaching a driver.
+ */
+function runProcedureCli(argv: string[], extraEnv: Record<string, string> = {}): { code: number; output: string } {
+	const r = spawnSync("npx", ["tsx", "src/core/procedure-cli.ts", ...argv], {
+		cwd: path.resolve(import.meta.dirname, ".."),
+		encoding: "utf8",
+		env: { ...process.env, ...extraEnv },
+	});
+
+	return { code: r.status ?? -1, output: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+}
+
+test("replay__RefusesARetiredEnvName__When__TheReplayEntryPointStarts", () => {
+	// RECIPE_RESCUE, RECIPE_RESCUE_STEPS and RECIPE_SETTLE_MS are REPLAY-side knobs retired by the
+	// 2026-08-03 swap, and this CLI is the only command an operator would ever set them for. Yet
+	// refuseRetiredEnv had exactly one caller — loadGrounding, which a replay never reaches, because
+	// a replay executes frozen steps and chooses no grounding tier. So on the one code path where
+	// those names get typed, the guard could not fire: setting RECIPE_SETTLE_MS did what an unset
+	// variable does (replay took the 900ms default) and RECIPE_RESCUE left rescue on, silently.
+	// That is the exact silent-no-op class the guard exists to prevent, and it was unreachable
+	// precisely where it mattered.
+	//
+	// Asserted through the ORDERING: the bogus stamp below fails loudly on its own, so seeing the
+	// retirement message instead proves the guard ran ahead of any replay work.
+	const stale = runProcedureCli(["replay", "definitely-not-a-run-stamp"], { RECIPE_RESCUE: "1" });
+	assert.equal(stale.code, 1);
+	assert.match(stale.output, /RECIPE_RESCUE was retired/);
+	assert.match(stale.output, /--no-rescue flag/);
+	assert.doesNotMatch(stale.output, /neither a procedure file nor a run stamp/);
+
+	// The control, and the half that makes the assertion above mean something: with a clean
+	// environment the same argv gets PAST the guard and dies on the stamp. A guard that refused
+	// every invocation would satisfy the first half alone.
+	//
+	// Blanked rather than merely omitted, because the child inherits this process's environment: a
+	// developer who has RECIPE_RESCUE exported for their own reasons would otherwise see this
+	// control fail. The guard reads blank as unset, which is the same contract envNum honours.
+	const clean = runProcedureCli(["replay", "definitely-not-a-run-stamp"], { RECIPE_RESCUE: "", RECIPE_RESCUE_STEPS: "", RECIPE_SETTLE_MS: "" });
+	assert.equal(clean.code, 1);
+	assert.match(clean.output, /neither a procedure file nor a run stamp/);
 });
 
 test("resolveTarget__PicksTheRecordedTwin__When__NothingElseSeparatesThem", () => {
