@@ -134,6 +134,7 @@ export function dispatchOptionsFor(arm: Arm, recipe?: string, model?: string): D
 		// plausible, wrong-labelled data producing no footage. `filmed()` derives those arms by
 		// adding only `record: true` and `n: 1`, so dropping it erases the entire difference.
 		...(d.record ? { record: true } : {}),
+		...(d.steps !== undefined ? { steps: d.steps } : {}),
 		...(d.noRescue ? { noRescue: true } : {}),
 		...(d.url ? { url: d.url } : {}),
 		...(recipe ? { recipe } : {}),

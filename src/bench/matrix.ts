@@ -61,6 +61,15 @@ export interface ArmDispatch {
 	/** Web target for an explore arm (`explore --url … --backend cdp`). Contract-assumed. */
 	url?: string;
 	/**
+	 * Step budget for this arm, when the default 15 is the wrong size for its TASK.
+	 *
+	 * The settings tasks finish in 5-13 steps, so 15 was never questioned. The creation task
+	 * cannot: the only known-successful run of that flow took 19, and every creation arm in the
+	 * first pass stopped at exactly 15 with `gave-up`. They were measuring the ceiling, not the
+	 * agent — a budget starvation dressed up as a capability result.
+	 */
+	steps?: number;
+	/**
 	 * Pin THIS arm to a model, overriding the pass-level one.
 	 *
 	 * Model was a pass-level choice only, so the whole 115-run matrix ran on one model and the
@@ -765,6 +774,10 @@ const creationArms = (): Arm[] =>
 			id: a.id.replace(/^p2-/, "p7-create-"),
 			phase: 7 as Phase,
 			task: CREATION_TASK,
+			// 30, against a known-good 19. The settings tasks run 5-13 and never strained the
+			// default; writing a two-scene script and setting a voice is a longer flow, and a
+			// budget that cuts it off measures the budget.
+			dispatch: { ...a.dispatch, steps: 30 },
 		}));
 
 const PHASE7: Arm[] = [
