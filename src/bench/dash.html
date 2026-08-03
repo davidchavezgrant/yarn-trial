@@ -350,7 +350,7 @@
 	</section>
 
 	<section class="grid2">
-		<div class="card"><h2>Phase 1 — Discovery per Backend</h2><div class="sub">controls seen / actuated / dismissed per Explore arm (x̃ across each arm's passes) — the leaner-vs-blinder question</div><div id="chart-explore"></div></div>
+		<div class="card"><h2>Phase 1 — Discovery per Backend</h2><div class="sub">map nodes / controls actuated per Explore arm, per pass — what the pass understood and what it operated</div><div id="chart-explore"></div></div>
 		<div class="card"><h2>Task Outcomes by Arm</h2><div class="sub">collected runs by verdict; pending = submitted, not yet collected</div><div id="chart-outcomes"></div></div>
 		<div class="card"><h2>Explore Effect — Actions x̄</h2><div class="sub">explored vs unexplored, per backend (phase 2 core)</div><div id="chart-steps"></div></div>
 		<div class="card"><h2>Explore Effect — Output Tokens x̄</h2><div class="sub">same arms, token cost of going in blind</div><div id="chart-tokens"></div></div>
@@ -1121,8 +1121,8 @@ const TASK_HEAD = "<tr>" + thr("Task", "the goal-only prompt the run was given")
 	thr("Out Tokens", "OUTPUT tokens the run spent", "num-h") + thr("Cost", "published-rate estimate per run — not an invoice · ? = tokens recorded but no pricing", "num-h") +
 	thr("Actions", "actions the run took — task runs carry their verified count in the hover; explore rows count the grounding pass", "num-h") +
 	thr("Nodes", "explore rows — distilled appmap graph nodes", "num-h") +
-	thr("Activated", "explore rows — share of the controls the pass observed that it operated at least once (actuated ÷ seen); hover for the counts", "num-h") +
-	thr("Dismissed", "explore rows — share of the controls the pass observed that it swept off the frontier without operating (dismissed ÷ seen). The pass ends when the frontier empties, and dismissing is a legitimate way to empty it", "num-h") +
+	thr("Actuated", "explore rows — COUNT of controls the pass operated at least once. Not a share of `seen`: seen counts triples the pass walked past, and one list-shaped surface took it from 293 to 6609 on the same arm, which made identical behaviour score 2% or 40%", "num-h") +
+	thr("Dismissed", "explore rows — of the controls the pass JUDGED (actuated + dismissed), the share it swept off the frontier without operating. Decisions made is the one bounded denominator list rows do not inflate. The pass ends when the frontier empties, and dismissing is a legitimate way to empty it", "num-h") +
 	thr("Ambig", "explore rows — settings editable at two scopes under one identity (same settingKey, different scope) — the wrong-scope trap; each gets a prompt warning. Shown as a share of graph nodes; hover for the count", "num-h") +
 	thr("Convergence", "explore rows — consumed share of the discovered frontier (actuated + dismissed over everything seen); 100% = frontier empty, the pass's own stop condition", "ctr-h") +
 	thr("Map", MAP_TIP, "ctr-h") +
@@ -1342,10 +1342,13 @@ const costCellFor = (e) => e.usd != null ? `<td class="num">${fmtMoney(e.usd)}</
 // wears the chart's blue, Dismissed its orange (NOT danger red: dismissing is a documented-
 // legitimate way to empty the frontier), Nodes the chart's green, Ambig the series gold
 // (status ambers stay reserved for actual state).
-// Activated/Dismissed are PERCENTAGES over `seen` (the pass's total observed
-// controls — the only denominator that keeps both in [0,100]; the distilled node count
-// can't be one, a mass dismissal sweeps controls the graph never keeps); Ambig is a share
-// of the graph's own nodes. The raw counts stay in each cell's tooltip. Spans set their
+// Actuated is a COUNT and Dismissed a share of DECISIONS MADE (actuated + dismissed).
+// Neither is over `seen` any more (David, 2026-08-03): seen counts role|name|surface triples
+// the pass walked past, so one drafts list took a cdp pass to 6609 where its twin saw 293 —
+// same arm, same code, distilling to 207 nodes against 144. As a denominator that scored
+// identical behaviour at 2% or 40% on whether a run happened to scroll. Nodes cannot be the
+// denominator either: actuated is not a subset of the distilled map, so the ratio would pass
+// 100%. Ambig stays a share of the graph's own nodes, where it IS a subset. The raw counts stay in each cell's tooltip. Spans set their
 // own color, so inside a livecell the numbers keep their column hue while the ~ keeps the
 // running tint. Both paths share the helpers, so a value never changes format or color
 // when a run's collect lands.
@@ -1372,15 +1375,29 @@ function exploreCellsFor(a, e) {
 		const declared = a.flags && a.flags.includes("--no-ax")
 			? ` <span data-tip="${esc(DECLARED_TIP)}">⚠</span>`
 			: "";
-		const act = pctOf(st.controlsActuated, st.controlsSeen);
-		const dis = pctOf(st.controlsDismissed, st.controlsSeen);
+		/**
+		 * ACTUATED IS A COUNT, and the rate below is out of what the pass DECIDED about
+		 * (actuated + dismissed) — not out of `seen` (David, 2026-08-03).
+		 *
+		 * `seen` counts distinct role|name|surface triples the pass walked past, so a
+		 * list-shaped surface inflates it without adding knowledge: one cdp pass reported 6609
+		 * against its twin's 293, same arm and same code, and distilled them to 207 nodes
+		 * against 144. As a denominator that made identical behaviour score 2% or 40% depending
+		 * on whether the run happened to scroll a drafts list.
+		 *
+		 * Nodes cannot be the denominator either — actuated is not a subset of the distilled
+		 * map, so the ratio would exceed 100%. Decisions made is the one bounded denominator
+		 * that list rows do not move: a control walked past and never judged is in neither term.
+		 */
+		const decided = (st.controlsActuated ?? 0) + (st.controlsDismissed ?? 0);
+		const dis = pctOf(st.controlsDismissed, decided || null);
 		const amb = pctOf(st.scopeAmbiguities, st.graphNodes);
 		return num(fmtNum(st.actions), "actions the pass took")
 			+ num(st.graphNodes != null ? hued(EXPLORE_HUES.nodes, fmtNum(st.graphNodes)) : "–", "distilled appmap graph nodes")
-			+ num(act != null ? hued(EXPLORE_HUES.activated, fmtPct(act)) + declared : "–",
-				act != null ? `actuated ${st.controlsActuated} of ${st.controlsSeen} controls observed` : "")
+			+ num(st.controlsActuated != null ? hued(EXPLORE_HUES.activated, fmtNum(st.controlsActuated)) + declared : "–",
+				st.controlsActuated != null ? `${st.controlsActuated} controls operated (of ${fmtNum(st.controlsSeen)} walked past — seen is inflated by list rows, so it is not the denominator)` : "")
 			+ num(dis != null ? hued(EXPLORE_HUES.dismissed, fmtPct(dis)) : "–",
-				dis != null ? `dismissed ${st.controlsDismissed} of ${st.controlsSeen} controls observed` : "")
+				dis != null ? `dismissed ${st.controlsDismissed} of ${decided} controls the pass judged` : "")
 			+ num(amb != null ? hued(EXPLORE_HUES.ambig, fmtPct(amb)) : "–",
 				amb != null ? `${st.scopeAmbiguities} dual-scope settings across ${st.graphNodes} graph nodes` : "");
 	}
@@ -2086,7 +2103,7 @@ function renderOffMatrix() {
 }
 
 function renderExplore() {
-	const arms = visibleArms().filter((a) => a.phase === 1 && a.passes.some((p) => p.explore && p.explore.controlsSeen != null));
+	const arms = visibleArms().filter((a) => a.phase === 1 && a.passes.some((p) => p.explore && p.explore.controlsActuated != null));
 	if (!arms.length) { $("chart-explore").innerHTML = `<div class="empty">waiting for a collected explore…</div>`; return; }
 	// Funnel order (seen ≥ actuated+dismissed); colors follow the series, not the position.
 	// Group labels speak the board's Variant names (per David, 2026-08-01) — one vocabulary
@@ -2107,16 +2124,27 @@ function renderExplore() {
 	const exploreLabel = (a) => displayName(a)
 		+ (titleCounts[displayName(a)] > 1 && a.actuation ? ` (${a.actuation})` : "")
 		+ (a.flags && a.flags.includes("--no-ax") ? " ⚠ declared" : "");
-	const groups = arms.flatMap((a) => a.passes.filter((p) => p.explore && p.explore.controlsSeen != null).map((p) => ({
+	const groups = arms.flatMap((a) => a.passes.filter((p) => p.explore && p.explore.controlsActuated != null).map((p) => ({
 		label: exploreLabel(a),
 		...(p.model !== "(default)" ? { sub: friendlyModel(p.model) } : {}),
-		values: [p.explore.controlsSeen, p.explore.controlsActuated, p.explore.controlsDismissed],
+		values: [p.explore.graphNodes, p.explore.controlsActuated],
 	})));
-	// seen/actuated/dismissed in SERIES hues — all three are categorical facets of one
-	// funnel. Dismissed used to be a danger red, which painted the documented-legitimate
-	// "swept off the frontier" as failure (104 dismissals read as 104 problems).
+	/**
+	 * NODES and ACTUATED — what the pass understood, and what it operated. `seen` is gone
+	 * (David, 2026-08-03).
+	 *
+	 * It counts distinct role|name|surface triples the pass walked PAST, so a list-shaped
+	 * surface inflates it without adding knowledge: one cdp pass reported 6609 seen against
+	 * its twin's 293 — the same arm, same code — arriving in two bursts of +1681 and +4542 as
+	 * it opened drafts lists. Those 6609 distilled to 207 graph nodes, against 144 for the run
+	 * that saw 293. Twenty-two times the encounters, 1.4x the map.
+	 *
+	 * Averaging that across an arm's passes produced the ~3500 bar that dwarfed the chart and
+	 * described neither run. Per PASS now, for the same reason the report's phase-1 table
+	 * splits: the spread IS the finding, and a mean hides it.
+	 */
 	$("chart-explore").innerHTML = hBars(groups, [
-		{ name: "Seen", color: SERIES[2] }, { name: "Actuated", color: SERIES[0] }, { name: "Dismissed", color: SERIES[1] },
+		{ name: "Map nodes", color: SERIES[2] }, { name: "Actuated", color: SERIES[0] },
 	]);
 }
 
