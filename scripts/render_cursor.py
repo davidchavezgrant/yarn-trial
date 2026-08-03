@@ -52,6 +52,14 @@ CLICK_RING_PT = 18.0
 # cursors rasterized beside it (measured: 51/64 of the box before, 38/64 for pointinghand).
 ARROW_SPAN = 0.72
 
+# White border around the arrow, in the 32pt space macOS draws cursors in. 1pt is what the system
+# cursors carry — measured on the rasterized pointinghand, whose black border is 2px of a 64px box.
+ARROW_OUTLINE_PT = 1.0
+
+# The arrow is drawn at this multiple of RASTER and downsampled. PIL's polygon fill is aliased, and
+# a 1pt border is a single output pixel — without supersampling the jaggies would BE the border.
+ARROW_SS = 6
+
 # Ramp on the synthetic hover tint, so it reads as a response rather than a compositing glitch.
 HOVER_FADE_MS = 120
 
@@ -97,17 +105,44 @@ def draw_arrow():
     32-unit box, which with its stroke rendered 51/64 of the box — against 38/64 for the real
     pointing hand, so the arrow showed up a third larger than every other pointer in the same
     video. ARROW_SPAN scales the profile so the drawn result matches.
-    """
-    image = Image.new("RGBA", (RASTER, RASTER), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
-    s = RASTER / 32.0 * ARROW_SPAN
-    body = [(0, 0), (0, 21), (5, 16), (9, 25), (13, 23), (9, 15), (16, 15)]
-    points = [(x * s, y * s) for x, y in body]
-    # White outline under a black fill is what makes a cursor legible over any background.
-    draw.polygon(points, fill=(255, 255, 255, 255), outline=(255, 255, 255, 255), width=max(1, round(2 * s)))
-    draw.polygon(points, fill=(0, 0, 0, 255))
 
-    return image, (0, 0)
+    Black body inside a white border, which is the macOS arrow (the system pointinghand beside it is
+    the inverse — white body, black border — and both are correct). The border is not decoration:
+    it is the only reason a black cursor stays visible over dark UI, and Yarn's editor is dark.
+
+    The border grows OUTWARD from the silhouette. The previous version drew it with
+    polygon(outline=..., width=...) and then filled the same polygon black on top, which erased
+    every white pixel it had just drawn — the rendered arrow measured zero white pixels. Stroking
+    the path centred would also have thinned the black body by half the border; dilating leaves the
+    body exactly as the profile describes it.
+    """
+    ss = ARROW_SS
+    size = RASTER * ss
+    s = RASTER / 32.0 * ARROW_SPAN * ss
+    body = [(0, 0), (0, 21), (5, 16), (9, 25), (13, 23), (9, 15), (16, 15)]
+    grow = max(1, round(ARROW_OUTLINE_PT * RASTER / 32.0 * ss))
+    # Inset by the border width: the profile's tip is (0,0), so an un-inset arrow has its border
+    # dilated straight off the top-left of the box and the tip — the one part of a cursor a viewer
+    # actually reads position from — loses its outline. The hotspot moves with it.
+    points = [(x * s + grow, y * s + grow) for x, y in body]
+
+    core = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(core).polygon(points, fill=255)
+    # A centred stroke of 2*grow plus the fill is the silhouette dilated by grow. joint="curve"
+    # rounds the joins, which is what keeps the arrow's sharp tip from growing a spike.
+    outer = core.copy()
+    ImageDraw.Draw(outer).line(points + [points[0]], fill=255, width=2 * grow, joint="curve")
+
+    # Downsample the two masks and derive colour from them, rather than resizing a finished RGBA.
+    # Resizing RGBA interpolates colour through the fully transparent pixels around the art, whose
+    # RGB is (0,0,0) — the white border would pick up a dark fringe on the one edge that matters.
+    core_a = core.resize((RASTER, RASTER), Image.LANCZOS)
+    alpha = outer.resize((RASTER, RASTER), Image.LANCZOS)
+    rgb = Image.composite(Image.new("RGB", (RASTER, RASTER), (0, 0, 0)), Image.new("RGB", (RASTER, RASTER), (255, 255, 255)), core_a)
+    image = rgb.convert("RGBA")
+    image.putalpha(alpha)
+
+    return image, (grow // ss, grow // ss)
 
 
 def load_cursors(tmpdir):
