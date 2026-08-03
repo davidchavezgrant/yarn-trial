@@ -7,7 +7,7 @@ import { manifestCost, usd } from "./cost.js";
 import type { BenchHarvestOutcome } from "./harvest.js";
 import type { BenchJudgeOutcome } from "./judge.js";
 import { entriesForArm, type Manifest, manifestPath, readManifest, utcDate } from "./manifest.js";
-import { BENCH_PRIMARY_MODEL, type Phase, phaseArms } from "./matrix.js";
+import { type Arm, BENCH_PRIMARY_MODEL, PHASES, STAGES, orderStages, type Phase, phaseArms, procedureArms, stageOf } from "./matrix.js";
 import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, auditPhase, findCompileSource, interruptedPass, plannedRuns, runPhase } from "./orchestrate.js";
 import { type PhaseProgress, phaseProgress, watchPhase } from "./watch.js";
 
@@ -73,7 +73,7 @@ import { type PhaseProgress, phaseProgress, watchPhase } from "./watch.js";
  * phase 5 unasked (filming changes the action space; cursor compositing after it is manual).
  */
 
-export const DEFAULT_PHASES: Phase[] = [1, 2, 3, 6];
+export const DEFAULT_PHASES: Phase[] = STAGES.filter((s) => s.inCorePass).map((s) => s.n);
 
 /** Per-phase drain backstop: 8 hours at the default 120s poll. */
 const DEFAULT_MAX_POLLS = (intervalSec: number): number => Math.max(1, Math.ceil((8 * 3600) / intervalSec));
@@ -111,23 +111,29 @@ export interface AutopilotOptions {
 	keyCheckFn?: () => Promise<void>;
 }
 
-/** Requested phases, deduped and ordered — ascending, except 5 (filmed) always runs last. */
+/** Requested phases in execution order — topological over each stage's declared `needs`. */
 export function orderedPhases(phases: Phase[]): Phase[] {
-	const valid = [...new Set(phases)].filter((p): p is Phase => [1, 2, 3, 4, 5, 6, 7, 8].includes(p));
-	const rest = valid.filter((p) => p !== 5).sort((a, b) => a - b);
-
-	return valid.includes(5) ? [...rest, 5] : rest;
+	return orderStages(phases);
 }
 
 /**
- * The stage list, in execution order. Judge→harvest→promote slot in immediately before phase 6
- * because that is the workflow's own ordering (harvest refuses unjudged runs, phase 6 refuses
- * unpromoted procedures) — encoding it here is the point of the autopilot.
+ * The stage list, in execution order. A stage's own `before` declares the workflow steps that
+ * must precede it — Reuse asks for judge→harvest→promote, because harvest refuses unjudged runs
+ * and the procedure gate refuses unpromoted ones.
+ *
+ * This used to be `if (p === 6)`. Moving it onto the stage means a future stage that needs the
+ * same preparation gets it by saying so, rather than by someone editing this loop.
  */
 export function planStages(phases: Phase[]): Stage[] {
 	const stages: Stage[] = [];
+	const done = new Set<string>();
 	for (const p of orderedPhases(phases)) {
-		if (p === 6) stages.push({ kind: "judge" }, { kind: "harvest" }, { kind: "promote" });
+		// Each prep step runs once per pass, not once per stage that wants it.
+		for (const step of stageOf(p)?.before ?? []) {
+			if (done.has(step)) continue;
+			done.add(step);
+			stages.push({ kind: step });
+		}
 		stages.push({ kind: "phase", phase: p });
 	}
 	stages.push({ kind: "final" });
@@ -313,8 +319,25 @@ export async function promoteForPhase6(opts: {
 	const { procedureFileFor } = await import("../core/procedure.js");
 	const outcome: PromoteOutcome = { promoted: [], blocked: [] };
 
-	for (const arm of phaseArms(6)) {
-		const wanted = procedureFileFor(opts.proceduresDir, appSlug(arm.app), arm.task ?? "", arm.dispatch.backend, arm.dispatch.procedureLineage ?? "grounded");
+	/**
+	 * One promotion per procedure FILE, not per arm.
+	 *
+	 * Several arms share a slot — a filmed twin wants the same (app, task, backend, lineage)
+	 * procedure as the arm it films, and the Claude cell wants the same one its Sol twin does.
+	 * Iterating arms promoted the identical file up to three times and, worse, reported one
+	 * missing procedure as three blocked arms. Deduping on the path the loop already computes
+	 * fixes both, and the representative is the arm that can actually fill it: an arm with no
+	 * `sourceArm` has no candidate run to harvest from and would report the slot unfillable
+	 * while its twin sat there able to fill it.
+	 */
+	const slots = new Map<string, Arm>();
+	for (const arm of procedureArms()) {
+		const key = procedureFileFor(opts.proceduresDir, appSlug(arm.app), arm.task ?? "", arm.dispatch.backend, arm.dispatch.procedureLineage ?? "grounded");
+		const held = slots.get(key);
+		if (!held || (!held.sourceArm && arm.sourceArm)) slots.set(key, arm);
+	}
+
+	for (const [wanted, arm] of slots) {
 		if (fs.existsSync(wanted)) {
 			opts.log(`… ${arm.id}: procedure already promoted (${relToData(wanted)})`);
 			continue;
@@ -360,7 +383,7 @@ export async function autopilot(opts: AutopilotOptions = {}): Promise<number> {
 	const intervalSec = Math.max(15, opts.intervalSec ?? 120);
 	const phases = orderedPhases(opts.phases ?? DEFAULT_PHASES);
 	if (!phases.length) {
-		log("no valid phases requested — --phases wants a comma list from 1-6");
+		log(`no valid phases requested — --phases wants a comma list from ${PHASES.join(", ")}`);
 
 		return EXIT_REFUSED;
 	}
@@ -381,7 +404,7 @@ export async function autopilot(opts: AutopilotOptions = {}): Promise<number> {
 		for (const p of phases) log(`  ${describePhase(p)}`);
 		const spend = passSpend(readManifest(date, liveRoot));
 		log(`spend so far this pass: ${usd(spend)}${opts.maxUsd !== undefined ? ` (ceiling ${usd(opts.maxUsd)})` : " (no ceiling — set --max-usd for unattended runs)"}`);
-		if (phases.includes(5)) log(`NOTE: phase 5 films takes; cursor compositing stays manual afterwards (npm run humanize -- <stamp>).`);
+		if (phases.some((p) => stageOf(p)?.kind === "deliverable")) log(`NOTE: this pass films takes; cursor compositing stays manual afterwards (npm run humanize -- <stamp>).`);
 		log(`Safe to Ctrl-C at any point once running — it holds no leash on runs, and re-running resumes from the manifest.`);
 
 		return EXIT_NEEDS_GO;
@@ -543,11 +566,11 @@ export async function autopilot(opts: AutopilotOptions = {}): Promise<number> {
 			if (head && lastHead && head !== lastHead)
 				log(`⚠ HEAD moved since the last phase (${lastHead.slice(0, 7)} → ${head.slice(0, 7)}) — this phase's runs will execute DIFFERENT code than the previous phase's. Comparability across phases is now on you.`);
 			lastHead = head ?? lastHead;
-			if (stage.phase === 6 && phase6Blocked.length === phaseArms(6).length) {
+			if (procedureArms(stage.phase).length > 0 && phase6Blocked.length === procedureArms(stage.phase).length) {
 				log(`phase 6 skipped entirely: no arm has a promoted procedure. That is the finding — no judged-PASS source run produced one (the likely case for the ungrounded lineage; see harvest's refusals).`);
 				continue;
 			}
-			if (stage.phase === 5) log(`filmed pass — cursor compositing stays manual afterwards: npm run humanize -- <stamp>`);
+			if (stageOf(stage.phase)?.kind === "deliverable") log(`filmed pass — cursor compositing stays manual afterwards: npm run humanize -- <stamp>`);
 			const reason = await driveToCompletion(stage.phase, ctx);
 			if (reason) return stop(stage, reason);
 			log(`spend so far: ${usd(passSpend(readManifest(date, liveRoot)))}`);
@@ -585,9 +608,9 @@ export async function autopilot(opts: AutopilotOptions = {}): Promise<number> {
 			const m = readManifest(date, liveRoot);
 			log(`\nautopilot complete (+${elapsed()}). Spend: ${usd(passSpend(m))}.`);
 			for (const p of phases) log(`  ${describePhase(p)}`);
-			if (phase6Blocked.length && phase6Blocked.length < phaseArms(6).length) log(`  phase 6 ran without: ${phase6Blocked.join(", ")} (no promotable procedure — a finding)`);
+			if (phase6Blocked.length && phase6Blocked.length < procedureArms().length) log(`  reuse ran without: ${phase6Blocked.join(", ")} (no promotable procedure — a finding)`);
 			if (collected.reportPath) log(`report: ${collected.reportPath}`);
-			if (phases.includes(5)) log(`filmed stamps need manual compositing: npm run humanize -- <stamp>`);
+			if (phases.some((p) => stageOf(p)?.kind === "deliverable")) log(`filmed stamps need manual compositing: npm run humanize -- <stamp>`);
 			if (process.env.ANTHROPIC_ADMIN_KEY) log(`reconcile against Anthropic's accounting: ./run bench truecost`);
 		}
 	}

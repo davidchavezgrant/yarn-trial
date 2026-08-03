@@ -27,9 +27,9 @@ import { liveDir, RUN_FILES, runDir } from "../src/paths.js";
 const DATE = "2026-07-31";
 
 // Real arm ids off the matrix — one per kind the judge cares about.
-const TASK_ARM = "p2-ax-grounded";
-const REPLAY_ARM = "p3-replay-ax";
-const EXPLORE_ARM = "p1-explore-ax";
+const TASK_ARM = "ax-grounded";
+const REPLAY_ARM = "replay-ax";
+const EXPLORE_ARM = "explore-ax";
 
 test("armById__ResolvesFixtureArms__When__JudgeTestsRun", () => {
 	// Guard against matrix drift making every test below vacuous: the fixture ids must stay

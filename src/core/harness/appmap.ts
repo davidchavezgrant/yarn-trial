@@ -491,7 +491,7 @@ export const appmapVariant = (): string => {
 	// not see the screen either. Without this the element-only map was written and read by
 	// nothing — 30 minutes and $14 of pass producing an artifact with no consumer.
 	//
-	// Deliberately NOT auto-derived from the run's own perception: p2-vision-only-grounded-axmap
+	// Deliberately NOT auto-derived from the run's own perception: vision-only-grounded-axmap
 	// is a vision-only run that must read the ELEMENT map on purpose, and inferring the tier
 	// would silently break exactly that arm.
 	return v === "vision" ? ".vision" : v === "novision" ? ".novision" : "";

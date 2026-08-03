@@ -92,6 +92,20 @@ export interface StepRecord {
 	 */
 	targetOrdinal?: number;
 	/**
+	 * Pixel-snap diagnostic, present only on coordinate-addressed steps (vision-only). What the
+	 * click point WOULD have resolved to against the element list the harness holds but the
+	 * model cannot see. Recorded, never acted on — it decomposes a missed step into SPATIAL
+	 * (landed on a different control than declared) or SEMANTIC (landed on the declared one and
+	 * still failed), which have opposite remedies.
+	 */
+	snapName?: string;
+	snapRole?: string;
+	snapDistancePx?: number;
+	snapInside?: boolean;
+	snapMatchesDeclared?: boolean;
+	/** The snap stage REWROTE this action to address the element by handle (SNAP_PX > 0). */
+	snapApplied?: boolean;
+	/**
 	 * Which channel NAMED the control this step operated: an AX label, the DOM descriptor
 	 * (axdom sidecar — the control is anonymous in bare AX), or neither ("none": addressed by
 	 * handle or coordinate with no name at all). Absent when no element was resolved. This is

@@ -117,7 +117,7 @@ const taskTableRule = "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 /**
  * The grounding TIER the runs actually reported, not the one the arm's name promises.
  * `groundingChecked` already fails a run whose provenance disagrees with its arm, so a row here
- * agreeing is a restatement — but the restatement is the point: the tier is what phase 2
+ * agreeing is a restatement — but the restatement is the point: the tier is what stage 2
  * measures, and reading it off arm ids invites exactly the mistake of trusting the label.
  * Divergence within an arm (it should never happen) renders as the set, loudly.
  */
@@ -128,7 +128,7 @@ const tierCell = (r: ArmRollup): string => {
 };
 
 /**
- * Node count of the map the arm grounded on — the confound "grounded" hides. Phase 1's maps
+ * Node count of the map the arm grounded on — the confound "grounded" hides. Stage 1's maps
  * ranged 89-234 nodes, so a grounded arm underperforming may have drawn a thin map rather than
  * been failed by grounding. A range means the arm's runs did not all read the same map.
  */
@@ -209,7 +209,7 @@ function taskTable(arms: Arm[], m: Manifest): string[] {
 }
 
 /**
- * Phase 1, ONE ROW PER RUN — not per arm.
+ * Stage 1 (Discovery), ONE ROW PER RUN — not per arm.
  *
  * This used to `.find()` the first collected entry, so an n=2 arm showed a single sample and its
  * repeat was invisible. That is the opposite of why the repeats exist: on 2026-08-01 the two cdp
@@ -352,11 +352,16 @@ function judgeSection(m: Manifest): string[] {
 
 export function renderReport(m: Manifest): string {
 	const p2 = phaseArms(2);
-	const core = p2.filter((a) => isTask(a) && /^p2-(ax|cdp)-(un)?grounded$/.test(a.id));
+	const core = p2.filter((a) => isTask(a) && /^(ax|cdp)-(un)?grounded$/.test(a.id));
 	const slices = p2.filter((a) => isTask(a) && !core.includes(a));
 	const p3Replays = phaseArms(3).filter((a) => a.kind === "replay");
+	// Reuse holds both frozen-artifact tiers since 2026-08-03. Rendering them in one section is
+	// the point of the merge: a compiled step list and harvested prose answer the same question,
+	// and while they sat three phases apart nothing in this report ever put them side by side.
+	const p3Procedures = phaseArms(3).filter(isTask);
 	const p4 = phaseArms(4);
 	const p5 = phaseArms(5);
+	const diagnostics = phaseArms(9);
 
 	const submitted = m.entries.length;
 	const collected = m.entries.filter((e) => e.collected).length;
@@ -368,19 +373,19 @@ export function renderReport(m: Manifest): string {
 		`> Plan: docs/plans/2026-07-31-benchmark-matrix.md (as amended: dom cut, Notion cut entirely, vision-only-grounded cut; procedures added 2026-08-01).`,
 		`> Progress: ${collected}/${submitted} submitted runs collected.`,
 		"",
-		"## Phase 1 — node discovery per backend",
+		"## Stage 1 — Discovery: what each perception condition finds",
 		"",
 		...exploreTable(phaseArms(1), m),
 		"",
-		"## Phase 2 — backend × grounding (core)",
+		"## Stage 2 — Configuration: backend × grounding (core)",
 		"",
 		...taskTable(core, m),
 		"",
-		"## Phase 2 — permutation slices",
+		"## Stage 2 — Configuration: perception and grounding slices",
 		"",
 		...taskTable(slices, m),
 		"",
-		"## Phase 3 — recipes",
+		"## Stage 3 — Reuse: recipes",
 		"",
 		...replayTable(p3Replays, m),
 		"",
@@ -394,17 +399,31 @@ export function renderReport(m: Manifest): string {
 				})
 				.join("; ") || "none"),
 		"",
-		"## Phase 4 — second-task spot check (optional)",
+		"## Stage 3 — Reuse: procedures",
+		"",
+		"> The other frozen tier, and the one to read AGAINST the replays above: a recipe re-resolves",
+		"> recorded steps, a procedure is prose an agent wrote after doing the task once. Same",
+		"> question — does a frozen artifact beat grounding live — answered by two very different",
+		"> artifacts. The `-from-ungrounded` lineage is the replacement claim; the other presupposes",
+		"> the sweep it would replace.",
+		"",
+		...taskTable(p3Procedures, m),
+		"",
+		"## Stage 4 — Generalization: second task, second model",
+		"",
+		"> Everything that varies something OTHER than the config: the motion-blur task, the creation",
+		"> task on every stage-2 cell, and the model axis. Read each row against its stage-2 twin —",
+		"> a config that won there and loses here did not generalize.",
 		"",
 		...taskTable(p4.filter(isTask), m),
 		"",
 		...replayTable(p4.filter((a) => a.kind === "replay"), m),
 		"",
-		"## Phase 5 — filmed takes",
+		"## Stage 5 — Deliverables: filmed takes",
 		"",
 		"> These ran with `--record`, which is NOT a passive camera: it injects demo conduct",
 		"> (mouse-first, no keyboard shortcuts), swaps in an act tool without `set_value`, and",
-		"> changes actuation. Compare each row against the SAME arm in phase 2 — a config that",
+		"> changes actuation. Compare each row against the SAME arm in stage 2 — a config that",
 		"> succeeded there and fails here failed at demo conduct, not at the task. n=1 per",
 		"> config, so a reorder is a prompt to re-measure that arm filmed, not a conclusion.",
 		"> Cursor compositing is a separate manual step (`npm run humanize -- <stamp>`).",
@@ -412,6 +431,16 @@ export function renderReport(m: Manifest): string {
 		...taskTable(p5.filter(isTask), m),
 		"",
 		...replayTable(p5.filter((a) => a.kind === "replay"), m),
+		"",
+		"## Diagnostics — the instrument, not the agent",
+		"",
+		"> Off the ladder on purpose. These arms measure the harness: the pair differs only in whether",
+		"> --record stages the window, so a geometry discrepancy in BOTH is the AX→screenshot transform",
+		"> and one in the filmed arm alone is staging. Read the PAIR; either alone says nothing. Their",
+		"> task outcome is close to irrelevant. Until now they had arms and no section — the results",
+		"> existed and the report never showed them.",
+		"",
+		...taskTable(diagnostics.filter(isTask), m),
 		"",
 		...costSection(m),
 		"",
@@ -433,13 +462,13 @@ export function renderReport(m: Manifest): string {
 		"     as TODOs until the final edit, made after the last collect. -->",
 		"",
 		"- TODO: which MODEL pipeline to ship — self-grounded end to end (its own explores, its own maps, its own task runs). Note: each model ran at its own max effort; that asymmetry is the deployment-honest comparison. If the winner's edge needs factoring (explored better vs executed better), one cross-cell (loser's tasks on winner's maps, n=3) resolves it.",
-		"- TODO: which backend to build on (phase 1 discovery + phase 2 outcomes).",
-		"- TODO: leaner vs blinder — cdp's smaller per-screen observation (obs-nodes/shown columns) is a token win ONLY if phase 1 shows it DISCOVERED comparable functionality (controls actuated/seen + graph nodes vs ax). If cdp's frontier is materially smaller, the lean snapshot missed real controls.",
+		"- TODO: which backend to build on (stage 1 discovery + stage 2 outcomes).",
+		"- TODO: leaner vs blinder — cdp's smaller per-screen observation (obs-nodes/shown columns) is a token win ONLY if stage 1 shows it DISCOVERED comparable functionality (controls actuated/seen + graph nodes vs ax). If cdp's frontier is materially smaller, the lean snapshot missed real controls.",
 		"- TODO: what grounding buys — actions, tokens, wrong-scope rate (doc-scope mutation counts above are raw; the cursor task implies the brand default).",
 		"- TODO: is the axdom sidecar worth shipping.",
 		"- TODO: what vision costs/buys per backend; the vision-only deploy story.",
 		"- TODO: whether replay is fleet-ready (rescue rate, no-rescue happy path).",
-		"- Generalization is a SECOND TASK only (phase 4, motion blur — dual-scope, so it reaches the correctness half too). Nothing here speaks to a second APP: every Notion arm was cut, so cross-app transfer is unmeasured.",
+		"- Generalization (stage 4) now varies the TASK (motion blur — dual-scope, so it reaches the correctness half too — plus the creation flow) and the MODEL. Nothing here speaks to a second APP yet: every Notion arm was cut, so cross-app transfer is unmeasured.",
 		"",
 	].join("\n");
 }

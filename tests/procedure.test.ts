@@ -13,7 +13,7 @@ import { test } from "node:test";
 import { harvestPrompt, harvestRefusal, lineageOf, procedureFileFor, procedureHeader, routeOf, type HarvestSource } from "../src/core/procedure.js";
 import { harvestSourceArms } from "../src/bench/harvest.js";
 import { expectedProvenance } from "../src/bench/collect.js";
-import { armById, phaseArms } from "../src/bench/matrix.js";
+import { armById, phaseArms, procedureArms } from "../src/bench/matrix.js";
 import { taskHash } from "../src/core/recipe.js";
 
 const PASSING: HarvestSource = {
@@ -112,7 +112,7 @@ test("procedureFileFor__KeysOnAppAndTask__When__NamingTheFile", () => {
 
 	// And by BACKEND, for the reason appmaps already carry that axis: ax and cdp name the same
 	// surfaces differently, so a procedure is no more backend-portable than a map. Without it
-	// p6-ax-procedure and p6-cdp-procedure resolve to one file, the second promote overwrites
+	// ax-procedure and cdp-procedure resolve to one file, the second promote overwrites
 	// the first, and one arm grounds on the other backend's write-up with nothing to catch it.
 	assert.notEqual(procedureFileFor("/d", "yarn", task, "ax"), procedureFileFor("/d", "yarn", task, "cdp"));
 });
@@ -131,9 +131,9 @@ test("expectedProvenance__ExpectsProcedure__When__TheArmAsksForOne", () => {
 	// The silent-fallback guard. USE_PROCEDURES with no file on disk degrades to the appmap, so
 	// without this an arm that never received its procedure would report clean numbers under the
 	// wrong tier label. groundingChecked compares this against what the run log recorded.
-	for (const arm of phaseArms(6)) assert.equal(expectedProvenance(arm), "procedure", arm.id);
-	assert.equal(expectedProvenance(armById("p2-ax-grounded")!), "explore");
-	assert.equal(expectedProvenance(armById("p2-curated")!), "curated");
+	for (const arm of procedureArms(3)) assert.equal(expectedProvenance(arm), "procedure", arm.id);
+	assert.equal(expectedProvenance(armById("ax-grounded")!), "explore");
+	assert.equal(expectedProvenance(armById("curated")!), "curated");
 });
 
 test("harvestSourceArms__CoversBothLineages__When__Phase6IsRead", () => {
@@ -141,7 +141,7 @@ test("harvestSourceArms__CoversBothLineages__When__Phase6IsRead", () => {
 	// beat the map it came from") and from an UNGROUNDED one ("can a write-up replace the map").
 	// Only the second can speak to whether the exploration pass needs to exist at all.
 	//
-	// Note the trap this replaced: the old check asserted /grounded$/, which "p2-ax-ungrounded"
+	// Note the trap this replaced: the old check asserted /grounded$/, which "ax-ungrounded"
 	// also matches — so it would have passed while proving nothing.
 	const sources = harvestSourceArms();
 	for (const id of sources) assert.ok(armById(id), `${id} is not a real arm`);
@@ -171,7 +171,7 @@ test("Phase6Arms__ReplaceTheAppmapRatherThanStack__When__Declared", () => {
 	// USE_PROCEDURES is a replacement tier, like USE_RECIPE. An arm that carried both would
 	// measure neither, and the question the phase exists to answer — can a write-up stand IN FOR
 	// the exploration pass — would be unanswerable from its own data.
-	const arms = phaseArms(6);
+	const arms = procedureArms(3);
 	assert.ok(arms.length > 0);
 	for (const a of arms) {
 		assert.equal(a.dispatch.useProcedures, true, a.id);

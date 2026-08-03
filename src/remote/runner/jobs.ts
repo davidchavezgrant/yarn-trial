@@ -120,6 +120,7 @@ export interface JobRecord {
 	useRecipe?: boolean;
 	/** `USE_PROCEDURES=1`: the child loads docs/procedures/<app>.<backend>.<task-hash>[.ungrounded].procedure.md. */
 	useProcedures?: boolean;
+	snapPx?: number;
 	/** `PROCEDURE_LINEAGE=ungrounded`: load the write-up by an agent that had NO map. */
 	procedureLineage?: "grounded" | "ungrounded";
 	/** Replay only: the recipe file, relative to the data root — the same key on both machines. */
@@ -160,6 +161,7 @@ export interface JobInit {
 	noGrounding?: boolean;
 	useRecipe?: boolean;
 	useProcedures?: boolean;
+	snapPx?: number;
 	procedureLineage?: "grounded" | "ungrounded";
 	recipe?: string;
 	noRescue?: boolean;
@@ -279,6 +281,7 @@ export function createJob(init: JobInit, root = jobsDir()): JobRecord {
 		...(init.noGrounding ? { noGrounding: true } : {}),
 		...(init.useRecipe ? { useRecipe: true } : {}),
 		...(init.useProcedures ? { useProcedures: true } : {}),
+		...(init.snapPx !== undefined ? { snapPx: init.snapPx } : {}),
 		...(init.procedureLineage ? { procedureLineage: init.procedureLineage } : {}),
 		...(init.recipe ? { recipe: init.recipe } : {}),
 		...(init.noRescue ? { noRescue: true } : {}),
@@ -300,7 +303,7 @@ function artifactsFor(id: string, init: JobInit): JobArtifacts {
 		// ONE derivation, shared with the pass that writes the file (explore/state.ts) and every
 		// reader that looks for it — see appmapSlug's header for the four-way divergence this
 		// replaced, and why each divergence surfaced as "no appmap" for a map that existed.
-		// axdomOff included: without it p1-explore-ax-noaxdom's record named yarn.ax — its
+		// axdomOff included: without it explore-ax-noaxdom's record named yarn.ax — its
 		// SIBLING'S map — and collect's existsSync guard passed because that file exists.
 		const slug = appmapSlug(init.url ?? init.app, {
 			visionOnly: Boolean(init.noAx),

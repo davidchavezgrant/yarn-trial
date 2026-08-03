@@ -389,9 +389,9 @@
 	</section>
 
 	<section class="grid2">
-		<div class="card"><h2>Phase 1 — Discovery per Backend</h2><div class="sub">map nodes / controls actuated per Explore arm, per pass — what the pass understood and what it operated</div><div id="chart-explore"></div></div>
+		<div class="card"><h2>Stage 1 — Discovery per Backend</h2><div class="sub">map nodes / controls actuated per Explore arm, per pass — what the pass understood and what it operated</div><div id="chart-explore"></div></div>
 		<div class="card"><h2>Task Outcomes by Arm</h2><div class="sub">collected runs by verdict; pending = submitted, not yet collected</div><div id="chart-outcomes"></div></div>
-		<div class="card"><h2>Explore Effect — Actions x̄</h2><div class="sub">explored vs unexplored, per backend (phase 2 core)</div><div id="chart-steps"></div></div>
+		<div class="card"><h2>Explore Effect — Actions x̄</h2><div class="sub">explored vs unexplored, per backend (stage 2 core)</div><div id="chart-steps"></div></div>
 		<div class="card"><h2>Explore Effect — Output Tokens x̄</h2><div class="sub">same arms, token cost of going in blind</div><div id="chart-tokens"></div></div>
 		<div class="card"><h2>Attention — Offered vs Shown</h2><div class="sub">mean interactive elements observed vs list lines rendered into the prompt</div><div id="chart-attention"></div></div>
 		<div class="card"><h2>Cumulative Est. Cost</h2><div class="sub" id="cost-sub"></div><div id="chart-cost"></div></div>
@@ -708,7 +708,7 @@ function hStack(rows, seriesNames, opts = {}) {
 	const fmt = opts.fmt || fmtNum;
 	// The label gutter auto-fits the longest row label (~5.8 viewBox units per char at the
 	// .lbl size) and the viewBox widens by the same amount so the bar area keeps its usual
-	// width — a fixed padL clipped "p6-cdp-procedure-from-ungrounded · Sol 5.6" off the
+	// width — a fixed padL clipped "cdp-procedure-from-ungrounded · Sol 5.6" off the
 	// left edge. When every label fits the caller's padL, this renders exactly as before.
 	const rowH = 22, padR = 46;
 	const padL = Math.max(opts.padL || 150, 8 + Math.ceil(5.8 * Math.max(0, ...rows.map((r) => r.label.length))));
@@ -1319,7 +1319,7 @@ const shortJob = (id) => String(id).replace(/\d{4}-\d{2}-\d{2}T/, "");
 function variantCell(a, p, span = "", lead = "") {
 	const tip = [a.id, a.informs || "", `flags: ${a.flags || "(none)"}`].filter(Boolean).join("\n");
 	// Phase badge on task/replay rows only: lineage groups interleave phases 2–5, so the row
-	// says which phase it belongs to. Explore group headers are all phase 1 — no badge.
+	// says which stage it belongs to. Explore group headers are all stage 1 — no badge.
 	const badge = a.kind !== "explore"
 		? `<span class="pbadge" data-tip="phase ${a.phase} arm — lineage groups interleave phases">P${a.phase}</span>`
 		: "";
@@ -2410,7 +2410,7 @@ function renderOutcomes() {
 function groundingChart(el, pick, fmt) {
 	const groups = [];
 	for (const b of ["ax", "cdp"]) {
-		const armOf = (grounded) => visibleArms().find((a) => a.id === `p2-${b}-${grounded ? "grounded" : "ungrounded"}`);
+		const armOf = (grounded) => visibleArms().find((a) => a.id === `${b}-${grounded ? "grounded" : "ungrounded"}`);
 		const models = new Set();
 		for (const grounded of [true, false])
 			for (const p of armOf(grounded)?.passes ?? []) if (p.collected) models.add(p.model);
@@ -2422,16 +2422,35 @@ function groundingChart(el, pick, fmt) {
 			groups.push({ label: b, ...(m !== "(default)" ? { sub: friendlyModel(m) } : {}), values: [v(true), v(false)] });
 		}
 	}
-	if (!groups.some((g) => g.values.some((v) => v != null))) { $(el).innerHTML = `<div class="empty">waiting for phase-2 core runs…</div>`; return; }
+	if (!groups.some((g) => g.values.some((v) => v != null))) {
+		// Two different empty states, because they call for different actions. This chart pairs
+		// arms by the CANONICAL ids (`cdp-grounded` / `cdp-ungrounded`), which exist only on the
+		// product app — a second target's cells are named for their own app and task. Saying
+		// "waiting for runs" there would promise runs that are never coming.
+		const canonical = visibleArms().some((a) => /^(ax|cdp)-(un)?grounded$/.test(a.id));
+		$(el).innerHTML = canonical
+			? `<div class="empty">waiting for stage-2 core runs…</div>`
+			: `<div class="empty">no core grounded/ungrounded pair on this target — this chart reads the product app's canonical cells</div>`;
+
+		return;
+	}
 	$(el).innerHTML = hBars(groups, [{ name: "Explored", color: SERIES[0] }, { name: "Unexplored", color: SERIES[1] }], { fmt, padL: 90 });
 }
 
 function renderAttention() {
-	const arms = visibleArms().filter((a) => /^p2-(ax|cdp)-(un)?grounded$/.test(a.id) && a.passes.some((p) => p.meanObsNodes != null));
-	if (!arms.length) { $("chart-attention").innerHTML = `<div class="empty">waiting for phase-2 runs…</div>`; return; }
+	const arms = visibleArms().filter((a) => /^(ax|cdp)-(un)?grounded$/.test(a.id) && a.passes.some((p) => p.meanObsNodes != null));
+	if (!arms.length) {
+		// Same split as groundingChart: absent-on-this-target is not the same fact as not-yet-run.
+		const canonical = visibleArms().some((a) => /^(ax|cdp)-(un)?grounded$/.test(a.id));
+		$("chart-attention").innerHTML = canonical
+			? `<div class="empty">waiting for stage-2 runs…</div>`
+			: `<div class="empty">no core cells on this target — observation size is charted on the product app</div>`;
+
+		return;
+	}
 	// One group per (arm × model pass) — passes[0] alone dropped every later model pass.
 	const groups = arms.flatMap((a) => a.passes.filter((p) => p.meanObsNodes != null).map((p) => ({
-		label: a.id.replace("p2-", ""),
+		label: a.id,
 		...(p.model !== "(default)" ? { sub: friendlyModel(p.model) } : {}),
 		values: [p.meanObsNodes, p.meanShownLines],
 	})));

@@ -68,7 +68,7 @@ export interface JudgeVerdict {
  *
  * Backend, for the reason appmaps already carry it (matrix.ts): a map is not backend-portable —
  * the ax and cdp passes name the same surfaces and controls differently, and a procedure names
- * both. Without this axis `p6-ax-procedure` and `p6-cdp-procedure` resolve to ONE file, the
+ * both. Without this axis `ax-procedure` and `cdp-procedure` resolve to ONE file, the
  * second promote overwrites the first, and one arm silently grounds on the other backend's
  * write-up. Nothing downstream would catch it: provenance reads "procedure" either way.
  */

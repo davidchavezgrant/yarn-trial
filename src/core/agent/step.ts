@@ -14,7 +14,7 @@ import {
 	unpaintedStreak,
 	verify,
 } from "../harness.js";
-import type { ObservationBundle, VerifyResult, WindowRef } from "../harness.js";
+import type { InteractiveElement, ObservationBundle, VerifyResult, WindowRef } from "../harness.js";
 import { type DemoPlan, demoTranslatable, demoTranslate, freshSnapshot, type FreshSnapshot } from "../harness/fresh-target.js";
 import { appendMutation, detectMutation } from "../journal.js";
 import type { Overlay } from "../overlay.js";
@@ -148,6 +148,84 @@ export async function executeAction(
 
 		return at >= 0 ? at : undefined;
 	})();
+	/**
+	 * PIXEL-SNAP DIAGNOSTIC — recorded, never acted on.
+	 *
+	 * A vision-only step addresses by screenshot pixel and declares which control it MEANT
+	 * (VISION_ACT_TOOL requires `target` for coverage). Those two facts together decompose the
+	 * condition's 75% target-never-appeared rate into two failures with opposite remedies:
+	 *
+	 *   SPATIAL  — the point landed on a different control than the one declared. The model
+	 *              identified the right thing and missed its pixels. A visual snap stage (the
+	 *              analogue of the redaction pipeline's snap·prune·size, which works on image
+	 *              structure rather than an element list) would plausibly rescue the condition.
+	 *   SEMANTIC — the point landed on exactly the control the model named, and the step still
+	 *              failed. It chose wrong, and no amount of refinement helps.
+	 *
+	 * We cannot currently tell these apart, and the answer decides whether the bigger build is
+	 * worth doing at all. So: record what the point WOULD have snapped to and leave the run
+	 * untouched — the harness holds the element list even in vision-only mode (observation.ts:
+	 * "the isolation is of what the model perceives, not of what the run can prove"), so this
+	 * costs one pass over an array and changes no behaviour.
+	 */
+	const snap = ((): { snapName: string; snapRole: string; snapDistancePx: number; snapInside: boolean; snapMatchesDeclared?: boolean; snapApplied?: boolean } | undefined => {
+		const ax = Number((input.action as Record<string, unknown>).x);
+		const ay = Number((input.action as Record<string, unknown>).y);
+		if (!Number.isFinite(ax) || !Number.isFinite(ay)) return undefined;
+		let best: { e: InteractiveElement; d: number } | undefined;
+		for (const e of ls.obs.interactive) {
+			if (!(e.w > 0 && e.h > 0)) continue;
+			// Distance to the RECT, zero when the point is inside it.
+			const dx = Math.max(e.x - ax, 0, ax - (e.x + e.w));
+			const dy = Math.max(e.y - ay, 0, ay - (e.y + e.h));
+			const d = Math.hypot(dx, dy);
+			if (!best || d < best.d) best = { e, d };
+		}
+		if (!best) return undefined;
+		const declared = (input.action as { target?: { name?: string } }).target?.name;
+		const norm = (v: string): string => v.trim().toLowerCase();
+
+		return {
+			snapName: best.e.name,
+			snapRole: best.e.role,
+			snapDistancePx: Math.round(best.d),
+			snapInside: best.d === 0,
+			...(declared ? { snapMatchesDeclared: norm(best.e.name) === norm(declared) } : {}),
+		};
+	})();
+	/**
+	 * THE SNAP STAGE. Opt-in via SNAP_PX; off by default so no existing arm moves.
+	 *
+	 * The redaction pipeline reads `detect (AI) -> track -> snap·prune·size -> render`: the
+	 * vision model's box is a HYPOTHESIS and four stages refine it before anything is drawn.
+	 * Vision-only UI driving had no middle — the model's pixel went straight to a click — which
+	 * is the whole of the gap between 75% target-never-appeared with pixels alone and 11% with
+	 * element addressing.
+	 *
+	 * So: treat the model's point as a hypothesis too. If it lands on (or within SNAP_PX of) an
+	 * interactive control, act on THAT CONTROL by handle instead of on the raw coordinate. The
+	 * model still reasons entirely from pixels; only the actuation is refined.
+	 *
+	 * What this is NOT: a solution for an app with no element channel. Snapping to elements
+	 * presupposes elements, and vision-only exists to ask what happens without them. The
+	 * genuine analogue for that case snaps to IMAGE structure — edges, contrast, widget-shaped
+	 * regions — and is a much larger build. This is the tractable half, and it is the one that
+	 * matches Yarn's own deployment target, an Electron app with a DOM.
+	 */
+	const snapPx = Number(process.env.SNAP_PX ?? 0);
+	if (snapPx > 0 && snap && snap.snapDistancePx <= snapPx) {
+		const hit = ls.obs.interactive.find((e) => e.name === snap.snapName && e.role === snap.snapRole);
+		if (hit) {
+			const a = input.action as Record<string, unknown>;
+			delete a.x;
+			delete a.y;
+			// One field, two dialects: `handle` is an element_index on the ax path and a ref on
+			// cdp, exactly as the observation produced it.
+			if (cdp) a.ref = hit.handle;
+			else a.element_index = hit.handle;
+			snap.snapApplied = true;
+		}
+	}
 	const prevShot = ls.lastShot;
 	while (sync.busy) await new Promise((r) => setTimeout(r, 50));
 	sync.busy = true;
@@ -430,6 +508,7 @@ export async function executeAction(
 						...(target.namedBy ? { targetNamedBy: target.namedBy } : {}),
 					}
 				: {}),
+		...(snap ?? {}),
 		// CDP demo typing is one pressSequentially call — real keystrokes, real frames —
 		// so it is `typedLive` without chunk records; the humanizer spans the turn instead.
 		...(plan?.typedLive || (ctx.demo === true && cdp && input.action.name === "type_text") ? { typedLive: true } : {}),

@@ -7,7 +7,7 @@ import { auditTaskPrompt } from "../src/core/harness.js";
 import type { JobRecord } from "../src/remote/runner/jobs.js";
 import { collect, collectEntry, expectedProvenance, failureKind, jobTiming, journalScopes, parseAppmapStamp, parseGraphCounts, parseRunMetrics, poisonedHosts, technicalFailure } from "../src/bench/collect.js";
 import { archiveDirFor, entriesForArm, manifestPath, readManifest, recordSubmissions, submittedCount, type Manifest, type ManifestEntry, updateEntry, writeManifest } from "../src/bench/manifest.js";
-import { BACKENDS, BENCH_ALT_MODEL, BENCH_PRIMARY_MODEL, armModel, MATRIX, armAppmapSlug, armById, armTitle, perceptionLine, phaseArms, phaseRunCount, type Arm } from "../src/bench/matrix.js";
+import { BACKENDS, BENCH_ALT_MODEL, BENCH_APP, BENCH_PRIMARY_MODEL, CREATION_EXCLUDED, armModel, MATRIX, armAppmapSlug, armById, armTitle, discoveryArmsFor, orderStages, perceptionLine, phaseArms, phaseRunCount, procedureArms, STAGES, stageNeedsMaps, stageOf, type Arm } from "../src/bench/matrix.js";
 import type { DispatchOptions } from "../src/remote/control/dispatch.js";
 import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, auditPhase, dateArg, dispatchOptionsFor, findCompileSource, plannedRuns, runPhase } from "../src/bench/orchestrate.js";
 import { renderReport, reportFileName, writeReport } from "../src/bench/report.js";
@@ -52,12 +52,14 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// Ten since 2026-08-02: the vision-only cdp explore arm joined, both to write the map its
 	// task arm reads and to separate "vision-only discovers little" from "vision-only could not
 	// open what it clicked".
-	assert.equal(phaseRunCount(1), 11);
+	// +2 since 2026-08-03: the second app brings its own Discovery, full-perception and
+	// no-vision, because a map is per-target and Yarn's says nothing about Notion.
+	assert.equal(phaseRunCount(1), 11 + 2);
 	// Phase 2: core 2 backends × 2 grounding × 3, plus 6 slices × 3. Two blocks were cut
 	// 2026-07-31 after their prerequisites were CHECKED rather than assumed (matrix.ts holds
 	// the full reasoning at each site): the Notion Calendar slice (4 arms × 2 = 8 runs — the
 	// app is installed on none of the three Macs, so every run would refuse at the readiness
-	// gate) and p2-vision-only-grounded (3 runs — its `.vision` appmap does not exist, and a
+	// gate) and vision-only-grounded (3 runs — its `.vision` appmap does not exist, and a
 	// missing map degrades to provenance "none", making it a silent duplicate of the
 	// ungrounded arm under a grounded label).
 	// Phase 2: core 12, plus 8 slices × 3 — the vision-only tier is now four arms
@@ -73,11 +75,36 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// core 12 (2 backends x grounded/ungrounded x 3), slices 27, procedures-tier comparators 6.
 	// Slices went 24 -> 27 on 2026-08-01: the native-equivalent grid (AXDOM=0, i.e. AX
 	// with no DOM behind it) was missing its cold+screenshots cell.
-	assert.equal(phaseRunCount(2), 12 + 27 + 6);
-	// Phase 3: 2 local compiles + replay ×3 per backend + no-rescue ×3.
-	assert.equal(phaseRunCount(3), 2 + 6 + 3);
-	// Phase 4 (optional): 2 task cells × 2 + 1 compile + 2 replays.
-	assert.equal(phaseRunCount(4), 7);
+	// Stage 2 Configuration (2026-08-03): the old phase-2 grid (12 core + 27 slices + 6
+	// procedure-tier comparators = 45) plus the five cdp cells that came home from phase 7 —
+	// four vision-only and one grounded on a vision-written map. They vary perception and
+	// grounding tier on the canonical task, which is this stage's definition.
+	// 45 + 15 + 6: the two snap arms joined stage 2 on 2026-08-03 — vision-only reasoning with
+	// element-precise actuation, the refinement stage the redaction pipeline has and UI driving
+	// lacked.
+	assert.equal(phaseRunCount(2), 45 + 15 + 6);
+	// Stage 3 Reuse: both frozen-artifact tiers together, so the report can finally compare
+	// them. Recipes (2 local compiles + 6 replays + 3 no-rescue) and procedures (4 arms x 3).
+	assert.equal(phaseRunCount(3), 11 + 12);
+	// Stage 4 Generalization: second task (7), the creation task on every stage-2 config
+	// carried over from phase 7 (15 x 3), the model axis (3 x 3), and — since 2026-08-03 — the
+	// second APP: three cdp cells crossed with a simple and a complex task (6 x 3).
+	// 51, not 45: the creation task derives from EVERY stage-2 config, so the two snap arms added
+	// there carry creation twins here automatically. That propagation is the derivation working —
+	// the alternative is remembering to add them.
+	assert.equal(phaseRunCount(4), 7 + 51 + 9 + 18);
+	// Stage 9 Diagnostics: the AX-offset pair at n=2. Off the ladder — it measures the rig.
+	assert.equal(phaseRunCount(9), 4);
+	// The collapse REGROUPED; it did not add or drop a run. This is the guard on that claim, and
+	// the +16 is kept as its own term rather than folded in so the claim stays checkable: the
+	// snap pair adds 6 in stage 2, 6 more as creation twins in stage 4 (derived from every
+	// stage-2 config), and 4 filmed takes in stage 5. Three derivations firing off two arms —
+	// which is the structure working, and also why the number moves more than it looks like it
+	// should.
+	assert.equal(
+		STAGES.reduce((t, st) => t + phaseRunCount(st.n), 0),
+		207 + 20 + 16,
+	);
 	// Phase 5 (filmed): one take per phase-2 task config (14, including the minimum-context
 	// pair — derived from the phase-2 arms, so adding a config there adds a filmed take here)
 	// plus one filmed replay per backend.
@@ -88,8 +115,125 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// Phase 8 is excluded: it is a diagnostics PAIR (one plain arm, one filmed) and the filmed
 	// half is the measurement, not a take of the other. Deriving a twin for it would film the
 	// same config twice and compare a run against itself.
-	const filmable = MATRIX.filter((a) => a.phase !== 5 && a.phase !== 8 && (a.kind === "task" || a.kind === "replay"));
+	// BENCH_APP-scoped, matching production: the second app is measured and deliberately unfilmed.
+	const filmable = MATRIX.filter((a) => a.app === BENCH_APP && stageOf(a.phase)?.kind === "measurement" && (a.kind === "task" || a.kind === "replay"));
 	assert.equal(phaseRunCount(5), filmable.length);
+});
+
+/**
+ * The guards the old numbering never had. Five hand-maintained copies of `[1..8]` and seven
+ * behaviours keyed on literal values meant a new stage was correct only if someone remembered
+ * every site; these assert the table itself instead.
+ */
+test("STAGES__DeclareAnAcyclicOrder__When__EveryStageIsRequested", () => {
+	const order = orderStages(STAGES.map((st) => st.n));
+	assert.equal(order.length, STAGES.length, "every declared stage is orderable — a cycle drops one");
+	for (const [i, p] of order.entries()) {
+		for (const dep of stageOf(p)?.needs ?? []) {
+			assert.ok(order.indexOf(dep) < i, `stage ${p} runs before its dependency ${dep}`);
+		}
+	}
+});
+
+test("STAGES__PutDeliverablesLast__When__AllRequested", () => {
+	// This used to be a special case in the sort ("ascending, except 5 always runs last").
+	// It is now a CONSEQUENCE of Deliverables declaring needs: [2, 4] — delete that and the
+	// test fails, which is the point.
+	const order = orderStages(STAGES.map((st) => st.n));
+	const deliverable = STAGES.find((st) => st.kind === "deliverable")!;
+	for (const m of STAGES.filter((st) => st.kind === "measurement")) {
+		assert.ok(order.indexOf(m.n) < order.indexOf(deliverable.n), `${m.title} must run before filming`);
+	}
+	// And the off-ladder stage yields to all of it: Diagnostics blocks nothing, so it waits
+	// rather than putting harness runs in front of the pass the operator asked for.
+	assert.equal(order.at(-1), STAGES.find((st) => st.kind === "diagnostic")!.n);
+});
+
+test("STAGES__AreUniqueAndCoverEveryArm__When__TheMatrixIsWalked", () => {
+	assert.equal(new Set(STAGES.map((st) => st.n)).size, STAGES.length, "two stages share a number");
+	assert.equal(new Set(STAGES.map((st) => st.id)).size, STAGES.length, "two stages share an id");
+	for (const arm of MATRIX) assert.ok(stageOf(arm.phase), `${arm.id} sits in stage ${arm.phase}, which no StageDef declares`);
+});
+
+test("STAGES__KeepFilmingOutOfMeasurementStages__When__ArmsSetRecord", () => {
+	// Diagnostics films as its own measurement and must not be filmed-twinned. That used to be
+	// two exceptions written against phase 8 by name; both now fall out of `kind`.
+	for (const arm of MATRIX) {
+		if (arm.dispatch.record) assert.notEqual(stageOf(arm.phase)?.kind, "measurement", `${arm.id} films inside a measurement stage`);
+	}
+	const filmedTwins = MATRIX.filter((a) => stageOf(a.phase)?.kind === "deliverable");
+	for (const t of filmedTwins) assert.equal(t.dispatch.record, true, `${t.id} is a deliverable and must film`);
+});
+
+/**
+ * The three gates, asserted against the ARMS rather than against a stage flag.
+ *
+ * The 2026-08-03 audit found six of ten procedure arms unprotected — a Claude cell and five
+ * filmed twins sat in stages nobody had marked `procedureGate: true`, so they could dispatch
+ * with nothing promoted and bank runs labelled "procedure" that measured the appmap tier. The
+ * flag was attached to the stage; the risk belongs to the arm. Same shape for the map gate,
+ * which missed Generalization's ten grounded creation arms entirely.
+ */
+test("ProcedureGate__CoversEveryArmThatGroundsOnAProcedure__When__TheMatrixIsWalked", () => {
+	const consumers = MATRIX.filter((a) => a.dispatch.useProcedures);
+	assert.ok(consumers.length >= 10, "guard assumes the procedure tier is non-trivial");
+	for (const a of consumers) {
+		assert.ok(procedureArms(a.phase).length > 0, `${a.id} grounds on a procedure in an ungated stage ${a.phase}`);
+	}
+});
+
+test("MapGate__CoversEveryStageHoldingAGroundedArm__When__ExceptDiagnostics", () => {
+	const readsAMap = (a: (typeof MATRIX)[number]) => a.kind === "task" && !a.dispatch.noGrounding && !a.dispatch.useRecipe && !a.dispatch.useProcedures;
+	for (const st of STAGES) {
+		const grounded = phaseArms(st.n).filter(readsAMap);
+		if (!grounded.length) continue;
+		if (st.kind === "diagnostic") {
+			// Exempt on purpose: it measures the AX→screenshot transform, and whether grounding
+			// prose loaded says nothing about that. Exempt BY KIND, so a second diagnostic stage
+			// inherits the exemption without anyone remembering it.
+			assert.equal(stageNeedsMaps(st.n), false, `${st.title} should not wait on Discovery`);
+			continue;
+		}
+		assert.equal(stageNeedsMaps(st.n), true, `stage ${st.n} ${st.title} holds ${grounded.length} map-reading arms but does not wait for Discovery`);
+	}
+});
+
+test("CreationExcluded__NamesLiveStageTwoCells__When__TheTaskAxisIsNarrowed", () => {
+	// Moving the cdp perception cells into Configuration would have widened the task axis from
+	// 15 twins to 20 as a side effect of a tidy-up. The exclusion is a judgement, so it is named
+	// — and an id renamed out from under the list has to fail here rather than quietly rejoin.
+	const s2 = new Set(phaseArms(2).filter((a) => a.kind === "task").map((a) => a.id));
+	for (const id of CREATION_EXCLUDED) assert.ok(s2.has(id), `${id} is excluded from the task axis but is no longer a stage-2 cell`);
+	// Stage 4 only: the filmed twins are `create-…-filmed` and would double the count.
+	const twins = phaseArms(4).filter((a) => a.id.startsWith("create-"));
+	assert.equal(twins.length, s2.size - CREATION_EXCLUDED.length, "every stage-2 cell that is not excluded has exactly one creation twin");
+});
+
+test("GroundedArms__ReadAMapSomeExploreWrites__When__EveryArmIsResolved", () => {
+	// The guard the second app needed immediately: its two vision-only cells resolved to
+	// `web-app.notion.com.cdp.vision`, a map no explore arm in the matrix produces, so they
+	// would have dispatched and loaded nothing — provenance "none" under a grounded label, the
+	// failure that cost six runs last pass and was only caught at collect.
+	const written = new Set(MATRIX.filter((a) => a.kind === "explore").map(armAppmapSlug));
+	for (const a of MATRIX) {
+		if (a.kind !== "task" || a.dispatch.noGrounding || a.dispatch.useRecipe || a.dispatch.useProcedures) continue;
+		const wanted = a.env?.APPMAP_VARIANT ? undefined : armAppmapSlug(a);
+		// Arms pinned to an explicit variant resolve through APPMAP_VARIANT, not the slug.
+		if (!wanted) continue;
+		assert.ok(written.has(wanted), `${a.id} grounds on ${wanted}, which no explore arm writes`);
+	}
+});
+
+test("SecondAppArms__AreCdpOnlyAndUnfilmed__When__TheTargetIsAUrl", () => {
+	const web = MATRIX.filter((a) => a.dispatch.url);
+	assert.ok(web.length > 0, "guard assumes a web target exists");
+	for (const a of web) {
+		// run.ts throws "web targets run on the cdp backend" — an ax web arm is not a worse
+		// measurement, it is a guaranteed crash.
+		assert.equal(a.dispatch.backend, "cdp", `${a.id} targets a URL on the ${a.dispatch.backend} backend`);
+		assert.notEqual(a.dispatch.record, true, `${a.id} films a second app; the deliverable is footage of the product`);
+	}
+	assert.equal(MATRIX.filter((x) => x.app !== BENCH_APP && x.id.endsWith("-filmed")).length, 0);
 });
 
 test("MATRIX__UsesOnlyAxAndCdp__When__DomIsDeleted", () => {
@@ -132,12 +276,18 @@ test("MATRIX__LinksSourceArms__When__CompileOrReplay", () => {
 });
 
 test("MATRIX__CarriesNoUnmetPrereqs__When__ArmsTargetASecondApp", () => {
-	// The Notion Calendar slice is gone (see the phase-2 note above), so nothing in the
-	// matrix should target a second app. This guards the restore path as much as the cut: an
-	// arm reintroduced for an app the fleet does not have must carry its prereq, because the
-	// prereq is what made the cut decidable instead of a surprise at run time.
+	// A second app is BACK (2026-08-03, Notion web) — but as a URL, not an install. The Notion
+	// Calendar app slice stays cut for the reason it was cut: it is installed on none of the
+	// three Macs. The rule the cut established still binds the restore — an arm for a target the
+	// fleet may not be ready for must carry its prereq, because the prereq is what makes that
+	// decidable at plan time instead of a surprise at run time.
 	assert.deepEqual(MATRIX.filter((a) => a.app === "Notion Calendar"), []);
 	for (const arm of MATRIX.filter((a) => a.prereq)) assert.match(arm.prereq ?? "", /signed in|installed/i, `${arm.id} prereq must name what is missing`);
+	// Every second-app EXPLORE carries one: the map is the artifact everything downstream reads,
+	// and a signed-out pass maps the login wall — which is exactly what the 07-30 notion.so pass
+	// did before anyone noticed.
+	for (const arm of MATRIX.filter((a) => a.kind === "explore" && a.app !== BENCH_APP))
+		assert.ok(arm.prereq, `${arm.id} explores a second app and must declare its sign-in prereq`);
 });
 
 test("MATRIX__ConfinesRecordingToTheFilmedPhase__When__ArmsAreDeclared", () => {
@@ -149,7 +299,7 @@ test("MATRIX__ConfinesRecordingToTheFilmedPhase__When__ArmsAreDeclared", () => {
 		// Phase 8 is the exception, and a narrow one: its filmed arm exists BECAUSE recording
 		// changes the action space. It stages the window, which is the perturbation under
 		// measurement — a diagnostic that could not film would be measuring nothing.
-		if (arm.dispatch.record) assert.ok(arm.phase === 5 || arm.phase === 8, `${arm.id} films, so it belongs to phase 5 (or 8, diagnostics)`);
+		if (arm.dispatch.record) assert.ok(stageOf(arm.phase)?.kind !== "measurement", `${arm.id} films, so it cannot sit in a measurement stage — filming changes the action space`);
 		if (arm.phase === 5) assert.equal(arm.dispatch.record, true, `${arm.id} is a filmed take and must set record`);
 	}
 	// Every filmed take is n=1 — footage, not statistics.
@@ -189,7 +339,7 @@ const entry = (armId: string, jobId: string, over: Partial<ManifestEntry> = {}):
 
 test("writeManifest__RoundTrips__When__ReadBack", () => {
 	withTemp("bench-", (dir) => {
-		const m: Manifest = { date: DATE, createdAt: "2026-07-31T09:00:00.000Z", entries: [entry("p1-explore-ax", "explore-j1")] };
+		const m: Manifest = { date: DATE, createdAt: "2026-07-31T09:00:00.000Z", entries: [entry("explore-ax", "explore-j1")] };
 		writeManifest(m, liveDir(dir));
 		assert.deepEqual(readManifest(DATE, liveDir(dir)), m);
 		assert.ok(fs.existsSync(manifestPath(DATE, liveDir(dir))));
@@ -205,15 +355,15 @@ test("readManifest__ReturnsEmpty__When__FileAbsent", () => {
 });
 
 test("recordSubmissions__DropsDuplicates__When__SameArmAndJobRecordedTwice", () => {
-	const m: Manifest = { date: DATE, createdAt: "", entries: [entry("p2-ax-grounded", "j1")] };
-	const next = recordSubmissions(m, [entry("p2-ax-grounded", "j1"), entry("p2-ax-grounded", "j2")]);
+	const m: Manifest = { date: DATE, createdAt: "", entries: [entry("ax-grounded", "j1")] };
+	const next = recordSubmissions(m, [entry("ax-grounded", "j1"), entry("ax-grounded", "j2")]);
 	assert.equal(next.entries.length, 2);
-	assert.equal(submittedCount(next, "p2-ax-grounded", BENCH_PRIMARY_MODEL), 2);
+	assert.equal(submittedCount(next, "ax-grounded", BENCH_PRIMARY_MODEL), 2);
 });
 
 test("updateEntry__ReplacesByKey__When__ArmAndJobMatch", () => {
-	const m: Manifest = { date: DATE, createdAt: "", entries: [entry("p2-ax-grounded", "j1"), entry("p2-ax-grounded", "j2")] };
-	const next = updateEntry(m, entry("p2-ax-grounded", "j2", { collected: true, state: "done" }));
+	const m: Manifest = { date: DATE, createdAt: "", entries: [entry("ax-grounded", "j1"), entry("ax-grounded", "j2")] };
+	const next = updateEntry(m, entry("ax-grounded", "j2", { collected: true, state: "done" }));
 	assert.equal(next.entries[0].collected, false);
 	assert.equal(next.entries[1].collected, true);
 	assert.equal(next.entries[1].state, "done");
@@ -267,7 +417,7 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		// Eleven: the two reference arms twice each, five single-condition cells, and the
 		// vision-only cdp pass at n=2 — three task arms ground on its map, and vision-only
 		// discovery has the widest spread in the matrix (9 surfaces then 21 on ax).
-		assert.equal(fake.calls.length, 11);
+		assert.equal(fake.calls.length, 13);
 		// The two single-channel passes must differ ONLY in which channel they drop — same
 		// backend, same app — or they are not a comparison.
 		const single = fake.calls.filter((c) => c.noAx || c.noVision);
@@ -280,7 +430,7 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		// screenshot" — so pixel addressing was available on that backend all along. Running it
 		// on both is what separates vision-only's 0/3 into a perception result or an aiming one.
 		// Six CALLS, not five arms: the vision-only cdp pass is n=2, so it dispatches twice.
-		assert.equal(single.length, 6);
+		assert.equal(single.length, 7, "six on Yarn, plus the second app's no-vision discovery");
 		assert.equal(single.filter((c) => c.noAx).length, 3, "a screenshots-only pass per backend, cdp repeated for an error bar");
 		// Backends PRESENT, not call counts — cdp repeats for an error bar and that is not a
 		// second condition.
@@ -289,7 +439,7 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 			["ax", "cdp"],
 			"vision-only must be measured on the actuator that aims AND the one that does not",
 		);
-		assert.equal(single.filter((c) => c.noVision).length, 3);
+		assert.equal(single.filter((c) => c.noVision).length, 4, "…plus the second app's no-vision pass");
 		// The perception grid must span BOTH backends, or the screenshot question is only
 		// answered on the fallback path and not on the one that ships.
 		assert.ok(single.some((c) => c.backend === "cdp" && c.noVision), "cdp gets a no-vision cell too");
@@ -307,13 +457,21 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		assert.equal(ax?.host, "auto");
 		assert.equal(ax?.queue, true);
 		assert.equal(ax?.app, "Yarn");
-		// Phase 1 is Yarn-only since 2026-08-01: no arm carries a URL, and every one targets
-		// the same app so the four differ ONLY in perception and backend.
-		assert.deepEqual(fake.calls.filter((c) => c.url), []);
-		assert.ok(fake.calls.every((c) => c.app === "Yarn"), "every phase-1 arm targets Yarn");
+		// Discovery stopped being Yarn-only on 2026-08-03: the second app brings its own passes,
+		// because a map is per-target and Yarn's says nothing about Notion. What still holds is
+		// the property the old assertion was really protecting — every URL-carrying pass names
+		// the SAME target as the app it declares, so a web arm can never silently ground one
+		// site's map onto another's runs.
+		const web = fake.calls.filter((c) => c.url);
+		assert.equal(web.length, 2, "the second app's full-perception and no-vision passes");
+		for (const c of web) assert.equal(c.app, c.url, `${c.url} dispatched under app ${c.app}`);
+		assert.ok(
+			fake.calls.every((c) => c.app === "Yarn" || c.url),
+			"a Discovery arm targets Yarn or declares the URL it targets — never neither",
+		);
 		// Every accepted job landed in the manifest, uncollected.
 		const m = readManifest(DATE, liveDir(dir));
-		assert.equal(m.entries.length, 11);
+		assert.equal(m.entries.length, 13);
 		assert.ok(m.entries.every((e) => !e.collected && e.host === "mac1"));
 	});
 });
@@ -323,18 +481,18 @@ test("runPhase__ShapesOptionsPerArm__When__Phase2Dispatches", async () => {
 		// Phase-1 gate satisfied: both Yarn explores collected.
 		let m = readManifest(DATE, liveDir(dir));
 		m = recordSubmissions(m, [
-			entry("p1-explore-ax", "explore-a", { collected: true, state: "done" }),
-			entry("p1-explore-cdp", "explore-c", { collected: true, state: "done" }),
+			entry("explore-ax", "explore-a", { collected: true, state: "done" }),
+			entry("explore-cdp", "explore-c", { collected: true, state: "done" }),
 			// The vision-only pass has to be collected too, and the gate is right to insist:
-			// p2-vision-only-grounded-visionmap reads the `.vision` map this pass writes, and
+			// vision-only-grounded-visionmap reads the `.vision` map this pass writes, and
 			// with no map loadGrounding degrades to provenance "none" — the arm would run as a
 			// silent duplicate of the ungrounded one. Phase 2 refusing here IS the protection.
-			entry("p1-explore-vision", "explore-v", { collected: true, state: "done" }),
-			entry("p1-explore-no-vision", "explore-nv", { collected: true, state: "done" }),
-			entry("p1-explore-ax-noaxdom", "explore-na", { collected: true, state: "done" }),
-			entry("p1-explore-ax-noaxdom-no-vision", "explore-nanv", { collected: true, state: "done" }),
-			entry("p1-explore-cdp-no-vision", "explore-cnv", { collected: true, state: "done" }),
-			entry("p1-explore-vision-cdp", "explore-vcdp", { collected: true, state: "done" }),
+			entry("explore-vision", "explore-v", { collected: true, state: "done" }),
+			entry("explore-no-vision", "explore-nv", { collected: true, state: "done" }),
+			entry("explore-ax-noaxdom", "explore-na", { collected: true, state: "done" }),
+			entry("explore-ax-noaxdom-no-vision", "explore-nanv", { collected: true, state: "done" }),
+			entry("explore-cdp-no-vision", "explore-cnv", { collected: true, state: "done" }),
+			entry("explore-vision-cdp", "explore-vcdp", { collected: true, state: "done" }),
 		]);
 		writeManifest(m, liveDir(dir));
 
@@ -366,11 +524,23 @@ test("runPhase__ShapesOptionsPerArm__When__Phase2Dispatches", async () => {
 		// third — the machine-written-appmap arm — was cut, which is why no dispatch carries
 		// appmapVariant: the variant it asked for resolves to a file that does not exist, and
 		// a missing map degrades to no grounding at all rather than failing.
-		// Four vision-only arms × 3. Exactly ONE carries appmapVariant: the arm grounded on the
-		// vision-written map. The others are the ungrounded floor, the ax-written map, and the
-		// curated notes — all four differ only in which grounding tier they read.
-		assert.equal(byFlag((c) => c.noAx === true).length, 12);
-		assert.equal(byFlag((c) => c.appmapVariant === "vision").length, 3);
+		// EIGHT vision-only arms x 3 since the stage reorganisation (2026-08-03), which brought
+		// the four cdp vision-only cells home from phase 7. They were never a separate question:
+		// same task, same model, a grounding tier the ax half of the grid already had — one of
+		// them says exactly that in its own `informs` ("completes the grid ax already has").
+		// 30 since the snap pair: both are vision-only (they refine ACTUATION, not perception),
+		// so they carry --no-ax like every other vision-only cell.
+		assert.equal(byFlag((c) => c.noAx === true).length, 30);
+		// Split by actuator, so the perception condition is measured against both rather than
+		// only the one whose click path misses by ~40px on this app.
+		assert.equal(byFlag((c) => c.noAx === true && c.backend === "ax").length, 12);
+		// 18 on cdp: the four original vision-only cdp cells plus the snap pair, which is
+		// vision-only by construction — it refines the coordinate, never the perception.
+		assert.equal(byFlag((c) => c.noAx === true && c.backend === "cdp").length, 18);
+		// THREE arms read the vision-written map, x3 each: the vision-only ax consumer, its cdp
+		// twin, and — the interesting one — a full-perception cdp agent handed the same pixel-written
+		// map, which is what separates "bad map" from "reader that cannot act on a good one".
+		assert.equal(byFlag((c) => c.appmapVariant === "vision").length, 9);
 		// The Notion Calendar slice was cut, so phase 2 must dispatch nothing for it — the
 		// assertion is kept (inverted) rather than deleted, so a careless restore that skips
 		// the fleet-install prereq trips a test instead of burning 8 runs on exit 3.
@@ -408,12 +578,12 @@ test("runPhase__SubmitsOnlyMissingSamples__When__ManifestAlreadyHoldsSome", asyn
 	await withTempAsync("bench-", async (dir) => {
 		let m = readManifest(DATE, liveDir(dir));
 		m = recordSubmissions(m, [
-			entry("p1-explore-ax", "explore-a"),
-			entry("p1-explore-cdp", "explore-c"),
-			entry("p1-explore-vision", "explore-v"),
-			entry("p1-explore-ax-noaxdom", "explore-na"),
-			entry("p1-explore-ax-noaxdom-no-vision", "explore-nanv"),
-			entry("p1-explore-cdp-no-vision", "explore-cnv"),
+			entry("explore-ax", "explore-a"),
+			entry("explore-cdp", "explore-c"),
+			entry("explore-vision", "explore-v"),
+			entry("explore-ax-noaxdom", "explore-na"),
+			entry("explore-ax-noaxdom-no-vision", "explore-nanv"),
+			entry("explore-cdp-no-vision", "explore-cnv"),
 		]);
 		writeManifest(m, liveDir(dir));
 
@@ -422,7 +592,7 @@ test("runPhase__SubmitsOnlyMissingSamples__When__ManifestAlreadyHoldsSome", asyn
 		assert.equal(code, EXIT_OK);
 		// ax and cdp are n=2, so seeding one sample of each leaves one of each outstanding,
 		// plus the un-seeded no-vision pass and the vision-only cdp pass.
-		assert.equal(fake.calls.length, 5);
+		assert.equal(fake.calls.length, 7);
 	});
 });
 
@@ -430,8 +600,8 @@ test("runPhase__CompilesLocallyAndDispatchesReplays__When__Phase3HasCleanSources
 	await withTempAsync("bench-", async (dir) => {
 		let m = readManifest(DATE, liveDir(dir));
 		m = recordSubmissions(m, [
-			entry("p2-ax-grounded", "run-ax-1", { collected: true, state: "done", metrics: { success: true, finalCheckVerified: true } }),
-			entry("p2-cdp-grounded", "run-cdp-1", { collected: true, state: "done", metrics: { success: false } }),
+			entry("ax-grounded", "run-ax-1", { collected: true, state: "done", metrics: { success: true, finalCheckVerified: true } }),
+			entry("cdp-grounded", "run-cdp-1", { collected: true, state: "done", metrics: { success: false } }),
 		]);
 		writeManifest(m, liveDir(dir));
 
@@ -453,18 +623,19 @@ test("runPhase__CompilesLocallyAndDispatchesReplays__When__Phase3HasCleanSources
 		// Only the ax source is clean; the cdp compile waits for a successful cdp run.
 		assert.deepEqual(compiled, ["run-ax-1"]);
 
-		// Only the ax replay arm dispatches: p3-replay-norescue moved to cdp on 2026-08-01 (it
+		// Only the ax replay arm dispatches: replay-norescue moved to cdp on 2026-08-01 (it
 		// measures the unattended FLEET posture, a question about the shipping actuator), so it
 		// waits on the cdp compile like every other cdp replay.
-		assert.equal(fake.calls.length, 3);
-		for (const c of fake.calls) {
-			assert.equal(c.kind, "replay");
-			assert.match(c.recipe ?? "", /recipe\.json$/);
-		}
-		assert.equal(fake.calls.filter((c) => c.noRescue === true).length, 0, "the no-rescue arm is cdp now and defers with the others");
+		// Reuse holds recipes AND procedures since 2026-08-03, so the stage dispatches both tiers
+		// in one go and the replay claim has to name its own slice. The mixed readiness is the
+		// wave loop's job: replays wait on compiles, procedure arms on promote.
+		const replays = fake.calls.filter((c) => c.kind === "replay");
+		assert.equal(replays.length, 3);
+		for (const c of replays) assert.match(c.recipe ?? "", /recipe\.json$/);
+		assert.equal(replays.filter((c) => c.noRescue === true).length, 0, "the no-rescue arm is cdp now and defers with the others");
 
 		const after = readManifest(DATE, liveDir(dir));
-		const compileEntry = after.entries.find((e) => e.armId === "p3-compile-ax");
+		const compileEntry = after.entries.find((e) => e.armId === "compile-ax");
 		assert.equal(compileEntry?.host, "local");
 		assert.equal(compileEntry?.collected, true);
 		assert.match(compileEntry?.recipe ?? "", /recipe\.json$/);
@@ -474,7 +645,7 @@ test("runPhase__CompilesLocallyAndDispatchesReplays__When__Phase3HasCleanSources
 test("runPhase__RecordsCompileRefusal__When__CompileFnThrows", async () => {
 	await withTempAsync("bench-", async (dir) => {
 		let m = readManifest(DATE, liveDir(dir));
-		m = recordSubmissions(m, [entry("p2-ax-grounded", "run-hinted", { collected: true, state: "done", metrics: { success: true } })]);
+		m = recordSubmissions(m, [entry("ax-grounded", "run-hinted", { collected: true, state: "done", metrics: { success: true } })]);
 		writeManifest(m, liveDir(dir));
 
 		const fake = fakeDispatch();
@@ -489,11 +660,12 @@ test("runPhase__RecordsCompileRefusal__When__CompileFnThrows", async () => {
 			log: () => {},
 		});
 		const after = readManifest(DATE, liveDir(dir));
-		const refusal = after.entries.find((e) => e.armId === "p3-compile-ax");
+		const refusal = after.entries.find((e) => e.armId === "compile-ax");
 		assert.equal(refusal?.state, "failed");
 		assert.match(refusal?.note ?? "", /--hinted/);
-		// No recipe means every ax replay deferred rather than dispatched without one.
-		assert.equal(fake.calls.length, 0);
+		// No recipe means every ax replay deferred rather than dispatching without one. Scoped to
+		// replays: Reuse also dispatches the procedure tier, which does not wait on a compile.
+		assert.equal(fake.calls.filter((c) => c.kind === "replay").length, 0);
 	});
 });
 
@@ -503,7 +675,7 @@ test("plannedRuns__ExcludesCompileArms__When__Phase3Planned", () => {
 });
 
 test("dispatchOptionsFor__CarriesRecipeAndQueue__When__ReplayArm", () => {
-	const arm = armById("p3-replay-norescue")!;
+	const arm = armById("replay-norescue")!;
 	const o = dispatchOptionsFor(arm, "docs/recipes/yarn.abc.recipe.json");
 	assert.equal(o.kind, "replay");
 	assert.equal(o.queue, true);
@@ -516,11 +688,11 @@ test("findCompileSource__SkipsTriedStamps__When__PreviousCompileRefused", () => 
 		date: DATE,
 		createdAt: "",
 		entries: [
-			entry("p2-ax-grounded", "run-1", { collected: true, metrics: { success: true } }),
-			entry("p2-ax-grounded", "run-2", { collected: true, metrics: { success: true } }),
+			entry("ax-grounded", "run-1", { collected: true, metrics: { success: true } }),
+			entry("ax-grounded", "run-2", { collected: true, metrics: { success: true } }),
 		],
 	};
-	assert.equal(findCompileSource(m, "p2-ax-grounded", new Set(["run-1"]), BENCH_PRIMARY_MODEL)?.jobId, "run-2");
+	assert.equal(findCompileSource(m, "ax-grounded", new Set(["run-1"]), BENCH_PRIMARY_MODEL)?.jobId, "run-2");
 });
 
 // --- collect: metrics off fixture artifacts ---
@@ -688,7 +860,7 @@ test("collect__MarksEntryWithMetrics__When__TaskRunArtifactsArePresent", async (
 			`${JSON.stringify({ kind: "setting", control: "Cursor Style", surface: "Screen Clip Settings", scope: "brand", before: "Arrow-first", after: "Pointer-first", step: 3 })}\n`,
 		);
 		let m = readManifest(DATE, liveDir(outRoot));
-		m = recordSubmissions(m, [entry("p2-ax-grounded", "job-1")]);
+		m = recordSubmissions(m, [entry("ax-grounded", "job-1")]);
 		writeManifest(m, liveDir(outRoot));
 
 		const outcome = await collect({
@@ -716,7 +888,7 @@ test("collect__PullsNothingAgain__When__RunASecondTime", async () => {
 		fs.mkdirSync(path.join(dir, "out/runs"), { recursive: true });
 		fs.writeFileSync(path.join(dir, "out/runs/job-1.json"), JSON.stringify(RUN_LOG));
 		let m = readManifest(DATE, liveDir(outRoot));
-		m = recordSubmissions(m, [entry("p2-ax-grounded", "job-1")]);
+		m = recordSubmissions(m, [entry("ax-grounded", "job-1")]);
 		writeManifest(m, liveDir(outRoot));
 
 		let pulls = 0;
@@ -745,7 +917,7 @@ test("collect__LeavesEntryPending__When__JobStillRunning", async () => {
 	await withTempAsync("bench-", async (dir) => {
 		const outRoot = path.join(dir, "out");
 		let m = readManifest(DATE, liveDir(outRoot));
-		m = recordSubmissions(m, [entry("p2-ax-grounded", "job-1")]);
+		m = recordSubmissions(m, [entry("ax-grounded", "job-1")]);
 		writeManifest(m, liveDir(outRoot));
 
 		const outcome = await collect({
@@ -766,7 +938,7 @@ test("collect__CountsRunAsFailure__When__TerminalJobHasNoRunLog", async () => {
 	await withTempAsync("bench-", async (dir) => {
 		const outRoot = path.join(dir, "out");
 		let m = readManifest(DATE, liveDir(outRoot));
-		m = recordSubmissions(m, [entry("p2-ax-grounded", "job-1")]);
+		m = recordSubmissions(m, [entry("ax-grounded", "job-1")]);
 		writeManifest(m, liveDir(outRoot));
 
 		const outcome = await collect({
@@ -793,7 +965,7 @@ test("collect__EvictsFailedRunFromLiveKeepingItsManifestRow__When__EntryIsTermin
 		fs.mkdirSync(runDir("job-bad", outRoot), { recursive: true });
 		fs.writeFileSync(path.join(runDir("job-bad", outRoot), RUN_FILES.log), JSON.stringify({ ...RUN_LOG, success: false }));
 		let m = readManifest(DATE, liveDir(outRoot));
-		m = recordSubmissions(m, [entry("p2-ax-grounded", "job-ok"), entry("p2-ax-grounded", "job-bad")]);
+		m = recordSubmissions(m, [entry("ax-grounded", "job-ok"), entry("ax-grounded", "job-bad")]);
 		writeManifest(m, liveDir(outRoot));
 
 		const outcome = await collect({
@@ -823,7 +995,7 @@ test("collect__RefusesEvictionAndNotesWhy__When__TheBackupCannotBeTaken", async 
 		fs.mkdirSync(runDir("job-bad", outRoot), { recursive: true });
 		fs.writeFileSync(path.join(runDir("job-bad", outRoot), RUN_FILES.log), JSON.stringify({ ...RUN_LOG, success: false }));
 		let m = readManifest(DATE, liveDir(outRoot));
-		m = recordSubmissions(m, [entry("p2-ax-grounded", "job-bad")]);
+		m = recordSubmissions(m, [entry("ax-grounded", "job-bad")]);
 		writeManifest(m, liveDir(outRoot));
 		// A FILE where the archive root belongs: every mkdir under it fails, so the backup cannot
 		// be taken and eviction must refuse rather than delete the only copy.
@@ -858,7 +1030,7 @@ test("collect__ParsesAppmapArtifacts__When__ExploreEntryIsTerminal", async () =>
 			JSON.stringify({ nodes: [{ id: "a", title: "A", kind: "surface", scope: "brand" }], edges: [] }),
 		);
 		let m = readManifest(DATE, liveDir(outRoot));
-		m = recordSubmissions(m, [entry("p1-explore-ax", "explore-1")]);
+		m = recordSubmissions(m, [entry("explore-ax", "explore-1")]);
 		writeManifest(m, liveDir(outRoot));
 
 		const job = { ...doneJob("explore-1", {}), kind: "explore", artifacts: { log: "out/jobs/explore-1/log.txt", appmap: "docs/appmaps/yarn.md", appmapGraph: "docs/appmaps/yarn.json" } } as JobRecord;
@@ -884,13 +1056,13 @@ test("renderReport__ListsStampsAndSections__When__ManifestHasEntries", () => {
 		date: DATE,
 		createdAt: "",
 		entries: [
-			entry("p2-ax-grounded", "job-1", { collected: true, state: "done", metrics: { success: true, steps: 4, elapsedSec: 52, modelCalls: 6, mutationScopes: ["brand"], queueWaitSec: 12, runSec: 60 } }),
-			entry("p2-ax-ungrounded", "job-2"),
+			entry("ax-grounded", "job-1", { collected: true, state: "done", metrics: { success: true, steps: 4, elapsedSec: 52, modelCalls: 6, mutationScopes: ["brand"], queueWaitSec: 12, runSec: 60 } }),
+			entry("ax-ungrounded", "job-2"),
 		],
 	};
 	const md = renderReport(m);
-	assert.match(md, /## Phase 1 — node discovery/);
-	assert.match(md, /## Phase 2 — backend × grounding \(core\)/);
+	assert.match(md, /## Stage 1 — Discovery/);
+	assert.match(md, /## Stage 2 — Configuration: backend × grounding \(core\)/);
 	// Notion was killed as an approach (David, 2026-08-01), so the SECTION it rendered — empty
 	// ever since the slice was cut — goes with it. An empty table reads as "we measured this and
 	// found nothing", which is the opposite of what happened.
@@ -901,7 +1073,7 @@ test("renderReport__ListsStampsAndSections__When__ManifestHasEntries", () => {
 	const headings = md.split("\n").filter((l) => l.startsWith("## "));
 	assert.deepEqual(headings.filter((h) => /notion/i.test(h)), [], "no section may exist for arms that do not");
 	assert.match(md, /Notion arm was cut|Notion cut entirely/, "the cut should stay visible as a stated limit");
-	assert.match(md, /## Phase 3 — recipes/);
+	assert.match(md, /## Stage 3 — Reuse: recipes/);
 	assert.match(md, /## Timing/);
 	assert.match(md, /## For Aman/);
 		// The stamp line now names the MODEL too, because the pass declares one — that is the
@@ -909,7 +1081,7 @@ test("renderReport__ListsStampsAndSections__When__ManifestHasEntries", () => {
 	assert.match(md, /`job-1` \(mac1, azure\/gpt-5\.6-sol\)/);
 	assert.match(md, /`job-2` \(mac1, azure\/gpt-5\.6-sol, uncollected\)/);
 	// The collected arm's row carries its numbers; the arm with no collected runs shows —.
-	assert.match(md, /\| p2-ax-grounded \|[^\n]*\| 1\/3 \| 1\/1 \| — \| 4 \| 52 \| 6 \|/);
+	assert.match(md, /\| ax-grounded \|[^\n]*\| 1\/3 \| 1\/1 \| — \| 4 \| 52 \| 6 \|/);
 	assert.match(md, /TODO: which backend/);
 });
 
@@ -933,12 +1105,12 @@ test("runPhase__ScopesSampleCountsToTheModelPass__When__TwoModelsRunTheMatrix", 
 	await withTempAsync("bench-", async (dir) => {
 		const a = fakeDispatch();
 		await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: a.fn, log: () => {}, model: "openai/gpt-5.6-sol:nitro" });
-		assert.equal(a.calls.length, 11, "pass A submits the full phase");
+		assert.equal(a.calls.length, 13, "pass A submits the full phase");
 		for (const c of a.calls) assert.equal(c.model, "openai/gpt-5.6-sol:nitro");
 
 		const b = fakeDispatch();
 		await runPhase(1, { go: true, date: DATE, outRoot: dir, dispatchFn: b.fn, log: () => {}, model: "claude-fable-5" });
-		assert.equal(b.calls.length, 11, "pass B submits the full phase again — pass A's entries are not its samples");
+		assert.equal(b.calls.length, 13, "pass B submits the full phase again — pass A's entries are not its samples");
 		for (const c of b.calls) assert.equal(c.model, "claude-fable-5");
 
 		// And a re-run of pass A tops up nothing.
@@ -966,12 +1138,12 @@ test("runPhase__GatesPhase2OnThisPassesExplores__When__AnotherModelAlreadyExplor
 });
 
 test("archiveDirFor__KeysOnModelArmAndJob__When__PassesOrSamplesShareOneManifest", () => {
-	const base = { armId: "p1-explore-ax", jobId: "j", host: "mac1", submittedAt: "", state: "done", collected: true };
+	const base = { armId: "explore-ax", jobId: "j", host: "mac1", submittedAt: "", state: "done", collected: true };
 	const sol = archiveDirFor("/bench/2026-07-31", { ...base, model: "openai/gpt-5.6-sol:nitro" });
 	const fable = archiveDirFor("/bench/2026-07-31", { ...base, model: "claude-fable-5" });
 	assert.notEqual(sol, fable, "each model pass archives its own maps");
-	assert.match(sol, /appmaps\/openai-gpt-5.6-sol-nitro\/p1-explore-ax\/j$/);
-	assert.match(archiveDirFor("/b", base), /appmaps\/default\/p1-explore-ax\/j$/);
+	assert.match(sol, /appmaps\/openai-gpt-5.6-sol-nitro\/explore-ax\/j$/);
+	assert.match(archiveDirFor("/b", base), /appmaps\/default\/explore-ax\/j$/);
 
 	// And per JOB, because an explore arm now runs n=2: both samples write the same live
 	// filename on their own Macs, so an arm-keyed archive would keep only the one collected
@@ -1000,7 +1172,7 @@ test("failureKind__ClassifiesEachShape__When__RunsFailDifferently", () => {
 
 test("poisonedHosts__FlagsTheHost__When__LastThreeRunsFailIdentically", () => {
 	const entry = (host: string, jobId: string, kind?: string, success = false) => ({
-		armId: "p2-ax-grounded", jobId, host, submittedAt: "", state: "done", collected: true,
+		armId: "ax-grounded", jobId, host, submittedAt: "", state: "done", collected: true,
 		metrics: { success, ...(kind ? { failureKind: kind } : {}) },
 	}) as any;
 	const m = (entries: any[]) => ({ date: "2026-07-31", createdAt: "", entries }) as any;
@@ -1070,7 +1242,7 @@ test("armAppmapSlug__GivesEveryExploreArmItsOwnFile__When__TheMatrixIsWalked", (
 	// the survivor is decided by explore ordering. That happened twice on 2026-08-01: first
 	// every Yarn explore wrote yarn.json (ax 156 nodes, cdp 196, no-vision 180 — last writer
 	// won), then the first fix added the BACKEND but not the perception tier, so
-	// p1-explore-ax and p1-explore-no-vision still collided. Neither was visible in any test
+	// explore-ax and explore-no-vision still collided. Neither was visible in any test
 	// because the arms individually looked fine; only the pair was wrong.
 	const explores = MATRIX.filter((a) => a.kind === "explore");
 	const byslug = new Map<string, string[]>();
@@ -1080,11 +1252,11 @@ test("armAppmapSlug__GivesEveryExploreArmItsOwnFile__When__TheMatrixIsWalked", (
 
 	// And every dimension that varies must actually appear in the name, or a future arm
 	// varying only in that dimension collides silently.
-	const yarnAx = explores.find((a) => a.id === "p1-explore-ax");
+	const yarnAx = explores.find((a) => a.id === "explore-ax");
 	assert.ok(yarnAx);
 	assert.equal(armAppmapSlug(yarnAx), "yarn.ax", "backend in the name");
-	assert.equal(armAppmapSlug(explores.find((a) => a.id === "p1-explore-no-vision")!), "yarn.ax.novision", "perception tier in the name");
-	assert.equal(armAppmapSlug(explores.find((a) => a.id === "p1-explore-vision")!), "yarn.ax.vision", "vision-only tier in the name");
+	assert.equal(armAppmapSlug(explores.find((a) => a.id === "explore-no-vision")!), "yarn.ax.novision", "perception tier in the name");
+	assert.equal(armAppmapSlug(explores.find((a) => a.id === "explore-vision")!), "yarn.ax.vision", "vision-only tier in the name");
 	// The web arms are gone, but the derivation must still handle a URL target — restoring
 	// them must not require rediscovering that a host and a backend both belong in the name.
 	assert.equal(appmapSlug("https://app.notion.com", { backend: "cdp" }), "web-app.notion.com.cdp");
@@ -1097,10 +1269,10 @@ test("armAppmapSlug__IsWhatTaskArmsWillRead__When__TheyGroundOnAPass", () => {
 	// controls for reasons that read as backend weakness.
 	const exploreFor = (backend: string) => MATRIX.find((a) => a.kind === "explore" && a.dispatch.backend === backend && !a.dispatch.noAx && !a.dispatch.noVision && a.app === "Yarn");
 	for (const backend of ["ax", "cdp"]) {
-		const task = MATRIX.find((a) => a.id === `p2-${backend}-grounded`);
+		const task = MATRIX.find((a) => a.id === `${backend}-grounded`);
 		const explore = exploreFor(backend);
 		assert.ok(task && explore, backend);
-		assert.equal(armAppmapSlug(task), armAppmapSlug(explore), `p2-${backend}-grounded must read what p1-explore-${backend} wrote`);
+		assert.equal(armAppmapSlug(task), armAppmapSlug(explore), `${backend}-grounded must read what explore-${backend} wrote`);
 	}
 });
 
@@ -1123,7 +1295,7 @@ test("armTitle__NamesTheArmWithoutRepeatingPerception__When__ShownBesideIt", () 
 
 test("MATRIX__ConsumesEveryMapItProduces__When__ExploresAndTaskArmsArePaired", () => {
 	// A grounding pass costs ~30 minutes and ~$14. One whose map no arm reads is that spent
-	// for a comparison alone — which is what p1-explore-no-vision was until APPMAP_VARIANT
+	// for a comparison alone — which is what explore-no-vision was until APPMAP_VARIANT
 	// learned "novision". The reverse is worse: an arm reading a map nothing writes finds
 	// nothing, and loadGrounding degrades a miss to provenance "none" — ungrounded under a
 	// grounded label, the failure mode this matrix has hit three separate ways.
@@ -1161,10 +1333,10 @@ test("groundingChecked__FlagsARunThatDidNotGetItsDeclaredGrounding__When__Proven
 	// for a whole class: a map that never synced to the host, a variant that never crossed the
 	// wire, a slug naming a sibling's file. Each produces a plausible number under a confident
 	// label, and loadGrounding turns a missing map into provenance "none" without complaint.
-	const grounded = MATRIX.find((a) => a.id === "p2-ax-grounded")!;
-	const ungrounded = MATRIX.find((a) => a.id === "p2-ax-ungrounded")!;
-	const curated = MATRIX.find((a) => a.id === "p2-curated")!;
-	const visionmap = MATRIX.find((a) => a.id === "p2-vision-only-grounded-visionmap")!;
+	const grounded = MATRIX.find((a) => a.id === "ax-grounded")!;
+	const ungrounded = MATRIX.find((a) => a.id === "ax-ungrounded")!;
+	const curated = MATRIX.find((a) => a.id === "curated")!;
+	const visionmap = MATRIX.find((a) => a.id === "vision-only-grounded-visionmap")!;
 
 	assert.equal(expectedProvenance(grounded), "explore");
 	assert.equal(expectedProvenance(ungrounded), "none");
@@ -1207,7 +1379,9 @@ test("MATRIX__FilmsEveryMeasuredConfig__When__PhaseFiveIsDerived", () => {
 	// Phase 8 is excluded: it is a diagnostics PAIR (one plain arm, one filmed) where the filmed
 	// half IS the measurement — staging the window is the perturbation under test. Deriving a
 	// twin would film the same config twice and compare a run against itself.
-	const measured = MATRIX.filter((a) => a.phase !== 5 && a.phase !== 8 && (a.kind === "task" || a.kind === "replay"));
+	// Scoped to BENCH_APP since 2026-08-03: the deliverable is footage of the PRODUCT, so the
+	// second-app arms are measured and deliberately unfilmed.
+	const measured = MATRIX.filter((a) => a.app === BENCH_APP && stageOf(a.phase)?.kind === "measurement" && (a.kind === "task" || a.kind === "replay"));
 	const filmed = MATRIX.filter((a) => a.phase === 5);
 	const shape = (a: Arm) => JSON.stringify({ ...a.dispatch, record: undefined, env: a.env ?? null });
 
@@ -1216,7 +1390,7 @@ test("MATRIX__FilmsEveryMeasuredConfig__When__PhaseFiveIsDerived", () => {
 	for (const m of measured) assert.ok(filmedShapes.has(shape(m)), `${m.id} is measured but never filmed`);
 	// Including the floor and the minimum-context pair — the reorder question (does demo
 	// conduct break this config?) applies hardest where the config is already marginal.
-	for (const id of ["p2-min-context-ungrounded", "p2-vision-only-ungrounded"]) {
+	for (const id of ["min-context-ungrounded", "vision-only-ungrounded"]) {
 		const m = MATRIX.find((a) => a.id === id);
 		assert.ok(m && filmedShapes.has(shape(m)), `${id} has no filmed twin`);
 	}
@@ -1255,7 +1429,7 @@ test("submittedCount__SkipsTechnicalFailures__When__ARunDiedProducingNothing", (
 	// `bench phase --go` uses, so excluding these makes the next run of the phase refill them —
 	// one code path for "submit what is missing", whatever the reason it is missing.
 	const e = (jobId: string, over: Partial<ManifestEntry> = {}): ManifestEntry => ({
-		armId: "p1-explore-cdp",
+		armId: "explore-cdp",
 		jobId,
 		host: "mac1",
 		submittedAt: "2026-08-01T06:00:00.000Z",
@@ -1268,14 +1442,14 @@ test("submittedCount__SkipsTechnicalFailures__When__ARunDiedProducingNothing", (
 		createdAt: "2026-08-01T06:00:00.000Z",
 		entries: [e("a"), e("b", { state: "failed", technical: { kind: "crashed", detail: "died on acquisition" } }), e("c")],
 	};
-	assert.equal(submittedCount(m, "p1-explore-cdp"), 2, "the crashed run must not consume a sample");
+	assert.equal(submittedCount(m, "explore-cdp"), 2, "the crashed run must not consume a sample");
 	// The entry STAYS — "two runs died acquiring the app" is worth knowing, and deleting the
 	// evidence would make a broken Mac look like a slow one.
-	assert.equal(entriesForArm(m, "p1-explore-cdp").length, 3);
+	assert.equal(entriesForArm(m, "explore-cdp").length, 3);
 });
 
 test("technicalFailure__SeparatesHarnessFromAgent__When__ARunFails", () => {
-	const explore = armById("p1-explore-cdp");
+	const explore = armById("explore-cdp");
 	// Died before producing anything → not a result.
 	assert.equal(technicalFailure("orphaned", {}, explore, [])?.kind, "orphaned");
 	assert.equal(technicalFailure("failed", { failureKind: "crashed" }, explore, [])?.kind, "crashed");
@@ -1420,6 +1594,9 @@ test("watchPhase__DispatchesTheNextPhaseOnce__When__ThenIsGiven", async () => {
 			const fired: number[] = [];
 			const lines: string[] = [];
 			const p = await watchPhase({
+				// The live default polls the fleet and can CANCEL queued jobs; watchPhase refuses to run
+				// without an injected one under test, for the same reason collectFn does.
+				rebalanceFn: async () => [],
 				phase: 1,
 				then: 2,
 				date: DATE,
@@ -1457,7 +1634,7 @@ test("watchPhase__NeverTouchesRuns__When__ItGivesUp", async () => {
 });
 
 test("technicalFailure__CatchesADemotedExplore__When__NothingWasPublished", () => {
-	// The miscount from 2026-08-01, as a test. p1-explore-no-vision and p1-explore-ax-noaxdom
+	// The miscount from 2026-08-01, as a test. explore-no-vision and explore-ax-noaxdom
 	// both published NO map — one left the previous day's file in place, the other wrote none —
 	// yet both were classified non-technical and counted as delivered samples, so re-running the
 	// phase would not have replaced them.
@@ -1469,7 +1646,7 @@ test("technicalFailure__CatchesADemotedExplore__When__NothingWasPublished", () =
 	//
 	// The product of an explore arm is a PUBLISHED map, because that is what the next phase
 	// reads. So publication is the test.
-	const explore = armById("p1-explore-ax-noaxdom");
+	const explore = armById("explore-ax-noaxdom");
 	assert.ok(explore, "fixture arm must exist");
 	assert.equal(technicalFailure("failed", {}, explore, ["map not published to docs/appmaps/yarn.ax.noaxdom.md — pass was demoted or superseded"])?.kind, "crashed");
 	// Still catches the older shape, where nothing was written at all.
@@ -1483,14 +1660,14 @@ test("collectEntry__FlagsAnUnpublishedMap__When__TheRunOnlyWroteItsOwnCopy", () 
 	// writeArtifacts and the classifier — a unit test that feeds the note directly (which the
 	// original did) passes while production silently does the wrong thing.
 	withTemp("collect-pub-", (dir) => {
-		const arm = armById("p1-explore-ax-noaxdom")!;
+		const arm = armById("explore-ax-noaxdom")!;
 		const slug = armAppmapSlug(arm);
 		const jobId = "explore-demoted";
 		const dataOut = path.join(dir, "out");
 		const stamp = "<!-- provenance: explore | app: Yarn | actions: 24 -->\n";
 
 		// The run folder holds a map (a demoted pass writes one); docs/appmaps holds an OLDER,
-		// different file for the same slug — exactly what p1-explore-no-vision left behind.
+		// different file for the same slug — exactly what explore-no-vision left behind.
 		fs.mkdirSync(runDir(jobId, dataOut), { recursive: true });
 		fs.writeFileSync(runPath(jobId, RUN_FILES.appmap, dataOut), `${stamp}demoted pass\n`);
 		fs.mkdirSync(path.join(dir, "docs", "appmaps"), { recursive: true });
@@ -1512,15 +1689,15 @@ test("renderReport__ShowsEveryRun__When__AnArmHasRepeatedSamples", () => {
 		date: DATE,
 		createdAt: "",
 		entries: [
-			entry("p1-explore-cdp", "job-a", { collected: true, state: "done", metrics: { controlsActuated: 136, graphNodes: 207, surfaces: 44 } }),
-			entry("p1-explore-cdp", "job-b", { collected: true, state: "done", metrics: { controlsActuated: 119, graphNodes: 144, surfaces: 12 } }),
+			entry("explore-cdp", "job-a", { collected: true, state: "done", metrics: { controlsActuated: 136, graphNodes: 207, surfaces: 44 } }),
+			entry("explore-cdp", "job-b", { collected: true, state: "done", metrics: { controlsActuated: 119, graphNodes: 144, surfaces: 12 } }),
 		],
 	};
 	// Scoped to the Phase 1 SECTION — later sections (Timing) list the same arm ids — and matched
-	// on the exact cell, because `p1-explore-cdp` is a prefix of `p1-explore-cdp-no-vision`.
+	// on the exact cell, because `explore-cdp` is a prefix of `explore-cdp-no-vision`.
 	const md = renderReport(m);
-	const phase1 = md.slice(md.indexOf("## Phase 1")).split("\n## ")[0];
-	const rows = phase1.split("\n").filter((l) => /^\| p1-explore-cdp \|/.test(l));
+	const phase1 = md.slice(md.indexOf("## Stage 1")).split("\n## ")[0];
+	const rows = phase1.split("\n").filter((l) => /^\| explore-cdp \|/.test(l));
 	assert.equal(rows.length, 2, "both samples must render");
 	assert.ok(
 		rows.some((r) => r.includes("| 136 |")) && rows.some((r) => r.includes("| 119 |")),
@@ -1547,9 +1724,9 @@ test("renderReport__MarksRescuedPasses__When__ARunSurvivedABlackout", () => {
 	const m: Manifest = {
 		date: DATE,
 		createdAt: "",
-		entries: [entry("p1-explore-ax", "job-x", { collected: true, state: "done", metrics: { controlsActuated: 85, blackouts: 1, relaunches: 1 } })],
+		entries: [entry("explore-ax", "job-x", { collected: true, state: "done", metrics: { controlsActuated: 85, blackouts: 1, relaunches: 1 } })],
 	};
-	assert.match(renderReport(m), /p1-explore-ax ⟲1/);
+	assert.match(renderReport(m), /explore-ax ⟲1/);
 });
 
 test("dispatchOptionsFor__PinsTheArmsOwnModel__When__ThePassRunsAnother", () => {
@@ -1557,11 +1734,11 @@ test("dispatchOptionsFor__PinsTheArmsOwnModel__When__ThePassRunsAnother", () => 
 	// "some runs with Claude" had nowhere to live short of re-dispatching a 45-run phase. An
 	// arm pin lets a few Claude cells sit beside their Sol twins in one pass — which is also the
 	// only way the report's per-model rows become a comparison instead of two separate tables.
-	const claude = MATRIX.find((a) => a.id === "p7-claude-cdp-grounded");
+	const claude = MATRIX.find((a) => a.id === "claude-cdp-grounded");
 	assert.ok(claude, "the Claude comparison arm must exist");
 	assert.equal(dispatchOptionsFor(claude!, undefined, "azure/gpt-5.6-sol").model, BENCH_ALT_MODEL);
 	// An unpinned arm still follows the pass.
-	const sol = MATRIX.find((a) => a.id === "p7-create-cdp-grounded");
+	const sol = MATRIX.find((a) => a.id === "create-cdp-grounded");
 	assert.equal(dispatchOptionsFor(sol!, undefined, "azure/gpt-5.6-sol").model, "azure/gpt-5.6-sol");
 });
 
@@ -1607,8 +1784,19 @@ test("runPhase__RecordsTheArmsOwnModel__When__AnArmIsPinnedToAnother", async () 
 	// under the pinned model, finds none, and re-dispatches the arm on every pass. Three Claude
 	// arms reached n=6 with "azure/gpt-5.6-sol" on all six rows before this was caught.
 	await withTempAsync("bench-pin-", async (dir) => {
+		// Generalization is map-gated now (2026-08-03): its creation arms are grounded, and
+		// dispatching them before Discovery lands would run them on provenance "none" under a
+		// grounded label. The old `phase === 2 || phase === 5` check missed this stage entirely.
+		// Seed the stage's OWN discovery dependencies. Hardcoding the Yarn explores broke the
+		// moment a second app joined Generalization — which is the point of discoveryArmsFor.
+		const seeded = recordSubmissions(
+			readManifest(DATE, liveDir(dir)),
+			discoveryArmsFor(4).map((a) => entry(a.id, `explore-${a.id}`, { collected: true, state: "done" })),
+		);
+		writeManifest(seeded, liveDir(dir));
+
 		const fake = fakeDispatch();
-		await runPhase(7, { go: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
+		await runPhase(4, { go: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
 		const claude = fake.calls.filter((c) => c.model === BENCH_ALT_MODEL);
 		assert.ok(claude.length > 0, "the Claude arms must dispatch as Claude");
 		const m = readManifest(DATE, liveDir(dir));
@@ -1626,7 +1814,7 @@ test("creationArms__CarryAStepBudgetThatFitsTheTask__When__TheDefaultWouldCutThe
 	// was the right fix against a default of 15 and the wrong one against a default of 100 with
 	// a stall detector: it put a ceiling back in front of a run that was still making progress.
 	// Three runs hit 30 with verified steps inside their last eight.
-	const create = MATRIX.filter((a) => a.id.startsWith("p7-create-"));
+	const create = MATRIX.filter((a) => a.id.startsWith("create-"));
 	assert.ok(create.length >= 15, "the creation task covers the phase-2 grid");
 	for (const a of create)
 		assert.ok(a.dispatch.steps === undefined || a.dispatch.steps > 19, `${a.id} caps below a known-good run's 19 steps`);
@@ -1694,4 +1882,28 @@ test("writeReport__WritesNothing__When__TheManifestIsEmpty", () => {
 		);
 		assert.equal(fs.existsSync(withRow), true);
 	});
+});
+
+test("snapPx__ReachesTheChild__When__AnArmDeclaresIt", () => {
+	// The wire has swallowed a declared field four separate times: useProcedures at the runner,
+	// --backend at the CLI, record and procedureLineage on the control side. Walk it end to end
+	// rather than trusting each layer to have been updated.
+	const arm = MATRIX.find((a) => a.id === "vision-only-cdp-snap24");
+	assert.ok(arm, "the snap arm must exist");
+	assert.equal(dispatchOptionsFor(arm!, undefined, BENCH_PRIMARY_MODEL).snapPx, 24);
+	const disp = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "remote", "control", "dispatch.ts"), "utf8");
+	assert.match(disp, /snapPx: opts\.snapPx/, "dispatch must put snapPx on the wire");
+	const serve = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "remote", "runner", "serve.ts"), "utf8");
+	assert.match(serve, /params\.snapPx/, "the runner must READ snapPx out of the request");
+	assert.match(serve, /SNAP_PX: String\(rec\.snapPx\)/, "and set it on the child");
+	const jobs = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "remote", "runner", "jobs.ts"), "utf8");
+	assert.match(jobs, /init\.snapPx/, "and persist it, or a queued job loses it across a runner restart");
+});
+
+test("snapArms__StayVisionOnly__When__TheyRefineActuation", () => {
+	// The snap stage must not become a back door to element PERCEPTION. The model still sees
+	// only pixels and still names its own target; only the coordinate is refined. An arm that
+	// dropped --no-ax would be plain element addressing under a name that claims otherwise.
+	for (const a of MATRIX.filter((x) => x.dispatch.snapPx))
+		assert.equal(a.dispatch.noAx, true, `${a.id} snaps but is not vision-only — that is just element addressing`);
 });

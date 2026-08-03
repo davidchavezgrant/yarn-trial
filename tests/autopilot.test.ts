@@ -16,7 +16,7 @@ import {
 	stageTitle,
 } from "../src/bench/autopilot.js";
 import { type Manifest, type ManifestEntry, readManifest, utcDate, writeManifest } from "../src/bench/manifest.js";
-import { BENCH_PRIMARY_MODEL, CANONICAL_TASK, type Phase, phaseArms } from "../src/bench/matrix.js";
+import { BENCH_PRIMARY_MODEL, CANONICAL_TASK, type Phase, phaseArms, procedureArms } from "../src/bench/matrix.js";
 import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, interruptedPass, runPhase } from "../src/bench/orchestrate.js";
 import { watchPhase } from "../src/bench/watch.js";
 import { procedureFileFor } from "../src/core/procedure.js";
@@ -73,10 +73,12 @@ test("orderedPhases__PutsFilmedPassLast__When__Phase5Requested", () => {
 	assert.deepEqual(orderedPhases([2, 2, 1] as Phase[]), [1, 2]);
 });
 
-test("planStages__InsertsJudgeHarvestPromoteBeforePhase6__When__Phase6Requested", () => {
-	const titles = planStages([1, 6] as Phase[]).map(stageTitle);
-	assert.deepEqual(titles, ["phase 1", "judge", "harvest", "promote", "phase 6", "final"]);
-	// Without phase 6 the pipeline stages don't appear — judging happens once, in final.
+test("planStages__InsertsJudgeHarvestPromote__When__AStageDeclaresThemInBefore", () => {
+	// Reuse declares before: [judge, harvest, promote]; the planner reads that rather than
+	// matching a phase number, so a future stage gets the same prep by saying so.
+	const titles = planStages([1, 3] as Phase[]).map(stageTitle);
+	assert.deepEqual(titles, ["phase 1", "judge", "harvest", "promote", "phase 3", "final"]);
+	// No stage that declares them → they don't appear; judging happens once, in final.
 	assert.deepEqual(planStages([1, 2] as Phase[]).map(stageTitle), ["phase 1", "phase 2", "final"]);
 });
 
@@ -114,7 +116,7 @@ test("autopilot__RefusesToStart__When__YesterdayHoldsAnInterruptedPass", async (
 		const prev = new Date(`${today}T00:00:00Z`);
 		prev.setUTCDate(prev.getUTCDate() - 1);
 		const yday = prev.toISOString().slice(0, 10);
-		writeManifest({ date: yday, createdAt: `${yday}T01:00:00.000Z`, entries: [entry("p1-explore-ax", "a")] }, liveDir(dir));
+		writeManifest({ date: yday, createdAt: `${yday}T01:00:00.000Z`, entries: [entry("explore-ax", "a")] }, liveDir(dir));
 
 		const lines: string[] = [];
 		const code = await autopilot({
@@ -135,7 +137,7 @@ test("autopilot__RefusesToStart__When__YesterdayHoldsAnInterruptedPass", async (
 
 test("interruptedPass__ReturnsNothing__When__TodayAlreadyHasEntries", async () => {
 	await withTempAsync("auto-", async (dir) => {
-		writeManifest(manifest([entry("p1-explore-ax", "a")]), liveDir(dir));
+		writeManifest(manifest([entry("explore-ax", "a")]), liveDir(dir));
 		assert.equal(interruptedPass(DATE, dir), undefined);
 	});
 });
@@ -195,13 +197,13 @@ test("driveToCompletion__StopsTheLine__When__TechnicalFailuresExceedTheBudget", 
 	// unattended means an arm dying on a broken host would be re-bought forever. Three deaths
 	// against a budget of two stops the line instead.
 	await withTempAsync("auto-", async (dir) => {
-		const dead = (j: string): ManifestEntry => entry("p1-explore-ax", j, { state: "failed", collected: false, technical: { kind: "crashed", detail: "died on acquisition" } });
+		const dead = (j: string): ManifestEntry => entry("explore-ax", j, { state: "failed", collected: false, technical: { kind: "crashed", detail: "died on acquisition" } });
 		writeManifest(manifest([dead("a"), dead("b"), dead("c")]), liveDir(dir));
 
 		let dispatched = 0;
 		const reason = await driveToCompletion(1, ctxFor(dir, { runPhaseFn: async () => (dispatched++, EXIT_OK) }));
 		assert.ok(reason && /retry budget/.test(reason), reason);
-		assert.ok(reason.includes("p1-explore-ax"));
+		assert.ok(reason.includes("explore-ax"));
 		assert.equal(dispatched, 0, "over budget must stop BEFORE spending more");
 	});
 });
@@ -259,7 +261,7 @@ test("driveToCompletion__MovesOnWithAFinding__When__AWholeWaveChangesNothing", a
 
 test("driveToCompletion__StopsBeforeDispatch__When__TheSpendCeilingIsReached", async () => {
 	await withTempAsync("auto-", async (dir) => {
-		writeManifest(manifest([entry("p1-explore-ax", "a", { metrics: { inputTokens: 2_000_000, outputTokens: 100_000, model: "claude-fable-5" } })]), liveDir(dir));
+		writeManifest(manifest([entry("explore-ax", "a", { metrics: { inputTokens: 2_000_000, outputTokens: 100_000, model: "claude-fable-5" } })]), liveDir(dir));
 		let dispatched = 0;
 		const reason = await driveToCompletion(1, ctxFor(dir, { maxUsd: 0.5, runPhaseFn: async () => (dispatched++, EXIT_OK) }));
 		assert.ok(reason && /spend ceiling/.test(reason), reason);
@@ -298,7 +300,7 @@ test("driveToCompletion__Resumes__When__UnreadyRunsPredateTheAutopilot", async (
 	await withTempAsync("auto-", async (dir) => {
 		const live = liveDir(dir);
 		const stale = (j: string): ManifestEntry =>
-			entry("p1-explore-ax", j, { state: "failed", collected: false, technical: { kind: "unready", detail: "exit 3" } });
+			entry("explore-ax", j, { state: "failed", collected: false, technical: { kind: "unready", detail: "exit 3" } });
 		writeManifest(manifest([stale("u1"), stale("u2"), stale("u3")]), live);
 
 		const reason = await driveToCompletion(
@@ -343,7 +345,7 @@ test("autopilot__RefusesToResume__When__TheLiveManifestWasWiped", async () => {
 	// a re-fire reported "0 submitted" — every arm looked done. The autopilot must not adopt a
 	// backup as the live pass.
 	await withTempAsync("auto-", async (dir) => {
-		writeManifest(manifest([entry("p1-explore-ax", "a")]), path.join(dir, "bench/archive"));
+		writeManifest(manifest([entry("explore-ax", "a")]), path.join(dir, "bench/archive"));
 		let dispatched = 0;
 		const lines: string[] = [];
 		const code = await autopilot({
@@ -370,6 +372,9 @@ test("watchPhase__StopsEarlyWithoutTouchingRuns__When__ProgressStallsPastTheBudg
 	// makes every poll report the same "9 samples owed" line, which is exactly a stall.
 	let polls = 0;
 	const progress = await watchPhase({
+		// The live default polls the fleet and can CANCEL queued jobs; watchPhase refuses to run
+		// without an injected one under test, for the same reason collectFn does.
+		rebalanceFn: async () => [],
 		phase: 1,
 		date: "2030-01-01",
 		intervalSec: 15,
@@ -408,9 +413,9 @@ test("overRetryBudget__IgnoresHonestFailures__When__RunsFailedOnTheirMerits", ()
 	// Only TECHNICAL failures count against the budget: an agent that ran and gave up is a
 	// measurement, and stopping the line on measurements would end every honest pass early.
 	const m = manifest([
-		entry("p2-ax-grounded", "a", { state: "failed", metrics: { success: false } }),
-		entry("p2-ax-grounded", "b", { state: "failed", metrics: { success: false } }),
-		entry("p2-ax-grounded", "c", { state: "failed", metrics: { success: false } }),
+		entry("ax-grounded", "a", { state: "failed", metrics: { success: false } }),
+		entry("ax-grounded", "b", { state: "failed", metrics: { success: false } }),
+		entry("ax-grounded", "c", { state: "failed", metrics: { success: false } }),
 	]);
 	assert.deepEqual(overRetryBudget(m, 2, MODEL, 2), []);
 });
@@ -428,7 +433,7 @@ test("promoteForPhase6__FillsTheArm__When__AHarvestedCandidateExists", async () 
 
 		const wanted = procedureFileFor(procDir, "yarn", CANONICAL_TASK, "ax", "grounded");
 		const outcome = await promoteForPhase6({
-			manifest: manifest([entry("p2-ax-grounded", "run-1")]),
+			manifest: manifest([entry("ax-grounded", "run-1")]),
 			model: MODEL,
 			dataOut,
 			proceduresDir: procDir,
@@ -444,7 +449,7 @@ test("promoteForPhase6__FillsTheArm__When__AHarvestedCandidateExists", async () 
 		assert.deepEqual(outcome.promoted, ["run-1"]);
 		// The other three arms (cdp, and both ungrounded lineages) have no candidates: blocked,
 		// reported as findings — and phase 6 skips them rather than refusing outright.
-		assert.equal(outcome.blocked.length, phaseArms(6).length - 1);
+		assert.equal(outcome.blocked.length, procedureArms(3).length - 1);
 	});
 });
 
@@ -459,7 +464,7 @@ test("promoteForPhase6__ReportsTheArmBlocked__When__NoSourceRunWasHarvested", as
 			log: () => {},
 		});
 		assert.deepEqual(outcome.promoted, []);
-		assert.equal(outcome.blocked.length, phaseArms(6).length);
+		assert.equal(outcome.blocked.length, procedureArms(3).length);
 	});
 });
 
@@ -478,7 +483,7 @@ test("runPhase__SkipsOnlyTheMissingArms__When__SomeProceduresArePromoted", async
 		const calls: string[] = [];
 		let n = 0;
 		const lines: string[] = [];
-		const code = await runPhase(6, {
+		const code = await runPhase(3, {
 			go: true,
 			date: DATE,
 			outRoot: dir,
@@ -491,16 +496,39 @@ test("runPhase__SkipsOnlyTheMissingArms__When__SomeProceduresArePromoted", async
 			},
 		});
 		assert.equal(code, EXIT_OK);
-		const grounded = phaseArms(6).filter((a) => (a.dispatch.procedureLineage ?? "grounded") === "grounded");
+		const grounded = procedureArms(3).filter((a) => (a.dispatch.procedureLineage ?? "grounded") === "grounded");
 		assert.equal(calls.length, grounded.reduce((s, a) => s + a.n, 0), "only the promoted arms dispatch");
 		assert.ok(lines.some((l) => /SKIPPED/.test(l) && /from-ungrounded/.test(l)));
 	});
 });
 
-test("runPhase__RefusesPhase6Outright__When__NoProcedureExistsAtAll", async () => {
+test("runPhase__SkipsProceduresWithoutRefusingTheStage__When__NoProcedureExistsAtAll", async () => {
+	// Reuse holds BOTH frozen tiers since 2026-08-03, so "no procedure exists" must no longer
+	// refuse the stage: the recipe half is unaffected and has its own readiness. The old rule
+	// (every procedure arm missing → refuse) read the same as "nothing can run" only while the
+	// phase WAS the procedure tier. Generalization made the difference expensive — one
+	// unharvested procedure among twenty-two arms would have cancelled sixty runs.
+	await withTempAsync("auto-", async (dir) => {
+		const lines: string[] = [];
+		const code = await runPhase(3, {
+			go: true,
+			date: DATE,
+			outRoot: dir,
+			proceduresDir: path.join(dir, "empty"),
+			log: (s) => lines.push(s),
+			dispatchFn: async () => ({ ok: false as const, error: "unreachable", attempts: [] }),
+		});
+		assert.notEqual(code, EXIT_REFUSED, "the recipe half of Reuse must survive an unharvested procedure");
+		const skipped = lines.filter((l) => l.includes("no promoted procedure"));
+		assert.equal(skipped.length, 4, "each procedure arm says why it was skipped, loudly");
+	});
+});
+
+test("runPhase__RefusesOutright__When__EveryDispatchableArmNeedsAMissingProcedure", async () => {
+	// The outright refusal still exists, scoped to what it always meant: nothing can run.
 	await withTempAsync("auto-", async (dir) => {
 		const calls: string[] = [];
-		const code = await runPhase(6, {
+		const code = await runPhase(4, {
 			go: true,
 			date: DATE,
 			outRoot: dir,
@@ -508,6 +536,9 @@ test("runPhase__RefusesPhase6Outright__When__NoProcedureExistsAtAll", async () =
 			log: () => {},
 			dispatchFn: async () => (calls.push("x"), { ok: false as const, error: "unreachable", attempts: [] }),
 		});
+		// Generalization is map-gated before it is procedure-gated, so with an empty manifest it
+		// refuses for the earlier reason — which is itself the guarantee worth asserting: a stage
+		// whose grounded arms have no maps never reaches dispatch.
 		assert.equal(code, EXIT_REFUSED);
 		assert.deepEqual(calls, []);
 	});
@@ -517,8 +548,8 @@ test("runPhase__RefusesPhase6Outright__When__NoProcedureExistsAtAll", async () =
 
 test("passSpend__PricesOnlyCollectedEntries__When__SomeAreStillInFlight", () => {
 	const m = manifest([
-		entry("p1-explore-ax", "a", { metrics: { inputTokens: 1_000_000, model: "claude-fable-5" } }),
-		entry("p1-explore-ax", "b", { collected: false, state: "running", metrics: { inputTokens: 1_000_000, model: "claude-fable-5" } }),
+		entry("explore-ax", "a", { metrics: { inputTokens: 1_000_000, model: "claude-fable-5" } }),
+		entry("explore-ax", "b", { collected: false, state: "running", metrics: { inputTokens: 1_000_000, model: "claude-fable-5" } }),
 	]);
 	const one = passSpend(manifest([m.entries[0]]));
 	assert.ok(one > 0);
@@ -526,6 +557,7 @@ test("passSpend__PricesOnlyCollectedEntries__When__SomeAreStillInFlight", () => 
 });
 
 test("DEFAULT_PHASES__ExcludeOptionalAndFilmed__When__Unspecified", () => {
-	// 4 is optional and 5 films with a different action space — both are opt-in via --phases.
-	assert.deepEqual(DEFAULT_PHASES, [1, 2, 3, 6]);
+	// Generalization and Deliverables are opt-in via --phases; Diagnostics is off the ladder.
+	// Read off StageDef.inCorePass rather than hardcoded, so a new core stage needs no edit here.
+	assert.deepEqual(DEFAULT_PHASES, [1, 2, 3]);
 });

@@ -28,7 +28,115 @@ export type BenchBackend = "ax" | "cdp";
 export type ArmKind = "task" | "explore" | "replay" | "compile";
 import { appmapSlug } from "../core/target.js";
 
-export type Phase = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+/**
+ * Stages, not phases (2026-08-03). Eight phases collapse to five ordered stages plus one that
+ * sits off the ladder.
+ *
+ * The old numbering accreted because a bare integer was carrying three jobs at once —
+ * dependency order, the axis a phase varied, and what KIND of thing it was — so every new
+ * question took the next free number and the orchestrator learned about it through hand-edited
+ * checks: five copies of `[1..8]` and seven behaviours keyed on specific values. Phase 8 was
+ * claimed by two sessions inside one hour because the next number was the only slot on offer.
+ *
+ * `9` is deliberately non-adjacent. Diagnostics is not the sixth step; it measures the
+ * INSTRUMENT rather than the agent, needs nothing, and blocks nothing.
+ */
+export type Phase = 1 | 2 | 3 | 4 | 5 | 9;
+
+export type StageKind = "artifact" | "measurement" | "deliverable" | "diagnostic";
+
+export interface StageDef {
+	n: Phase;
+	id: string;
+	title: string;
+	kind: StageKind;
+	/** Topological order. Replaces autopilot's "ascending, except 5 (filmed) always runs last". */
+	needs: Phase[];
+	/** Workflow steps inserted before this stage. Replaces "judge→harvest→promote before phase 6". */
+	before?: Array<"judge" | "harvest" | "promote">;
+	/** In the default hands-off pass. Replaces `DEFAULT_PHASES = [1, 2, 3, 6]`. */
+	inCorePass?: boolean;
+	note?: string;
+}
+
+/**
+ * The one source of truth for what stages exist and how they order. Adding a stage is adding an
+ * object here; nothing in orchestrate.ts or autopilot.ts changes.
+ *
+ * What lives HERE is genuinely stage-level: order, kind, the prep a stage needs, whether the
+ * core pass includes it. What does NOT live here is anything the stage's ARMS determine —
+ * compiles, map-gating, procedure-gating are derived below. Declaring those was the same
+ * mistake in miniature as keying on a phase number: an attribute attached to the wrong noun
+ * goes stale the moment an arm moves, and the audit caught exactly that.
+ */
+export const STAGES: readonly StageDef[] = [
+	{
+		n: 1, id: "discovery", title: "Discovery", kind: "artifact", needs: [], inCorePass: true,
+		note: "what a pass can find, per perception condition, per app — produces every grounding artifact downstream reads",
+	},
+	{
+		n: 2, id: "configuration", title: "Configuration", kind: "measurement", needs: [1], inCorePass: true,
+		note: "which backend / perception / grounding tier wins, holding task and model fixed",
+	},
+	{
+		n: 3, id: "reuse", title: "Reuse", kind: "measurement", needs: [2], before: ["judge", "harvest", "promote"], inCorePass: true,
+		note: "does a frozen artifact beat live grounding — compiled recipes and harvested procedures, together so the report can finally compare them",
+	},
+	{
+		n: 4, id: "generalization", title: "Generalization", kind: "measurement", needs: [2, 3],
+		note: "does stage 2 hold off this task, this model, this app",
+	},
+	{
+		n: 5, id: "deliverables", title: "Deliverables", kind: "deliverable", needs: [2, 4],
+		note: "footage of the configs that won; --record changes the action space, so these were never comparable to stage 2",
+	},
+	{
+		n: 9, id: "diagnostics", title: "Diagnostics", kind: "diagnostic", needs: [],
+		note: "is the instrument sound — measures the harness, not the agent; runs whenever the fleet is free",
+	},
+] as const;
+
+export const PHASES: Phase[] = STAGES.map((s) => s.n);
+
+export const stageOf = (phase: Phase): StageDef | undefined => STAGES.find((s) => s.n === phase);
+
+export const isPhase = (n: number): n is Phase => PHASES.includes(n as Phase);
+
+/**
+ * Stages in execution order: topological over `needs`, ties broken by number.
+ *
+ * This is what replaces "ascending, except 5 always runs last". Deliverables runs last because
+ * it DECLARES `needs: [2, 4]`, not because a sort function remembers a special case.
+ */
+export function orderStages(phases: Phase[]): Phase[] {
+	const want = [...new Set(phases)].filter(isPhase);
+	const out: Phase[] = [];
+	const rest = new Set(want);
+	while (rest.size) {
+		// Ready = every dependency either satisfied or not requested in this run at all.
+		// Ties break by number, EXCEPT that an off-ladder stage yields to the measurement work.
+		// Diagnostics needs nothing, so a naive numeric tie-break scheduled it second — ahead of
+		// Configuration — and put four harness runs in front of the pass the operator asked for.
+		// It blocks nothing, so it should also wait for nothing.
+		const rank = (p: Phase): number => (stageOf(p)?.kind === "diagnostic" ? 1 : 0);
+		const ready = [...rest]
+			.filter((p) => (stageOf(p)?.needs ?? []).every((d) => !rest.has(d)))
+			.sort((a, b) => rank(a) - rank(b) || a - b);
+		if (!ready.length) {
+			// Cycle: emit the remainder in numeric order rather than hanging. The test below
+			// makes this unreachable; the fallback exists so a bad edit degrades loudly-but-safely.
+			out.push(...[...rest].sort((a, b) => a - b));
+			break;
+		}
+		// ONE per round, not the whole ready set: Diagnostics needs nothing, so it is ready in
+		// round one and a batch emit put it second — four harness runs ahead of Configuration.
+		// Re-ranking each round lets the measurement chain unblock itself first.
+		out.push(ready[0]);
+		rest.delete(ready[0]);
+	}
+
+	return out;
+}
 
 /**
  * The dispatch knobs an arm turns, in `DispatchOptions`' exact spellings.
@@ -61,6 +169,11 @@ export interface ArmDispatch {
 	/** Web target for an explore arm (`explore --url … --backend cdp`). Contract-assumed. */
 	url?: string;
 	/**
+	 * SNAP_PX for this arm: treat a coordinate action as a hypothesis and act on the interactive
+	 * control within this many pixels of it, if any. 0/absent leaves the raw coordinate alone.
+	 */
+	snapPx?: number;
+	/**
 	 * Step budget for this arm, when the default 15 is the wrong size for its TASK.
 	 *
 	 * The settings tasks finish in 5-13 steps, so 15 was never questioned. The creation task
@@ -82,7 +195,11 @@ export interface ArmDispatch {
 }
 
 export interface Arm {
-	/** Stable slug, e.g. "p2-ax-grounded". Manifest entries key on it. */
+	/**
+	 * Stable slug naming the CELL, e.g. "ax-grounded" — not the stage it sits in. Manifest
+	 * entries key on it, so an id that encoded its position (the old `p2-`, `p7-` prefixes)
+	 * meant re-homing an arm silently orphaned its history. Re-homing is now free.
+	 */
 	id: string;
 	phase: Phase;
 	kind: ArmKind;
@@ -180,6 +297,61 @@ export const PHASE4_TASK = "show me how to change the motion blur";
  */
 export const CREATION_TASK =
 	"Make a two-scene video script for a coffee ordering app called Brew, narrated by Cassidy. Do not publish, export, or share it.";
+
+/**
+ * The second APP — the axis 207 runs never varied, and the one the brief actually promises:
+ * "This should theoretically work on arbitrary apps, although we'd budget some setup time."
+ *
+ * Every finding so far is indistinguishable from a fact about Yarn's DOM. Notion web is the
+ * brief's own example, needs no install (the cdp backend drives its own persistent Chrome), and
+ * already has a stamped explore map from 2026-07-31.
+ *
+ * The FULL URL, not a host: `appmapSlug` recognises a target by being a URL and slugs it to
+ * `web-app.notion.com`, which is what the committed map is called. A bare host would slug to
+ * `app.notion.com` and silently miss it — the arm would load nothing and run ungrounded under a
+ * grounded label, which is this repo's most-repeated failure and the one `groundingChecked`
+ * caught six times in the last pass.
+ */
+export const SECOND_APP_URL = "https://app.notion.com";
+
+/**
+ * TWO tasks, spanning difficulty on purpose (David, 2026-08-03).
+ *
+ * A settings toggle was the obvious choice and would have been the wrong one: Yarn's settings
+ * task finished this pass at ceiling in eleven of twelve arms, so a third one buys nothing. The
+ * pass's most useful finding was that grounding's value tracks the TASK — cdp needs none on a
+ * dropdown (3/3 either way) and 0/3 without it on the product flow. A simple and a complex task
+ * on a second app tests whether that PATTERN transfers, which is a sharper question than whether
+ * one more toggle works.
+ *
+ * Both are goal-only: they name an outcome and never a route. Both mutate, which is safe here —
+ * the workspace is a throwaway account — but see the reset note on the arms below, because
+ * teardown restores what the mutation journal recorded and page creation is not that.
+ *
+ * NOT known to be dual-scope, either of them. `findScopeAmbiguities()` over the committed Notion
+ * map returns 11 collisions and most are false positives — generic verbs (sort, filter, group)
+ * the explore model gave one `settingKey` across unrelated database surfaces. The real
+ * account-vs-workspace splits are missing from it, so the detector has both error kinds here.
+ * Consequence, to be stated wherever these arms are reported: the actions/tokens half of the
+ * comparison stands, the wrong-scope half does not until someone hand-validates a pair. That
+ * degradation is itself a finding — the scope mechanism is grounding's strongest measured win on
+ * Yarn and it does not survive contact with a database-shaped app.
+ */
+export const SECOND_APP_SIMPLE_TASK = "Create a table with five rows and populate every row.";
+
+/**
+ * The complex half: multi-surface, deeply nested, and still checkable at the end.
+ *
+ * Chosen against the Notion map's own shape — its dismissal log is dominated by view-settings,
+ * filter, sort, group and property panels, which is where the app's real depth lives and where
+ * nothing in this matrix has ever driven an agent. It needs a schema change, five records with
+ * varied values, a second view, a grouping and a filter: six distinct surfaces against the
+ * simple task's one, and no single control completes it.
+ *
+ * Deliberately free of externality verbs — nothing here shares, publishes, invites or deletes.
+ */
+export const SECOND_APP_COMPLEX_TASK =
+	"Make a task database with a status property, add five tasks across different statuses, then give it a board view grouped by status that shows only the unfinished ones.";
 /**
  * The comparison model. Every one of the first 115 runs was Sol; nothing tested a second.
  *
@@ -226,9 +398,9 @@ const task = (id: string, dispatch: ArmDispatch, informs: string, over: Partial<
  * Phase 1 — node discovery per backend (grounded arms use their own backend's map), plus
  * the one web-explore run that verifies cdp covers the web path dom used to own.
  */
-const PHASE1: Arm[] = [
+const DISCOVERY: Arm[] = [
 	...BACKENDS.map((backend): Arm => ({
-		id: `p1-explore-${backend}`,
+		id: `explore-${backend}`,
 		phase: 1,
 		kind: "explore",
 		app: BENCH_APP,
@@ -250,7 +422,7 @@ const PHASE1: Arm[] = [
 		informs: "controls seen/actuated/dismissed, obs latency, pass duration, map size, scope ambiguities",
 	})),
 	/**
-	 * ~~p1-explore-web-cdp (Notion)~~ — DROPPED 2026-08-01 (David's call, on time).
+	 * ~~explore-web-cdp (Notion)~~ — DROPPED 2026-08-01 (David's call, on time).
 	 *
 	 * The prompt and frontier fixes require re-running every grounding pass, and this was the
 	 * longest run in the matrix by a wide margin: 1h14m and $24.45 against ~30m and ~$14 for a
@@ -276,7 +448,7 @@ const PHASE1: Arm[] = [
 	 * It is a cost question above all. The Notion pass spent 2.5M input and 17.8M cache-read
 	 * tokens, and screenshots are the bulk of that — so if an element-only pass produces a
 	 * comparable map, onboarding a new app gets materially cheaper, which is exactly the
-	 * per-app budget Jasper described. Read `nodes` and `surfaces` against p1-explore-ax,
+	 * per-app budget Jasper described. Read `nodes` and `surfaces` against explore-ax,
 	 * which differs from this arm in nothing but the screenshot channel.
 	 */
 	/**
@@ -290,7 +462,7 @@ const PHASE1: Arm[] = [
 	 * unanswered — and this is the arm that answers it.
 	 */
 	{
-		id: "p1-explore-vision-cdp",
+		id: "explore-vision-cdp",
 		phase: 1,
 		kind: "explore",
 		app: BENCH_APP,
@@ -303,10 +475,10 @@ const PHASE1: Arm[] = [
 		 */
 		n: 2,
 		dispatch: { backend: "cdp", noAx: true },
-		informs: "does vision-only discovery improve when its clicks land — surfaces/nodes against p1-explore-vision on ax",
+		informs: "does vision-only discovery improve when its clicks land — surfaces/nodes against explore-vision on ax",
 	},
 	{
-		id: "p1-explore-no-vision",
+		id: "explore-no-vision",
 		phase: 1,
 		kind: "explore",
 		app: BENCH_APP,
@@ -324,34 +496,34 @@ const PHASE1: Arm[] = [
 	 * attributes onto AX elements, which on Yarn named 955 of 1044 otherwise-anonymous nodes.
 	 * A map IS names, so a pass without it should produce a measurably worse one — and that
 	 * is the only test of whether the sidecar earns its keep AT GROUNDING TIME. The existing
-	 * p2-ax-grounded-axdom-off arm tests it at RUN time, against a map that had it.
+	 * ax-grounded-axdom-off arm tests it at RUN time, against a map that had it.
 	 *
 	 * Adding one costs the same as adding three: six runs is two waves across three Macs and
 	 * nine is three, so the marginal cost of the last two is tokens, not time.
 	 */
 	{
-		id: "p1-explore-ax-noaxdom",
+		id: "explore-ax-noaxdom",
 		phase: 1,
 		kind: "explore",
 		app: BENCH_APP,
 		n: 1,
 		dispatch: { backend: "ax", axdomOff: true },
-		informs: "does the axdom sidecar earn its keep at GROUNDING time — map size and named-control count vs p1-explore-ax",
+		informs: "does the axdom sidecar earn its keep at GROUNDING time — map size and named-control count vs explore-ax",
 	},
 	{
-		id: "p1-explore-ax-noaxdom-no-vision",
+		id: "explore-ax-noaxdom-no-vision",
 		phase: 1,
 		kind: "explore",
 		app: BENCH_APP,
 		n: 1,
 		dispatch: { backend: "ax", axdomOff: true, noVision: true },
-		// Consumed by p2-min-context-grounded since 2026-08-01 — it was comparison-only until
+		// Consumed by min-context-grounded since 2026-08-01 — it was comparison-only until
 		// David pointed out that the least-context condition is exactly the one worth running
 		// a task in: it measures how much the agent can work out on the fly.
 		informs: "the bare AX alone: the floor of the element channel, with neither DOM attrs nor Vision",
 	},
 	{
-		id: "p1-explore-cdp-no-vision",
+		id: "explore-cdp-no-vision",
 		phase: 1,
 		kind: "explore",
 		app: BENCH_APP,
@@ -374,7 +546,7 @@ const PHASE1: Arm[] = [
 	 * measuring it against an element list. Read those numbers as claims, not counts.
 	 */
 	{
-		id: "p1-explore-vision",
+		id: "explore-vision",
 		phase: 1,
 		kind: "explore",
 		app: BENCH_APP,
@@ -386,13 +558,99 @@ const PHASE1: Arm[] = [
 ];
 
 /** Phase 2 core — backend × grounding, n=3 per cell. */
-const PHASE2_CORE: Arm[] = BACKENDS.flatMap((backend) => [
-	task(`p2-${backend}-ungrounded`, { backend, noGrounding: true }, "ad-hoc discovery floor on this backend"),
-	task(`p2-${backend}-grounded`, { backend }, "what a grounding pass buys on this backend"),
+const CONFIG_CORE: Arm[] = BACKENDS.flatMap((backend) => [
+	task(`${backend}-ungrounded`, { backend, noGrounding: true }, "ad-hoc discovery floor on this backend"),
+	task(`${backend}-grounded`, { backend }, "what a grounding pass buys on this backend"),
 ]);
 
+/**
+ * The cdp half of the perception grid, declared here rather than where it happened to be typed.
+ *
+ * These five cells lived in phase 7 until the stage reorganisation (2026-08-03) — not because
+ * they asked a phase-7 question (they hold the task and the model fixed and vary only what the
+ * agent perceives and what it grounds on, which IS this stage's definition) but because that was
+ * the next number free on the day they were written. `vision-only-cdp-curated` says so in its own
+ * `informs`: "completes the grid ax already has".
+ *
+ * Declared as their own const, and spread into CONFIG_SLICES below, so the ARRAY grouping and the
+ * STAGE agree. While they sat in the phase-7 array carrying `phase: 2`, every derivation that
+ * read the arrays disagreed with every gate that read the stage.
+ */
+const CONFIG_CDP_PERCEPTION: Arm[] = [
+	// Same three cells as Sol ran, one variable changed. Canonical task on purpose: it is the
+	// only task with 45 runs of Sol baseline behind it.
+	task("vision-only-cdp-curated", { backend: "cdp", noAx: true, useRecipe: true }, "vision-only against the human-written tier — completes the grid ax already has", { phase: 2 }),
+	/**
+	 * An ELEMENT-perceiving agent reading a map written from PIXELS.
+	 *
+	 * Unmeasured on either backend, and it is the question that decides whether a vision-only
+	 * exploration pass is worth its 30-40 minutes at all. Every existing consumer of a
+	 * vision-written map is itself vision-only, so a poor result there is ambiguous: bad map, or
+	 * a reader that cannot act on a good one? Handing the same map to a reader with full
+	 * perception separates them.
+	 *
+	 * It also matters practically. If a pixel-written map grounds a normal agent about as well
+	 * as an element-written one, then onboarding an app whose AX tree is useless costs a vision
+	 * pass and nothing else — which is the native-app generalisation story, priced.
+	 */
+	task("cdp-grounded-visionmap", { backend: "cdp" }, "is a map written from pixels any good to an agent that can see elements", {
+		phase: 2,
+		env: { APPMAP_VARIANT: "vision" },
+	}),
+	/**
+	 * Vision-only, re-run on the actuator that can aim.
+	 *
+	 * Every vision-only arm in phase 2 went 0/3, and I reported that as a perception result —
+	 * "vision alone cannot find the controls". The failure classification says otherwise: 87 of
+	 * their unverified steps are `target-never-appeared`, the signature of a click that did not
+	 * land, and vision-only addresses by screenshot pixel on a backend where the AX frame and
+	 * the screen disagree by ~40px. Its clicks were missing, not its eyes.
+	 *
+	 * On cdp the class is structurally absent (`scale:"css"` ties screenshot pixels to the
+	 * coordinates act consumes), so these arms measure what the condition was always for. If
+	 * they still fail, THAT is the perception result — and it will be the first honest one.
+	 */
+	task("vision-only-cdp-ungrounded", { backend: "cdp", noAx: true, noGrounding: true }, "vision-only floor on an actuator that can aim", { phase: 2 }),
+	task("vision-only-cdp-grounded", { backend: "cdp", noAx: true }, "does a map lift vision-only once its clicks land (map from an element-perceiving pass)", { phase: 2 }),
+	/**
+	 * The SNAP arms: vision-only reasoning, element-precise actuation.
+	 *
+	 * Vision-only misses its target 75% of the time against 11% for element addressing, on a
+	 * backend whose coordinate space is provably exact — so the model localises poorly from
+	 * pixels, and the harness is not at fault. The redaction pipeline in ../yarn solved the same
+	 * class by treating the vision model's box as a HYPOTHESIS and refining it
+	 * (`detect -> track -> snap·prune·size -> render`, then a few pixels of padding because
+	 * over-covering is free). UI driving had no refinement stage at all: the model's pixel went
+	 * straight to a click, where a 40px error is not "slightly worse" but a no-op on a different
+	 * control, and the error compounds because every later step reasons about a state that never
+	 * happened.
+	 *
+	 * These add the middle. The model still sees ONLY pixels and still names its own target; the
+	 * harness rewrites the coordinate to the control it landed on, within a tolerance. Two
+	 * tolerances because the right radius is unknown and cheap to measure: 24px is about a small
+	 * control's half-height, 48px is forgiving enough to cross a label into its widget.
+	 *
+	 * NOT a solution for an app with no element channel — snapping to elements presupposes
+	 * elements, and vision-only exists to ask what happens without them. The genuine analogue
+	 * there snaps to IMAGE structure and is a much larger build. This is the tractable half, and
+	 * the half that matches a target with a DOM.
+	 */
+	task("vision-only-cdp-snap24", { backend: "cdp", noAx: true, snapPx: 24 }, "does refining the pixel to the nearest control rescue vision-only", { phase: 2 }),
+	task("vision-only-cdp-snap48", { backend: "cdp", noAx: true, snapPx: 48 }, "same, at a tolerance that can cross a label into its widget", { phase: 2 }),
+	/**
+	 * Vision-only at BOTH stages on cdp — the ax pair's `-visionmap` arm, on an actuator whose
+	 * screenshot pixels and click coordinates are the same space. This is the honest version of
+	 * the app-with-no-usable-AX deploy story: the ax pair could only ever answer it through a
+	 * click path that misses by ~40px on this app.
+	 */
+	task("vision-only-cdp-visionmap", { backend: "cdp", noAx: true }, "grounding AND actuation vision-only, on the backend that can aim", {
+		phase: 2,
+		env: { APPMAP_VARIANT: "vision" },
+	}),
+];
+
 /** Phase 2 permutation slices — each maps to a fork in the implementation Aman inherits. */
-const PHASE2_SLICES: Arm[] = [
+const CONFIG_SLICES: Arm[] = [
 	/**
 	 * THE NATIVE-EQUIVALENT TIER (reframed 2026-08-01, David).
 	 *
@@ -406,7 +664,7 @@ const PHASE2_SLICES: Arm[] = [
 	 * `AXDOMClassList` — attributes that exist only because the target is Chromium. Switch it
 	 * off and what remains is AX with no DOM behind it, actuated through the
 	 * accessibility API: exactly the surface a native AppKit or SwiftUI app presents. The
-	 * grounding matches, too — `p1-explore-ax-noaxdom` writes the map these read, so the
+	 * grounding matches, too — `explore-ax-noaxdom` writes the map these read, so the
 	 * limitation applies END TO END rather than only at run time.
 	 *
 	 * IT IS AN OPTIMISTIC BOUND, and the report must say so. Chromium derives its AX content FROM
@@ -423,27 +681,27 @@ const PHASE2_SLICES: Arm[] = [
 	 * app (docs/research/2026-07-30-native-mac-apps-investigation.md).
 	 */
 	task(
-		"p2-ax-grounded-axdom-off",
+		"ax-grounded-axdom-off",
 		{ backend: "ax", axdomOff: true },
 		"NATIVE-EQUIVALENT, grounded: AX with no DOM behind it, mapped and run under the same limit. Also answers whether the Swift sidecar earns its keep end to end.",
 	),
 	/**
 	 * The cell the native tier was missing: cold AND native-equivalent, screenshots available.
-	 * Its counterpart `p2-ax-ungrounded` has the sidecar, and `p2-min-context-ungrounded` also
+	 * Its counterpart `ax-ungrounded` has the sidecar, and `min-context-ungrounded` also
 	 * drops vision — so without this there was no way to say "no DOM, no map, but it can see",
 	 * which is the honest starting position for an app nobody has onboarded yet.
 	 */
 	task(
-		"p2-ax-noaxdom-ungrounded",
+		"ax-noaxdom-ungrounded",
 		{ backend: "ax", axdomOff: true, noGrounding: true },
 		"NATIVE-EQUIVALENT, cold: no DOM attributes, no map, Vision on — the un-onboarded native app",
 	),
 	// Grounds on the map an element-only pass wrote, so the map's vocabulary matches what this
 	// run can perceive — the same reason the vision arm reads the vision map. Also the only
-	// thing that consumes p1-explore-no-vision's output; without it that pass writes an
+	// thing that consumes explore-no-vision's output; without it that pass writes an
 	// artifact nobody reads.
-	task("p2-ax-grounded-no-vision", { backend: "ax", noVision: true }, "what the Vision channel buys on ax", { env: { APPMAP_VARIANT: "novision" } }),
-	task("p2-cdp-grounded-no-vision", { backend: "cdp", noVision: true }, "same on cdp — DOM snapshot is text-rich; fleet-scale cost", { env: { APPMAP_VARIANT: "novision" } }),
+	task("ax-grounded-no-vision", { backend: "ax", noVision: true }, "what the Vision channel buys on ax", { env: { APPMAP_VARIANT: "novision" } }),
+	task("cdp-grounded-no-vision", { backend: "cdp", noVision: true }, "same on cdp — DOM snapshot is text-rich; fleet-scale cost", { env: { APPMAP_VARIANT: "novision" } }),
 	/**
 	 * MINIMUM CONTEXT, both tiers (David, 2026-08-01). Bare AX: no DOM attributes from
 	 * the sidecar, no screenshots. It is the most impoverished condition an agent can be asked
@@ -452,19 +710,19 @@ const PHASE2_SLICES: Arm[] = [
 	 * Two reasons this pair earns six runs. It is the only test of how well the agent figures
 	 * things out ON THE FLY when almost nothing is handed to it — the deployment case where
 	 * the sidecar is unavailable and screenshots are too expensive at fleet scale. And the
-	 * grounded half is the only consumer of p1-explore-ax-noaxdom-no-vision's map, which was
+	 * grounded half is the only consumer of explore-ax-noaxdom-no-vision's map, which was
 	 * otherwise a 30-minute pass written for a comparison alone.
 	 *
 	 * The ungrounded half is the floor of the entire matrix: least perception AND no map. Every
 	 * other arm should beat it, and an arm that does not is telling you its condition adds
 	 * nothing.
 	 */
-	task("p2-min-context-grounded", { backend: "ax", axdomOff: true, noVision: true }, "NATIVE-EQUIVALENT, harshest grounded: bare AX, no Vision, mapped under the same limit", {
+	task("min-context-grounded", { backend: "ax", axdomOff: true, noVision: true }, "NATIVE-EQUIVALENT, harshest grounded: bare AX, no Vision, mapped under the same limit", {
 		env: { APPMAP_VARIANT: "novision" },
 	}),
-	task("p2-min-context-ungrounded", { backend: "ax", axdomOff: true, noVision: true, noGrounding: true }, "NATIVE-EQUIVALENT floor: bare AX, no Vision, no map — can it work it out on the fly"),
+	task("min-context-ungrounded", { backend: "ax", axdomOff: true, noVision: true, noGrounding: true }, "NATIVE-EQUIVALENT floor: bare AX, no Vision, no map — can it work it out on the fly"),
 		task(
-		"p2-curated",
+		"curated",
 		{ backend: "cdp", useRecipe: true },
 		// TASK-CONTAMINATED, and the numbers must be reported as such. docs/recipes/yarn.md names
 		// the canonical task's control, its surface, its exact options AND the brand-vs-document
@@ -474,7 +732,7 @@ const PHASE2_SLICES: Arm[] = [
 		"explore pass vs a curated tier that CONTAINS THIS TASK'S ANSWER — an upper bound on grounding, not a human-notes comparison",
 	),
 	// Vision-only is ax-backend-only by construction: cdp observations ARE ref lists.
-	task("p2-vision-only-ungrounded", { backend: "ax", noAx: true, noGrounding: true }, "the floor: Vision alone, cold", { axRationale: "Vision-only is ax-only by construction — a cdp observation IS a ref list, so 'Vision only' cannot be expressed on that backend" }),
+	task("vision-only-ungrounded", { backend: "ax", noAx: true, noGrounding: true }, "the floor: Vision alone, cold", { axRationale: "Vision-only is ax-only by construction — a cdp observation IS a ref list, so 'Vision only' cannot be expressed on that backend" }),
 	/**
 	 * Vision-only run against the ORDINARY stamped appmap — the one an ax explore pass wrote.
 	 * No new infrastructure: docs/appmaps/<slug>.md already exists.
@@ -496,10 +754,10 @@ const PHASE2_SLICES: Arm[] = [
 	 * useless at BOTH stages is still unmeasured — that needs the vision-only explore pass.
 	 * The id says `axmap` so a reader of the report cannot miss which it is.
 	 */
-	task("p2-vision-only-grounded-axmap", { backend: "ax", noAx: true }, "does explore-written prose lift a Vision-only agent (map from an element-perceiving pass)", { axRationale: "Vision-only is ax-only by construction — a cdp observation IS a ref list, so 'Vision only' cannot be expressed on that backend" }),
+	task("vision-only-grounded-axmap", { backend: "ax", noAx: true }, "does explore-written prose lift a Vision-only agent (map from an element-perceiving pass)", { axRationale: "Vision-only is ax-only by construction — a cdp observation IS a ref list, so 'Vision only' cannot be expressed on that backend" }),
 	/**
 	 * The AX-hostile-app story, measured properly: grounding AND actuation both from
-	 * screenshots only. Consumes the `.vision` map that p1-explore-vision writes, so it is
+	 * screenshots only. Consumes the `.vision` map that explore-vision writes, so it is
 	 * gated on phase 1 having run — with no map, loadGrounding degrades to provenance "none"
 	 * and this silently becomes a duplicate of the ungrounded arm. `bench collect` records
 	 * provenance per run, so check it reads `explore-vision` before believing this row.
@@ -509,12 +767,13 @@ const PHASE2_SLICES: Arm[] = [
 	 * this asks whether it can be dropped ENTIRELY.
 	 */
 	task(
-		"p2-vision-only-grounded-visionmap",
+		"vision-only-grounded-visionmap",
 		{ backend: "ax", noAx: true },
 		"grounding and actuation both Vision-only — the app-with-no-usable-AX deploy story",
 		{ env: { APPMAP_VARIANT: "vision" }, axRationale: "Vision-only is ax-only by construction — a cdp observation IS a ref list, so 'Vision only' cannot be expressed on that backend" },
 	),
-	task("p2-vision-only-curated", { backend: "ax", noAx: true, useRecipe: true }, "same against the human-written tier", { axRationale: "Vision-only is ax-only by construction — a cdp observation IS a ref list, so 'Vision only' cannot be expressed on that backend" }),
+	task("vision-only-curated", { backend: "ax", noAx: true, useRecipe: true }, "same against the human-written tier", { axRationale: "Vision-only is ax-only by construction — a cdp observation IS a ref list, so 'Vision only' cannot be expressed on that backend" }),
+	...CONFIG_CDP_PERCEPTION,
 ];
 
 /**
@@ -554,29 +813,29 @@ const PHASE2_SLICES: Arm[] = [
  * fleet. The compile source — one clean grounded run per backend — is resolved at phase
  * time from the collected manifest, never named here.
  */
-const PHASE3: Arm[] = [
+const REUSE_RECIPES: Arm[] = [
 	...BACKENDS.map((backend): Arm => ({
-		id: `p3-compile-${backend}`,
+		id: `compile-${backend}`,
 		phase: 3,
 		kind: "compile",
 		app: BENCH_APP,
 		n: 1,
 		dispatch: { backend },
-		sourceArm: `p2-${backend}-grounded`,
+		sourceArm: `${backend}-grounded`,
 		informs: "compile success; what the gate refuses",
 	})),
 	...BACKENDS.map((backend): Arm => ({
-		id: `p3-replay-${backend}`,
+		id: `replay-${backend}`,
 		phase: 3,
 		kind: "replay",
 		app: BENCH_APP,
 		n: 3,
 		dispatch: { backend },
-		sourceArm: `p3-compile-${backend}`,
+		sourceArm: `compile-${backend}`,
 		informs: "steps re-resolved vs rescued, model calls (target 0), wall-clock + tokens vs live grounded",
 	})),
 	{
-		id: "p3-replay-norescue",
+		id: "replay-norescue",
 		phase: 3,
 		kind: "replay",
 		app: BENCH_APP,
@@ -584,7 +843,7 @@ const PHASE3: Arm[] = [
 		// cdp, not ax: this measures the UNATTENDED FLEET POSTURE, which is a question about
 		// how the shipping configuration behaves with no operator, not about the fallback.
 		dispatch: { backend: "cdp", noRescue: true },
-		sourceArm: "p3-compile-cdp",
+		sourceArm: "compile-cdp",
 		informs: "unattended-fleet posture: does the happy path hold with ZERO model calls",
 	},
 ];
@@ -596,28 +855,28 @@ const PHASE3: Arm[] = [
  * after the grounded runs land, then `bench phase 4 --go` again — already-submitted samples
  * are skipped, the compile runs, and the replays go out.
  */
-const PHASE4: Arm[] = [
-	task("p4-ungrounded", { backend: "cdp", noGrounding: true }, "is everything above cursor-task-specific", { phase: 4, task: PHASE4_TASK, n: 2 }),
-	task("p4-grounded", { backend: "cdp" }, "is everything above cursor-task-specific", { phase: 4, task: PHASE4_TASK, n: 2 }),
+const GEN_SECOND_TASK: Arm[] = [
+	task("blur-ungrounded", { backend: "cdp", noGrounding: true }, "is everything above cursor-task-specific", { phase: 4, task: PHASE4_TASK, n: 2 }),
+	task("blur-grounded", { backend: "cdp" }, "is everything above cursor-task-specific", { phase: 4, task: PHASE4_TASK, n: 2 }),
 	{
-		id: "p4-compile",
+		id: "blur-compile",
 		phase: 4,
 		kind: "compile",
 		app: BENCH_APP,
 		n: 1,
-		// Follows p4-grounded: a recipe compiled from a cdp run resolves cdp's control names.
+		// Follows blur-grounded: a recipe compiled from a cdp run resolves cdp's control names.
 		dispatch: { backend: "cdp" },
-		sourceArm: "p4-grounded",
+		sourceArm: "blur-grounded",
 		informs: "does compile generalize past the canonical task",
 	},
 	{
-		id: "p4-replay",
+		id: "blur-replay",
 		phase: 4,
 		kind: "replay",
 		app: BENCH_APP,
 		n: 2,
 		dispatch: { backend: "cdp" },
-		sourceArm: "p4-compile",
+		sourceArm: "blur-compile",
 		informs: "does replay generalize past the canonical task",
 	},
 ];
@@ -638,11 +897,11 @@ const PHASE4: Arm[] = [
  * dispatching a phase.
  *
  * The comparison is three-way against arms that already exist at n=3 on the same task and
- * backend: p2-<backend>-ungrounded (nothing), p2-<backend>-grounded (the appmap), and these
+ * backend: <backend>-ungrounded (nothing), <backend>-grounded (the appmap), and these
  * (a previous run's write-up). USE_PROCEDURES REPLACES the appmap rather than adding to it —
  * stacking them would measure neither.
  */
-const PHASE6: Arm[] = [
+const REUSE_PROCEDURES: Arm[] = [
 	/**
 	 * The honest replacement claim (added by David, 2026-08-01). Its procedure is harvested from
 	 * an UNGROUNDED run — an agent that worked the app out from nothing, succeeded, was judged
@@ -659,27 +918,27 @@ const PHASE6: Arm[] = [
 	 * phase-6 gate refuses dispatch rather than silently running it as an appmap arm.
 	 */
 	...BACKENDS.map((backend): Arm => ({
-		id: `p6-${backend}-procedure-from-ungrounded`,
-		phase: 6,
+		id: `${backend}-procedure-from-ungrounded`,
+		phase: 3,
 		kind: "task",
 		app: BENCH_APP,
 		task: CANONICAL_TASK,
 		n: 3,
 		dispatch: { backend, useProcedures: true, procedureLineage: "ungrounded" as const },
-		sourceArm: `p2-${backend}-ungrounded`,
+		sourceArm: `${backend}-ungrounded`,
 		informs:
 			"THE replacement question: can a write-up by an agent that had no map stand in for the exploration pass? " +
-			"vs p2-<backend>-ungrounded (what its author knew) and p2-<backend>-grounded (the sweep it would replace).",
+			"vs <backend>-ungrounded (what its author knew) and <backend>-grounded (the sweep it would replace).",
 	})),
 	...BACKENDS.map((backend): Arm => ({
-	id: `p6-${backend}-procedure`,
-	phase: 6,
+	id: `${backend}-procedure`,
+	phase: 3,
 	kind: "task",
 	app: BENCH_APP,
 	task: CANONICAL_TASK,
 	n: 3,
 	dispatch: { backend, useProcedures: true },
-	sourceArm: `p2-${backend}-grounded`,
+	sourceArm: `${backend}-grounded`,
 	informs:
 		"does a frozen, judge-passed route beat live appmap grounding ON THE TASK IT WAS HARVESTED FROM? " +
 		"NOT a replacement claim — its procedure presupposes the sweep; the -from-ungrounded arm above is that claim. " +
@@ -729,7 +988,7 @@ const PHASE6: Arm[] = [
  */
 const filmed = (arm: Arm): Arm => ({
 	...arm,
-	id: `p5-${arm.id.replace(/^p[0-9]-/, "")}-filmed`,
+	id: `${arm.id}-filmed`,
 	phase: 5,
 	n: 1,
 	dispatch: { ...arm.dispatch, record: true },
@@ -767,13 +1026,34 @@ const filmed = (arm: Arm): Arm => ({
  * checkable text. Whether the harness can grade creative work AT ALL is the second finding
  * here, and arguably the more useful one.
  */
+/**
+ * Stage-2 cells that do NOT get a creation twin, named rather than left to fall out of where a
+ * declaration happened to sit.
+ *
+ * Moving the cdp perception cells into Configuration would silently have widened the task axis
+ * from 15 twins to 20 — fifteen runs nobody asked for, arriving as a side effect of a tidy-up.
+ * The exclusion is a judgement and belongs in the open: vision-only already reaches the creation
+ * task through its four ax cells, so the cdp repeats would buy a fourth sample of a condition
+ * already represented, on the most expensive task in the matrix.
+ *
+ * Delete an entry here to widen the axis deliberately. A test asserts every id still resolves,
+ * so a cell renamed out from under this list fails the build instead of quietly rejoining.
+ */
+export const CREATION_EXCLUDED: readonly string[] = [
+	"vision-only-cdp-ungrounded",
+	"vision-only-cdp-grounded",
+	"vision-only-cdp-visionmap",
+	"vision-only-cdp-curated",
+	"cdp-grounded-visionmap",
+];
+
 const creationArms = (): Arm[] =>
-	[...PHASE2_CORE, ...PHASE2_SLICES]
-		.filter((a) => a.kind === "task")
+	[...CONFIG_CORE, ...CONFIG_SLICES]
+		.filter((a) => a.kind === "task" && !CREATION_EXCLUDED.includes(a.id))
 		.map((a) => ({
 			...a,
-			id: a.id.replace(/^p2-/, "p7-create-"),
-			phase: 7 as Phase,
+			id: `create-${a.id}`,
+			phase: 4 as Phase,
 			task: CREATION_TASK,
 			// NO arm-level budget. 30 was the right fix against a default of 15 and became the
 			// wrong one the moment the default turned into a runaway backstop of 100 with a
@@ -784,66 +1064,16 @@ const creationArms = (): Arm[] =>
 			dispatch: { ...a.dispatch },
 		}));
 
-const PHASE7: Arm[] = [
+const GEN_TASK_AND_MODEL: Arm[] = [
 	...creationArms(),
-	// Same three cells as Sol ran, one variable changed. Canonical task on purpose: it is the
-	// only task with 45 runs of Sol baseline behind it.
-	task("p7-vision-only-cdp-curated", { backend: "cdp", noAx: true, useRecipe: true }, "vision-only against the human-written tier — completes the grid ax already has", { phase: 7 }),
-	/**
-	 * An ELEMENT-perceiving agent reading a map written from PIXELS.
-	 *
-	 * Unmeasured on either backend, and it is the question that decides whether a vision-only
-	 * exploration pass is worth its 30-40 minutes at all. Every existing consumer of a
-	 * vision-written map is itself vision-only, so a poor result there is ambiguous: bad map, or
-	 * a reader that cannot act on a good one? Handing the same map to a reader with full
-	 * perception separates them.
-	 *
-	 * It also matters practically. If a pixel-written map grounds a normal agent about as well
-	 * as an element-written one, then onboarding an app whose AX tree is useless costs a vision
-	 * pass and nothing else — which is the native-app generalisation story, priced.
-	 */
-	task("p7-cdp-grounded-visionmap", { backend: "cdp" }, "is a map written from pixels any good to an agent that can see elements", {
-		phase: 7,
-		env: { APPMAP_VARIANT: "vision" },
-	}),
-	task("p7-claude-cdp-ungrounded", { backend: "cdp", noGrounding: true, model: BENCH_ALT_MODEL }, "is the ungrounded floor a model property or a general one", { phase: 7 }),
-	task("p7-claude-cdp-grounded", { backend: "cdp", model: BENCH_ALT_MODEL }, "does grounding lift Claude the way it lifts Sol", { phase: 7 }),
-	/**
-	 * Vision-only, re-run on the actuator that can aim.
-	 *
-	 * Every vision-only arm in phase 2 went 0/3, and I reported that as a perception result —
-	 * "vision alone cannot find the controls". The failure classification says otherwise: 87 of
-	 * their unverified steps are `target-never-appeared`, the signature of a click that did not
-	 * land, and vision-only addresses by screenshot pixel on a backend where the AX frame and
-	 * the screen disagree by ~40px. Its clicks were missing, not its eyes.
-	 *
-	 * On cdp the class is structurally absent (`scale:"css"` ties screenshot pixels to the
-	 * coordinates act consumes), so these arms measure what the condition was always for. If
-	 * they still fail, THAT is the perception result — and it will be the first honest one.
-	 */
-	task("p7-vision-only-cdp-ungrounded", { backend: "cdp", noAx: true, noGrounding: true }, "vision-only floor on an actuator that can aim", { phase: 7 }),
-	task("p7-vision-only-cdp-grounded", { backend: "cdp", noAx: true }, "does a map lift vision-only once its clicks land (map from an element-perceiving pass)", { phase: 7 }),
-	/**
-	 * Vision-only at BOTH stages on cdp — the ax pair's `-visionmap` arm, on an actuator whose
-	 * screenshot pixels and click coordinates are the same space. This is the honest version of
-	 * the app-with-no-usable-AX deploy story: the ax pair could only ever answer it through a
-	 * click path that misses by ~40px on this app.
-	 */
-	task("p7-vision-only-cdp-visionmap", { backend: "cdp", noAx: true }, "grounding AND actuation vision-only, on the backend that can aim", {
-		phase: 7,
-		env: { APPMAP_VARIANT: "vision" },
-	}),
-	task("p7-claude-cdp-procedure-from-ungrounded", { backend: "cdp", useProcedures: true, procedureLineage: "ungrounded", model: BENCH_ALT_MODEL }, "does the replacement result survive a model change — the finding most worth a second model", { phase: 7 }),
+	task("claude-cdp-ungrounded", { backend: "cdp", noGrounding: true, model: BENCH_ALT_MODEL }, "is the ungrounded floor a model property or a general one", { phase: 4 }),
+	task("claude-cdp-grounded", { backend: "cdp", model: BENCH_ALT_MODEL }, "does grounding lift Claude the way it lifts Sol", { phase: 4 }),
+	task("claude-cdp-procedure-from-ungrounded", { backend: "cdp", useProcedures: true, procedureLineage: "ungrounded", model: BENCH_ALT_MODEL }, "does the replacement result survive a model change — the finding most worth a second model", { phase: 4 }),
 ];
 
 // Phase 7 joins the derivation rather than being remembered — that is the whole point of the
 // rule. It also means the CREATION flow gets filmed, which is the footage closest to what Yarn
 // actually sells; every take before it was of a dropdown being changed.
-const FILMABLE: Arm[] = [...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE3, ...PHASE4, ...PHASE6, ...PHASE7].filter((a) => a.kind === "task" || a.kind === "replay");
-
-const PHASE5: Arm[] = FILMABLE.map(filmed);
-
-
 /**
  * Phase 8 — HARNESS diagnostics. These arms measure the rig, not the agent.
  *
@@ -861,22 +1091,198 @@ const PHASE5: Arm[] = FILMABLE.map(filmed);
  * Their task outcome is close to irrelevant — the artifact is geometryBasis and the step rects.
  * n=2 because the offset is intermittent, and an intermittent fault seen once is a rumour.
  */
-const PHASE8: Arm[] = [
-	task("p8-geometry-ax", { backend: "ax" }, "is the AX→screenshot transform sound when nothing stages the window", {
-		phase: 8,
+const DIAGNOSTICS: Arm[] = [
+	task("geometry-ax", { backend: "ax" }, "is the AX→screenshot transform sound when nothing stages the window", {
+		phase: 9,
 		n: 2,
 		axRationale: "the transform under test IS the ax path's; cdp needs none (scale:\"css\" ties screenshot pixels to the coordinates act consumes)",
 	}),
-	task("p8-geometry-ax-filmed", { backend: "ax", record: true }, "does staging the window perturb the geometry the harness reads", {
-		phase: 8,
+	task("geometry-ax-filmed", { backend: "ax", record: true }, "does staging the window perturb the geometry the harness reads", {
+		phase: 9,
 		n: 2,
 		axRationale: "same transform, with the window resize --record performs — the difference between the two arms IS the measurement",
 	}),
 ];
 
-export const MATRIX: readonly Arm[] = [...PHASE1, ...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE3, ...PHASE4, ...PHASE5, ...PHASE6, ...PHASE7, ...PHASE8];
+/**
+ * Everything declared directly, before the two derived stages. Deliverables is derived FROM it,
+ * so it cannot appear here.
+ */
+/**
+ * Discovery for the second app. Two passes, both cdp — `run.ts` REFUSES a web target on the ax
+ * backend ("web targets run on the cdp backend"), so the backend axis simply does not exist
+ * here. That is the price of choosing the brief's app over an installed one, and it is why these
+ * arms cannot re-test "is grounding backend-dependent".
+ *
+ * The no-vision pass exists because `notion-cdp-grounded-no-vision` consumes an
+ * APPMAP_VARIANT=novision map. Grounding an arm on a map its own treatment did not produce is
+ * LIMITATIONS §23 with the sign flipped.
+ *
+ * A stamped map from 2026-07-31 already exists (471 nodes, 119 surfaces, frontier-empty, 1h14m).
+ * It predates the prompt and frontier fixes that forced a re-run of every Yarn pass, so these
+ * arms re-run it rather than grounding on code no other arm executed. Skip them with `--force`
+ * and reuse the old map if the 1h14m is not affordable — but label the rows if you do.
+ */
+const DISCOVERY_SECOND_APP: Arm[] = [
+	{
+		id: "explore-notion-cdp",
+		phase: 1,
+		kind: "explore",
+		app: SECOND_APP_URL,
+		n: 1,
+		dispatch: { backend: "cdp", url: SECOND_APP_URL },
+		prereq: "Notion signed in to the RUNNER's Chrome profile (`./run browser-login`), not the Mac's — measured 2026-08-03, mac1 had no app.notion.com session while mac2/mac3 did",
+		informs: "does the discovery story hold on an app 3x Yarn's size that nobody tuned the harness against",
+	},
+	{
+		id: "explore-notion-cdp-no-vision",
+		phase: 1,
+		kind: "explore",
+		app: SECOND_APP_URL,
+		n: 1,
+		dispatch: { backend: "cdp", noVision: true, url: SECOND_APP_URL },
+		prereq: "Notion signed in to the runner Chrome profile — same requirement as explore-notion-cdp",
+		informs: "the novision map the no-vision arm reads; also a second sample of what dropping screenshots costs during GROUNDING",
+	},
+];
+
+/**
+ * The second APP crossed with a simple and a complex task.
+ *
+ * Derived from the stage-2 cells rather than hand-written, so a config added there is not
+ * silently missing here — but from a NAMED subset, because every ax cell is impossible on a web
+ * target and running all twenty would be twelve arms of guaranteed refusal.
+ *
+ * The five are the cdp cells that carry a finding worth re-testing: the grounding pair (does
+ * cdp's task-dependence reproduce off Yarn), the no-vision cell (does lean-beats-rich transfer),
+ * and the two vision-only cells (the floor, and whether a map lifts it).
+ *
+ * RESET NOTE: both tasks create workspace content, and teardown only restores what the mutation
+ * journal recorded — page and database creation is not that. Seed the workspace to a known state
+ * and clear it between passes, or run n+1 and read the first sample as contaminated.
+ */
+/**
+ * THREE cells, not five. The two vision-only cells were drafted and cut on the evidence.
+ *
+ * They would need a third explore pass — a vision-only cdp sweep to write the `.vision` map they
+ * resolve to, ~1h15m and $10-20 — and the thing it would buy is a second sample of a floor. All
+ * four vision-only cdp cells on Yarn came back 0/3 this pass, two of them void on
+ * grounding-mismatch. The vision-only result that DID work (a pixel-written map lifts a
+ * pixel-only reader from 0/3 to 2/3) happened on the AX backend, and ax is impossible against a
+ * web target — so the transferable half of that finding cannot be tested here at all.
+ *
+ * Add them back with `explore-notion-cdp-vision` if the vision-only deploy story ever needs a
+ * second app behind it.
+ */
+const SECOND_APP_CELLS = ["cdp-ungrounded", "cdp-grounded", "cdp-grounded-no-vision"] as const;
+
+const secondAppArms = (): Arm[] =>
+	[...CONFIG_CORE, ...CONFIG_SLICES]
+		.filter((a) => (SECOND_APP_CELLS as readonly string[]).includes(a.id))
+		.flatMap((a) => [
+			{
+				...a,
+				id: `notion-${a.id}`,
+				phase: 4 as Phase,
+				app: SECOND_APP_URL,
+				task: SECOND_APP_SIMPLE_TASK,
+				// 30 against Yarn's settings tasks at 5-13: a table with five populated rows is
+				// more typing than a dropdown, and the stall detector is what actually ends a
+				// run now — the budget only has to be too big to bind.
+				dispatch: { ...a.dispatch, url: SECOND_APP_URL, steps: 30 },
+				informs: `does ${a.id}'s result transfer to a second app on a SIMPLE task`,
+			},
+			{
+				...a,
+				id: `notion-complex-${a.id}`,
+				phase: 4 as Phase,
+				app: SECOND_APP_URL,
+				task: SECOND_APP_COMPLEX_TASK,
+				// 60: six surfaces, a schema change and five records. The creation task needed 30
+				// against a known-good 19, and this is longer than that with no known-good run at
+				// all — so the budget is set not to bind rather than to a measured number.
+				dispatch: { ...a.dispatch, url: SECOND_APP_URL, steps: 60 },
+				informs: `does ${a.id}'s result transfer to a second app on a COMPLEX task — and does Yarn's task-dependence reproduce`,
+			},
+		]);
+
+const GEN_SECOND_APP: Arm[] = secondAppArms();
+
+const DECLARED: Arm[] = [...DISCOVERY, ...DISCOVERY_SECOND_APP, ...CONFIG_CORE, ...CONFIG_SLICES, ...REUSE_RECIPES, ...REUSE_PROCEDURES, ...GEN_SECOND_TASK, ...GEN_TASK_AND_MODEL, ...GEN_SECOND_APP, ...DIAGNOSTICS];
+
+/**
+ * Filmed twins come from MEASUREMENT stages only, read off `StageDef.kind`.
+ *
+ * This used to be a hand-listed set of phase arrays, and Diagnostics had to be left out of it by
+ * name — one of two exceptions that stage needed, because it films as its own measurement and
+ * filming it again would compare a run against itself. Keying on kind makes that a consequence
+ * rather than a special case, and a future non-measurement stage is excluded before anyone
+ * remembers to exclude it.
+ */
+const FILMABLE: Arm[] = DECLARED.filter(
+	// BENCH_APP only. The deliverable is footage of the PRODUCT — a filmed take of the agent
+	// driving someone else's web app demonstrates nothing Yarn wants to show, and the second-app
+	// arms would have added ten n=1 takes to a corpus nobody would cut from. Keyed on the app
+	// rather than on an exclusion list, so a third app inherits the rule; delete this clause to
+	// film everything.
+	(a) => a.app === BENCH_APP && stageOf(a.phase)?.kind === "measurement" && (a.kind === "task" || a.kind === "replay"),
+);
+
+const DELIVERABLES: Arm[] = FILMABLE.map(filmed);
+
+
+export const MATRIX: readonly Arm[] = [...DECLARED, ...DELIVERABLES];
 
 export const phaseArms = (phase: Phase): Arm[] => MATRIX.filter((a) => a.phase === phase);
+
+/**
+ * Arms that ground on a promoted procedure — the set the procedure gate, the harvest source list
+ * and the autopilot's "ran without" report all mean when they say it.
+ *
+ * They used to say `phaseArms(6)`, which was true only while procedures lived alone in a phase.
+ * Reuse now holds recipes and procedures together, so the number stopped meaning the thing; the
+ * dispatch flag always did.
+ */
+/**
+ * The three gates, derived from the ARMS a stage holds rather than declared on the stage.
+ *
+ * Declaring them was the same mistake as `phaseArms(6)` in a smaller key: a stage does not
+ * "have a procedure gate", it CONTAINS arms that ground on a procedure. The audit found the
+ * difference — six of ten procedure arms sat in stages with no `procedureGate: true`, so a
+ * claude cell and five filmed twins could dispatch with nothing promoted and bank runs labelled
+ * "procedure" that measured the appmap tier. That is the exact failure the gate's own comment
+ * warns about, and it survived because the flag was attached to the wrong noun.
+ */
+export const stageCompiles = (phase: Phase): boolean => phaseArms(phase).some((a) => a.kind === "compile");
+
+/** Arms that load grounding prose, so the stage cannot dispatch before Discovery is collected. */
+const readsAMap = (a: Arm): boolean => a.kind === "task" && !a.dispatch.noGrounding && !a.dispatch.useRecipe && !a.dispatch.useProcedures;
+
+/**
+ * Diagnostics is exempt BY KIND, not by number: it measures the AX→screenshot transform, and
+ * whether a map happened to load says nothing about that. Every other stage holding a
+ * map-reading arm is gated — including Generalization, whose ten grounded creation arms the
+ * old `phase === 2 || phase === 5` check missed entirely.
+ */
+export const stageNeedsMaps = (phase: Phase): boolean => stageOf(phase)?.kind !== "diagnostic" && phaseArms(phase).some(readsAMap);
+
+/**
+ * The Discovery arms a stage's grounded arms actually depend on — PER APP.
+ *
+ * The gate used to be `phaseArms(1).filter(a => a.app === BENCH_APP)`, which was correct while
+ * everything was Yarn and wrong the moment it was not: Generalization's Notion arms would have
+ * been held up by Yarn explores they never read, and — far worse — would have dispatched with
+ * their OWN app's map missing, since nothing checked for it. That is the same shape as the six
+ * grounding-mismatch runs the last pass paid for and only detected at collect.
+ */
+export const discoveryArmsFor = (phase: Phase): Arm[] => {
+	const apps = new Set(phaseArms(phase).filter(readsAMap).map((a) => a.app));
+
+	return phaseArms(1).filter((a) => apps.has(a.app));
+};
+
+export const procedureArms = (phase?: Phase): Arm[] =>
+	MATRIX.filter((a) => a.dispatch.useProcedures && (phase === undefined || a.phase === phase));
 
 /**
  * The model an arm will ACTUALLY run on: its own pin, else the pass default. Sample counting
@@ -903,7 +1309,7 @@ export const phaseRunCount = (phase: Phase): number => phaseArms(phase).reduce((
  * sharing a filename means the later pass silently overwrites the earlier. That happened
  * twice on 2026-08-01: first every Yarn explore wrote yarn.json (ax 156 nodes, cdp 196,
  * no-vision 180, last writer won), then the first fix added the backend but not the tier so
- * p1-explore-ax and p1-explore-no-vision still collided.
+ * explore-ax and explore-no-vision still collided.
  */
 export const armAppmapSlug = (arm: Arm): string =>
 	appmapSlug(arm.app, {

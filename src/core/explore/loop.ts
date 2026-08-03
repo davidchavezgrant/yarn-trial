@@ -170,7 +170,7 @@ export async function runExploreLoop({ p, client, model, overlay, interrupted, d
 		 * start quits the app so acquisition relaunches it; on the CDP path acquisition returns
 		 * as soon as the DEBUG PORT answers, which the Electron main process opens well before
 		 * the renderer has content. So quit → relaunch → attach → observe raced the first paint
-		 * and killed p1-explore-cdp about fifteen seconds in, while every ax arm ran fine.
+		 * and killed explore-cdp about fifteen seconds in, while every ax arm ran fine.
 		 *
 		 * The same shape the task agent already uses for its home probe (agent/run.ts): sample,
 		 * stop the moment there is content, give up after a bounded wait and let the guard speak.

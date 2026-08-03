@@ -6,7 +6,7 @@ import { CHALLENGER_N, challengerNeedsExplore, planChallenger } from "./challeng
 import { collect } from "./collect.js";
 import { manifestCost } from "./cost.js";
 import { fetchTrueCost, reconcile } from "./truecost.js";
-import { BENCH_APP, BENCH_PRIMARY_MODEL, MATRIX, armById, flagsLine, perceptionLine, armModel, phaseArms, phaseRunCount, type Arm, type Phase } from "./matrix.js";
+import { BENCH_APP, BENCH_PRIMARY_MODEL, MATRIX, PHASES, armById, discoveryArmsFor, flagsLine, isPhase, perceptionLine, armModel, phaseArms, phaseRunCount, procedureArms, stageCompiles, stageNeedsMaps, stageOf, type Arm, type Phase } from "./matrix.js";
 import {
 	entriesForArm,
 	type Manifest,
@@ -92,7 +92,8 @@ export const EXIT_REFUSED = 1;
 export const EXIT_NEEDS_GO = 2;
 
 /** Phase-1 arms whose collected maps gate phase 2 — the Yarn explores, not the web check. */
-const phase1GateArms = (): Arm[] => phaseArms(1).filter((a) => a.app === BENCH_APP);
+// Per-app since 2026-08-03 — see discoveryArmsFor. Kept as a named local for the gate below.
+const phase1GateArms = (phase: Phase): Arm[] => discoveryArmsFor(phase);
 
 /**
  * Interleaved submission order, minus samples the manifest already holds. Compile arms are
@@ -135,6 +136,7 @@ export function dispatchOptionsFor(arm: Arm, recipe?: string, model?: string): D
 		// adding only `record: true` and `n: 1`, so dropping it erases the entire difference.
 		...(d.record ? { record: true } : {}),
 		...(d.steps !== undefined ? { steps: d.steps } : {}),
+		...(d.snapPx !== undefined ? { snapPx: d.snapPx } : {}),
 		...(d.noRescue ? { noRescue: true } : {}),
 		...(d.url ? { url: d.url } : {}),
 		...(recipe ? { recipe } : {}),
@@ -142,8 +144,8 @@ export function dispatchOptionsFor(arm: Arm, recipe?: string, model?: string): D
 		// and sets APPMAP_VARIANT on the child. Anything else in arm.env has no wire lane and
 		// would silently not reach the run — refuse loudly at plan time, not here.
 		// Forward whatever the arm declared. Restricting this to "vision" meant
-		// APPMAP_VARIANT=novision never crossed the wire: p2-ax-grounded-no-vision and
-		// p2-cdp-grounded-no-vision silently read the WITH-screenshots maps, the two
+		// APPMAP_VARIANT=novision never crossed the wire: ax-grounded-no-vision and
+		// cdp-grounded-no-vision silently read the WITH-screenshots maps, the two
 		// element-only grounding passes had no consumer at all, and `bench plan` printed
 		// "crosses the wire as appmapVariant" — a claim that was false.
 		...(arm.env?.APPMAP_VARIANT ? { appmapVariant: arm.env.APPMAP_VARIANT as "vision" | "novision" } : {}),
@@ -406,8 +408,8 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 	// The gate refuses DISPATCH, not the preview: without --go nothing can fire anyway, and
 	// the preview is how an operator finds out what phase 2 needs before phase 1 has run.
 	const missingMaps =
-		(phase === 2 || phase === 5) && !opts.force
-			? phase1GateArms().filter((a) => !entriesForArm(manifest, a.id, opts.model).some((e) => e.collected))
+		stageNeedsMaps(phase) && !opts.force
+			? phase1GateArms(phase).filter((a) => !entriesForArm(manifest, a.id, opts.model).some((e) => e.collected))
 			: [];
 	if (missingMaps.length && opts.go) {
 		log(`REFUSED: phase ${phase}'s grounded arms need phase-1 maps${opts.model ? ` from THIS model's pass (${opts.model} grounds itself)` : ""}, and today's manifest has no collected explore for: ${missingMaps.map((a) => a.id).join(", ")}`);
@@ -429,17 +431,28 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 	 * Only when EVERY arm is missing does the phase refuse outright, as before.
 	 */
 	let missingProcedures = new Set<string>();
-	if (phase === 6 && !opts.force) {
+	if (procedureArms(phase).length > 0 && !opts.force) {
 		const { proceduresDir } = await import("../paths.js");
 		const { procedureFileFor } = await import("../core/procedure.js");
 		const fs6 = await import("node:fs");
 		const dir = opts.proceduresDir ?? proceduresDir();
 		const wanted = (a: (typeof MATRIX)[number]): string =>
 			procedureFileFor(dir, appSlug(a.app), a.task ?? "", a.dispatch.backend, a.dispatch.procedureLineage ?? "grounded");
-		const missing = phaseArms(6).filter((a) => !fs6.existsSync(wanted(a)));
-		if (missing.length === phaseArms(6).length && opts.go) {
-			log(`REFUSED: phase 6 grounds on promoted procedures, and none exists for any arm.`);
-			log(`Workflow: runs land → \`./run bench judge\` → \`./run bench harvest\` → \`./run procedures promote <stamp>\` → phase 6.`);
+		const missing = procedureArms(phase).filter((a) => !fs6.existsSync(wanted(a)));
+		/**
+		 * Refuse outright only when skipping the blocked arms would leave NOTHING to dispatch.
+		 *
+		 * The old rule — every procedure arm missing → refuse the phase — was written when a
+		 * phase WAS the procedure tier and the two statements meant the same thing. After the
+		 * stage reorganisation they do not: Generalization holds one procedure arm among
+		 * twenty-two, so a single unharvested procedure would have refused the whole stage and
+		 * taken sixty runs of task-and-model work down with it. Skip-loudly is already the
+		 * per-arm behaviour; this just stops the all-missing shortcut from over-reaching.
+		 */
+		const dispatchable = phaseArms(phase).filter((a) => a.kind !== "compile");
+		if (missing.length && missing.length === dispatchable.length && opts.go) {
+			log(`REFUSED: every dispatchable arm in this stage grounds on a promoted procedure, and none exists.`);
+			log(`Workflow: runs land → \`./run bench judge\` → \`./run bench harvest\` → \`./run procedures promote <stamp>\`, then re-run.`);
 			log(`Expected at: ${missing.map((a) => relToData(wanted(a))).join(", ")}`);
 
 			return EXIT_REFUSED;
@@ -451,7 +464,7 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 	}
 
 	// Compiles are local and cheap, but they are still phase work — gated like everything else.
-	if (opts.go && (phase === 3 || phase === 4)) manifest = await runCompiles(phase, manifest, { ...opts, log });
+	if (opts.go && stageCompiles(phase)) manifest = await runCompiles(phase, manifest, { ...opts, log });
 
 	const planned = plannedRuns(phase, manifest, opts.model).filter((p) => !missingProcedures.has(p.arm.id));
 	// Resolve replay recipes AFTER compiles so a single --go does compile-then-replay when
@@ -525,16 +538,12 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 export function printPlan(log: (line: string) => void = console.log): void {
 	const total = MATRIX.reduce((sum, a) => sum + a.n, 0);
 	log(`benchmark matrix — ${MATRIX.length} arms, ${total} runs (dom cut; Notion cut entirely; procedures added 2026-08-01 — reasons in matrix.ts)`);
-	for (const phase of [1, 2, 3, 4, 5, 6, 7, 8] as Phase[]) {
-		const note =
-			phase === 4
-				? " (optional)"
-				: phase === 5
-					? " (filmed takes — run last; --record changes the action space)"
-					: phase === 6
-						? " (procedures — needs `bench judge` then `bench harvest` first, and each procedure promoted)"
-						: "";
-		log(`\nphase ${phase} — ${phaseRunCount(phase)} runs${note}`);
+	for (const phase of PHASES) {
+		const st = stageOf(phase);
+		const note = [st?.inCorePass ? "" : "optional", st?.before?.length ? `needs ${st.before.join(" → ")} first` : "", st?.note]
+			.filter(Boolean)
+			.join("; ");
+		log(`\nstage ${phase} ${st?.title ?? ""} — ${phaseRunCount(phase)} runs${note ? ` (${note})` : ""}`);
 		for (const arm of phaseArms(phase)) {
 			log(`  ${arm.id}  n=${arm.n}  ${arm.kind}  "${arm.app}"  ${flagsLine(arm)}`);
 			// Only where it is not the default: printing "elements + screenshots" on every one
@@ -709,7 +718,7 @@ async function main(argv: string[]): Promise<number> {
 	}
 	if (cmd === "phase") {
 		const phase = Number(argv[1]);
-		if (![1, 2, 3, 4, 5, 6, 7, 8].includes(phase)) {
+		if (!isPhase(phase)) {
 			console.error(USAGE);
 
 			return EXIT_REFUSED;
@@ -805,7 +814,7 @@ async function main(argv: string[]): Promise<number> {
 		const ti = argv.indexOf("--then");
 		const then = ti >= 0 ? Number(argv[ti + 1]) : undefined;
 		const ii = argv.indexOf("--interval");
-		const valid = (p: number) => [1, 2, 3, 4, 5, 6, 7, 8].includes(p);
+		const valid = (p: number) => isPhase(p);
 		if (!valid(phase) || (then !== undefined && !valid(then))) {
 			console.error(USAGE);
 
@@ -833,7 +842,7 @@ async function main(argv: string[]): Promise<number> {
 		let phases: Phase[] | undefined;
 		if (pi >= 0) {
 			const nums = (argv[pi + 1] ?? "").split(",").map((s) => Number(s.trim()));
-			if (!nums.length || nums.some((n) => ![1, 2, 3, 4, 5, 6, 7, 8].includes(n))) {
+			if (!nums.length || nums.some((n) => !isPhase(n))) {
 				console.error("--phases wants a comma list from 1-6, e.g. --phases 1,2,3,6");
 
 				return EXIT_REFUSED;

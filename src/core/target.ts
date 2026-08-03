@@ -174,8 +174,8 @@ export function appmapSlug(appOrUrl: string, opts: { visionOnly?: boolean; noVis
 	// phase 2 grounded on was decided by explore ordering.
 	// BOTH the backend and the perception tier, because all three vary independently and any
 	// two arms sharing a filename means the later pass silently overwrites the earlier. An
-	// earlier version of this fix included only the backend, and p1-explore-ax and
-	// p1-explore-no-vision — same backend, different perception — collided exactly as before.
+	// earlier version of this fix included only the backend, and explore-ax and
+	// explore-no-vision — same backend, different perception — collided exactly as before.
 	// Three independent axes, all in the name. `axdomOff` joins them because the sidecar is a
 	// SEPARATE element channel layered on AX — a pass without it names controls the bare AX
 	// tree could name, which on Yarn was 955 of 1044 anonymous nodes fewer. Two passes whose
