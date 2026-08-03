@@ -168,6 +168,27 @@
 	/* Lineage groups: extra air above each group's first row. The explore row IS the group
 	   header — the board's only column labels live in the two-row sticky thead. */
 	tr.gsep td { padding-top: 16px; }
+	/* Child runs are INDENTED under the grounding pass that heads their group (David,
+	   2026-08-03) — the .exp-row wash alone left a header and the fifteen runs beneath it
+	   starting at the same pixel. The indent goes on td.task, never on a first cell: a
+	   multi-run pass rowspans its identity cells, so a continuation row's first td is the
+	   RUNS chip, and indenting that would shove the chip out of its column. td.task is
+	   content-box, so the column simply grows by the indent. */
+	tr.chrow > td.task { padding-left: 18px; }
+	/* Lineage disclosure, one per group header. Folded, it WEARS the hidden-run count so a
+	   collapsed group can never read as an empty one. This is the only clickable thing added
+	   to a header row — rows stay inert (David, 2026-08-01), the button owns the hit area. */
+	.gtog {
+		background: none; border: 1px solid transparent; border-radius: 7px; color: var(--muted);
+		font: inherit; font-size: 11px; padding: 0 4px; margin-right: 5px; cursor: pointer;
+		font-variant-numeric: tabular-nums;
+	}
+	.gtog:hover { color: var(--ink); border-color: var(--border); }
+	.gtog.shut { color: var(--ink-2); border-color: var(--border); }
+	/* Board tools: fold-everything, sat directly above the table it drives. */
+	#board-tools { display: flex; align-items: center; flex-wrap: wrap; margin: 2px 0 8px; }
+	#board-tools .chip { cursor: pointer; }
+	#board-tools .bt-n { color: var(--muted); font-size: 11px; margin-left: 6px; }
 	/* 18 columns (NCOLS): the table must overflow sideways rather than crush the prose cells
 	   — wide content scrolls in its own container, the page never scrolls horizontally. */
 	#board { overflow-x: auto; }
@@ -346,6 +367,9 @@
 		<div id="target-picker"></div>
 		<div class="sub" id="board-sub"></div>
 		<div id="offmatrix"></div>
+		<!-- Fold-everything control for the lineage groups, sat against the table it drives.
+		     Rendered by renderBoard, which is the one place that knows the group keys. -->
+		<div id="board-tools"></div>
 		<div class="scroll" id="board"></div>
 	</section>
 
@@ -1259,19 +1283,22 @@ const shortJob = (id) => String(id).replace(/\d{4}-\d{2}-\d{2}T/, "");
 // into the columns the rowspans left open.
 
 // Columns 1–2: the task prompt, then the arm name (rank dot + display name + phase badge).
-function variantCell(a, p, span = "") {
+// `lead` is HTML the caller puts INSIDE the task cell ahead of its text — the lineage
+// disclosure on a group's header row, and nothing on any other row.
+function variantCell(a, p, span = "", lead = "") {
 	const tip = [a.id, a.informs || "", `flags: ${a.flags || "(none)"}`].filter(Boolean).join("\n");
 	// Phase badge on task/replay rows only: lineage groups interleave phases 2–5, so the row
 	// says which phase it belongs to. Explore group headers are all phase 1 — no badge.
 	const badge = a.kind !== "explore"
 		? `<span class="pbadge" data-tip="phase ${a.phase} arm — lineage groups interleave phases">P${a.phase}</span>`
 		: "";
-	const taskCell = a.task
-		? `<td class="task"${span} data-tip="${esc(a.task)}">${esc(a.task)}</td>`
+	const [text, taskTip] = a.task
+		? [a.task, a.task]
 		: a.kind === "explore"
-			? `<td class="task"${span} data-tip="Explore pass — no task prompt. The objective is coverage: operate every safe control until the frontier of un-operated controls empties, then write the appmap (docs/appmaps/)">Explore</td>`
-			: `<td class="task"${span} data-tip="no prompt — a replay runs its recipe's task">–</td>`;
-	return `${taskCell}<td class="arm"${span} data-tip="${esc(tip)}">${rankDot(a, p)}<span class="dn">${esc(displayName(a))}</span>${badge}</td>`;
+			? ["Explore", "Explore pass — no task prompt. The objective is coverage: operate every safe control until the frontier of un-operated controls empties, then write the appmap (docs/appmaps/)"]
+			: ["–", "no prompt — a replay runs its recipe's task"];
+	return `<td class="task"${span} data-tip="${esc(taskTip)}">${lead}${esc(text)}</td>`
+		+ `<td class="arm"${span} data-tip="${esc(tip)}">${rankDot(a, p)}<span class="dn">${esc(displayName(a))}</span>${badge}</td>`;
 }
 
 // Columns 4–8 (after the Runs column): the Sees AX/DOM checks, the Has/Vision check,
@@ -1473,15 +1500,17 @@ function retryPairs(a, p) {
 	return { hidden, retryOf };
 }
 
-function passRows(a, p, first, metricCells) {
+function passRows(a, p, first, metricCells, lead = "") {
 	const key = rowId(a, p);
 	const { hidden, retryOf } = retryPairs(a, p);
 	const sel = openRows[key] ? selJob(p, key, hidden) : undefined;
 	const runs = p.entries.filter((e) => !hidden.has(e.jobId)).sort((x, y) => entryBand(x) - entryBand(y) || entryTime(x) - entryTime(y));
 	const span = runs.length > 1 ? ` rowspan="${runs.length}"` : "";
-	const expCls = a.kind === "explore" ? " exp-row" : "";
+	// An explore pass HEADS its lineage group (.exp-row, the wash); everything else is a child
+	// OF one (.chrow, the indent). Derived from kind, so no caller has to remember to pass it.
+	const rowCls = a.kind === "explore" ? " exp-row" : " chrow";
 	const rows = runs.map((e, i) =>
-		`<tr class="mrow${expCls}${i === 0 && first ? " gsep" : ""}${i < runs.length - 1 ? " splitrow" : ""}">${i === 0 ? variantCell(a, p, span) : ""}
+		`<tr class="mrow${rowCls}${i === 0 && first ? " gsep" : ""}${i < runs.length - 1 ? " splitrow" : ""}">${i === 0 ? variantCell(a, p, span, lead) : ""}
 		<td class="runs">${statusChip(e, key, e.jobId === sel, retryOf[e.jobId])}</td>
 		${i === 0 ? identityRest(a, p, span) : ""}
 		${metricCells(e)}
@@ -1501,9 +1530,11 @@ function taskRow(a, p) {
 }
 
 // The explore GROUP-HEADER rows — exploreCellsFor leads with the pass's own Actions cell.
-function exploreRow(a, p, first) {
+// `lead` carries the lineage disclosure on the group's very first row (renderBoard owns it:
+// only it knows how many runs the group holds).
+function exploreRow(a, p, first, lead = "") {
 	return passRows(a, p, first, (e) =>
-		tokensCellFor(e) + costCellFor(e) + exploreCellsFor(a, e) + convergenceCellFor(e));
+		tokensCellFor(e) + costCellFor(e) + exploreCellsFor(a, e) + convergenceCellFor(e), lead);
 }
 
 // Compile arms (phase 3/4 recipe compiles) are local, instant file transforms recorded as
@@ -1525,7 +1556,7 @@ function compileRow(a, p) {
 	// to lean on), so it must be kept in step with TASK_HEAD: Task(=src), Variant, Runs, the
 	// three Sees/Has dashes (no model runs, so no perception channels), Acts With, Model,
 	// Tokens, Cost, Actions, the four explore dashes, Convergence, Map, Graphs — 18 cells.
-	return `<tr class="crow">${srcCell}<td class="arm" data-tip="${esc(tip)}"><span class="dn">${esc(displayName(a))}</span>${badge}</td>
+	return `<tr class="crow chrow">${srcCell}<td class="arm" data-tip="${esc(tip)}"><span class="dn">${esc(displayName(a))}</span>${badge}</td>
 		${runsCell(p, null)}<td class="see">–</td><td class="see">–</td><td class="see">–</td><td class="num">–</td><td class="num">–</td>
 		<td class="num">–</td><td class="num">–</td><td class="num">–</td>
 		${NO_EXPLORE_CELLS}${NO_CONV_CELL}<td class="treecell"></td><td class="treecell"></td></tr>`;
@@ -2003,6 +2034,71 @@ function timelineRows(arms) {
 		.sort((x, y) => x.k[0] - y.k[0] || x.k[1] - y.k[1]);
 }
 
+/* ---- lineage folding ------------------------------------------------------------------
+   A full bench is ~190 rows over 11 lineages, which reads as one wall (David, 2026-08-03:
+   "when there's a lot of runs, the data can become sorta overwhelming"). Each group folds
+   independently, and folding hides only the runs BENEATH the header — a grounding pass never
+   disappears, because its row carries the group's discovery metrics and its rank.
+
+   State lives here, not in the DOM: renderBoard replaces the board's innerHTML on every SSE
+   push, so a DOM-only fold would spring open a few seconds after you set it (the same reason
+   openRows and prevOpenSurfs exist). It is in-memory and per-page, like openRows — a reload
+   starts fully expanded. Keys are explore arm ids plus the two "#"-prefixed pseudo-groups,
+   which arm ids cannot collide with. Keys for groups the target picker currently filters out
+   are kept, so scoping away and back preserves the fold. */
+const collapsedGroups = new Set();
+const UNGROUNDED_KEY = "#ungrounded", COMPILES_KEY = "#compiles";
+
+// How many RUNS of a pass the board shows: its entries minus any a retry replaced (those
+// chips are gone from the Runs column, so they are not on the board at all) — the same
+// retryPairs filter passRows applies, so a fold count can never promise a run that unfolding
+// does not show. Runs, not rows: a compile pass packs every chip into one cell (compileRow),
+// so its four runs unfold as three lines. The count says "runs" and means it.
+const visibleRuns = (a, p) => {
+	const { hidden } = retryPairs(a, p);
+	return p.entries.filter((e) => !hidden.has(e.jobId)).length;
+};
+const groupRunCount = (rows) => rows.reduce((s, { a, p }) => s + visibleRuns(a, p), 0);
+
+// The group's disclosure control. Folded, it wears its hidden-run count ("▸ 15") so a
+// collapsed group never reads as an empty one — and so the count is legible without
+// unfolding, which is half of what the fold is for. Groups with no children get no control.
+function groupToggle(key, n) {
+	if (!n) return "";
+	const shut = collapsedGroups.has(key);
+	const runs = `${n} run${n === 1 ? "" : "s"}`;
+	const tip = shut
+		? `expand — show the ${runs} in this group`
+		: `collapse — fold away the ${runs} in this group; the header line stays, with the count on it`;
+	return `<button class="gtog${shut ? " shut" : ""}" data-group="${esc(key)}" aria-expanded="${shut ? "false" : "true"}" data-tip="${esc(tip)}">${shut ? `▸ ${n}` : "▾"}</button>`;
+}
+
+// A pseudo-group's header line: the groups with no explore pass to head them (ungrounded
+// arms, compiles, and a lineage whose grounding pass has not been submitted).
+const groupHead = (key, label, n) =>
+	`<tr class="phase-h"><td colspan="${NCOLS}">${groupToggle(key, n)}${esc(label)}</td></tr>`;
+
+// The groups the last render put on the board, {key, n} — what fold-all acts on, so it never
+// folds a lineage the scope picker is currently hiding.
+let lastBoardKeys = [];
+
+// One chip over the board: fold or unfold every group at once. 11 lineages is too many to
+// click through one at a time, and folding all of them is the overview — every grounding pass
+// with its discovery metrics, no runs. Hidden when there is nothing to coordinate.
+function renderBoardTools(keys) {
+	lastBoardKeys = keys;
+	const foldable = keys.filter((k) => k.n);
+	if (foldable.length < 2) { $("board-tools").innerHTML = ""; return; }
+	const shut = foldable.filter((k) => collapsedGroups.has(k.key)).length;
+	const allShut = shut === foldable.length;
+	const tip = allShut
+		? "expand every lineage group"
+		: "collapse every lineage group — the grounding passes stay with their discovery metrics, the runs beneath them fold away";
+	$("board-tools").innerHTML =
+		`<span class="chip" data-fold-all="${allShut ? "0" : "1"}" data-tip="${esc(tip)}">${allShut ? "▸ expand all" : "▾ collapse all"}</span>`
+		+ (shut && !allShut ? `<span class="bt-n">${shut} of ${foldable.length} groups collapsed</span>` : "");
+}
+
 // The board is grouped by LINEAGE, not phase: each explore arm heads a group (its row IS
 // the group header, carrying its discovery metrics in the Actions…Ambig columns), and
 // beneath it sit the task/replay arms that consumed its map (groundedBy on the wire — the
@@ -2034,11 +2130,25 @@ function renderBoard(progress) {
 	const groups = arms.filter((a) => a.kind === "explore" && a.passes.length)
 		.map((e) => ({ e, rows: timelineRows([e]) }))
 		.sort((x, y) => x.rows[0].k[0] - y.rows[0].k[0] || x.rows[0].k[1] - y.rows[0].k[1]);
+	// Every group key this render put on the board, with its child count — renderBoardTools'
+	// input, so the fold-all chip coordinates exactly what is visible.
+	const keys = [];
+	// One group's children: registered with the tools strip, then emitted unless the group is
+	// folded. The header is always emitted by the caller — folding hides runs, never a
+	// grounding pass and never a section label.
+	const kidRows = (key, kids, n, row = taskRow) => {
+		keys.push({ key, n });
+		return collapsedGroups.has(key) ? "" : kids.map(({ a, p }) => row(a, p)).join("");
+	};
 	for (const { e, rows } of groups) {
 		seen.add(e.id);
-		html += rows.map(({ a, p }, i) => exploreRow(a, p, i === 0)).join("");
-		const d = deps[e.id] || [];
-		if (d.length) html += timelineRows(d).map(({ a, p }) => taskRow(a, p)).join("");
+		const kids = timelineRows(deps[e.id] || []);
+		const n = groupRunCount(kids);
+		const body = kidRows(e.id, kids, n);
+		// The disclosure rides the group's FIRST header row (an explore arm can have several
+		// passes; they are all header, and one control folds the group they share).
+		const lead = groupToggle(e.id, n);
+		html += rows.map(({ a, p }, i) => exploreRow(a, p, i === 0, i === 0 ? lead : "")).join("") + body;
 	}
 	// Grounded arms whose explore pass has nothing submitted (or names an arm outside the
 	// matrix): still shown, under a placeholder header naming the missing lineage — a run
@@ -2046,12 +2156,14 @@ function renderBoard(progress) {
 	for (const gid of Object.keys(deps)) {
 		if (seen.has(gid)) continue;
 		const ex = state.arms.find((x) => x.id === gid);
-		html += `<tr class="phase-h"><td colspan="${NCOLS}">${esc(gid)} — ${ex ? "grounding pass not yet submitted" : "not in the matrix"}</td></tr>`;
-		html += timelineRows(deps[gid]).map(({ a, p }) => taskRow(a, p)).join("");
+		const kids = timelineRows(deps[gid]), n = groupRunCount(kids);
+		const body = kidRows(gid, kids, n);
+		html += groupHead(gid, `${gid} — ${ex ? "grounding pass not yet submitted" : "not in the matrix"}`, n) + body;
 	}
 	if (ungrounded.length) {
-		html += `<tr class="phase-h"><td colspan="${NCOLS}">No Explore Pass</td></tr>`;
-		html += timelineRows(ungrounded).map(({ a, p }) => taskRow(a, p)).join("");
+		const kids = timelineRows(ungrounded), n = groupRunCount(kids);
+		const body = kidRows(UNGROUNDED_KEY, kids, n);
+		html += groupHead(UNGROUNDED_KEY, "No Explore Pass", n) + body;
 	}
 	// Compiles get their own labeled line at the board's end, NOT a lineage group: the wire
 	// gives a compile arm neither groundedBy (dash.ts omits it for explore/compile kinds)
@@ -2061,14 +2173,16 @@ function renderBoard(progress) {
 	// p2 ids; explore: phase 1) — keep it that way: compile entries carry zero metrics, and
 	// folding their nothing into means would drag every average toward zero.
 	if (compiles.length) {
-		html += `<tr class="phase-h"><td colspan="${NCOLS}">Compiles — local recipe compiles, no model in the loop</td></tr>`;
-		html += timelineRows(compiles).map(({ a, p }) => compileRow(a, p)).join("");
+		const kids = timelineRows(compiles), n = groupRunCount(kids);
+		const body = kidRows(COMPILES_KEY, kids, n, compileRow);
+		html += groupHead(COMPILES_KEY, "Compiles — local recipe compiles, no model in the loop", n) + body;
 	}
 	// The one section that had no empty state: a bare 19-column header floating over nothing
 	// was indistinguishable from a board that failed to render its rows.
 	if (!groups.length && !Object.keys(deps).length && !ungrounded.length && !compiles.length)
 		html += `<tr><td colspan="${NCOLS}"><div class="empty">nothing submitted for ${esc(targetLabel(currentTarget()))} yet — arms appear as bench phase submits</div></td></tr>`;
 	$("board").innerHTML = html + "</tbody></table>";
+	renderBoardTools(keys);
 	// No explainer sentence (per David) — the heroes carry the numbers and the tooltips
 	// carry the semantics.
 	$("board-sub").textContent = "";
@@ -2427,12 +2541,38 @@ $("target-picker").addEventListener("click", (ev) => {
 	render();
 });
 
+// Fold-all, delegated once (the strip's innerHTML is replaced on every push). It acts on the
+// groups THIS render put on the board — collapsing while a scope filter is on must not fold
+// lineages the filter is hiding.
+$("board-tools").addEventListener("click", (ev) => {
+	const t = ev.target.closest("[data-fold-all]");
+	if (!t) return;
+	const shut = t.dataset.foldAll === "1";
+	for (const { key, n } of lastBoardKeys) {
+		if (!n) continue;
+		if (shut) collapsedGroups.add(key);
+		else collapsedGroups.delete(key);
+	}
+	render();
+});
+
 // Run selection, delegated once — the board's innerHTML is replaced on every push, so
-// handlers must live on the container. Only the Runs-column chips toggle (David,
-// 2026-08-01): rows are inert, so the toggle attrs live on the chips alone.
+// handlers must live on the container. Rows themselves stay inert (David, 2026-08-01): every
+// click target on a row is an explicit control — a Runs-column chip selects that run, the ⤢
+// opens its map, the lineage disclosure folds the group. Never the row.
 $("board").addEventListener("click", (ev) => {
 	const vt = ev.target.closest("[data-viewtree]");
 	if (vt) { requestTree(vt.dataset.viewtree); return; }
+	// Lineage disclosure: folds the runs under one group header. Checked before the run chips
+	// — a header row carries both, and the disclosure is the more specific target.
+	const tog = ev.target.closest(".gtog[data-group]");
+	if (tog) {
+		const g = tog.dataset.group;
+		if (collapsedGroups.has(g)) collapsedGroups.delete(g);
+		else collapsedGroups.add(g);
+		render();
+		return;
+	}
 	const chip = ev.target.closest(".chip[data-job][data-row]");
 	if (chip) {
 		const { row, job: id } = chip.dataset;
