@@ -13,6 +13,20 @@ const IDLE_POLL_MS = 400;
 /** How long after an action counts as "responding". */
 const RESPONSE_WINDOW_MS = 4000;
 
+/**
+ * Slowest gap actually observed between two captured frames during an act: p90 579ms, max 634ms
+ * over the 146 frames of run 2026-08-02T18-51-49-069. RESPONSE_POLL_MS above is what the loop
+ * ASKS for; each page.screenshot() costs ~220ms on top, and that is the number that governs —
+ * not one gap in that run came in under 220ms.
+ *
+ * Exported because it is the shutter speed, and two other modules need it to reason about what
+ * can be filmed at all: src/backends/cdp.ts sizes the demo hover dwell to outlast it, and
+ * src/cursor/track.ts uses it to decide whether a run's dwell was long enough for the app's own
+ * hover to have landed in a frame (and so whether to synthesize one). Lives here because it is a
+ * property of THIS loop; when the capture path gets faster, this is the one place to re-measure.
+ */
+export const FRAME_GAP_CEILING_MS = 640;
+
 /** Window-size probes that must agree before recording starts, and the ceiling on waiting. */
 const STAGE_SETTLE_HITS = 3;
 const STAGE_SETTLE_MAX_MS = 12_000;

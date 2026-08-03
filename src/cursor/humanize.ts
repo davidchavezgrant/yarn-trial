@@ -147,14 +147,17 @@ function main(): void {
 	let app = "unknown";
 	let task = "";
 	let backend: string | undefined;
+	let demoDwellMs: number | undefined;
 	if (fs.existsSync(runLogPath)) {
 		const log = JSON.parse(fs.readFileSync(runLogPath, "utf8"));
 		steps = log.steps ?? [];
 		app = log.app ?? app;
 		task = log.task ?? task;
 		// `backend` is what actually DROVE — a cdp run that fell back to ax records "ax" — which
-		// is the right question here, since it decides whether the app painted its own hover.
+		// is the right question here, since with the dwell it decides whether the app painted its
+		// own hover into the frames, and so whether the track synthesizes one.
 		backend = log.backend;
+		demoDwellMs = log.demoDwellMs;
 	} else {
 		console.log(`no run log at ${runLogPath} — pointer types will default to arrow`);
 	}
@@ -234,6 +237,7 @@ function main(): void {
 		app,
 		task,
 		backend,
+		demoDwellMs,
 		runLog: fs.existsSync(runLogPath) ? path.relative(process.cwd(), runLogPath) : "",
 		steps,
 		turns,

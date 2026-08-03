@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { chromium, type Browser, type Locator, type Page } from "playwright-core";
 import { envNum } from "../env.js";
+import { FRAME_GAP_CEILING_MS } from "../core/agent/recording.js";
 import { MAX_WAIT_MS, OUT, type ObservationBundle } from "../core/harness.js";
 import type { Target } from "../core/target.js";
 import { webTarget } from "../core/target.js";
@@ -490,14 +491,6 @@ export function webPageChoice(urls: string[], origin: string): { index: number; 
 }
 
 /**
- * Slowest observed gap between two captured frames during an act: p90 579ms, max 634ms over
- * the 146 frames of run 2026-08-02T18-51-49-069. The frame loop ASKS for 120ms
- * (RESPONSE_POLL_MS in src/core/agent/recording.ts), but each page.screenshot() costs ~220ms
- * on top, and that is the number that governs — not one gap in that run came in under 220ms.
- */
-const FRAME_GAP_CEILING_MS = 640;
-
-/**
  * Demo-mode pointer pacing. The dwell sits between the move and the press so a :hover
  * transition has real wall-clock to render before the click's effect replaces it.
  *
@@ -514,7 +507,7 @@ const FRAME_GAP_CEILING_MS = 640;
  *
  * The press delay holds the button down like a finger, not a zero-width tap.
  */
-const DEMO_DWELL_MS = 700;
+const DEMO_DWELL_MS = FRAME_GAP_CEILING_MS + 60;
 const DEMO_PRESS_MS = 60;
 /** Per-character delay for demo typing — the plate shows text arriving, not appearing. */
 const DEMO_TYPE_DELAY_MS = 70;
@@ -570,6 +563,16 @@ export class CdpBackend {
 	private lastClickPoint?: { x: number; y: number };
 
 	private lastRows: SnapshotRow[] = [];
+
+	/**
+	 * How long the demo pointer rests on a target before pressing, or undefined when this run is
+	 * not a filmed demo. Read into the run log so the humanizer can tell whether the app's OWN
+	 * hover highlight could have landed in a frame — a question about the run, not about today's
+	 * constant, since re-rendering an old take must not assume the dwell it was recorded with.
+	 */
+	get demoDwellMs(): number | undefined {
+		return this.demo ? DEMO_DWELL_MS : undefined;
+	}
 
 	private constructor(
 		private browser: Browser,

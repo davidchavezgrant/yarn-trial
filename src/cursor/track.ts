@@ -25,6 +25,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { FRAME_GAP_CEILING_MS } from "../core/agent/recording.js";
 import type {
 	CursorSample,
 	CursorType,
@@ -857,10 +858,12 @@ export interface BuildTrackInput {
 	stamp: string;
 	app: string;
 	task: string;
-	/** Which backend DROVE the run, as recorded in the run log — not what was asked for. Decides
-	 *  whether the app painted its own hover highlight into the frames; see the hover block in
-	 *  buildTrack. Absent (a run log too old to record it) is treated as "it did not". */
+	/** Which backend DROVE the run, as recorded in the run log — not what was asked for. */
 	backend?: string;
+	/** How long that run's demo pointer rested on each target, from its own run log. With
+	 *  `backend` this decides whether the app painted its own hover into the frames; see the hover
+	 *  block in buildTrack. Absent (unrecorded, or a log written before 2026-08-03) means no. */
+	demoDwellMs?: number;
 	runLog: string;
 	steps: RunLogStep[];
 	turns: TrajectoryTurn[];
@@ -891,10 +894,18 @@ export interface BuildTrackInput {
 export function buildTrack(input: BuildTrackInput): MotionTrack {
 	const rand = makeRandom(input.seed ?? 0x5eed);
 	const allJoined = joinSteps(input.steps, input.turns);
-	// The CDP path moves an injected pointer onto the target and dwells there, so the app's own
-	// `:hover` fires and lands in frames. Every other actuation path clicks without a pointer
-	// ever resting on the control.
-	const appPaintsHover = input.backend === "cdp";
+	/**
+	 * Did THIS run film the app's own hover? Two conditions, and both are properties of the run
+	 * rather than of today's code:
+	 *
+	 * CDP moves an injected pointer onto the target and dwells, so `:hover` fires — no other
+	 * actuation path rests a pointer on the control at all. And the dwell has to outlast the
+	 * shutter, or the highlight falls between frames: every cdp run recorded before 2026-08-03
+	 * dwelled 200ms against a gap that never once came in under 220ms, so those takes contain no
+	 * hover to keep. Re-rendering one must still synthesize, which is why this reads the run's
+	 * OWN recorded dwell and not DEMO_DWELL_MS.
+	 */
+	const appPaintsHover = input.backend === "cdp" && (input.demoDwellMs ?? 0) > FRAME_GAP_CEILING_MS;
 
 	/**
 	 * Decide which actions the take contains BEFORE building the timeline, because dropping an

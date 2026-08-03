@@ -213,6 +213,16 @@ export async function main(): Promise<void> {
 					// a log that says cdp when ax produced the numbers is measurement fraud.
 					backend: effectiveBackend,
 					...(backendFallback ? { backendFallback } : {}),
+					// How long the demo pointer rested on each target before pressing. The
+					// humanizer needs it to decide whether the app's OWN hover highlight could
+					// have landed in a frame, and so whether to synthesize one — a question only
+					// this run can answer, since the constant has changed (200ms filmed the real
+					// hover exactly never; see FRAME_GAP_CEILING_MS in src/backends/cdp.ts).
+					// Absent on unrecorded runs and on every log written before 2026-08-03,
+					// which is exactly the "assume it filmed nothing" case. Read off the backend
+					// instance rather than imported: core holds no static value-import of
+					// src/backends/, and this must not be the one that breaks it.
+					...(cdp?.demoDwellMs ? { demoDwellMs: cdp.demoDwellMs } : {}),
 					// The exact model id, because forensics on a bad run starts with "what was
 					// driving" and until now the logs only recorded token usage.
 					model,
