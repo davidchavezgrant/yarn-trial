@@ -85,7 +85,10 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// deliverable is a corpus showing how each lever moves outcomes, not one good video), so it
 	// is derived rather than counted — a hardcoded number here would just be a second place to
 	// update whenever an arm is added anywhere upstream.
-	const filmable = MATRIX.filter((a) => a.phase !== 5 && (a.kind === "task" || a.kind === "replay"));
+	// Phase 8 is excluded: it is a diagnostics PAIR (one plain arm, one filmed) and the filmed
+	// half is the measurement, not a take of the other. Deriving a twin for it would film the
+	// same config twice and compare a run against itself.
+	const filmable = MATRIX.filter((a) => a.phase !== 5 && a.phase !== 8 && (a.kind === "task" || a.kind === "replay"));
 	assert.equal(phaseRunCount(5), filmable.length);
 });
 
@@ -143,7 +146,10 @@ test("MATRIX__ConfinesRecordingToTheFilmedPhase__When__ArmsAreDeclared", () => {
 	// that filmed itself would report demo-mode reliability as config reliability, so the split
 	// is enforced rather than remembered.
 	for (const arm of MATRIX) {
-		if (arm.dispatch.record) assert.equal(arm.phase, 5, `${arm.id} films, so it belongs to phase 5`);
+		// Phase 8 is the exception, and a narrow one: its filmed arm exists BECAUSE recording
+		// changes the action space. It stages the window, which is the perturbation under
+		// measurement — a diagnostic that could not film would be measuring nothing.
+		if (arm.dispatch.record) assert.ok(arm.phase === 5 || arm.phase === 8, `${arm.id} films, so it belongs to phase 5 (or 8, diagnostics)`);
 		if (arm.phase === 5) assert.equal(arm.dispatch.record, true, `${arm.id} is a filmed take and must set record`);
 	}
 	// Every filmed take is n=1 — footage, not statistics.
@@ -1194,8 +1200,11 @@ test("MATRIX__FilmsEveryMeasuredConfig__When__PhaseFiveIsDerived", () => {
 	// habit. Phase 5 derives from the phase-2 arms, so the guarantee holds automatically —
 	// but only while nothing is added to phase 2 outside the derived set, which is exactly
 	// the mistake a future edit would make.
-	// Every arm that PERFORMS something gets a filmed twin — phases 2, 3, 4 and 6, not just 2.
-	const measured = MATRIX.filter((a) => a.phase !== 5 && (a.kind === "task" || a.kind === "replay"));
+	// Every arm that PERFORMS something gets a filmed twin — phases 2, 3, 4, 6 and 7, not just 2.
+	// Phase 8 is excluded: it is a diagnostics PAIR (one plain arm, one filmed) where the filmed
+	// half IS the measurement — staging the window is the perturbation under test. Deriving a
+	// twin would film the same config twice and compare a run against itself.
+	const measured = MATRIX.filter((a) => a.phase !== 5 && a.phase !== 8 && (a.kind === "task" || a.kind === "replay"));
 	const filmed = MATRIX.filter((a) => a.phase === 5);
 	const shape = (a: Arm) => JSON.stringify({ ...a.dispatch, record: undefined, env: a.env ?? null });
 

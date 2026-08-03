@@ -28,7 +28,7 @@ export type BenchBackend = "ax" | "cdp";
 export type ArmKind = "task" | "explore" | "replay" | "compile";
 import { appmapSlug } from "../core/target.js";
 
-export type Phase = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+export type Phase = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
 /**
  * The dispatch knobs an arm turns, in `DispatchOptions`' exact spellings.
@@ -840,7 +840,37 @@ const FILMABLE: Arm[] = [...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE3, ...PHASE4,
 const PHASE5: Arm[] = FILMABLE.map(filmed);
 
 
-export const MATRIX: readonly Arm[] = [...PHASE1, ...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE3, ...PHASE4, ...PHASE5, ...PHASE6, ...PHASE7];
+/**
+ * Phase 8 — HARNESS diagnostics. These arms measure the rig, not the agent.
+ *
+ * They exist because the two runs that finally explained the "~43px Library-page AX offset"
+ * were dispatched by hand and left no trace in the matrix: a plain ax run and a filmed one,
+ * compared on the geometryBasis their run logs now carry. That comparison is what showed the
+ * transform was sound (window 1570x970, shot 1568x969, heightGap 0.24pt) and that the error
+ * was a snapshot taken mid-reflow after `--record` stages the window — not a coordinate bug at
+ * all, which is what everyone had assumed for three days.
+ *
+ * A diagnosis worth three days should not depend on someone remembering to type the command.
+ * Read the PAIR, never either alone: the filmed arm is the one that stages the window, so a
+ * discrepancy that appears only there is staging, and one in both is the transform.
+ *
+ * Their task outcome is close to irrelevant — the artifact is geometryBasis and the step rects.
+ * n=2 because the offset is intermittent, and an intermittent fault seen once is a rumour.
+ */
+const PHASE8: Arm[] = [
+	task("p8-geometry-ax", { backend: "ax" }, "is the AX→screenshot transform sound when nothing stages the window", {
+		phase: 8,
+		n: 2,
+		axRationale: "the transform under test IS the ax path's; cdp needs none (scale:\"css\" ties screenshot pixels to the coordinates act consumes)",
+	}),
+	task("p8-geometry-ax-filmed", { backend: "ax", record: true }, "does staging the window perturb the geometry the harness reads", {
+		phase: 8,
+		n: 2,
+		axRationale: "same transform, with the window resize --record performs — the difference between the two arms IS the measurement",
+	}),
+];
+
+export const MATRIX: readonly Arm[] = [...PHASE1, ...PHASE2_CORE, ...PHASE2_SLICES, ...PHASE3, ...PHASE4, ...PHASE5, ...PHASE6, ...PHASE7, ...PHASE8];
 
 export const phaseArms = (phase: Phase): Arm[] => MATRIX.filter((a) => a.phase === phase);
 

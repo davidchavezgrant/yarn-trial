@@ -525,7 +525,7 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 export function printPlan(log: (line: string) => void = console.log): void {
 	const total = MATRIX.reduce((sum, a) => sum + a.n, 0);
 	log(`benchmark matrix — ${MATRIX.length} arms, ${total} runs (dom cut; Notion cut entirely; procedures added 2026-08-01 — reasons in matrix.ts)`);
-	for (const phase of [1, 2, 3, 4, 5, 6, 7] as Phase[]) {
+	for (const phase of [1, 2, 3, 4, 5, 6, 7, 8] as Phase[]) {
 		const note =
 			phase === 4
 				? " (optional)"
@@ -709,7 +709,7 @@ async function main(argv: string[]): Promise<number> {
 	}
 	if (cmd === "phase") {
 		const phase = Number(argv[1]);
-		if (![1, 2, 3, 4, 5, 6, 7].includes(phase)) {
+		if (![1, 2, 3, 4, 5, 6, 7, 8].includes(phase)) {
 			console.error(USAGE);
 
 			return EXIT_REFUSED;
@@ -805,7 +805,7 @@ async function main(argv: string[]): Promise<number> {
 		const ti = argv.indexOf("--then");
 		const then = ti >= 0 ? Number(argv[ti + 1]) : undefined;
 		const ii = argv.indexOf("--interval");
-		const valid = (p: number) => [1, 2, 3, 4, 5, 6, 7].includes(p);
+		const valid = (p: number) => [1, 2, 3, 4, 5, 6, 7, 8].includes(p);
 		if (!valid(phase) || (then !== undefined && !valid(then))) {
 			console.error(USAGE);
 
@@ -833,7 +833,7 @@ async function main(argv: string[]): Promise<number> {
 		let phases: Phase[] | undefined;
 		if (pi >= 0) {
 			const nums = (argv[pi + 1] ?? "").split(",").map((s) => Number(s.trim()));
-			if (!nums.length || nums.some((n) => ![1, 2, 3, 4, 5, 6, 7].includes(n))) {
+			if (!nums.length || nums.some((n) => ![1, 2, 3, 4, 5, 6, 7, 8].includes(n))) {
 				console.error("--phases wants a comma list from 1-6, e.g. --phases 1,2,3,6");
 
 				return EXIT_REFUSED;

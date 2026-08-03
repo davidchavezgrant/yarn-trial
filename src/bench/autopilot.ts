@@ -113,7 +113,7 @@ export interface AutopilotOptions {
 
 /** Requested phases, deduped and ordered — ascending, except 5 (filmed) always runs last. */
 export function orderedPhases(phases: Phase[]): Phase[] {
-	const valid = [...new Set(phases)].filter((p): p is Phase => [1, 2, 3, 4, 5, 6, 7].includes(p));
+	const valid = [...new Set(phases)].filter((p): p is Phase => [1, 2, 3, 4, 5, 6, 7, 8].includes(p));
 	const rest = valid.filter((p) => p !== 5).sort((a, b) => a - b);
 
 	return valid.includes(5) ? [...rest, 5] : rest;
