@@ -110,10 +110,10 @@ copies first" resolution exists for exactly these rows and never fires for them.
 model-A run's detail renders model B's graph while graphSource claims "(live)" truthfully but
 uselessly. Same after any re-explore of a variant with older task runs on the board.
 
-### B3. CONFIRMED [medium] dash.ts:1098 — heatFor counts ungrounded/curated/procedure runs into a graph's traversal heat
+### B3. CONFIRMED [medium] dash.ts:1098 — heatFor counts ungrounded/curated/recipe runs into a graph's traversal heat
 The filter is `groundingArmId(a) !== exploreArmId`, but groundingArmId ignores
-`noGrounding`/`useRecipe`/`useProcedures` (armAppmapSlug takes none as input) — so p2-*-ungrounded,
-p2-curated, and all four p6 procedure arms (including procedure-from-ungrounded, defined by having
+`noGrounding`/`useCurated`/`useRecipes` (armAppmapSlug takes none as input) — so p2-*-ungrounded,
+p2-curated, and all four p6 recipe arms (including recipe-from-ungrounded, defined by having
 no map) count as consumers of their backend's explore graph. Edge thickness — "the map funneled
 traffic down these edges" — aggregates runs the map never informed, inverting the
 grounded-vs-ungrounded comparison the display feeds. Display-only.

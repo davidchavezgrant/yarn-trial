@@ -455,7 +455,7 @@ test("BuildState__ExposesLineageAndTargetKey__When__ArmsRideTheWire", () => {
 	const byId = (id: string) => s.arms.find((a) => a.id === id);
 	assert.equal(byId("ax-grounded")?.groundedBy, "explore-ax");
 	assert.equal(byId("cdp-grounded")?.groundedBy, "explore-cdp");
-	// Curated (USE_RECIPE) arms are grounded — they nest too.
+	// Curated (USE_CURATED) arms are grounded — they nest too.
 	// The curated tier moved to cdp on 2026-08-01 — it measures ONBOARDING COST, which should be
 	// read on the shipping actuator, and it has no ax twin so it was never a comparison.
 	assert.equal(byId("curated")?.groundedBy, "explore-cdp");
@@ -1207,7 +1207,7 @@ test("groundingArmId__AttributesTheMapTheArmActuallyReads__When__VariantsCombine
 	// version still named explore-web-cdp, deleted from the matrix.
 	for (const arm of MATRIX) {
 		if (arm.kind === "explore" || arm.kind === "compile") continue;
-		if (arm.dispatch.noGrounding || arm.dispatch.useRecipe || arm.dispatch.useProcedures) continue;
+		if (arm.dispatch.noGrounding || arm.dispatch.useCurated || arm.dispatch.useRecipes) continue;
 		const id = groundingArmId(arm);
 		assert.ok(armById(id), `${arm.id} attributed to "${id}", which is not an arm`);
 		assert.equal(armAppmapSlug(armById(id)!), armAppmapSlug(arm), `${arm.id} attributed to ${id}, a different map`);

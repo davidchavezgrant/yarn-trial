@@ -235,7 +235,7 @@ export interface PassView {
 	 */
 	exploreRank?: { rank: number; of: number };
 	/** Replay arms. */
-	replay?: { meanRecipeSteps?: number; meanRescuedSteps?: number };
+	replay?: { meanProcedureSteps?: number; meanRescuedSteps?: number };
 	entries: EntryView[];
 }
 
@@ -282,7 +282,7 @@ export interface ArmView {
 	 * The phase-1 explore arm whose map this task/replay arm consumed (groundingArmId — the
 	 * same resolution orchestrate applies), so the board can nest arms under their lineage.
 	 * Absent on ungrounded (NO_GROUNDING) arms and on explore/compile arms. Curated
-	 * (USE_RECIPE) arms are still grounded — they carry it and nest.
+	 * (USE_CURATED) arms are still grounded — they carry it and nest.
 	 */
 	groundedBy?: string;
 	/** What the arm points at — the dispatch URL for web arms, else the app. The picker's key. */
@@ -589,8 +589,8 @@ function passView(arm: Arm, model: string | undefined, entries: ManifestEntry[],
 		...(arm.kind === "replay"
 			? {
 					replay: {
-						...(mean(r.collected.map((e) => e.metrics?.recipeSteps).filter((n): n is number => n !== undefined)) !== undefined
-							? { meanRecipeSteps: mean(r.collected.map((e) => e.metrics?.recipeSteps).filter((n): n is number => n !== undefined)) }
+						...(mean(r.collected.map((e) => e.metrics?.procedureSteps).filter((n): n is number => n !== undefined)) !== undefined
+							? { meanProcedureSteps: mean(r.collected.map((e) => e.metrics?.procedureSteps).filter((n): n is number => n !== undefined)) }
 							: {}),
 						...(mean(r.collected.map((e) => e.metrics?.rescuedSteps).filter((n): n is number => n !== undefined)) !== undefined
 							? { meanRescuedSteps: mean(r.collected.map((e) => e.metrics?.rescuedSteps).filter((n): n is number => n !== undefined)) }
@@ -1315,7 +1315,7 @@ export function narratorPrompt(
 		"Questions the matrix exists to answer (from the plan): which backend to build on;",
 		"what grounding buys (actions, tokens, wrong-scope mutations); whether cdp's leaner",
 		"observations are denser or blinder (compare explore discovery: controls seen/actuated,",
-		"surfaces, graph nodes, scope ambiguities); what vision costs/buys; whether recipe replay",
+		"surfaces, graph nodes, scope ambiguities); what vision costs/buys; whether procedure replay",
 		"is fleet-ready; judge disagreements with self-reports.",
 		"",
 		"Write 2–3 sentences, Strunk & White style: plain, active, omit needless words. Every",
@@ -1348,11 +1348,11 @@ export function narratorPrompt(
 const ARM_TITLE_COPY: Record<string, string> = {
 	"grounded task": "Explored Task",
 	"ungrounded task": "Unexplored Task",
-	"human-notes task": "Curated-Recipe Task",
+	"human-notes task": "Curated-Procedure Task",
 	"vision-map grounded task": "Vision-Map Explored Task",
-	"recipe compile": "Recipe Compile",
-	"recipe replay": "Recipe Replay",
-	"recipe replay (no rescue)": "Recipe Replay (No Rescue)",
+	"procedure compile": "Procedure Compile",
+	"procedure replay": "Procedure Replay",
+	"procedure replay (no rescue)": "Procedure Replay (No Rescue)",
 };
 
 /**
@@ -2573,7 +2573,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	const localRunRow = async (): Promise<FleetRow | undefined> => {
 		// pgrep exits 1 on no match — that is the quiet "nothing running" path, not an error.
 		const inFlight = await new Promise<boolean>((resolve) =>
-			execFile("pgrep", ["-f", "tsx src/core/(agent|explore|recipe-cli)\\.ts"], (err) => resolve(!err)));
+			execFile("pgrep", ["-f", "tsx src/core/(agent|explore|procedure-cli)\\.ts"], (err) => resolve(!err)));
 		if (!inFlight) return undefined;
 
 		let jobId: string | undefined;

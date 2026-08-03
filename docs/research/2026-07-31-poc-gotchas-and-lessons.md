@@ -192,10 +192,10 @@ declared, budgeted inputs (the appmap).
   (`auditTaskPrompt()`) that makes the agent refuse a prompt that dictates method; an
   explicit `--hinted` flag opts in and stamps the run log. Zero violations since.
 - **The gate had a side door: the grounding artifact.** The original appmaps were partly
-  hand-written and contained recipes for the exact tasks being measured — so "grounded"
-  runs measured recipe-following, not the pipeline. The fix is provenance: `docs/appmaps/`
+  hand-written and contained procedures for the exact tasks being measured — so "grounded"
+  runs measured note-following, not the pipeline. The fix is provenance: `docs/appmaps/`
   holds *only* stamped machine output from the exploration pass; hand-curated notes live
-  in a separate, separately-declared tier (`docs/recipes/`). Every run log records which
+  in a separate, separately-declared tier (`docs/procedures/`). Every run log records which
   tier grounded it, plus the map's content hash. **Never hand-edit a stamped appmap.**
 - **One log writer, in a `finally`, or your reliability numbers are survivorship-biased.**
   We had two writers that drifted: one path omitted the field the gallery filtered on,
@@ -570,7 +570,7 @@ From `2026-07-30-cua-learnings-for-real-implementation.md`, which argues this in
    Mac fleet.
 4. **Treat sign-in as a product component** — the auth constraint is why the fleet is
    persistent Macs at all.
-5. **Recipe compilation is the production cost lever:** grounding-time thinking →
+5. **Procedure compilation is the production cost lever:** grounding-time thinking →
    deterministic replay with the model as exception handler only. Whatever backend you
    choose, recorded actions must be replayable without a model in the loop; CDP makes
    this trivial. (Designed, not yet built — the storage tier exists.)

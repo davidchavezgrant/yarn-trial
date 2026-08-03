@@ -42,7 +42,7 @@ NL task ──▶ agent.ts ── autonomous loop (Claude Opus 5, tool use)
 - **`src/explore.ts`** — the grounding pass: same loop, different contract (25-step
   budget, absolute safety rules, `record`/`finish` tools) → `docs/appmaps/<app>.md`,
   auto-loaded into the agent's system prompt when present. Hand-curated notes live
-  separately in `docs/recipes/<app>.md` so exploration output stays uncontaminated;
+  separately in `docs/curated/<app>.md` so exploration output stays uncontaminated;
   both tiers ground the agent and the run log records which was used.
 - **`src/probe.ts`** — permissions/perception smoke test. **`src/step.mts`** — manual
   step driver for debugging.
@@ -59,7 +59,7 @@ NL task ──▶ agent.ts ── autonomous loop (Claude Opus 5, tool use)
 2. **Grounding as a separate, cacheable pass.** Exploration takes ~5-6 min (measured)
    and runs once per app. Clean re-measure: it roughly halves actions and tokens, and
    more importantly it fixes wrong-scope changes that otherwise pass verification. This maps directly onto Jasper's ~24h per-app onboarding budget, and it's the
-   embryo of recipe compilation: thinking at grounding time, cheap execution at run time.
+   embryo of procedure compilation: thinking at grounding time, cheap execution at run time.
 
 3. **Window-scoped recording that can't leak.** `--record` polls the driver's
    per-window snapshots (~4fps) — which capture the target window's own content even
@@ -98,7 +98,7 @@ grounded, 3–5 actions, zero dead ends; clean recorded deliverables in `out/`.
 ## Next steps (agreed direction)
 
 1. **Second-app generalization test** — the biggest open claim.
-2. **Recipe compilation** — grounding-time thinking → replayable deterministic
+2. **Procedure compilation** — grounding-time thinking → replayable deterministic
    sequences, model only as exception handler (justified by cost + determinism now,
    not latency).
 3. **Driver `browser_*` CDP tools** for Electron targets — may beat AX for Yarn's own app.

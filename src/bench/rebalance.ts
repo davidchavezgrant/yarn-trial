@@ -78,7 +78,7 @@ export async function rebalanceStranded(deps: RebalanceDeps = {}): Promise<Move[
 			continue;
 		}
 
-		const res = await send({ ...dispatchOptionsFor(arm, entry.recipe, entry.model), host: m.to, queue: false });
+		const res = await send({ ...dispatchOptionsFor(arm, entry.procedure, entry.model), host: m.to, queue: false });
 		if (!res.ok) {
 			// The job is now cancelled on `from` and not accepted on `to`. Say so loudly: the
 			// sample still owes a run, and the next dispatch wave is what re-submits it.

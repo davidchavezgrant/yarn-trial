@@ -942,7 +942,7 @@ test("SYNC_EXCLUDES__WithholdsAppmaps__When__ShippingTheCheckout", async () => {
 		const rsyncArgs = rec.rsync.flat();
 		const excluded = rsyncArgs.filter((a, i) => rsyncArgs[i - 1] === "--exclude");
 		assert.ok(excluded.includes("/docs/appmaps/"), `appmaps must be withheld, got: ${excluded.join(" ")}`);
-		// Recipes are NOT excluded here — syncRecipes owns them by the same argument, but this
+		// Procedures are NOT excluded here — syncProcedures owns them by the same argument, but this
 		// assertion is about the map path that actually regressed.
 		assert.ok(excluded.includes("/.env"), "the secret exclusions must survive any edit to this list");
 	});

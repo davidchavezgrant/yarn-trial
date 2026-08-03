@@ -3,11 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
-import { compileRecipe, readRecipe, recipeFileFor } from "../../core/recipe.js";
-import { LIVE_DIR, RUN_FILES, archiveRun, dataRoot, recipesDir, runFile, runRel } from "../../paths.js";
+import { compileProcedure, readProcedure, procedureFileFor } from "../../core/procedure.js";
+import { LIVE_DIR, RUN_FILES, archiveRun, dataRoot, proceduresDir, runFile, runRel } from "../../paths.js";
 import { EXIT_REFUSED as CTL_REFUSED, EXIT_UNREACHABLE as CTL_UNREACHABLE } from "../runner/ctl.js";
 import type { JobArtifacts, JobKind, JobRecord } from "../runner/jobs.js";
-import { autoSync, autoSyncProcedures, autoSyncRecipes, type SyncOptions } from "./appmaps.js";
+import { autoSync, autoSyncRecipes, autoSyncProcedures, type SyncOptions } from "./appmaps.js";
 import { type FleetRow, type FleetState, fleetStatus, pickIdleHost, pickShortestQueue } from "./fleet.js";
 import { defaultOperator, type HostEntry, type Inventory, loadHosts, resolveHost } from "./hosts.js";
 import { assertSafeRemotePath, DEFAULT_SSH_TIMEOUT_MS, firstLine, lastFrame, remoteDataRoot, runnerArgv, runnerHome, runSsh, runTransport, rsyncShell, SPAWN_FAILED_EXIT, type SshResult, type SshRunner, sshArgv, TIMEOUT_EXIT } from "./ssh.js";
@@ -91,19 +91,19 @@ export interface DispatchOptions {
 	axdomOff?: boolean;
 	/** `NO_GROUNDING=1`: the ungrounded arm — the child ignores its appmap. */
 	noGrounding?: boolean;
-	/** `USE_RECIPE=1`: ground from the curated docs/recipes/<app>.md notes instead. */
-	/** `USE_PROCEDURES=1`: ground on a harvested procedure for this exact task. */
-	useProcedures?: boolean;
-	procedureLineage?: "grounded" | "ungrounded";
-	/** Injected in tests, like `sync`/`syncRecipes`. */
-	syncProcedures?: (opts: { inventory?: Inventory }) => Promise<string | undefined>;
-	useRecipe?: boolean;
+	/** `USE_CURATED=1`: ground from the curated docs/curated/<app>.md notes instead. */
+	/** `USE_RECIPES=1`: ground on a harvested recipe for this exact task. */
+	useRecipes?: boolean;
+	recipeLineage?: "grounded" | "ungrounded";
+	/** Injected in tests, like `sync`/`syncProcedures`. */
+	syncRecipes?: (opts: { inventory?: Inventory }) => Promise<string | undefined>;
+	useCurated?: boolean;
 	/** Step budget override for the child run (AGENT_STEPS on the runner). */
 	steps?: number;
 	/** SNAP_PX on the child: snap a coordinate action to a control within N px. 0 = off. */
 	snapPx?: number;
-	/** Replay only: recipe file path RELATIVE to the data root — the same key on both machines. */
-	recipe?: string;
+	/** Replay only: procedure file path RELATIVE to the data root — the same key on both machines. */
+	procedure?: string;
 	/** Replay only: `--no-rescue`, the unattended posture — a broken step fails instead of calling the model. */
 	noRescue?: boolean;
 	/** Web target: `--url <url>` on the child argv (task and explore). The app field stays the display label. */
@@ -138,11 +138,11 @@ export interface DispatchOptions {
 	 */
 	sync?: (opts: SyncOptions) => Promise<string | undefined>;
 	/**
-	 * The recipe fan-out, run before a replay submit only — the runner refuses a replay whose
-	 * recipe is not already on its disk, and this is what puts it there. Injected for the same
+	 * The procedure fan-out, run before a replay submit only — the runner refuses a replay whose
+	 * procedure is not already on its disk, and this is what puts it there. Injected for the same
 	 * reason as `sync`.
 	 */
-	syncRecipes?: (opts: SyncOptions) => Promise<string | undefined>;
+	syncProcedures?: (opts: SyncOptions) => Promise<string | undefined>;
 	timeoutMs?: number;
 }
 
@@ -233,7 +233,7 @@ export async function dispatch(opts: DispatchOptions): Promise<DispatchResult> {
 	const run = opts.run ?? runSsh;
 	const kind: JobKind = opts.kind === "explore" || opts.kind === "replay" ? opts.kind : "task";
 	if (!opts.app?.trim()) throw new Error("dispatch needs an app");
-	if (kind === "replay" && !opts.recipe?.trim()) throw new Error("a replay dispatch needs a recipe path (relative to the data root)");
+	if (kind === "replay" && !opts.procedure?.trim()) throw new Error("a replay dispatch needs a procedure path (relative to the data root)");
 
 	const spec = {
 		kind,
@@ -249,15 +249,15 @@ export async function dispatch(opts: DispatchOptions): Promise<DispatchResult> {
 		noAx: Boolean(opts.noAx),
 		axdomOff: Boolean(opts.axdomOff),
 		noGrounding: Boolean(opts.noGrounding),
-		useRecipe: Boolean(opts.useRecipe),
-		useProcedures: Boolean(opts.useProcedures),
+		useCurated: Boolean(opts.useCurated),
+		useRecipes: Boolean(opts.useRecipes),
 		...(opts.snapPx !== undefined ? { snapPx: opts.snapPx } : {}),
-		...(opts.procedureLineage ? { procedureLineage: opts.procedureLineage } : {}),
+		...(opts.recipeLineage ? { recipeLineage: opts.recipeLineage } : {}),
 		noRescue: Boolean(opts.noRescue),
 		...(opts.backend ? { backend: opts.backend } : {}),
 		// The path is data-root-relative — the one key both machines share. The runner owns
 		// its validation (path discipline, file presence); nothing here second-guesses it.
-		...(kind === "replay" ? { recipe: opts.recipe } : {}),
+		...(kind === "replay" ? { procedure: opts.procedure } : {}),
 		...(opts.url ? { url: opts.url } : {}),
 		...(opts.appmapVariant ? { appmapVariant: opts.appmapVariant } : {}),
 		...(opts.model ? { model: opts.model } : {}),
@@ -297,18 +297,18 @@ export async function dispatch(opts: DispatchOptions): Promise<DispatchResult> {
 	// ran on another Mac — which reaches the target only if that Mac is collected from too.
 	// Measured at ~3s for three Macs, against runs that last minutes.
 	//
-	// A replay adds the recipe fan-out on top (a replay still reads its appmap graph for the
-	// teardown's scope resolution, so the appmap sync is not skipped for it). The recipe sync
-	// runs first because the runner REFUSES a replay whose recipe file is absent — this is the
+	// A replay adds the procedure fan-out on top (a replay still reads its appmap graph for the
+	// teardown's scope resolution, so the appmap sync is not skipped for it). The procedure sync
+	// runs first because the runner REFUSES a replay whose procedure file is absent — this is the
 	// step that makes the submit below admissible.
-	const recipeNote = kind === "replay" ? await (opts.syncRecipes ?? autoSyncRecipes)({ inventory: inv }) : undefined;
-	// A USE_PROCEDURES run needs its procedure on the target Mac for the same reason a replay
-	// needs its recipe. Unlike the replay the runner does NOT refuse when it is missing — the
+	const procedureNote = kind === "replay" ? await (opts.syncProcedures ?? autoSyncProcedures)({ inventory: inv }) : undefined;
+	// A USE_RECIPES run needs its recipe on the target Mac for the same reason a replay
+	// needs its procedure. Unlike the replay the runner does NOT refuse when it is missing — the
 	// child just falls back to the appmap tier and reports the wrong label — so this sync is the
 	// only thing standing between phase 6 and six runs of mislabelled data.
-	const procedureNote = opts.useProcedures ? await (opts.syncProcedures ?? autoSyncProcedures)({ inventory: inv }) : undefined;
+	const recipeNote = opts.useRecipes ? await (opts.syncRecipes ?? autoSyncRecipes)({ inventory: inv }) : undefined;
 	const appmapNote = await (opts.sync ?? autoSync)({ inventory: inv });
-	const syncNote = [recipeNote, procedureNote, appmapNote].filter(Boolean).join("\n") || undefined;
+	const syncNote = [procedureNote, recipeNote, appmapNote].filter(Boolean).join("\n") || undefined;
 
 	for (const { host, queue } of targets) {
 		const res = await run(host, runnerArgv("submit", queue ? { ...spec, queue: true } : spec), { timeoutMs: opts.timeoutMs ?? SUBMIT_TIMEOUT_MS });
@@ -837,9 +837,9 @@ function toHost(host: HostEntry | string, inv?: Inventory): HostEntry {
 	return typeof host === "string" ? resolveHost(host, inv ?? loadHosts()) : host;
 }
 
-const USAGE = `usage: dispatch <host|auto> "<task>" "<App>" [--backend ax|cdp] [--record] [--no-vision] [--no-ax] [--axdom-off] [--no-grounding] [--use-recipe] [--use-procedures [--procedure-lineage grounded|ungrounded]] [--model <id>] [--no-cleanup]
+const USAGE = `usage: dispatch <host|auto> "<task>" "<App>" [--backend ax|cdp] [--record] [--no-vision] [--no-ax] [--axdom-off] [--no-grounding] [--use-curated] [--use-recipes [--recipe-lineage grounded|ungrounded]] [--model <id>] [--no-cleanup]
        dispatch <host|auto> explore "<App>"
-       dispatch <host|auto> replay <recipe-file-or-stamp> [--no-rescue]
+       dispatch <host|auto> replay <procedure-file-or-stamp> [--no-rescue]
        dispatch <host> follow <jobId> [--from <byte>]
        dispatch <host> pull <jobId>
 
@@ -852,36 +852,36 @@ for callers whose own lifetime is capped and must not hold a 40-minute run's lea
 whose text is exactly one of those four words has to be dispatched through the API instead.`;
 
 /**
- * What a `dispatch … replay <arg>` argument means: a recipe file, or a run stamp whose
- * compiled recipe already exists. The same resolution recipe-cli's replay verb applies,
- * MINUS compilation — dispatch never compiles, because compileRecipe is a gate (it refuses
- * failed/unverified/hinted runs) and minting a recipe as a side effect of a dispatch would
+ * What a `dispatch … replay <arg>` argument means: a procedure file, or a run stamp whose
+ * compiled procedure already exists. The same resolution procedure-cli's replay verb applies,
+ * MINUS compilation — dispatch never compiles, because compileProcedure is a gate (it refuses
+ * failed/unverified/hinted runs) and minting a procedure as a side effect of a dispatch would
  * bury that refusal inside a submit error.
  *
- * The wire path is `docs/recipes/<basename>` regardless of where the local file sits: that
- * is where the fan-out lands recipes on every Mac, and the runner resolves the relative path
+ * The wire path is `docs/procedures/<basename>` regardless of where the local file sits: that
+ * is where the fan-out lands procedures on every Mac, and the runner resolves the relative path
  * against ITS data root.
  */
-function resolveReplayArg(arg: string): { app: string; recipe: string } {
+function resolveReplayArg(arg: string): { app: string; procedure: string } {
 	let file: string | undefined;
 	if (fs.existsSync(arg)) file = arg;
 	else {
 		const logPath = runFile(arg, RUN_FILES.log, path.join(dataRoot(), "out"));
 		if (fs.existsSync(logPath)) {
 			const runLog = JSON.parse(fs.readFileSync(logPath, "utf8"));
-			// Backend-keyed first, legacy second — see recipeFileFor.
-			const slug_ = compileRecipe(runLog, arg).slug;
-			const candidate = [recipeFileFor(recipesDir(), slug_, runLog.task, runLog.backend), recipeFileFor(recipesDir(), slug_, runLog.task)].find((p) => fs.existsSync(p)) ?? recipeFileFor(recipesDir(), slug_, runLog.task, runLog.backend);
-			if (!fs.existsSync(candidate)) throw new Error(`no compiled recipe for ${arg} — run: ./run recipe compile ${arg}`);
+			// Backend-keyed first, legacy second — see procedureFileFor.
+			const slug_ = compileProcedure(runLog, arg).slug;
+			const candidate = [procedureFileFor(proceduresDir(), slug_, runLog.task, runLog.backend), procedureFileFor(proceduresDir(), slug_, runLog.task)].find((p) => fs.existsSync(p)) ?? procedureFileFor(proceduresDir(), slug_, runLog.task, runLog.backend);
+			if (!fs.existsSync(candidate)) throw new Error(`no compiled procedure for ${arg} — run: ./run procedure compile ${arg}`);
 			file = candidate;
 		}
 	}
-	if (!file) throw new Error(`${arg} is neither a recipe file nor a run stamp`);
+	if (!file) throw new Error(`${arg} is neither a procedure file nor a run stamp`);
 
-	// The app comes out of the recipe itself — the runner needs it for the profile swap and
+	// The app comes out of the procedure itself — the runner needs it for the profile swap and
 	// the job key, and asking the operator to retype what the artifact already records is how
 	// a replay ends up leased under the wrong app name.
-	return { app: readRecipe(file).app, recipe: `docs/recipes/${path.basename(file)}` };
+	return { app: readProcedure(file).app, procedure: `docs/procedures/${path.basename(file)}` };
 }
 
 /**
@@ -908,8 +908,8 @@ async function main(argv: string[]): Promise<number> {
 
 			return 2;
 		}
-		const { app, recipe } = resolveReplayArg(argv[2]);
-		opts = { host, kind: "replay", app, recipe, noRescue: argv.includes("--no-rescue") };
+		const { app, procedure } = resolveReplayArg(argv[2]);
+		opts = { host, kind: "replay", app, procedure, noRescue: argv.includes("--no-rescue") };
 	} else
 		// argv[1] is the task and reaches the spec untouched. No trimming, no unquoting: the
 		// shell already did its splitting, and anything further would be this file editing a
@@ -927,7 +927,7 @@ async function main(argv: string[]): Promise<number> {
 			 *
 			 * DispatchOptions declared `backend`, dispatch() put it on the wire and the runner
 			 * read it — the CLI simply never parsed it, so `--backend ax` was accepted in silence
-			 * and the run came back cdp. Same shape as useProcedures being dropped by the runner:
+			 * and the run came back cdp. Same shape as useRecipes being dropped by the runner:
 			 * every layer agrees the field exists and one link never touches it, so nothing
 			 * errors and the run is quietly the wrong arm.
 			 */
@@ -936,13 +936,13 @@ async function main(argv: string[]): Promise<number> {
 			axdomOff: argv.includes("--axdom-off"),
 			noGrounding: argv.includes("--no-grounding"),
 			...(argv.includes("--model") ? { model: argv[argv.indexOf("--model") + 1] } : {}),
-			...(argv.includes("--procedure-lineage")
-				? { procedureLineage: argv[argv.indexOf("--procedure-lineage") + 1] as "grounded" | "ungrounded" }
+			...(argv.includes("--recipe-lineage")
+				? { recipeLineage: argv[argv.indexOf("--recipe-lineage") + 1] as "grounded" | "ungrounded" }
 				: {}),
-			// The curated-recipe grounding tier (docs/recipes/<app>.md), same knob the bench
+			// The curated-notes grounding tier (docs/curated/<app>.md), same knob the bench
 			// arms use — app method knowledge belongs there, never in the task prompt.
-			useRecipe: argv.includes("--use-recipe"),
-			useProcedures: argv.includes("--use-procedures"),
+			useCurated: argv.includes("--use-curated"),
+			useRecipes: argv.includes("--use-recipes"),
 			// --no-cleanup: CLEANUP=off on the child — the run ends on the changed state.
 			// For filmed takes and maintenance runs whose change IS the deliverable.
 			...(argv.includes("--no-cleanup") ? { cleanup: "off" as const } : {}),

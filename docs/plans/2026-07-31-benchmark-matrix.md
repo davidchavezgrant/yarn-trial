@@ -1,4 +1,4 @@
-# Benchmark matrix: backends × grounding × recipes (settled 2026-07-31)
+# Benchmark matrix: backends × grounding × procedures (settled 2026-07-31)
 
 **Status**: approved shape; NO runs fire without David's explicit go, phase by phase.
 **Target**: Electron only — the Yarn app. Canonical task: "show me how to change the
@@ -13,7 +13,7 @@ prompt. Arms differ only in declared inputs (backend, perception channels, groun
    task outcomes?
 2. How much does a grounding pass buy over ad-hoc discovery (no pass, agent discovers
    mid-task), and how does it affect outcomes?
-3. How much do recipes help complete a task, and how do they affect outcomes?
+3. How much do procedures help complete a task, and how do they affect outcomes?
 4. Vision-only (added by David): can the agent complete tasks from screenshots alone,
    and does grounding rescue it? "A big thing we want to test."
 
@@ -27,7 +27,7 @@ Cells nothing would ever ship (dom + no-vision + ungrounded, stacked handicaps) 
 - Yarn signed in on mac2 + mac3 (`./run signin mac2 "Yarn"`, `./run signin mac3 "Yarn"`).
   Found signed out 2026-07-31: mac2 at the SSO wall, mac3 no window.
 - Plumbing (built in the `benchmarks` worktree): dispatch/runner carry `--backend`,
-  `--no-ax`, `NO_GROUNDING`, `USE_RECIPE`; replay as a dispatchable job kind; recipe files
+  `--no-ax`, `NO_GROUNDING`, `USE_CURATED`; replay as a dispatchable job kind; procedure files
   fan out to the fleet; cdp arms need Yarn launched with `--remote-debugging-port` on the
   target Mac; bench orchestrator + manifest + report collector.
 
@@ -58,7 +58,7 @@ Permutation slices (18):
 | ax grounded, axdom off (`AXDOM=0`) | 3 | is the Swift sidecar worth shipping (outcomes, not just naming counts) |
 | ax grounded, `--no-vision` | 3 | what the screenshot channel buys on ax |
 | cdp grounded, `--no-vision` | 3 | same on cdp (DOM snapshot is text-rich — vision may be worth less; fleet-scale cost) |
-| ax, curated notes (`USE_RECIPE=1`) | 3 | explore pass vs 10 minutes of human notes |
+| ax, curated notes (`USE_CURATED=1`) | 3 | explore pass vs 10 minutes of human notes |
 | **vision-only** (`--no-ax`) × ungrounded | 3 | the floor: screenshots alone, cold |
 | **vision-only** × grounded (explore appmap) | 3 | does prose grounding rescue a vision-only agent — the AX-hostile-app deploy story |
 | **vision-only** × curated notes | 3 | same against the human-written tier |
@@ -74,7 +74,7 @@ rejections; wall-clock (job record `queuedAt`/`startedAt`/`endedAt` — queue wa
 excluded from run elapsed by design); per-step timestamps; tokens + model calls;
 elements-per-observation.
 
-## Phase 3 — recipes (3 compiles + 12 replays)
+## Phase 3 — procedures (3 compiles + 12 replays)
 
 | # | Run | Measures |
 |---|-----|----------|
@@ -97,7 +97,7 @@ Wall-clock ≈ 4–5 hours after sign-ins; the explore passes dominate and run i
 - Full factorial (~90+ runs): most cells answer no question; n=3 can't resolve
   interactions anyway — deepen a surprising cell after it surprises.
 - `--no-ax` on dom/cdp: impossible by construction (refs are the observation).
-- Cross-backend replay: recipes record their backend; not worth building for a benchmark.
+- Cross-backend replay: procedures record their backend; not worth building for a benchmark.
 - Perception-variant explore passes: the 40-min multiplier; discovery is measured once
   per backend.
 - **Vision-only grounding (producing a map from screenshots)**: deferred. It is a
@@ -111,7 +111,7 @@ Wall-clock ≈ 4–5 hours after sign-ins; the explore passes dominate and run i
 
 ## Report
 
-`docs/research/2026-07-31-backend-grounding-recipe-benchmarks.md` (vault-symlinked):
+`docs/research/2026-07-31-backend-grounding-reuse-benchmarks.md` (vault-symlinked):
 tables per axis, timing breakdowns, raw run-log stamps for re-analysis, and a "for Aman"
 section — which backend to build on, what grounding buys, whether replay is fleet-ready.
 

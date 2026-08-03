@@ -662,7 +662,7 @@ function hintWarning(t) {
   const mech = t.match(/\b(click|clicks|clicking|clicked|press|presses|pressing|keystroke\w*|select all|scroll\w*|hover\w*|drag\w*|cmd\+|ctrl\+|option\+|shift\+)/gi);
   const uniq = mech ? [...new Set(mech.map(m => m.toLowerCase()))] : [];
   if (vocab) return 'Names driver internals (' + [...new Set(vocab)].join(', ') + '). The agent will refuse: task prompts state the goal only.';
-  if (uniq.length >= 2) return 'Reads like a recipe (' + uniq.join(', ') + '). The agent will refuse — describe WHAT to achieve, not HOW.';
+  if (uniq.length >= 2) return 'Reads like a procedure (' + uniq.join(', ') + '). The agent will refuse — describe WHAT to achieve, not HOW.';
   return '';
 }
 

@@ -16,10 +16,10 @@ import {
 	stageTitle,
 } from "../src/bench/autopilot.js";
 import { type Manifest, type ManifestEntry, readManifest, utcDate, writeManifest } from "../src/bench/manifest.js";
-import { BENCH_PRIMARY_MODEL, CANONICAL_TASK, type Phase, phaseArms, procedureArms } from "../src/bench/matrix.js";
+import { BENCH_PRIMARY_MODEL, CANONICAL_TASK, type Phase, phaseArms, recipeArms } from "../src/bench/matrix.js";
 import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, interruptedPass, runPhase } from "../src/bench/orchestrate.js";
 import { watchPhase } from "../src/bench/watch.js";
-import { procedureFileFor } from "../src/core/procedure.js";
+import { recipeFileFor } from "../src/core/recipe.js";
 import { liveDir } from "../src/paths.js";
 import { host, withTempAsync } from "./fixtures.js";
 
@@ -92,7 +92,7 @@ test("autopilot__DispatchesNothing__When__GoFlagAbsent", async () => {
 			date: DATE,
 			outRoot: dir,
 			dataDir: dir,
-			proceduresDir: path.join(dir, "procs"),
+			recipesDir: path.join(dir, "procs"),
 			log: (l) => lines.push(l),
 			runPhaseFn: async () => (touched++, EXIT_OK),
 			watchFn: async () => (touched++, doneProgress),
@@ -429,16 +429,16 @@ test("promoteForPhase6__FillsTheArm__When__AHarvestedCandidateExists", async () 
 		// The judged-PASS grounded ax run, harvested into its own folder.
 		const runDir = path.join(dataOut, "bench/live/run-1");
 		fs.mkdirSync(runDir, { recursive: true });
-		fs.writeFileSync(path.join(runDir, "procedure.md"), "route prose");
+		fs.writeFileSync(path.join(runDir, "recipe.md"), "route prose");
 
-		const wanted = procedureFileFor(procDir, "yarn", CANONICAL_TASK, "ax", "grounded");
+		const wanted = recipeFileFor(procDir, "yarn", CANONICAL_TASK, "ax", "grounded");
 		const outcome = await promoteForPhase6({
 			manifest: manifest([entry("ax-grounded", "run-1")]),
 			model: MODEL,
 			dataOut,
-			proceduresDir: procDir,
+			recipesDir: procDir,
 			promoteFn: async (stamp) => {
-				// Stand-in for promoteProcedure: lineage/backend derive from the run log, which
+				// Stand-in for promoteRecipe: lineage/backend derive from the run log, which
 				// for run-1 is (ax, grounded) — landing exactly the file the arm expects.
 				assert.equal(stamp, "run-1");
 				fs.mkdirSync(path.dirname(wanted), { recursive: true });
@@ -449,7 +449,7 @@ test("promoteForPhase6__FillsTheArm__When__AHarvestedCandidateExists", async () 
 		assert.deepEqual(outcome.promoted, ["run-1"]);
 		// The other three arms (cdp, and both ungrounded lineages) have no candidates: blocked,
 		// reported as findings — and phase 6 skips them rather than refusing outright.
-		assert.equal(outcome.blocked.length, procedureArms(3).length - 1);
+		assert.equal(outcome.blocked.length, recipeArms(3).length - 1);
 	});
 });
 
@@ -459,24 +459,24 @@ test("promoteForPhase6__ReportsTheArmBlocked__When__NoSourceRunWasHarvested", as
 			manifest: manifest([]),
 			model: MODEL,
 			dataOut: path.join(dir, "out"),
-			proceduresDir: path.join(dir, "procs"),
+			recipesDir: path.join(dir, "procs"),
 			promoteFn: async () => assert.fail("nothing to promote"),
 			log: () => {},
 		});
 		assert.deepEqual(outcome.promoted, []);
-		assert.equal(outcome.blocked.length, procedureArms(3).length);
+		assert.equal(outcome.blocked.length, recipeArms(3).length);
 	});
 });
 
 // --- the per-arm phase-6 gate (orchestrate) ---
 
-test("runPhase__SkipsOnlyTheMissingArms__When__SomeProceduresArePromoted", async () => {
+test("runPhase__SkipsOnlyTheMissingArms__When__SomeRecipesArePromoted", async () => {
 	// All-or-nothing held the runnable grounded arms hostage to the ungrounded lineage, which
 	// is EXPECTED to be missing (a judged-PASS ungrounded run is rare by design).
 	await withTempAsync("auto-", async (dir) => {
 		const procDir = path.join(dir, "procs");
 		for (const backend of ["ax", "cdp"]) {
-			const f = procedureFileFor(procDir, "yarn", CANONICAL_TASK, backend, "grounded");
+			const f = recipeFileFor(procDir, "yarn", CANONICAL_TASK, backend, "grounded");
 			fs.mkdirSync(path.dirname(f), { recursive: true });
 			fs.writeFileSync(f, "prose");
 		}
@@ -487,7 +487,7 @@ test("runPhase__SkipsOnlyTheMissingArms__When__SomeProceduresArePromoted", async
 			go: true,
 			date: DATE,
 			outRoot: dir,
-			proceduresDir: procDir,
+			recipesDir: procDir,
 			log: (l) => lines.push(l),
 			dispatchFn: async (o) => {
 				calls.push(String(o.task));
@@ -496,35 +496,35 @@ test("runPhase__SkipsOnlyTheMissingArms__When__SomeProceduresArePromoted", async
 			},
 		});
 		assert.equal(code, EXIT_OK);
-		const grounded = procedureArms(3).filter((a) => (a.dispatch.procedureLineage ?? "grounded") === "grounded");
+		const grounded = recipeArms(3).filter((a) => (a.dispatch.recipeLineage ?? "grounded") === "grounded");
 		assert.equal(calls.length, grounded.reduce((s, a) => s + a.n, 0), "only the promoted arms dispatch");
 		assert.ok(lines.some((l) => /SKIPPED/.test(l) && /from-ungrounded/.test(l)));
 	});
 });
 
-test("runPhase__SkipsProceduresWithoutRefusingTheStage__When__NoProcedureExistsAtAll", async () => {
-	// Reuse holds BOTH frozen tiers since 2026-08-03, so "no procedure exists" must no longer
-	// refuse the stage: the recipe half is unaffected and has its own readiness. The old rule
-	// (every procedure arm missing → refuse) read the same as "nothing can run" only while the
-	// phase WAS the procedure tier. Generalization made the difference expensive — one
-	// unharvested procedure among twenty-two arms would have cancelled sixty runs.
+test("runPhase__SkipsRecipesWithoutRefusingTheStage__When__NoRecipeExistsAtAll", async () => {
+	// Reuse holds BOTH frozen tiers since 2026-08-03, so "no recipe exists" must no longer
+	// refuse the stage: the procedure half is unaffected and has its own readiness. The old rule
+	// (every recipe arm missing → refuse) read the same as "nothing can run" only while the
+	// phase WAS the recipe tier. Generalization made the difference expensive — one
+	// unharvested recipe among twenty-two arms would have cancelled sixty runs.
 	await withTempAsync("auto-", async (dir) => {
 		const lines: string[] = [];
 		const code = await runPhase(3, {
 			go: true,
 			date: DATE,
 			outRoot: dir,
-			proceduresDir: path.join(dir, "empty"),
+			recipesDir: path.join(dir, "empty"),
 			log: (s) => lines.push(s),
 			dispatchFn: async () => ({ ok: false as const, error: "unreachable", attempts: [] }),
 		});
-		assert.notEqual(code, EXIT_REFUSED, "the recipe half of Reuse must survive an unharvested procedure");
-		const skipped = lines.filter((l) => l.includes("no promoted procedure"));
-		assert.equal(skipped.length, 4, "each procedure arm says why it was skipped, loudly");
+		assert.notEqual(code, EXIT_REFUSED, "the procedure half of Reuse must survive an unharvested recipe");
+		const skipped = lines.filter((l) => l.includes("no promoted recipe"));
+		assert.equal(skipped.length, 4, "each recipe arm says why it was skipped, loudly");
 	});
 });
 
-test("runPhase__RefusesOutright__When__EveryDispatchableArmNeedsAMissingProcedure", async () => {
+test("runPhase__RefusesOutright__When__EveryDispatchableArmNeedsAMissingRecipe", async () => {
 	// The outright refusal still exists, scoped to what it always meant: nothing can run.
 	await withTempAsync("auto-", async (dir) => {
 		const calls: string[] = [];
@@ -532,11 +532,11 @@ test("runPhase__RefusesOutright__When__EveryDispatchableArmNeedsAMissingProcedur
 			go: true,
 			date: DATE,
 			outRoot: dir,
-			proceduresDir: path.join(dir, "empty"),
+			recipesDir: path.join(dir, "empty"),
 			log: () => {},
 			dispatchFn: async () => (calls.push("x"), { ok: false as const, error: "unreachable", attempts: [] }),
 		});
-		// Generalization is map-gated before it is procedure-gated, so with an empty manifest it
+		// Generalization is map-gated before it is recipe-gated, so with an empty manifest it
 		// refuses for the earlier reason — which is itself the guarantee worth asserting: a stage
 		// whose grounded arms have no maps never reaches dispatch.
 		assert.equal(code, EXIT_REFUSED);

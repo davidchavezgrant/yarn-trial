@@ -112,7 +112,7 @@ export interface RunMetrics {
 	judgeModel?: string;       // what actually judged, off the artifact
 	judgeFrames?: number;      // framesUsed
 	/** Replay runs. */
-	recipeSteps?: number;
+	procedureSteps?: number;
 	rescuedSteps?: number;
 	/** Explore passes — parsed from the appmap stamp + graph. */
 	controlsActuated?: number;
@@ -170,8 +170,8 @@ export interface ManifestEntry {
 	 * ground truth either way and collect records it into metrics.
 	 */
 	model?: string;
-	/** Replay arms: the recipe file the run replays, data-root-relative. */
-	recipe?: string;
+	/** Replay arms: the procedure file the run replays, data-root-relative. */
+	procedure?: string;
 	metrics?: RunMetrics;
 	/** Why collect could not finish this entry (missing artifact, unreadable log). */
 	note?: string;

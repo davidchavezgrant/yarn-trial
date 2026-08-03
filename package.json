@@ -12,7 +12,7 @@
     "agent": "tsx src/core/agent.ts",
     "explore": "tsx src/core/explore.ts",
     "cleanup": "tsx src/core/cleanup.ts",
-    "recipe": "tsx src/core/recipe-cli.ts",
+    "procedure": "tsx src/core/procedure-cli.ts",
     "judge": "tsx src/core/judge-cli.ts",
     "home": "tsx src/core/home.ts",
     "humanize": "tsx src/cursor/humanize.ts",

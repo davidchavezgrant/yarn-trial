@@ -17,15 +17,15 @@ All findings below are fixed unless marked otherwise.
 
 ## Two live bugs, both failing safely (which is why nobody noticed)
 
-**Recipe replay could not handle dual-scope apps.** `surfaceOf()` in `src/core/recipe.ts` read
+**Procedure replay could not handle dual-scope apps.** `surfaceOf()` in `src/core/procedure.ts` read
 `targetSurface` off a `StepRecord` through an `as any`, and **nothing ever wrote the field**. So
-`RecipeStep.target.surface` was always absent, `resolveTarget`'s surface-narrowing branch was
-dead, and every compiled recipe carried name+role only — confirmed against the committed
-Wikipedia recipe, whose targets have exactly those two. The cost lands precisely where this repo
+`ProcedureStep.target.surface` was always absent, `resolveTarget`'s surface-narrowing branch was
+dead, and every compiled procedure carried name+role only — confirmed against the committed
+Wikipedia procedure, whose targets have exactly those two. The cost lands precisely where this repo
 documents its risk: an app with two same-named controls cannot be replayed at all, and the 10
 dual-scope Yarn settings (brand vs document) are the documented example. It fails *safe* —
 `resolveTarget` errors on ambiguity rather than clicking the wrong twin — which is why the
-Wikipedia recipe replayed 2/2 and nothing looked broken. **The cast is what hid it: a typed read
+Wikipedia procedure replayed 2/2 and nothing looked broken. **The cast is what hid it: a typed read
 would not have compiled.**
 
 **Teardown's model call had no retry.** It was the only bare `messages.create` in core — explore,

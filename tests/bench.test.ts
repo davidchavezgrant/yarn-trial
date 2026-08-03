@@ -7,7 +7,7 @@ import { auditTaskPrompt } from "../src/core/harness.js";
 import type { JobRecord } from "../src/remote/runner/jobs.js";
 import { collect, collectEntry, expectedProvenance, failureKind, jobTiming, journalScopes, parseAppmapStamp, parseGraphCounts, parseRunMetrics, poisonedHosts, technicalFailure } from "../src/bench/collect.js";
 import { archiveDirFor, entriesForArm, manifestPath, readManifest, recordSubmissions, submittedCount, type Manifest, type ManifestEntry, updateEntry, writeManifest } from "../src/bench/manifest.js";
-import { BACKENDS, BENCH_ALT_MODEL, BENCH_APP, BENCH_PRIMARY_MODEL, CREATION_EXCLUDED, EXPLORE_SAMPLES, armModel, MATRIX, armAppmapSlug, armById, armTitle, discoveryArmsFor, orderStages, perceptionLine, phaseArms, phaseRunCount, procedureArms, STAGES, stageNeedsMaps, stageOf, type Arm } from "../src/bench/matrix.js";
+import { BACKENDS, BENCH_ALT_MODEL, BENCH_APP, BENCH_PRIMARY_MODEL, CREATION_EXCLUDED, EXPLORE_SAMPLES, armModel, MATRIX, armAppmapSlug, armById, armTitle, discoveryArmsFor, orderStages, perceptionLine, phaseArms, phaseRunCount, recipeArms, STAGES, stageNeedsMaps, stageOf, type Arm } from "../src/bench/matrix.js";
 import type { DispatchOptions } from "../src/remote/control/dispatch.js";
 import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, auditPhase, dateArg, dispatchOptionsFor, findCompileSource, plannedRuns, runPhase } from "../src/bench/orchestrate.js";
 import { renderReport, reportFileName, writeReport } from "../src/bench/report.js";
@@ -75,11 +75,11 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// Phase 2: core 12, 8 slices x 3, plus the minimum-context PAIR x 3 — bare AX with
 	// no DOM attrs and no screenshots, grounded on an equally minimal map and ungrounded. The
 	// ungrounded half is the floor of the whole matrix; every other arm should beat it.
-	// core 12 (2 backends x grounded/ungrounded x 3), slices 27, procedures-tier comparators 6.
+	// core 12 (2 backends x grounded/ungrounded x 3), slices 27, recipes-tier comparators 6.
 	// Slices went 24 -> 27 on 2026-08-01: the native-equivalent grid (AXDOM=0, i.e. AX
 	// with no DOM behind it) was missing its cold+screenshots cell.
 	// Stage 2 Configuration (2026-08-03): the old phase-2 grid (12 core + 27 slices + 6
-	// procedure-tier comparators = 45) plus the five cdp cells that came home from phase 7 —
+	// recipe-tier comparators = 45) plus the five cdp cells that came home from phase 7 —
 	// four vision-only and one grounded on a vision-written map. They vary perception and
 	// grounding tier on the canonical task, which is this stage's definition.
 	// 45 + 15 + 6: the two snap arms joined stage 2 on 2026-08-03 — vision-only reasoning with
@@ -87,7 +87,7 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// lacked.
 	assert.equal(phaseRunCount(2), 45 + 15 + 6);
 	// Stage 3 Reuse: both frozen-artifact tiers together, so the report can finally compare
-	// them. Recipes (2 local compiles + 6 replays + 3 no-rescue) and procedures (4 arms x 3).
+	// them. Procedures (2 local compiles + 6 replays + 3 no-rescue) and recipes (4 arms x 3).
 	assert.equal(phaseRunCount(3), 11 + 12);
 	// Stage 4 Generalization: second task (7), the creation task on every stage-2 config
 	// carried over from phase 7 (15 x 3), the model axis (3 x 3), and — since 2026-08-03 — the
@@ -175,22 +175,22 @@ test("STAGES__KeepFilmingOutOfMeasurementStages__When__ArmsSetRecord", () => {
 /**
  * The three gates, asserted against the ARMS rather than against a stage flag.
  *
- * The 2026-08-03 audit found six of ten procedure arms unprotected — a Claude cell and five
- * filmed twins sat in stages nobody had marked `procedureGate: true`, so they could dispatch
- * with nothing promoted and bank runs labelled "procedure" that measured the appmap tier. The
+ * The 2026-08-03 audit found six of ten recipe arms unprotected — a Claude cell and five
+ * filmed twins sat in stages nobody had marked `recipeGate: true`, so they could dispatch
+ * with nothing promoted and bank runs labelled "recipe" that measured the appmap tier. The
  * flag was attached to the stage; the risk belongs to the arm. Same shape for the map gate,
  * which missed Generalization's ten grounded creation arms entirely.
  */
-test("ProcedureGate__CoversEveryArmThatGroundsOnAProcedure__When__TheMatrixIsWalked", () => {
-	const consumers = MATRIX.filter((a) => a.dispatch.useProcedures);
-	assert.ok(consumers.length >= 10, "guard assumes the procedure tier is non-trivial");
+test("RecipeGate__CoversEveryArmThatGroundsOnARecipe__When__TheMatrixIsWalked", () => {
+	const consumers = MATRIX.filter((a) => a.dispatch.useRecipes);
+	assert.ok(consumers.length >= 10, "guard assumes the recipe tier is non-trivial");
 	for (const a of consumers) {
-		assert.ok(procedureArms(a.phase).length > 0, `${a.id} grounds on a procedure in an ungated stage ${a.phase}`);
+		assert.ok(recipeArms(a.phase).length > 0, `${a.id} grounds on a recipe in an ungated stage ${a.phase}`);
 	}
 });
 
 test("MapGate__CoversEveryStageHoldingAGroundedArm__When__ExceptDiagnostics", () => {
-	const readsAMap = (a: (typeof MATRIX)[number]) => a.kind === "task" && !a.dispatch.noGrounding && !a.dispatch.useRecipe && !a.dispatch.useProcedures;
+	const readsAMap = (a: (typeof MATRIX)[number]) => a.kind === "task" && !a.dispatch.noGrounding && !a.dispatch.useCurated && !a.dispatch.useRecipes;
 	for (const st of STAGES) {
 		const grounded = phaseArms(st.n).filter(readsAMap);
 		if (!grounded.length) continue;
@@ -223,7 +223,7 @@ test("GroundedArms__ReadAMapSomeExploreWrites__When__EveryArmIsResolved", () => 
 	// failure that cost six runs last pass and was only caught at collect.
 	const written = new Set(MATRIX.filter((a) => a.kind === "explore").map(armAppmapSlug));
 	for (const a of MATRIX) {
-		if (a.kind !== "task" || a.dispatch.noGrounding || a.dispatch.useRecipe || a.dispatch.useProcedures) continue;
+		if (a.kind !== "task" || a.dispatch.noGrounding || a.dispatch.useCurated || a.dispatch.useRecipes) continue;
 		const wanted = a.env?.APPMAP_VARIANT ? undefined : armAppmapSlug(a);
 		// Arms pinned to an explicit variant resolve through APPMAP_VARIANT, not the slug.
 		if (!wanted) continue;
@@ -527,7 +527,7 @@ test("runPhase__ShapesOptionsPerArm__When__Phase2Dispatches", async () => {
 		// And the matrix floor is dispatched with everything off at once, which no other arm is.
 		assert.equal(byFlag((c) => c.axdomOff === true && c.noVision === true && c.noGrounding === true).length, 3);
 		assert.equal(byFlag((c) => c.noVision === true && c.backend === "cdp").length, 3);
-		assert.equal(byFlag((c) => c.useRecipe === true && !c.noAx).length, 3);
+		assert.equal(byFlag((c) => c.useCurated === true && !c.noAx).length, 3);
 		// Two vision-only arms remain (ungrounded floor + curated prose), 3 runs each. The
 		// third — the machine-written-appmap arm — was cut, which is why no dispatch carries
 		// appmapVariant: the variant it asked for resolves to a file that does not exist, and
@@ -624,7 +624,7 @@ test("runPhase__CompilesLocallyAndDispatchesReplays__When__Phase3HasCleanSources
 			compileFn: (stamp) => {
 				compiled.push(stamp);
 
-				return { path: path.join(dir, "docs/recipes/yarn.abc.recipe.json") };
+				return { path: path.join(dir, "docs/procedures/yarn.abc.procedure.json") };
 			},
 			log: () => {},
 		});
@@ -635,19 +635,19 @@ test("runPhase__CompilesLocallyAndDispatchesReplays__When__Phase3HasCleanSources
 		// Only the ax replay arm dispatches: replay-norescue moved to cdp on 2026-08-01 (it
 		// measures the unattended FLEET posture, a question about the shipping actuator), so it
 		// waits on the cdp compile like every other cdp replay.
-		// Reuse holds recipes AND procedures since 2026-08-03, so the stage dispatches both tiers
+		// Reuse holds procedures AND recipes since 2026-08-03, so the stage dispatches both tiers
 		// in one go and the replay claim has to name its own slice. The mixed readiness is the
-		// wave loop's job: replays wait on compiles, procedure arms on promote.
+		// wave loop's job: replays wait on compiles, recipe arms on promote.
 		const replays = fake.calls.filter((c) => c.kind === "replay");
 		assert.equal(replays.length, 3);
-		for (const c of replays) assert.match(c.recipe ?? "", /recipe\.json$/);
+		for (const c of replays) assert.match(c.procedure ?? "", /procedure\.json$/);
 		assert.equal(replays.filter((c) => c.noRescue === true).length, 0, "the no-rescue arm is cdp now and defers with the others");
 
 		const after = readManifest(DATE, liveDir(dir));
 		const compileEntry = after.entries.find((e) => e.armId === "compile-ax");
 		assert.equal(compileEntry?.host, "local");
 		assert.equal(compileEntry?.collected, true);
-		assert.match(compileEntry?.recipe ?? "", /recipe\.json$/);
+		assert.match(compileEntry?.procedure ?? "", /procedure\.json$/);
 	});
 });
 
@@ -672,8 +672,8 @@ test("runPhase__RecordsCompileRefusal__When__CompileFnThrows", async () => {
 		const refusal = after.entries.find((e) => e.armId === "compile-ax");
 		assert.equal(refusal?.state, "failed");
 		assert.match(refusal?.note ?? "", /--hinted/);
-		// No recipe means every ax replay deferred rather than dispatching without one. Scoped to
-		// replays: Reuse also dispatches the procedure tier, which does not wait on a compile.
+		// No procedure means every ax replay deferred rather than dispatching without one. Scoped to
+		// replays: Reuse also dispatches the recipe tier, which does not wait on a compile.
 		assert.equal(fake.calls.filter((c) => c.kind === "replay").length, 0);
 	});
 });
@@ -683,13 +683,13 @@ test("plannedRuns__ExcludesCompileArms__When__Phase3Planned", () => {
 	assert.ok(plannedRuns(3, m).every((p) => p.arm.kind !== "compile"));
 });
 
-test("dispatchOptionsFor__CarriesRecipeAndQueue__When__ReplayArm", () => {
+test("dispatchOptionsFor__CarriesProcedureAndQueue__When__ReplayArm", () => {
 	const arm = armById("replay-norescue")!;
-	const o = dispatchOptionsFor(arm, "docs/recipes/yarn.abc.recipe.json");
+	const o = dispatchOptionsFor(arm, "docs/procedures/yarn.abc.procedure.json");
 	assert.equal(o.kind, "replay");
 	assert.equal(o.queue, true);
 	assert.equal(o.noRescue, true);
-	assert.equal(o.recipe, "docs/recipes/yarn.abc.recipe.json");
+	assert.equal(o.procedure, "docs/procedures/yarn.abc.procedure.json");
 });
 
 test("findCompileSource__SkipsTriedStamps__When__PreviousCompileRefused", () => {
@@ -766,23 +766,23 @@ test("parseRunMetrics__OmitsAttentionMeans__When__NoStepCarriesTheCounts", () =>
 });
 
 test("parseRunMetrics__CountsRescuedSteps__When__GivenReplayRunLog", () => {
-	// The shape recipe-cli.ts writes for a replay: modelCalls top-level, replayOf set,
+	// The shape procedure-cli.ts writes for a replay: modelCalls top-level, replayOf set,
 	// rescues marked in modelReasoning (see replay.ts).
 	const m = parseRunMetrics({
 		task: "t",
 		app: "Yarn",
 		backend: "ax",
 		replayOf: "2026-07-31T02-18-03-799-www.wikipedia.org",
-		recipeSteps: 3,
+		procedureSteps: 3,
 		modelCalls: 2,
 		success: true,
 		steps: [
-			{ modelReasoning: "replayed from recipe x" },
+			{ modelReasoning: "replayed from procedure x" },
 			{ modelReasoning: "rescued after: target not found" },
-			{ modelReasoning: "replayed from recipe x" },
+			{ modelReasoning: "replayed from procedure x" },
 		],
 	});
-	assert.equal(m.recipeSteps, 3);
+	assert.equal(m.procedureSteps, 3);
 	assert.equal(m.rescuedSteps, 1);
 	assert.equal(m.modelCalls, 2);
 });
@@ -1082,7 +1082,7 @@ test("renderReport__ListsStampsAndSections__When__ManifestHasEntries", () => {
 	const headings = md.split("\n").filter((l) => l.startsWith("## "));
 	assert.deepEqual(headings.filter((h) => /notion/i.test(h)), [], "no section may exist for arms that do not");
 	assert.match(md, /Notion arm was cut|Notion cut entirely/, "the cut should stay visible as a stated limit");
-	assert.match(md, /## Stage 3 — Reuse: recipes/);
+	assert.match(md, /## Stage 3 — Reuse: procedures/);
 	assert.match(md, /## Timing/);
 	assert.match(md, /## For Aman/);
 		// The stamp line now names the MODEL too, because the pass declares one — that is the
@@ -1293,10 +1293,10 @@ test("armTitle__NamesTheArmWithoutRepeatingPerception__When__ShownBesideIt", () 
 	assert.equal(armTitle(arm("explore", { backend: "cdp", url: "https://app.notion.com" })), "grounding pass (web)");
 	assert.equal(armTitle(arm("task", { backend: "ax" })), "grounded task");
 	assert.equal(armTitle(arm("task", { backend: "ax", noGrounding: true })), "ungrounded task");
-	assert.equal(armTitle(arm("task", { backend: "ax", useRecipe: true })), "human-notes task");
+	assert.equal(armTitle(arm("task", { backend: "ax", useCurated: true })), "human-notes task");
 	assert.equal(armTitle(arm("task", { backend: "ax", noAx: true }, { APPMAP_VARIANT: "vision" })), "vision-map grounded task");
 	assert.equal(armTitle(arm("task", { backend: "ax", record: true })), "filmed grounded task");
-	assert.equal(armTitle(arm("replay", { backend: "ax", noRescue: true })), "recipe replay (no rescue)");
+	assert.equal(armTitle(arm("replay", { backend: "ax", noRescue: true })), "procedure replay (no rescue)");
 	// Derived from the DISPATCH, never from the rendered flags string — the dash used to parse
 	// flagsLine output, which fails silently the moment the wording changes.
 	for (const a of MATRIX) assert.ok(armTitle(a).length > 0 && !armTitle(a).includes("undefined"), a.id);
@@ -1319,7 +1319,7 @@ test("MATRIX__ConsumesEveryMapItProduces__When__ExploresAndTaskArmsArePaired", (
 		return `${appmapSlug(a.app)}.${a.dispatch.backend}${sidecar}${tier}`;
 	};
 	const written = new Set(MATRIX.filter((a) => a.kind === "explore").map(armAppmapSlug));
-	const consumers = MATRIX.filter((a) => a.kind === "task" && !a.dispatch.noGrounding && !a.dispatch.useRecipe);
+	const consumers = MATRIX.filter((a) => a.kind === "task" && !a.dispatch.noGrounding && !a.dispatch.useCurated);
 
 	// THE CORRECTNESS DIRECTION: every grounded arm's map is written by some explore arm.
 	// A miss here is not a wasted run — loadGrounding degrades an absent map to provenance
@@ -1413,7 +1413,7 @@ test("dispatchOptionsFor__ForwardsEveryDeclaredFlag__When__AnyArmDeclaresIt", ()
 	// on an arm reaches the child only if someone also remembered this function. Twice it was
 	// not remembered: APPMAP_VARIANT=novision never crossed the wire (two grounding passes had
 	// no consumer, and `bench plan` printed a claim that was false), and today `record` and
-	// `useProcedures` were both missing — which would have made all 16 phase-5 runs unfilmed
+	// `useRecipes` were both missing — which would have made all 16 phase-5 runs unfilmed
 	// duplicates of their phase-2 siblings and all 6 phase-6 runs measure the appmap tier.
 	//
 	// Checking the MATRIX declares the flags — which the tests already did — catches none of
@@ -1894,8 +1894,8 @@ test("writeReport__WritesNothing__When__TheManifestIsEmpty", () => {
 });
 
 test("snapPx__ReachesTheChild__When__AnArmDeclaresIt", () => {
-	// The wire has swallowed a declared field four separate times: useProcedures at the runner,
-	// --backend at the CLI, record and procedureLineage on the control side. Walk it end to end
+	// The wire has swallowed a declared field four separate times: useRecipes at the runner,
+	// --backend at the CLI, record and recipeLineage on the control side. Walk it end to end
 	// rather than trusting each layer to have been updated.
 	const arm = MATRIX.find((a) => a.id === "vision-only-cdp-snap24");
 	assert.ok(arm, "the snap arm must exist");

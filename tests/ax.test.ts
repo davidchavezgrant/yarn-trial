@@ -63,7 +63,7 @@ test("fallbackEligible__ReturnsFalse__When__AnAppTargetFailsWithAPlainError", ()
 
 test("AxBackend__ReExportsTheActionsSurface__When__ImportedFromAx", () => {
 	// ax.ts is the one-stop shop but the definitions STAY in actions.ts (shared by
-	// verification, teardown, recipes) — the re-exports must be the SAME objects, not copies.
+	// verification, teardown, procedures) — the re-exports must be the SAME objects, not copies.
 	assert.equal(ACT_TOOL, actions.ACT_TOOL);
 	assert.equal(DEMO_ACT_TOOL, actions.DEMO_ACT_TOOL);
 	assert.equal(DRIVER_RULES, actions.DRIVER_RULES);

@@ -208,7 +208,7 @@ test("mintJobId__MatchesTheRunLogStamp__When__AppNameHasSpaces", () => {
 });
 
 test("mintJobId__CarriesTheReplayPrefix__When__TheJobIsAReplay", () => {
-	// The same prefix recipe-cli.ts stamps its artifacts with (runKey("replay-", …)), so the
+	// The same prefix procedure-cli.ts stamps its artifacts with (runKey("replay-", …)), so the
 	// job id and the run log/journal share one key exactly like task and explore runs.
 	assert.match(mintJobId("replay", "Yarn"), /^replay-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}(-\d+)?-yarn$/);
 });
@@ -258,16 +258,16 @@ test("createJob__ListsTheAppmapGraph__When__TheJobIsAnExplorePass", async () => 
 
 test("createJob__ListsRunLogAndJournal__When__TheJobIsAReplay", async () => {
 	await withTempAsync("yr-jobs-", async (dir) => {
-		// recipe-cli.ts writes exactly these two under the run key: the run log always, the
+		// procedure-cli.ts writes exactly these two under the run key: the run log always, the
 		// journal only when a step mutated something (pull reads an absent one as `missing`).
-		const rec = createJob({ id: "replay-job", kind: "replay", app: "Yarn", task: "", operator: "dave", recipe: "docs/recipes/yarn.abc123.recipe.json", noRescue: true }, dir);
+		const rec = createJob({ id: "replay-job", kind: "replay", app: "Yarn", task: "", operator: "dave", procedure: "docs/procedures/yarn.abc123.procedure.json", noRescue: true }, dir);
 		assert.equal(rec.artifacts.runLog, "out/bench/live/replay-job/run.json");
 		assert.equal(rec.artifacts.journal, "out/bench/live/replay-job/journal.jsonl");
 		assert.equal(rec.artifacts.appmap, undefined);
 		assert.equal(rec.artifacts.recording, undefined);
-		// The recipe path and the rescue posture are on the record — a queued replay spawns
+		// The procedure path and the rescue posture are on the record — a queued replay spawns
 		// later, possibly under a restarted runner, and the record is the only carrier.
-		assert.equal(rec.recipe, "docs/recipes/yarn.abc123.recipe.json");
+		assert.equal(rec.procedure, "docs/procedures/yarn.abc123.procedure.json");
 		assert.equal(rec.noRescue, true);
 	});
 });
@@ -1825,7 +1825,7 @@ test("submit__IsRejected__When__AFlagArrivesAsSomethingOtherThanABoolean", async
 				{ kind: "task", app: "Yarn", task: "t", noAx: "true" },
 				{ kind: "task", app: "Yarn", task: "t", axdomOff: "false" },
 				{ kind: "task", app: "Yarn", task: "t", noGrounding: 1 },
-				{ kind: "task", app: "Yarn", task: "t", useRecipe: "yes" },
+				{ kind: "task", app: "Yarn", task: "t", useCurated: "yes" },
 				{ kind: "task", app: "Yarn", task: "t", noRescue: 0 },
 				{ kind: "wander", app: "Yarn", task: "t" },
 			];
@@ -1867,7 +1867,7 @@ test("submit__CarriesTheArmFlagsToTheChild__When__BenchmarkOptionsAreSet", async
 				noAx: true,
 				axdomOff: true,
 				noGrounding: true,
-				useRecipe: true,
+				useCurated: true,
 			});
 			assert.equal(res.ok, true, String(res.error ?? ""));
 			pid = res.pid;
@@ -1879,14 +1879,14 @@ test("submit__CarriesTheArmFlagsToTheChild__When__BenchmarkOptionsAreSet", async
 			const env = spawner.envs[0];
 			assert.equal(env.AXDOM, "0");
 			assert.equal(env.NO_GROUNDING, "1");
-			assert.equal(env.USE_RECIPE, "1");
+			assert.equal(env.USE_CURATED, "1");
 			// And they are persisted: the record is the only carrier for a queued job.
 			const rec = readJob(res.jobId);
 			assert.equal(rec?.backend, "cdp");
 			assert.equal(rec?.noAx, true);
 			assert.equal(rec?.axdomOff, true);
 			assert.equal(rec?.noGrounding, true);
-			assert.equal(rec?.useRecipe, true);
+			assert.equal(rec?.useCurated, true);
 		} finally {
 			if (pid) try { process.kill(-pid, "SIGKILL"); } catch {}
 			await runner.close();
@@ -1912,7 +1912,7 @@ test("submit__LeavesArgvAndEnvClean__When__NoArmFlagIsSet", async () => {
 			const env = spawner.envs[0];
 			assert.equal(env.AXDOM, undefined);
 			assert.equal(env.NO_GROUNDING, undefined);
-			assert.equal(env.USE_RECIPE, undefined);
+			assert.equal(env.USE_CURATED, undefined);
 		} finally {
 			if (pid) try { process.kill(-pid, "SIGKILL"); } catch {}
 			await runner.close();
@@ -1960,19 +1960,19 @@ test("submit__IsRejected__When__TheBackendIsOutsideTheVocabulary", async () => {
 });
 
 test("unsafeRelPath__NamesTheProblem__When__ThePathBreaksDiscipline", () => {
-	// The recipe path arrives over a socket and is resolved against the data root; each
+	// The procedure path arrives over a socket and is resolved against the data root; each
 	// refusal names its rule so a stale client's error is actionable from the dispatch log.
 	assert.match(unsafeRelPath("/etc/passwd") ?? "", /absolute/);
-	assert.match(unsafeRelPath("docs//recipes/x.json") ?? "", /absolute paths and doubled slashes/);
+	assert.match(unsafeRelPath("docs//procedures/x.json") ?? "", /absolute paths and doubled slashes/);
 	assert.match(unsafeRelPath("../secrets.json") ?? "", /traversal/);
-	assert.match(unsafeRelPath("docs/recipes/../../x.json") ?? "", /traversal/);
-	assert.match(unsafeRelPath("docs/recipes/$(id).json") ?? "", /characters outside/);
-	assert.match(unsafeRelPath("docs/recipes/a b.json") ?? "", /characters outside/);
-	assert.equal(unsafeRelPath("docs/recipes/www.wikipedia.org.bdf46c21.recipe.json"), undefined);
+	assert.match(unsafeRelPath("docs/procedures/../../x.json") ?? "", /traversal/);
+	assert.match(unsafeRelPath("docs/procedures/$(id).json") ?? "", /characters outside/);
+	assert.match(unsafeRelPath("docs/procedures/a b.json") ?? "", /characters outside/);
+	assert.equal(unsafeRelPath("docs/procedures/www.wikipedia.org.bdf46c21.procedure.json"), undefined);
 	assert.equal(unsafeRelPath("x.json"), undefined);
 });
 
-test("submit__RefusesTheReplay__When__TheRecipePathIsUnsafeOrAbsent", async () => {
+test("submit__RefusesTheReplay__When__TheProcedurePathIsUnsafeOrAbsent", async () => {
 	await withTempAsync("yr-serve-", async (dir) => {
 		const prevData = process.env.YARN_RUNNER_DATA;
 		process.env.YARN_RUNNER_DATA = dir;
@@ -1980,18 +1980,18 @@ test("submit__RefusesTheReplay__When__TheRecipePathIsUnsafeOrAbsent", async () =
 		const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
 		try {
 			const cases: Array<[unknown, RegExp]> = [
-				[undefined, /needs a recipe path/],
-				["", /needs a recipe path/],
-				["/etc/passwd", /unsafe recipe path/],
-				["../outside.recipe.json", /unsafe recipe path/],
+				[undefined, /needs a procedure path/],
+				["", /needs a procedure path/],
+				["/etc/passwd", /unsafe procedure path/],
+				["../outside.procedure.json", /unsafe procedure path/],
 				// Disciplined path, no file: a clear refusal beats a child that dies instantly.
-				["docs/recipes/ghost.recipe.json", /no recipe at/],
+				["docs/procedures/ghost.procedure.json", /no procedure at/],
 			];
-			for (const [recipe, expected] of cases) {
-				const [res] = await request(runner.socketPath, "submit", { kind: "replay", app: "Yarn", operator: "dave", ...(recipe === undefined ? {} : { recipe }) });
-				assert.equal(res.ok, false, `${JSON.stringify(recipe)} should be refused`);
+			for (const [procedure, expected] of cases) {
+				const [res] = await request(runner.socketPath, "submit", { kind: "replay", app: "Yarn", operator: "dave", ...(procedure === undefined ? {} : { procedure }) });
+				assert.equal(res.ok, false, `${JSON.stringify(procedure)} should be refused`);
 				assert.match(String(res.error), expected);
-				assert.equal(inspect(dir).holder, undefined, `${JSON.stringify(recipe)} left the lease held`);
+				assert.equal(inspect(dir).holder, undefined, `${JSON.stringify(procedure)} left the lease held`);
 			}
 			assert.equal(spawner.calls.length, 0);
 		} finally {
@@ -2002,7 +2002,7 @@ test("submit__RefusesTheReplay__When__TheRecipePathIsUnsafeOrAbsent", async () =
 	});
 });
 
-test("submit__SpawnsRecipeCliWithTheResolvedPath__When__TheKindIsReplay", async () => {
+test("submit__SpawnsProcedureCliWithTheResolvedPath__When__TheKindIsReplay", async () => {
 	await withTempAsync("yr-serve-", async (dir) => {
 		const prevData = process.env.YARN_RUNNER_DATA;
 		process.env.YARN_RUNNER_DATA = dir;
@@ -2010,20 +2010,20 @@ test("submit__SpawnsRecipeCliWithTheResolvedPath__When__TheKindIsReplay", async 
 		const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
 		let pid = 0;
 		try {
-			const rel = "docs/recipes/yarn.abc123.recipe.json";
-			fs.mkdirSync(path.join(dir, "docs", "recipes"), { recursive: true });
+			const rel = "docs/procedures/yarn.abc123.procedure.json";
+			fs.mkdirSync(path.join(dir, "docs", "procedures"), { recursive: true });
 			fs.writeFileSync(path.join(dir, rel), JSON.stringify({ version: 1, task: "t", app: "Yarn", slug: "yarn", backend: "ax", compiledFrom: "x", compiledAt: "2026-07-31T00:00:00.000Z", steps: [] }));
 
-			const [res] = await request(runner.socketPath, "submit", { kind: "replay", app: "Yarn", operator: "dave", recipe: rel, noRescue: true });
+			const [res] = await request(runner.socketPath, "submit", { kind: "replay", app: "Yarn", operator: "dave", procedure: rel, noRescue: true });
 			assert.equal(res.ok, true, String(res.error ?? ""));
 			pid = res.pid;
 			assert.match(res.jobId, /^replay-.*-yarn$/);
 			assert.equal(res.artifacts.runLog, `out/bench/live/${res.jobId}/run.json`);
 			assert.equal(res.artifacts.journal, `out/bench/live/${res.jobId}/journal.jsonl`);
 
-			// recipe-cli's replay verb, with the recipe resolved against THIS Mac's data root.
+			// procedure-cli's replay verb, with the procedure resolved against THIS Mac's data root.
 			const args = spawner.calls[0].args;
-			assert.equal(args.includes("src/core/recipe-cli.ts"), true);
+			assert.equal(args.includes("src/core/procedure-cli.ts"), true);
 			assert.deepEqual(args.slice(args.indexOf("replay")), ["replay", path.join(dir, rel), "--no-rescue"]);
 			// The job id reaches the child as RUN_STAMP, so the replay's artifacts land on it.
 			assert.equal(spawner.envs[0].RUN_STAMP, res.jobId);
@@ -2055,7 +2055,7 @@ test("drain__CarriesTheArmFlags__When__AQueuedJobStartsAfterTheHostFrees", async
 				noAx: true,
 				axdomOff: true,
 				noGrounding: true,
-				useRecipe: true,
+				useCurated: true,
 			});
 			assert.equal(second.queued, true);
 
@@ -2068,7 +2068,7 @@ test("drain__CarriesTheArmFlags__When__AQueuedJobStartsAfterTheHostFrees", async
 			const env = spawner.envs[1];
 			assert.equal(env.AXDOM, "0");
 			assert.equal(env.NO_GROUNDING, "1");
-			assert.equal(env.USE_RECIPE, "1");
+			assert.equal(env.USE_CURATED, "1");
 			await waitFor("the drained job to finish", () => readJob(second.jobId)?.state === "done", 10_000);
 		} finally {
 			await runner.close();
@@ -2541,11 +2541,11 @@ test("submitSpec__IsFullyConsumedByTheRunner__When__DispatchPutsAFieldOnTheWire"
 	/**
 	 * Every field dispatch writes into the base64 submit spec must be PARSED by the runner.
 	 *
-	 * `useProcedures` and `procedureLineage` were declared on both ends and dropped in the
-	 * middle: dispatch sent them, serve.ts read `rec.useProcedures` to set USE_PROCEDURES on
+	 * `useRecipes` and `recipeLineage` were declared on both ends and dropped in the
+	 * middle: dispatch sent them, serve.ts read `rec.useRecipes` to set USE_RECIPES on
 	 * the child — and nothing in between ever copied them out of the request. The path
 	 * typechecks end to end because both halves declare the fields, so the compiler is no help.
-	 * All 12 phase-6 runs silently ground on the appmap instead of the procedure, reported
+	 * All 12 phase-6 runs silently ground on the appmap instead of the recipe, reported
 	 * 12/12 success, and only `groundingChecked` caught it.
 	 *
 	 * Same shape as the ctl.ts METHODS allowlist that never learned `peek-capture`. The lesson
@@ -2561,7 +2561,7 @@ test("submitSpec__IsFullyConsumedByTheRunner__When__DispatchPutsAFieldOnTheWire"
 	const fields = [...new Set([...body.matchAll(/^\t*(?:\.\.\.\([^)]*\?\s*\{\s*)?([a-zA-Z][a-zA-Z0-9]*)\s*:/gm)].map((m) => m[1]))];
 	assert.ok(fields.length >= 10, `expected the spec to have many fields, parsed ${fields.length}`);
 	// MENTIONING the field is not enough — that is what made the first version of this test
-	// useless. serve.ts referenced `rec.useProcedures` the whole time it was dropping the field
+	// useless. serve.ts referenced `rec.useRecipes` the whole time it was dropping the field
 	// on arrival, so a "does the string appear" check passed on the shipped bug. The field has
 	// to be READ OUT OF THE REQUEST: `flag(params, "x")` for booleans, `params.x` otherwise.
 	const parsed = (f: string) => new RegExp(`flag\\(params, "${f}"\\)|params\\.${f}\\b`).test(serveSrc);

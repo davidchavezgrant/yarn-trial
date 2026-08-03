@@ -77,18 +77,18 @@ export interface StepRecord {
 	/**
 	 * The control's nearest named ancestor — which panel, menu or document it sat in.
 	 *
-	 * Recorded for RECIPE REPLAY, which re-resolves a step's target by (name, surface, role)
+	 * Recorded for PROCEDURE REPLAY, which re-resolves a step's target by (name, surface, role)
 	 * against a fresh observation. Name and role alone cannot separate two same-named controls
 	 * — the dual-scope trap this repo measures on Yarn, where 10 settings exist at both brand
-	 * and document scope — so without the surface a recipe on such an app resolves ambiguously
+	 * and document scope — so without the surface a procedure on such an app resolves ambiguously
 	 * and errors out rather than replaying. It failed SAFE, which is why it went unnoticed:
-	 * `surfaceOf()` in src/core/recipe.ts read this field for months before anything wrote it.
+	 * `surfaceOf()` in src/core/procedure.ts read this field for months before anything wrote it.
 	 */
 	targetSurface?: string;
 	/**
 	 * Position among same-(name, role, surface) twins in the observation this action was chosen
-	 * from, 0-based. Present only when identity alone could not separate them — a recipe should
-	 * fall back to an index only where there is nothing better. See RecipeTarget.ordinal.
+	 * from, 0-based. Present only when identity alone could not separate them — a procedure should
+	 * fall back to an index only where there is nothing better. See ProcedureTarget.ordinal.
 	 */
 	targetOrdinal?: number;
 	/**

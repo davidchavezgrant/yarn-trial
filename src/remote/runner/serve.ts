@@ -135,7 +135,7 @@ let profileSwapChain: Promise<unknown> = Promise.resolve();
  * Inline inside startJob this was unreachable from a test, which is why the omission survived.
  * A dropped flag is the worst kind of bug to leave untestable: it produces a plausible run.
  */
-export function childRunArgs(kind: JobKind, rec: { url?: string; backend?: string; noVision?: boolean; noAx?: boolean; record?: boolean; noRescue?: boolean; recipe?: string }, app: string, task: string): string[] {
+export function childRunArgs(kind: JobKind, rec: { url?: string; backend?: string; noVision?: boolean; noAx?: boolean; record?: boolean; noRescue?: boolean; procedure?: string }, app: string, task: string): string[] {
 	// `--backend` rides both the task and the explore argv; every further rule about the
 	// combination (e.g. --no-ax outside the ax backend) belongs to the child CLI, which
 	// refuses invalid ones itself — a second copy of its validation here would drift.
@@ -148,14 +148,14 @@ export function childRunArgs(kind: JobKind, rec: { url?: string; backend?: strin
 	const perception = [...(rec.noVision ? ["--no-vision"] : []), ...(rec.noAx ? ["--no-ax"] : [])];
 
 	if (kind === "explore") return [...(rec.url ? [] : [app]), ...urlArgs, ...perception, ...backendArgs];
-	// The recipe path was validated relative at submit time; the child resolves paths against
+	// The procedure path was validated relative at submit time; the child resolves paths against
 	// its cwd (the resources root), so hand it the data-root form.
-	// --record included: a replay is filmable now (recipe-cli.ts), and the two filmed-replay
+	// --record included: a replay is filmable now (procedure-cli.ts), and the two filmed-replay
 	// arms were declared-but-impossible until this argument existed on both sides.
 	if (kind === "replay")
 		return [
 			"replay",
-			path.join(dataRoot(), rec.recipe ?? ""),
+			path.join(dataRoot(), rec.procedure ?? ""),
 			...(rec.record ? ["--record"] : []),
 			...(rec.noRescue ? ["--no-rescue"] : []),
 			...(rec.url ? ["--url", rec.url] : []),
@@ -649,7 +649,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		}
 		log(`job ${id}: ${describeSwap(swap)}`);
 
-		const script = kind === "explore" ? "src/core/explore.ts" : kind === "replay" ? "src/core/recipe-cli.ts" : "src/core/agent.ts";
+		const script = kind === "explore" ? "src/core/explore.ts" : kind === "replay" ? "src/core/procedure-cli.ts" : "src/core/agent.ts";
 		const base = resolveRunCommand(script);
 		const runArgs = childRunArgs(kind, rec, app, task);
 
@@ -666,10 +666,10 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 						...childEnv({ runnerDir, stamp: id }),
 						...(rec.axdomOff ? { AXDOM: "0" } : {}),
 						...(rec.noGrounding ? { NO_GROUNDING: "1" } : {}),
-						...(rec.useRecipe ? { USE_RECIPE: "1" } : {}),
-						...(rec.useProcedures ? { USE_PROCEDURES: "1" } : {}),
+						...(rec.useCurated ? { USE_CURATED: "1" } : {}),
+						...(rec.useRecipes ? { USE_RECIPES: "1" } : {}),
 						...(rec.snapPx !== undefined ? { SNAP_PX: String(rec.snapPx) } : {}),
-						...(rec.procedureLineage ? { PROCEDURE_LINEAGE: rec.procedureLineage } : {}),
+						...(rec.recipeLineage ? { RECIPE_LINEAGE: rec.recipeLineage } : {}),
 						...(rec.appmapVariant ? { APPMAP_VARIANT: rec.appmapVariant } : {}),
 						...(rec.model ? { AGENT_MODEL: rec.model } : {}),
 						...(rec.steps ? { AGENT_STEPS: String(rec.steps) } : {}),
@@ -804,12 +804,12 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		const noAx = flag(params, "noAx");
 		const axdomOff = flag(params, "axdomOff");
 		const noGrounding = flag(params, "noGrounding");
-		const useRecipe = flag(params, "useRecipe");
-		// Declared on the wire and read at line ~670 to set USE_PROCEDURES, but never PARSED
+		const useCurated = flag(params, "useCurated");
+		// Declared on the wire and read at line ~670 to set USE_RECIPES, but never PARSED
 		// here — so the field arrived and was dropped, and all 12 phase-6 runs silently ground
-		// on the appmap instead of the procedure. The whole path typechecks because both ends
+		// on the appmap instead of the recipe. The whole path typechecks because both ends
 		// declare it; only the middle omitted it.
-		const useProcedures = flag(params, "useProcedures");
+		const useRecipes = flag(params, "useRecipes");
 		// Numeric, validated like `steps`: it becomes an env value on the child, and an
 		// unbounded one would let a snap reach across the whole window.
 		if (params.snapPx !== undefined && (typeof params.snapPx !== "number" || params.snapPx < 0 || params.snapPx > 200))
@@ -822,8 +822,8 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		if (typeof noAx !== "boolean") return noAx;
 		if (typeof axdomOff !== "boolean") return axdomOff;
 		if (typeof noGrounding !== "boolean") return noGrounding;
-		if (typeof useRecipe !== "boolean") return useRecipe;
-		if (typeof useProcedures !== "boolean") return useProcedures;
+		if (typeof useCurated !== "boolean") return useCurated;
+		if (typeof useRecipes !== "boolean") return useRecipes;
 		if (typeof noRescue !== "boolean") return noRescue;
 		if (typeof queue !== "boolean") return queue;
 
@@ -834,12 +834,12 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			return { ok: false, error: `backend must be "ax" or "cdp", got ${JSON.stringify(params.backend)}` };
 		const backend = params.backend as "ax" | "cdp" | undefined;
 
-		// Fixed vocabulary, same rule as backend and appmapVariant: it selects which procedure
+		// Fixed vocabulary, same rule as backend and appmapVariant: it selects which recipe
 		// FILE the child loads, so an unrecognised value would degrade to the wrong lineage —
 		// and the two lineages are different experiments that must not share an artifact.
-		if (params.procedureLineage !== undefined && params.procedureLineage !== "grounded" && params.procedureLineage !== "ungrounded")
-			return { ok: false, error: `procedureLineage must be "grounded" or "ungrounded", got ${JSON.stringify(params.procedureLineage)}` };
-		const procedureLineage = params.procedureLineage as "grounded" | "ungrounded" | undefined;
+		if (params.recipeLineage !== undefined && params.recipeLineage !== "grounded" && params.recipeLineage !== "ungrounded")
+			return { ok: false, error: `recipeLineage must be "grounded" or "ungrounded", got ${JSON.stringify(params.recipeLineage)}` };
+		const recipeLineage = params.recipeLineage as "grounded" | "ungrounded" | undefined;
 
 		// Same fixed-vocabulary rule for the appmap variant — it becomes an env value, and the
 		// only variant that exists is the vision map. A typo'd variant would silently ground the
@@ -881,19 +881,19 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			return { ok: false, error: `url must be an http(s) URL, got ${JSON.stringify(params.url)}` };
 		const url = params.url as string | undefined;
 
-		// A replay names its recipe as a data-root-relative path — the same key the file has on
-		// every machine. Checked for path discipline AND presence here: a missing recipe would
+		// A replay names its procedure as a data-root-relative path — the same key the file has on
+		// every machine. Checked for path discipline AND presence here: a missing procedure would
 		// otherwise cost the operator a lease, a profile swap and a child that dies on its first
 		// read, with the reason buried in the job log.
-		let recipe: string | undefined;
+		let procedure: string | undefined;
 		if (kind === "replay") {
-			if (typeof params.recipe !== "string" || !params.recipe)
-				return { ok: false, error: "a replay needs a recipe path (relative to the data root)" };
-			recipe = params.recipe;
-			const bad = unsafeRelPath(recipe);
-			if (bad) return { ok: false, error: `unsafe recipe path ${JSON.stringify(recipe)}: ${bad}` };
-			if (!fs.existsSync(path.join(dataRoot(), recipe)))
-				return { ok: false, error: `no recipe at ${recipe} on this Mac — sync recipes before dispatching a replay` };
+			if (typeof params.procedure !== "string" || !params.procedure)
+				return { ok: false, error: "a replay needs a procedure path (relative to the data root)" };
+			procedure = params.procedure;
+			const bad = unsafeRelPath(procedure);
+			if (bad) return { ok: false, error: `unsafe procedure path ${JSON.stringify(procedure)}: ${bad}` };
+			if (!fs.existsSync(path.join(dataRoot(), procedure)))
+				return { ok: false, error: `no procedure at ${procedure} on this Mac — sync procedures before dispatching a replay` };
 		}
 
 		const id = mintJobId(kind, app);
@@ -911,13 +911,13 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			noAx,
 			axdomOff,
 			noGrounding,
-			useRecipe,
-			useProcedures,
+			useCurated,
+			useRecipes,
 			noRescue,
 			...(snapPx !== undefined ? { snapPx } : {}),
-			...(procedureLineage !== undefined ? { procedureLineage } : {}),
+			...(recipeLineage !== undefined ? { recipeLineage } : {}),
 			...(backend !== undefined ? { backend } : {}),
-			...(recipe !== undefined ? { recipe } : {}),
+			...(procedure !== undefined ? { procedure } : {}),
 			...(url !== undefined ? { url } : {}),
 			...(appmapVariant !== undefined ? { appmapVariant } : {}),
 			...(model !== undefined ? { model } : {}),

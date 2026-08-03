@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { appmapsDir, outDir, proceduresDir, recipesDir } from "../../paths.js";
+import { appmapsDir, outDir, recipesDir, proceduresDir } from "../../paths.js";
 
 import { readJsonOr } from "../../fsutil.js";
 import { readCapturedAt } from "../../core/apps.js";
@@ -40,16 +40,16 @@ export function stagingDir(): string {
 }
 
 /**
- * Compiled recipes stage apart from appmaps: each collect rsyncs with `--delete`, so sharing
- * one directory would have the recipe collect erase the appmap staging mid-dispatch.
+ * Compiled procedures stage apart from appmaps: each collect rsyncs with `--delete`, so sharing
+ * one directory would have the procedure collect erase the appmap staging mid-dispatch.
  */
-export function recipeStagingDir(): string {
-	return `${outDir()}/recipe-sync`;
-}
-
-/** And procedures apart from both, for the same `--delete` reason. */
 export function procedureStagingDir(): string {
 	return `${outDir()}/procedure-sync`;
+}
+
+/** And recipes apart from both, for the same `--delete` reason. */
+export function recipeStagingDir(): string {
+	return `${outDir()}/recipe-sync`;
 }
 
 export interface MapVersion {
@@ -112,28 +112,28 @@ export function readAppmaps(dir: string): Map<string, MapVersion> {
 export { readCapturedAt };
 
 /**
- * Read a directory's compiled recipes, one entry per `.recipe.json` file.
+ * Read a directory's compiled procedures, one entry per `.procedure.json` file.
  *
  * `compiledAt` plays the role `capturedAt` plays for appmaps: the stamp travels inside the
- * artifact, so a `git checkout`'s mtimes cannot make an old recipe look fresh. A file that
+ * artifact, so a `git checkout`'s mtimes cannot make an old procedure look fresh. A file that
  * does not parse — rsynced mid-write, same as the appmap case — reads as unstamped and never
- * overwrites anything. The curated prose beside these (`docs/recipes/<app>.md`) is
+ * overwrites anything. The curated prose beside these (`docs/curated/<app>.md`) is
  * deliberately excluded: it is hand-written and committed, so it arrives with the checkout;
  * machine output is what has to move.
  */
-export function readRecipes(dir: string): Map<string, MapVersion> {
+export function readProcedures(dir: string): Map<string, MapVersion> {
 	const out = new Map<string, MapVersion>();
 	let entries: string[];
 	try {
 		entries = fs.readdirSync(dir);
 	} catch {
-		return out; // A host with no recipes directory is a normal state, not an error.
+		return out; // A host with no procedures directory is a normal state, not an error.
 	}
 
 	for (const file of entries.sort()) {
-		if (!file.endsWith(".recipe.json")) continue;
-		// The whole stem — `<slug>.<taskhash>.recipe` — because one app legitimately has one
-		// compiled recipe per task, and keying on the app alone would make them shadow each other.
+		if (!file.endsWith(".procedure.json")) continue;
+		// The whole stem — `<slug>.<taskhash>.procedure` — because one app legitimately has one
+		// compiled procedure per task, and keying on the app alone would make them shadow each other.
 		const slug = file.slice(0, -".json".length);
 		const parsed = readJsonOr<{ compiledAt?: unknown } | undefined>(path.join(dir, file), undefined);
 		const stamp = typeof parsed?.compiledAt === "string" && parsed.compiledAt ? parsed.compiledAt : undefined;
@@ -144,30 +144,30 @@ export function readRecipes(dir: string): Map<string, MapVersion> {
 }
 
 /**
- * Harvested procedures. Same shape as recipes — one file per (app, backend, task) — but the
+ * Harvested recipes. Same shape as procedures — one file per (app, backend, task) — but the
  * version stamp lives in a markdown provenance header rather than in JSON, so it is read out of
- * the first line: `<!-- provenance: procedure | app: … | from: <run stamp> | … -->`.
+ * the first line: `<!-- provenance: recipe | app: … | from: <run stamp> | … -->`.
  *
  * The run stamp IS the version: stamps are ISO-derived and sort chronologically, so "newest
- * promoted procedure wins" falls out of the same `beats` comparison every other tree uses. An
+ * promoted recipe wins" falls out of the same `beats` comparison every other tree uses. An
  * unstamped file (a hand-written one wearing the filename) never overwrites a stamped one, which
  * is the same protection appmaps have and for the same reason.
  */
-export function readProcedures(dir: string): Map<string, MapVersion> {
+export function readRecipes(dir: string): Map<string, MapVersion> {
 	const out = new Map<string, MapVersion>();
 	let entries: string[];
 	try {
 		entries = fs.readdirSync(dir);
 	} catch {
-		return out; // No procedures yet is the normal state before phase 6, not an error.
+		return out; // No recipes yet is the normal state before phase 6, not an error.
 	}
 
 	for (const file of entries.sort()) {
-		if (!file.endsWith(".procedure.md")) continue;
+		if (!file.endsWith(".recipe.md")) continue;
 		const slug = file.slice(0, -".md".length);
 		let stamp: string | undefined;
 		try {
-			stamp = /<!--\s*provenance: procedure\b[^>]*\bfrom: ([^|>\s]+)/.exec(fs.readFileSync(path.join(dir, file), "utf8").slice(0, 500))?.[1];
+			stamp = /<!--\s*provenance: recipe\b[^>]*\bfrom: ([^|>\s]+)/.exec(fs.readFileSync(path.join(dir, file), "utf8").slice(0, 500))?.[1];
 		} catch {}
 		out.set(slug, { slug, hasGraph: false, ...(stamp ? { capturedAt: stamp } : {}), files: [file] });
 	}
@@ -275,8 +275,8 @@ export interface SyncOptions {
 
 const SYNC_TIMEOUT_MS = 60_000;
 const REMOTE_REL = "docs/appmaps";
-const RECIPES_REMOTE_REL = "docs/recipes";
 const PROCEDURES_REMOTE_REL = "docs/procedures";
+const RECIPES_REMOTE_REL = "docs/recipes";
 
 /**
  * Bring the fleet to one view of every app's map.
@@ -295,26 +295,10 @@ export function syncAppmaps(opts: SyncOptions = {}): Promise<SyncResult> {
 }
 
 /**
- * The same convergence for compiled recipes, which a dispatched replay needs on its target
- * Mac before the submit — the runner refuses a replay whose recipe file is not already there.
+ * The same convergence for compiled procedures, which a dispatched replay needs on its target
+ * Mac before the submit — the runner refuses a replay whose procedure file is not already there.
  * Same rules by construction: newest stamp wins (`compiledAt`), unstamped never overwrites,
  * unreachable hosts cost a note.
- */
-export function syncRecipes(opts: SyncOptions = {}): Promise<SyncResult> {
-	return syncTree(opts, {
-		localDir: opts.localDir ?? recipesDir(),
-		stageDir: opts.stageDir ?? recipeStagingDir(),
-		remoteRel: RECIPES_REMOTE_REL,
-		read: readRecipes,
-	});
-}
-
-/**
- * The same convergence for harvested procedures, which a USE_PROCEDURES run needs on its target
- * Mac before it starts. Without this, phase 6 dispatches to a Mac with an empty
- * docs/procedures/, `loadGrounding` silently falls back to the appmap tier, and the arm reports
- * clean numbers under the wrong label — caught by groundingChecked, but only at collect time
- * after six runs have been paid for.
  */
 export function syncProcedures(opts: SyncOptions = {}): Promise<SyncResult> {
 	return syncTree(opts, {
@@ -325,16 +309,32 @@ export function syncProcedures(opts: SyncOptions = {}): Promise<SyncResult> {
 	});
 }
 
+/**
+ * The same convergence for harvested recipes, which a USE_RECIPES run needs on its target
+ * Mac before it starts. Without this, phase 6 dispatches to a Mac with an empty
+ * docs/recipes/, `loadGrounding` silently falls back to the appmap tier, and the arm reports
+ * clean numbers under the wrong label — caught by groundingChecked, but only at collect time
+ * after six runs have been paid for.
+ */
+export function syncRecipes(opts: SyncOptions = {}): Promise<SyncResult> {
+	return syncTree(opts, {
+		localDir: opts.localDir ?? recipesDir(),
+		stageDir: opts.stageDir ?? recipeStagingDir(),
+		remoteRel: RECIPES_REMOTE_REL,
+		read: readRecipes,
+	});
+}
+
 interface TreeConfig {
 	localDir: string;
 	stageDir: string;
 	/** Data-root-relative directory on every host — the same key everywhere. */
 	remoteRel: string;
-	/** How a directory becomes versions: appmap pairs or recipe files. */
+	/** How a directory becomes versions: appmap pairs or procedure files. */
 	read: (dir: string) => Map<string, MapVersion>;
 }
 
-/** The shared engine behind syncAppmaps and syncRecipes: collect, plan, move. */
+/** The shared engine behind syncAppmaps and syncProcedures: collect, plan, move. */
 async function syncTree(opts: SyncOptions, cfg: TreeConfig): Promise<SyncResult> {
 	const run = opts.run ?? runSsh;
 	const rsync = opts.rsync ?? runRsync;
@@ -451,17 +451,17 @@ export async function autoSync(opts: SyncOptions = {}): Promise<string | undefin
 }
 
 /**
- * The recipe fan-out that runs before a replay dispatch, exactly as `autoSync` runs before a
+ * The procedure fan-out that runs before a replay dispatch, exactly as `autoSync` runs before a
  * task/explore dispatch — and under the same `APPMAP_SYNC=0` switch, because both are "move
  * grounding artifacts around the fleet automatically" and an operator turning that off means
  * all of it.
  */
-export async function autoSyncRecipes(opts: SyncOptions = {}): Promise<string | undefined> {
-	return autoNote("recipes", "recipe", syncRecipes, opts);
-}
-
 export async function autoSyncProcedures(opts: SyncOptions = {}): Promise<string | undefined> {
 	return autoNote("procedures", "procedure", syncProcedures, opts);
+}
+
+export async function autoSyncRecipes(opts: SyncOptions = {}): Promise<string | undefined> {
+	return autoNote("recipes", "recipe", syncRecipes, opts);
 }
 
 async function autoNote(

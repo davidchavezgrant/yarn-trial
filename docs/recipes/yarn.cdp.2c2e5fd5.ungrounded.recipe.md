@@ -1,4 +1,4 @@
-<!-- provenance: procedure | app: Yarn | task: show me how to change the cursor type | from: 2026-08-01T19-54-22-629-yarn | judge: PASS | backend: cdp | lineage: ungrounded -->
+<!-- provenance: recipe | app: Yarn | task: show me how to change the cursor type | from: 2026-08-01T19-54-22-629-yarn | judge: PASS | backend: cdp | lineage: ungrounded -->
 
 1. Close the open **Settings** dialog using its button; confirm **Workspace name** is no longer visible.
 2. In the **Untitled** title textbox, enter the draft name. The verified run used **Scratch Cursor Type Demo 7f3a**; confirm the title updates.

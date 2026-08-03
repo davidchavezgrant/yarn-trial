@@ -21,7 +21,7 @@
  *
  * Task strings are GOAL-ONLY, always — auditTaskPrompt is the gate and orchestrate.ts
  * re-checks every task arm before dispatch. Method knowledge lives in the declared inputs
- * (backend, appmap tier, recipe), never in the task text.
+ * (backend, appmap tier, procedure), never in the task text.
  */
 
 export type BenchBackend = "ax" | "cdp";
@@ -65,7 +65,7 @@ export interface StageDef {
  *
  * What lives HERE is genuinely stage-level: order, kind, the prep a stage needs, whether the
  * core pass includes it. What does NOT live here is anything the stage's ARMS determine —
- * compiles, map-gating, procedure-gating are derived below. Declaring those was the same
+ * compiles, map-gating, recipe-gating are derived below. Declaring those was the same
  * mistake in miniature as keying on a phase number: an attribute attached to the wrong noun
  * goes stale the moment an arm moves, and the audit caught exactly that.
  */
@@ -80,7 +80,7 @@ export const STAGES: readonly StageDef[] = [
 	},
 	{
 		n: 3, id: "reuse", title: "Reuse", kind: "measurement", needs: [2], before: ["judge", "harvest", "promote"], inCorePass: true,
-		note: "does a frozen artifact beat live grounding — compiled recipes and harvested procedures, together so the report can finally compare them",
+		note: "does a frozen artifact beat live grounding — compiled procedures and harvested recipes, together so the report can finally compare them",
 	},
 	{
 		n: 4, id: "generalization", title: "Generalization", kind: "measurement", needs: [2, 3],
@@ -142,7 +142,7 @@ export function orderStages(phases: Phase[]): Phase[] {
  * The dispatch knobs an arm turns, in `DispatchOptions`' exact spellings.
  *
  * Every one of them now EXISTS on that type — `backend`, `noAx`, `axdomOff`, `noGrounding`,
- * `useRecipe`, `recipe`, `noRescue`, `url`, `appmapVariant` — and `JobKind` carries "replay".
+ * `useCurated`, `procedure`, `noRescue`, `url`, `appmapVariant` — and `JobKind` carries "replay".
  * This used to describe a contract being built concurrently, with orchestrate.ts casting at
  * the dispatch() call site until it merged; it merged, the cast is gone, and the compiler now
  * checks that an arm can only name a knob the wire actually has.
@@ -153,11 +153,11 @@ export interface ArmDispatch {
 	noAx?: boolean;
 	axdomOff?: boolean;
 	noGrounding?: boolean;
-	useRecipe?: boolean;
-	/** `USE_PROCEDURES=1`: ground on a procedure harvested from a judged-PASS run of THIS task. */
-	useProcedures?: boolean;
-	/** Which procedure lineage to load: one distilled from a grounded run, or from an ungrounded one. */
-	procedureLineage?: "grounded" | "ungrounded";
+	useCurated?: boolean;
+	/** `USE_RECIPES=1`: ground on a recipe harvested from a judged-PASS run of THIS task. */
+	useRecipes?: boolean;
+	/** Which recipe lineage to load: one distilled from a grounded run, or from an ungrounded one. */
+	recipeLineage?: "grounded" | "ungrounded";
 	noRescue?: boolean;
 	/**
 	 * Film this take. Phase 5 only — a measurement arm must never set it, because recording
@@ -218,7 +218,7 @@ export interface Arm {
 	env?: Record<string, string>;
 	/**
 	 * compile arms: the task arm whose clean successful run is the compile source.
-	 * replay arms: the compile arm whose recipe they replay.
+	 * replay arms: the compile arm whose procedure they replay.
 	 */
 	sourceArm?: string;
 	/**
@@ -265,7 +265,7 @@ export const CANONICAL_TASK = "show me how to change the cursor type";
  * Recorded rather than silently deleted because "add a second app" is a reasonable idea someone
  * will have again, and the reason it did not happen here is logistical, not conceptual: nothing
  * in the matrix measures cross-APP transfer, only cross-task (phase 4). Their data is kept —
- * docs/appmaps/web-app.notion.com.*, notion-calendar.* and docs/recipes/notion-calendar.md are
+ * docs/appmaps/web-app.notion.com.*, notion-calendar.* and docs/curated/notion-calendar.md are
  * the only record of what those passes produced.
  */
 
@@ -622,7 +622,7 @@ const CONFIG_CORE: Arm[] = BACKENDS.flatMap((backend) => [
 const CONFIG_CDP_PERCEPTION: Arm[] = [
 	// Same three cells as Sol ran, one variable changed. Canonical task on purpose: it is the
 	// only task with 45 runs of Sol baseline behind it.
-	task("vision-only-cdp-curated", { backend: "cdp", noAx: true, useRecipe: true }, "vision-only against the human-written tier — completes the grid ax already has", { phase: 2 }),
+	task("vision-only-cdp-curated", { backend: "cdp", noAx: true, useCurated: true }, "vision-only against the human-written tier — completes the grid ax already has", { phase: 2 }),
 	/**
 	 * An ELEMENT-perceiving agent reading a map written from PIXELS.
 	 *
@@ -766,8 +766,8 @@ const CONFIG_SLICES: Arm[] = [
 	task("min-context-ungrounded", { backend: "ax", axdomOff: true, noVision: true, noGrounding: true }, "NATIVE-EQUIVALENT floor: bare AX, no Vision, no map — can it work it out on the fly"),
 		task(
 		"curated",
-		{ backend: "cdp", useRecipe: true },
-		// TASK-CONTAMINATED, and the numbers must be reported as such. docs/recipes/yarn.md names
+		{ backend: "cdp", useCurated: true },
+		// TASK-CONTAMINATED, and the numbers must be reported as such. docs/curated/yarn.md names
 		// the canonical task's control, its surface, its exact options AND the brand-vs-document
 		// split — so this arm receives the route and the wrong-scope defence. Its own header also
 		// says it was "assembled from an exploration pass on 2026-07-29", so it is not 10 minutes
@@ -815,7 +815,7 @@ const CONFIG_SLICES: Arm[] = [
 		"grounding and actuation both Vision-only — the app-with-no-usable-AX deploy story",
 		{ env: { APPMAP_VARIANT: "vision" }, axRationale: "Vision-only is ax-only by construction — a cdp observation IS a ref list, so 'Vision only' cannot be expressed on that backend" },
 	),
-	task("vision-only-curated", { backend: "ax", noAx: true, useRecipe: true }, "same against the human-written tier", { axRationale: "Vision-only is ax-only by construction — a cdp observation IS a ref list, so 'Vision only' cannot be expressed on that backend" }),
+	task("vision-only-curated", { backend: "ax", noAx: true, useCurated: true }, "same against the human-written tier", { axRationale: "Vision-only is ax-only by construction — a cdp observation IS a ref list, so 'Vision only' cannot be expressed on that backend" }),
 	...CONFIG_CDP_PERCEPTION,
 ];
 
@@ -851,12 +851,12 @@ const CONFIG_SLICES: Arm[] = [
  */
 
 /**
- * Phase 3 — recipes. Compiles are LOCAL (a pure file transform on a pulled run log through
- * recipe-cli's compileFromStamp, which keeps its refusal gates); replays dispatch to the
+ * Phase 3 — procedures. Compiles are LOCAL (a pure file transform on a pulled run log through
+ * procedure-cli's compileFromStamp, which keeps its refusal gates); replays dispatch to the
  * fleet. The compile source — one clean grounded run per backend — is resolved at phase
  * time from the collected manifest, never named here.
  */
-const REUSE_RECIPES: Arm[] = [
+const REUSE_PROCEDURES: Arm[] = [
 	...BACKENDS.map((backend): Arm => ({
 		id: `compile-${backend}`,
 		phase: 3,
@@ -896,7 +896,7 @@ const REUSE_RECIPES: Arm[] = [
  * phase inside the plan's ~5–8 run budget; they now take TASK_SAMPLES like every other measured
  * cell (David, 2026-08-03). Three runs is the cost of the phase reporting a rate at all: at n=2 a
  * cell can only say 0/50/100%, which is the resolution problem the task default exists to avoid,
- * and the phase is worth 3 runs or it is not worth running. The replay arm needs a recipe compiled from a
+ * and the phase is worth 3 runs or it is not worth running. The replay arm needs a procedure compiled from a
  * clean phase-4 grounded run, so it is dispatched in a second wave: run `bench collect`
  * after the grounded runs land, then `bench phase 4 --go` again — already-submitted samples
  * are skipped, the compile runs, and the replays go out.
@@ -910,7 +910,7 @@ const GEN_SECOND_TASK: Arm[] = [
 		kind: "compile",
 		app: BENCH_APP,
 		n: COMPILE_RUNS,
-		// Follows blur-grounded: a recipe compiled from a cdp run resolves cdp's control names.
+		// Follows blur-grounded: a procedure compiled from a cdp run resolves cdp's control names.
 		dispatch: { backend: "cdp" },
 		sourceArm: "blur-grounded",
 		informs: "does compile generalize past the canonical task",
@@ -928,33 +928,33 @@ const GEN_SECOND_TASK: Arm[] = [
 ];
 
 /**
- * Phase 6 — procedures: can an agent's own written-up success replace the exploration pass?
+ * Phase 6 — recipes: can an agent's own written-up success replace the exploration pass?
  *
  * The question Yarn actually has to answer to ship this. Jasper's budget is ~24h to onboard a
  * new app, and the current answer to "how" is a 40-minute frontier sweep producing a topological
- * map. A procedure is the other possibility: run the task once however you can, have the agent
+ * map. A recipe is the other possibility: run the task once however you can, have the agent
  * write down the route that worked, and ground every later run on that. If it holds, onboarding
  * cost collapses from a sweep to a handful of successful runs.
  *
- * PREREQUISITE, and it is not optional: procedures are harvested from judged-PASS phase-2 runs
+ * PREREQUISITE, and it is not optional: recipes are harvested from judged-PASS phase-2 runs
  * by `./run bench harvest`, which needs `bench judge` to have run first. There is no arm here
  * that produces them — harvesting is an operator step, deliberately, because promoting a
- * procedure makes it an INPUT to future runs and that should never happen as a side effect of
+ * recipe makes it an INPUT to future runs and that should never happen as a side effect of
  * dispatching a phase.
  *
  * The comparison is three-way against arms that already exist at n=3 on the same task and
  * backend: <backend>-ungrounded (nothing), <backend>-grounded (the appmap), and these
- * (a previous run's write-up). USE_PROCEDURES REPLACES the appmap rather than adding to it —
+ * (a previous run's write-up). USE_RECIPES REPLACES the appmap rather than adding to it —
  * stacking them would measure neither.
  */
-const REUSE_PROCEDURES: Arm[] = [
+const REUSE_RECIPES: Arm[] = [
 	/**
-	 * The honest replacement claim (added by David, 2026-08-01). Its procedure is harvested from
+	 * The honest replacement claim (added by David, 2026-08-01). Its recipe is harvested from
 	 * an UNGROUNDED run — an agent that worked the app out from nothing, succeeded, was judged
 	 * correct, and wrote down what worked. Every later run reads that instead of a map.
 	 *
 	 * This is the only arm in the matrix that can speak to "does the 40-minute exploration pass
-	 * need to exist", because it is the only procedure that does not presuppose one. If it holds,
+	 * need to exist", because it is the only recipe that does not presuppose one. If it holds,
 	 * per-app onboarding collapses from a sweep to a handful of successful runs, which is the
 	 * question Yarn's ~24h budget actually turns on.
 	 *
@@ -964,31 +964,31 @@ const REUSE_PROCEDURES: Arm[] = [
 	 * phase-6 gate refuses dispatch rather than silently running it as an appmap arm.
 	 */
 	...BACKENDS.map((backend): Arm => ({
-		id: `${backend}-procedure-from-ungrounded`,
+		id: `${backend}-recipe-from-ungrounded`,
 		phase: 3,
 		kind: "task",
 		app: BENCH_APP,
 		task: CANONICAL_TASK,
 		n: TASK_SAMPLES,
-		dispatch: { backend, useProcedures: true, procedureLineage: "ungrounded" as const },
+		dispatch: { backend, useRecipes: true, recipeLineage: "ungrounded" as const },
 		sourceArm: `${backend}-ungrounded`,
 		informs:
 			"THE replacement question: can a write-up by an agent that had no map stand in for the exploration pass? " +
 			"vs <backend>-ungrounded (what its author knew) and <backend>-grounded (the sweep it would replace).",
 	})),
 	...BACKENDS.map((backend): Arm => ({
-	id: `${backend}-procedure`,
+	id: `${backend}-recipe`,
 	phase: 3,
 	kind: "task",
 	app: BENCH_APP,
 	task: CANONICAL_TASK,
 	n: TASK_SAMPLES,
-	dispatch: { backend, useProcedures: true },
+	dispatch: { backend, useRecipes: true },
 	sourceArm: `${backend}-grounded`,
 	informs:
 		"does a frozen, judge-passed route beat live appmap grounding ON THE TASK IT WAS HARVESTED FROM? " +
-		"NOT a replacement claim — its procedure presupposes the sweep; the -from-ungrounded arm above is that claim. " +
-		"NOT a transfer claim: a procedure is per-task where a map is per-app, and no arm tests it on a second task.",
+		"NOT a replacement claim — its recipe presupposes the sweep; the -from-ungrounded arm above is that claim. " +
+		"NOT a transfer claim: a recipe is per-task where a map is per-app, and no arm tests it on a second task.",
 	})),
 ];
 
@@ -1114,7 +1114,7 @@ const GEN_TASK_AND_MODEL: Arm[] = [
 	...creationArms(),
 	task("claude-cdp-ungrounded", { backend: "cdp", noGrounding: true, model: BENCH_ALT_MODEL }, "is the ungrounded floor a model property or a general one", { phase: 4 }),
 	task("claude-cdp-grounded", { backend: "cdp", model: BENCH_ALT_MODEL }, "does grounding lift Claude the way it lifts Sol", { phase: 4 }),
-	task("claude-cdp-procedure-from-ungrounded", { backend: "cdp", useProcedures: true, procedureLineage: "ungrounded", model: BENCH_ALT_MODEL }, "does the replacement result survive a model change — the finding most worth a second model", { phase: 4 }),
+	task("claude-cdp-recipe-from-ungrounded", { backend: "cdp", useRecipes: true, recipeLineage: "ungrounded", model: BENCH_ALT_MODEL }, "does the replacement result survive a model change — the finding most worth a second model", { phase: 4 }),
 ];
 
 // Phase 7 joins the derivation rather than being remembered — that is the whole point of the
@@ -1256,7 +1256,7 @@ const secondAppArms = (): Arm[] =>
 
 const GEN_SECOND_APP: Arm[] = secondAppArms();
 
-const DECLARED: Arm[] = [...DISCOVERY, ...DISCOVERY_SECOND_APP, ...CONFIG_CORE, ...CONFIG_SLICES, ...REUSE_RECIPES, ...REUSE_PROCEDURES, ...GEN_SECOND_TASK, ...GEN_TASK_AND_MODEL, ...GEN_SECOND_APP, ...DIAGNOSTICS];
+const DECLARED: Arm[] = [...DISCOVERY, ...DISCOVERY_SECOND_APP, ...CONFIG_CORE, ...CONFIG_SLICES, ...REUSE_PROCEDURES, ...REUSE_RECIPES, ...GEN_SECOND_TASK, ...GEN_TASK_AND_MODEL, ...GEN_SECOND_APP, ...DIAGNOSTICS];
 
 /**
  * Filmed twins come from MEASUREMENT stages only, read off `StageDef.kind`.
@@ -1284,27 +1284,27 @@ export const MATRIX: readonly Arm[] = [...DECLARED, ...DELIVERABLES];
 export const phaseArms = (phase: Phase): Arm[] => MATRIX.filter((a) => a.phase === phase);
 
 /**
- * Arms that ground on a promoted procedure — the set the procedure gate, the harvest source list
+ * Arms that ground on a promoted recipe — the set the recipe gate, the harvest source list
  * and the autopilot's "ran without" report all mean when they say it.
  *
- * They used to say `phaseArms(6)`, which was true only while procedures lived alone in a phase.
- * Reuse now holds recipes and procedures together, so the number stopped meaning the thing; the
+ * They used to say `phaseArms(6)`, which was true only while recipes lived alone in a phase.
+ * Reuse now holds procedures and recipes together, so the number stopped meaning the thing; the
  * dispatch flag always did.
  */
 /**
  * The three gates, derived from the ARMS a stage holds rather than declared on the stage.
  *
  * Declaring them was the same mistake as `phaseArms(6)` in a smaller key: a stage does not
- * "have a procedure gate", it CONTAINS arms that ground on a procedure. The audit found the
- * difference — six of ten procedure arms sat in stages with no `procedureGate: true`, so a
+ * "have a recipe gate", it CONTAINS arms that ground on a recipe. The audit found the
+ * difference — six of ten recipe arms sat in stages with no `recipeGate: true`, so a
  * claude cell and five filmed twins could dispatch with nothing promoted and bank runs labelled
- * "procedure" that measured the appmap tier. That is the exact failure the gate's own comment
+ * "recipe" that measured the appmap tier. That is the exact failure the gate's own comment
  * warns about, and it survived because the flag was attached to the wrong noun.
  */
 export const stageCompiles = (phase: Phase): boolean => phaseArms(phase).some((a) => a.kind === "compile");
 
 /** Arms that load grounding prose, so the stage cannot dispatch before Discovery is collected. */
-const readsAMap = (a: Arm): boolean => a.kind === "task" && !a.dispatch.noGrounding && !a.dispatch.useRecipe && !a.dispatch.useProcedures;
+const readsAMap = (a: Arm): boolean => a.kind === "task" && !a.dispatch.noGrounding && !a.dispatch.useCurated && !a.dispatch.useRecipes;
 
 /**
  * Diagnostics is exempt BY KIND, not by number: it measures the AX→screenshot transform, and
@@ -1329,8 +1329,8 @@ export const discoveryArmsFor = (phase: Phase): Arm[] => {
 	return phaseArms(1).filter((a) => apps.has(a.app));
 };
 
-export const procedureArms = (phase?: Phase): Arm[] =>
-	MATRIX.filter((a) => a.dispatch.useProcedures && (phase === undefined || a.phase === phase));
+export const recipeArms = (phase?: Phase): Arm[] =>
+	MATRIX.filter((a) => a.dispatch.useRecipes && (phase === undefined || a.phase === phase));
 
 /**
  * The model an arm will ACTUALLY run on: its own pin, else the pass default. Sample counting
@@ -1422,19 +1422,19 @@ export function perceptionLine(arm: Arm): string {
  * one row is noise. Together they read: "Grounded task | Vision only".
  *
  * Derived from the dispatch object, never from the rendered flags string. The dash used to
- * do `flags.includes("USE_RECIPE")`, which is a parse of a display artifact — it breaks the
+ * do `flags.includes("USE_CURATED")`, which is a parse of a display artifact — it breaks the
  * moment flagsLine changes its wording, and silently, since a missed match just falls
  * through to "grounded task".
  */
 export function armTitle(arm: Arm): string {
 	const filmed = arm.dispatch.record ? "filmed " : "";
 	if (arm.kind === "explore") return `${filmed}grounding pass${arm.dispatch.url ? " (web)" : ""}`;
-	if (arm.kind === "compile") return "recipe compile";
-	if (arm.kind === "replay") return `${filmed}recipe replay${arm.dispatch.noRescue ? " (no rescue)" : ""}`;
+	if (arm.kind === "compile") return "procedure compile";
+	if (arm.kind === "replay") return `${filmed}procedure replay${arm.dispatch.noRescue ? " (no rescue)" : ""}`;
 
 	const tier = arm.dispatch.noGrounding
 		? "ungrounded"
-		: arm.dispatch.useRecipe
+		: arm.dispatch.useCurated
 			? "human-notes"
 			: arm.env?.APPMAP_VARIANT === "vision"
 				? "vision-map grounded"
@@ -1452,9 +1452,9 @@ export function flagsLine(arm: Arm): string {
 	if (d.noAx) parts.push("--no-ax");
 	if (d.axdomOff) parts.push("AXDOM=0");
 	if (d.noGrounding) parts.push("NO_GROUNDING=1");
-	if (d.useRecipe) parts.push("USE_RECIPE=1");
-	if (d.useProcedures) parts.push("USE_PROCEDURES=1");
-	if (d.procedureLineage === "ungrounded") parts.push("PROCEDURE_LINEAGE=ungrounded");
+	if (d.useCurated) parts.push("USE_CURATED=1");
+	if (d.useRecipes) parts.push("USE_RECIPES=1");
+	if (d.recipeLineage === "ungrounded") parts.push("RECIPE_LINEAGE=ungrounded");
 	if (d.noRescue) parts.push("--no-rescue");
 	for (const [k, v] of Object.entries(arm.env ?? {})) parts.push(`${k}=${v}`);
 

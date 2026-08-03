@@ -708,7 +708,7 @@ function hStack(rows, seriesNames, opts = {}) {
 	const fmt = opts.fmt || fmtNum;
 	// The label gutter auto-fits the longest row label (~5.8 viewBox units per char at the
 	// .lbl size) and the viewBox widens by the same amount so the bar area keeps its usual
-	// width — a fixed padL clipped "cdp-procedure-from-ungrounded · Sol 5.6" off the
+	// width — a fixed padL clipped "cdp-recipe-from-ungrounded · Sol 5.6" off the
 	// left edge. When every label fits the caller's padL, this renders exactly as before.
 	const rowH = 22, padR = 46;
 	const padL = Math.max(opts.padL || 150, 8 + Math.ceil(5.8 * Math.max(0, ...rows.map((r) => r.label.length))));
@@ -1201,7 +1201,7 @@ const TASK_HEAD = "<tr>" + thr("Task", "the goal-only prompt the run was given")
 // the name: they are their own columns ("Vision-only explore (AX)" folded two axes into
 // one confusing label — it meant sees-Vision-only, acts-via-AX).
 // The server derives this from the dispatch object (matrix.ts armTitle). It used to be
-// derived HERE by string-matching the rendered flags — flags.includes("USE_RECIPE") — which
+// derived HERE by string-matching the rendered flags — flags.includes("USE_CURATED") — which
 // is a parse of a display artifact: it breaks silently the moment flagsLine rewords, falling
 // through to "grounded task" rather than erroring.
 const displayName = (a) => a.title || a.id;
@@ -1336,7 +1336,7 @@ function variantCell(a, p, span = "", lead = "") {
 		? [a.task, a.task]
 		: a.kind === "explore"
 			? ["Explore", "Explore pass — no task prompt. The objective is coverage: operate every safe control until the frontier of un-operated controls empties, then write the appmap (docs/appmaps/)"]
-			: ["–", "no prompt — a replay runs its recipe's task"];
+			: ["–", "no prompt — a replay runs its procedure's task"];
 	return `<td class="task"${span} data-tip="${esc(taskTip)}">${lead}${esc(text)}</td>`
 		+ `<td class="arm"${span} data-tip="${esc(tip)}">${rankDot(a, p)}<span class="dn">${esc(displayName(a))}</span>${badge}</td>`;
 }
@@ -1611,12 +1611,12 @@ function exploreRow(a, p, first, lead = "") {
 		tokensCellFor(e) + costCellFor(e) + exploreCellsFor(a, e) + convergenceCellFor(e), lead);
 }
 
-// Compile arms (phase 3/4 recipe compiles) are local, instant file transforms recorded as
+// Compile arms (phase 3/4 procedure compiles) are local, instant file transforms recorded as
 // already-collected manifest entries — they count in the hero Submitted/Finished numbers,
 // so hiding them made the totals disagree with the visible rows. One slim line each: no
 // model runs, no steps, no tokens, so every metric column is honestly a dash. The Task
 // column shows the SOURCE run's stamp — a compile entry's jobId IS its source stamp
-// (manifest.ts), and the recipe file path never rides the wire. Deliberately inert:
+// (manifest.ts), and the procedure file path never rides the wire. Deliberately inert:
 // runsCell gets no row key so the chips carry tooltips (incl. a "compile refused: …"
 // note) but select nothing — there is no log pane or map behind a local file transform.
 function compileRow(a, p) {
@@ -1624,7 +1624,7 @@ function compileRow(a, p) {
 	const badge = `<span class="pbadge" data-tip="phase ${a.phase} arm — lineage groups interleave phases">P${a.phase}</span>`;
 	const src = p.entries[0];
 	const srcCell = src
-		? `<td class="task" data-tip="compiled from this source run's log (a compile entry's jobId is its source stamp; the recipe file path is not on the wire)">src ${esc(shortJob(src.jobId))}</td>`
+		? `<td class="task" data-tip="compiled from this source run's log (a compile entry's jobId is its source stamp; the procedure file path is not on the wire)">src ${esc(shortJob(src.jobId))}</td>`
 		: `<td class="task" data-tip="no source run yet">–</td>`;
 	// This inert row mirrors the board's column order by HAND (no variantCell/passRows split
 	// to lean on), so it must be kept in step with TASK_HEAD: Task(=src), Variant, Runs, the
@@ -1703,7 +1703,7 @@ function detailRowHtml(a, p, key) {
 	const prompt =
 		a.kind === "explore" ? (a.prompt ? `<span class="k">Prompt</span>${esc(a.prompt)}` : `<span class="meta">Explore pass — system prompt not on the wire yet</span>`)
 		: a.task ? `<span class="k">Prompt</span>${esc(a.task)}`
-		: a.kind === "replay" ? (d && d.task ? `<span class="k">Replay — recipe task</span>${esc(d.task)}` : `<span class="meta">Replay — recipe task not collected yet</span>`)
+		: a.kind === "replay" ? (d && d.task ? `<span class="k">Replay — procedure task</span>${esc(d.task)}` : `<span class="meta">Replay — procedure task not collected yet</span>`)
 		: d && d.task ? `<span class="k">Prompt</span>${esc(d.task)}`
 		: `<span class="meta">no task prompt recorded</span>`;
 	// The run's own narrator note (its run dir's narrative.jsonl) — model-written, so it keeps
@@ -2320,7 +2320,7 @@ function renderBoard(progress) {
 	if (compiles.length) {
 		const kids = timelineRows(compiles), n = groupRunCount(kids);
 		const body = kidRows(COMPILES_KEY, kids, n, compileRow);
-		html += groupHead(COMPILES_KEY, "Compiles — local recipe compiles, no model in the loop", n) + body;
+		html += groupHead(COMPILES_KEY, "Compiles — local procedure compiles, no model in the loop", n) + body;
 	}
 	// The one section that had no empty state: a bare 19-column header floating over nothing
 	// was indistinguishable from a board that failed to render its rows.

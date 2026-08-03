@@ -49,7 +49,7 @@ export type JobState = "queued" | "running" | "done" | "failed" | "orphaned" | "
 export interface JobArtifacts {
 	/** Combined stdout+stderr of the child. Always present; the child owns this file. */
 	log: string;
-	/** `out/bench/live/<id>/run.json`, written by agent.ts (task) or recipe-cli.ts (replay). */
+	/** `out/bench/live/<id>/run.json`, written by agent.ts (task) or procedure-cli.ts (replay). */
 	runLog?: string;
 	/**
 	 * `out/bench/live/<id>/journal.jsonl`, the mutation journal a replay appends as it detects
@@ -116,15 +116,15 @@ export interface JobRecord {
 	axdomOff?: boolean;
 	/** `NO_GROUNDING=1`: the child ignores its appmap — the ungrounded benchmark arm. */
 	noGrounding?: boolean;
-	/** `USE_RECIPE=1`: the child loads the curated docs/recipes/<app>.md notes tier. */
-	useRecipe?: boolean;
-	/** `USE_PROCEDURES=1`: the child loads docs/procedures/<app>.<backend>.<task-hash>[.ungrounded].procedure.md. */
-	useProcedures?: boolean;
+	/** `USE_CURATED=1`: the child loads the curated docs/curated/<app>.md notes tier. */
+	useCurated?: boolean;
+	/** `USE_RECIPES=1`: the child loads docs/recipes/<app>.<backend>.<task-hash>[.ungrounded].recipe.md. */
+	useRecipes?: boolean;
 	snapPx?: number;
-	/** `PROCEDURE_LINEAGE=ungrounded`: load the write-up by an agent that had NO map. */
-	procedureLineage?: "grounded" | "ungrounded";
-	/** Replay only: the recipe file, relative to the data root — the same key on both machines. */
-	recipe?: string;
+	/** `RECIPE_LINEAGE=ungrounded`: load the write-up by an agent that had NO map. */
+	recipeLineage?: "grounded" | "ungrounded";
+	/** Replay only: the procedure file, relative to the data root — the same key on both machines. */
+	procedure?: string;
 	/** Replay only: `--no-rescue` — a broken step fails the replay, the unattended fleet posture. */
 	noRescue?: boolean;
 	/** Web target: `--url <url>` on the child argv. The app field stays the display label. */
@@ -159,11 +159,11 @@ export interface JobInit {
 	noAx?: boolean;
 	axdomOff?: boolean;
 	noGrounding?: boolean;
-	useRecipe?: boolean;
-	useProcedures?: boolean;
+	useCurated?: boolean;
+	useRecipes?: boolean;
 	snapPx?: number;
-	procedureLineage?: "grounded" | "ungrounded";
-	recipe?: string;
+	recipeLineage?: "grounded" | "ungrounded";
+	procedure?: string;
 	noRescue?: boolean;
 	url?: string;
 	appmapVariant?: "vision" | "novision";
@@ -191,7 +191,7 @@ const SAFE_ID = /^[A-Za-z0-9._-]+$/;
  */
 export function mintJobId(kind: JobKind, app: string): string {
 	// The same prefixes the child scripts already stamp their artifacts with (explore.ts's
-	// `explore-`, recipe-cli.ts's `replay-`), so the job id and the run key stay one string.
+	// `explore-`, procedure-cli.ts's `replay-`), so the job id and the run key stay one string.
 	const prefix = kind === "task" ? "" : `${kind}-`;
 	// mintRunKey, never runKey: the runner is long-lived and mints an id per job. runKey
 	// returns RUN_STAMP when it is set, and this process sets that variable on every child it
@@ -279,11 +279,11 @@ export function createJob(init: JobInit, root = jobsDir()): JobRecord {
 		...(init.noAx ? { noAx: true } : {}),
 		...(init.axdomOff ? { axdomOff: true } : {}),
 		...(init.noGrounding ? { noGrounding: true } : {}),
-		...(init.useRecipe ? { useRecipe: true } : {}),
-		...(init.useProcedures ? { useProcedures: true } : {}),
+		...(init.useCurated ? { useCurated: true } : {}),
+		...(init.useRecipes ? { useRecipes: true } : {}),
 		...(init.snapPx !== undefined ? { snapPx: init.snapPx } : {}),
-		...(init.procedureLineage ? { procedureLineage: init.procedureLineage } : {}),
-		...(init.recipe ? { recipe: init.recipe } : {}),
+		...(init.recipeLineage ? { recipeLineage: init.recipeLineage } : {}),
+		...(init.procedure ? { procedure: init.procedure } : {}),
 		...(init.noRescue ? { noRescue: true } : {}),
 		...(init.url ? { url: init.url } : {}),
 		...(init.appmapVariant ? { appmapVariant: init.appmapVariant } : {}),
@@ -319,7 +319,7 @@ function artifactsFor(id: string, init: JobInit): JobArtifacts {
 			checkpoint: runRel(id, RUN_FILES.checkpoint),
 		};
 	}
-	// recipe-cli.ts writes exactly these two under the run key: the run log always, the
+	// procedure-cli.ts writes exactly these two under the run key: the run log always, the
 	// journal only when a step mutated something (`pull` reads an absent one as `missing`).
 	if (init.kind === "replay")
 		return {

@@ -271,7 +271,7 @@ would not have in a real test case; task prompts state the goal only.*
 Safe-descent is an **exploration-time capability**, not a task-time one. Its output is the
 appmap (`docs/appmaps/` — a declared, budgeted input), and the task agent still receives
 goal-only prompts and still gets its scope warnings from the graph. Descent widens what the
-grounding pass can see; it does not hand the task agent a recipe. The provenance split is
+grounding pass can see; it does not hand the task agent a procedure. The provenance split is
 preserved: stamped explore output only, no hand-editing. And it is opt-in
 (`EXPLORE_DESCENT=on`, off by default) precisely because it spends grounding budget and touches
 live workspace state — the 24h/app budget makes that spend cheap, but it should be a declared

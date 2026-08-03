@@ -34,10 +34,10 @@ orchestrate.ts:836  nums.some((n) => ![1, 2, 3, 4, 5, 6, 7, 8].includes(n))
 ```
 autopilot.ts:115    "ascending, except 5 (filmed) always runs last"
 autopilot.ts:127    judge→harvest→promote inserted "immediately before phase 6"
-autopilot.ts:546    if (stage.phase === 6 && …)          procedure gate
+autopilot.ts:546    if (stage.phase === 6 && …)          recipe gate
 autopilot.ts:550    if (stage.phase === 5) …             filming note
 orchestrate.ts:409  (phase === 2 || phase === 5)         home-state guard
-orchestrate.ts:432  if (phase === 6 …)                   procedure gate
+orchestrate.ts:432  if (phase === 6 …)                   recipe gate
 orchestrate.ts:454  if (opts.go && (phase === 3 || phase === 4)) runCompiles
 ```
 
@@ -83,7 +83,7 @@ Five ordered stages plus one off-ladder track. Every stage varies one axis and a
 | p2 — 15 config arms | **2 Configuration** | unchanged, the core |
 | p7 — `vision-only-cdp-*` (4), `cdp-grounded-visionmap` (1) | **2 Configuration** | **re-homed.** Same task, same model — these are config cells the phase-2 grid was missing, not new questions. `p7-vision-only-cdp-curated`'s own `informs` says *"completes the grid ax already has"* |
 | p3 — compile + replay | **3 Reuse** | merged with p6 |
-| p6 — procedure arms | **3 Reuse** | merged with p3. Both consume a judged-PASS stage-2 run, and putting them together is the only way the report ever compares a **compiled step list** against **harvested prose** — today they sit three phases apart and nothing compares them |
+| p6 — recipe arms | **3 Reuse** | merged with p3. Both consume a judged-PASS stage-2 run, and putting them together is the only way the report ever compares a **compiled step list** against **harvested prose** — today they sit three phases apart and nothing compares them |
 | p4 — motion blur (2nd task) | **4 Generalization** | task axis |
 | p7 — `create-*` (15) | **4 Generalization** | task axis |
 | p7 — `claude-*` (3) | **4 Generalization** | model axis |

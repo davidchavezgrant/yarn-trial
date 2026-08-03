@@ -11,25 +11,25 @@ import {
 	type WindowRef,
 } from "./harness.js";
 import { appendMutation, detectMutation } from "./journal.js";
-import { armAction, needsTarget, type Recipe, type RecipeStep, resolveTarget, substituteUnique } from "./recipe.js";
+import { armAction, needsTarget, type Procedure, type ProcedureStep, resolveTarget, substituteUnique } from "./procedure.js";
 import type { AppMap, StepRecord } from "../types.js";
 
 /**
- * Replay a compiled recipe: the deterministic loop, with the model demoted to exception
+ * Replay a compiled procedure: the deterministic loop, with the model demoted to exception
  * handler.
  *
  * The happy path makes NO model calls. Each step re-resolves its target by (name, surface,
  * role) against a fresh observation, acts, and runs the SAME `verify()` a live run is gated
  * by — the recorded expectation, checked against the fresh haystack with the pre-action
- * haystack as the discrimination baseline. A recipe is not a macro that is trusted; it is a
+ * haystack as the discrimination baseline. A procedure is not a macro that is trusted; it is a
  * run whose thinking is pre-paid and whose checking is not skipped.
  *
  * When a step breaks — target won't resolve, action throws, check fails — the model gets ONE
- * bounded rescue per step (RECIPE_RESCUE_STEPS actions, default 3) with the failing step's
- * intent and the recorded expectation as its goal. The expectation is the recipe's, not the
+ * bounded rescue per step (PROCEDURE_RESCUE_STEPS actions, default 3) with the failing step's
+ * intent and the recorded expectation as its goal. The expectation is the procedure's, not the
  * model's: rescue is teardown's trick reused — the harness owns the check, so a rescue
  * cannot talk its way into a pass (`src/core/teardown.ts` for the original argument). If
- * rescue is disabled (`RECIPE_RESCUE=0`, or no model client is supplied) a broken step fails
+ * rescue is disabled (`PROCEDURE_RESCUE=0`, or no model client is supplied) a broken step fails
  * the replay, which is the honest fleet default: a drifted app needs re-recording, not
  * improvisation at 3am.
  *
@@ -42,7 +42,7 @@ import type { AppMap, StepRecord } from "../types.js";
 const SETTLE_MS = 900;
 
 export interface ReplayStepResult {
-	step: RecipeStep;
+	step: ProcedureStep;
 	index: number;
 	outcome: "verified" | "rescued" | "failed";
 	note: string;
@@ -53,7 +53,7 @@ export interface ReplayStepResult {
 export interface ReplayResult {
 	ok: boolean;
 	steps: ReplayStepResult[];
-	/** The recipe's final goal evidence, checked against a fresh last observation. */
+	/** The procedure's final goal evidence, checked against a fresh last observation. */
 	finalCheck?: { verified: boolean; note: string };
 	modelCalls: number;
 	/** StepRecords in the run-log shape, so a replay writes the same artifact a run does. */
@@ -77,7 +77,7 @@ export interface ReplayDeps {
 	log?: (line: string) => void;
 	/**
 	 * Structured-event sink, the `log` callback's sibling: the engine has no run stamp (that
-	 * is the CLI's business), so the caller decides where events land — recipe-cli.ts wires
+	 * is the CLI's business), so the caller decides where events land — procedure-cli.ts wires
 	 * this to runEvent(stamp, …). Optional like log; absent means no event log, never an error.
 	 */
 	event?: (kind: string, detail: Record<string, unknown>) => void;
@@ -85,7 +85,7 @@ export interface ReplayDeps {
 
 export interface RescueArgs {
 	deps: ReplayDeps;
-	step: RecipeStep;
+	step: ProcedureStep;
 	index: number;
 	obs: ObservationBundle;
 	prevHaystack: string;
@@ -99,18 +99,18 @@ async function act(deps: ReplayDeps, action: Record<string, unknown>): Promise<s
 	return request ? (await deps.driver!.act(request)).text.slice(0, 300) : "waited";
 }
 
-export async function replayRecipe(recipe: Recipe, deps: ReplayDeps): Promise<ReplayResult> {
-	if (!!deps.driver === !!deps.cdp) throw new Error("replayRecipe needs exactly one of driver/cdp");
+export async function replayProcedure(procedure: Procedure, deps: ReplayDeps): Promise<ReplayResult> {
+	if (!!deps.driver === !!deps.cdp) throw new Error("replayProcedure needs exactly one of driver/cdp");
 	const log = deps.log ?? ((l: string) => console.log(l));
-	const settleDefault = envNum("RECIPE_SETTLE_MS", SETTLE_MS);
+	const settleDefault = envNum("PROCEDURE_SETTLE_MS", SETTLE_MS);
 	const results: ReplayStepResult[] = [];
 	const records: StepRecord[] = [];
 	let modelCalls = 0;
 
 	/**
-	 * One fresh value per replay for every `{{unique}}` the recipe carries.
+	 * One fresh value per replay for every `{{unique}}` the procedure carries.
 	 *
-	 * A recipe that types its recorded scratch name verbatim is only new once: the second
+	 * A procedure that types its recorded scratch name verbatim is only new once: the second
 	 * replay finds the field already reading it and verify() refuses the step, correctly — the
 	 * check was satisfied before the action, so nothing proves the action did anything. The
 	 * placeholder is resolved here rather than at compile so each run gets its own, and the
@@ -121,7 +121,7 @@ export async function replayRecipe(recipe: Recipe, deps: ReplayDeps): Promise<Re
 	 */
 	const unique = deps.unique ?? String(Date.now());
 	let obs = await deps.observe("replay-0");
-	for (const [i, raw] of recipe.steps.entries()) {
+	for (const [i, raw] of procedure.steps.entries()) {
 		const step = substituteUnique(raw, unique);
 		const index = i + 1;
 		const prevHaystack = obs.haystack;
@@ -138,14 +138,14 @@ export async function replayRecipe(recipe: Recipe, deps: ReplayDeps): Promise<Re
 			if ("error" in resolved) problem = resolved.error;
 			else {
 				try {
-					await act(deps, armAction(step, resolved.handle, recipe.backend));
+					await act(deps, armAction(step, resolved.handle, procedure.backend));
 				} catch (err) {
 					problem = `action failed: ${err instanceof Error ? err.message : String(err)}`;
 				}
 			}
 		} else {
 			try {
-				await act(deps, armAction(step, undefined, recipe.backend));
+				await act(deps, armAction(step, undefined, procedure.backend));
 			} catch (err) {
 				problem = `action failed: ${err instanceof Error ? err.message : String(err)}`;
 			}
@@ -186,10 +186,10 @@ export async function replayRecipe(recipe: Recipe, deps: ReplayDeps): Promise<Re
 			verified: outcome !== "failed",
 			verificationChannel: outcome === "failed" ? undefined : "text",
 			verificationNote: note,
-			modelReasoning: outcome === "rescued" ? `rescued after: ${note}` : `replayed from recipe ${recipe.compiledFrom}`,
+			modelReasoning: outcome === "rescued" ? `rescued after: ${note}` : `replayed from procedure ${procedure.compiledFrom}`,
 		});
 		const mark = outcome === "verified" ? "✓" : outcome === "rescued" ? "✓ (rescued)" : "✗";
-		log(`  ${mark} [${index}/${recipe.steps.length}] ${step.action.name}${step.target ? ` "${step.target.name}"` : ""}${outcome === "failed" ? ` — ${note}` : ""}`);
+		log(`  ${mark} [${index}/${procedure.steps.length}] ${step.action.name}${step.target ? ` "${step.target.name}"` : ""}${outcome === "failed" ? ` — ${note}` : ""}`);
 		deps.event?.("step", {
 			step: index,
 			action: step.action.name,
@@ -208,13 +208,13 @@ export async function replayRecipe(recipe: Recipe, deps: ReplayDeps): Promise<Re
 			return { ok: false, steps: results, modelCalls, records };
 	}
 
-	// The recipe's own goal gate, replayed against a FRESH observation — same authority as
-	// done(success) grading in the live loop. A recipe without one (old run log) passes on
+	// The procedure's own goal gate, replayed against a FRESH observation — same authority as
+	// done(success) grading in the live loop. A procedure without one (old run log) passes on
 	// steps alone, and the result says so.
 	let finalCheck: ReplayResult["finalCheck"];
-	if (recipe.finalEvidence) {
+	if (procedure.finalEvidence) {
 		const last = await deps.observe("replay-final");
-		const v = verify(recipe.finalEvidence, last.haystack);
+		const v = verify(procedure.finalEvidence, last.haystack);
 		finalCheck = { verified: v.verified, note: v.note };
 		log(`  final goal check: ${v.verified ? "PASSED" : `failed — ${v.note}`}`);
 		deps.event?.("goal-check", { verified: v.verified });
@@ -229,12 +229,12 @@ You get the step's original intent, the recorded success check, and an observati
 
 /**
  * The default rescue: one bounded mini-loop per broken step, checked by the harness against
- * the RECIPE's expectation. Kept separate from replayRecipe so tests can inject a fake and
+ * the PROCEDURE's expectation. Kept separate from replayProcedure so tests can inject a fake and
  * the deterministic engine stays free of SDK imports at call time.
  */
 export async function modelRescue(a: RescueArgs): Promise<{ ok: boolean; note: string; calls: number }> {
 	const { deps, step } = a;
-	const budget = envNum("RECIPE_RESCUE_STEPS", 3);
+	const budget = envNum("PROCEDURE_RESCUE_STEPS", 3);
 	const { ACT_TOOL, observationBlocks } = await import("./harness.js");
 	const { CDP_ACT_TOOL } = await import("../backends/cdp.js");
 	let calls = 0;
@@ -277,10 +277,10 @@ export async function modelRescue(a: RescueArgs): Promise<{ ok: boolean; note: s
 		} catch (err) {
 			resultText = `ACTION FAILED: ${err instanceof Error ? err.message : String(err)}`;
 		}
-		await new Promise((res) => setTimeout(res, envNum("RECIPE_SETTLE_MS", SETTLE_MS)));
+		await new Promise((res) => setTimeout(res, envNum("PROCEDURE_SETTLE_MS", SETTLE_MS)));
 		obs = await deps.observe(`replay-rescue-${a.index}-${n}`);
 
-		// The recipe's check, against the pre-step baseline — the rescue passes exactly when
+		// The procedure's check, against the pre-step baseline — the rescue passes exactly when
 		// the original step would have.
 		const verdict = verify(step.expectation, obs.haystack, a.prevHaystack);
 		if (verdict.verified) return { ok: true, note: `rescued in ${n} action(s)`, calls };

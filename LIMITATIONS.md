@@ -236,7 +236,7 @@ Yarn exploration was lost this way when a one-off diagnostic script ran alongsid
 
 ## 7. Yarn-specific actuation quirks
 
-**QUIRK** · found 2026-07-29 (details in `docs/recipes/yarn.md`)
+**QUIRK** · found 2026-07-29 (details in `docs/curated/yarn.md`)
 
 - **Background-delivered clicks are silently no-ops in Yarn** — every click needs
   `delivery_mode: "foreground"`. Background scroll is refused outright
@@ -302,21 +302,21 @@ IDEs, design tools, browsers.
 **CONSTRAINT** · found 2026-07-29 (process, not code)
 
 Appmaps are a *declared input* to every grounded run, so anything hand-written into them
-silently inflates results. Both original appmaps contained task-specific recipes added after
+silently inflates results. Both original appmaps contained task-specific procedures added after
 watching runs fail at the very tasks later measured — the prompt-hygiene rule enforced by
 `auditTaskPrompt()`, evaded through a side door.
 
 **Workarounds**
 - `docs/appmaps/` holds *only* `explore.ts` output, carrying a machine-readable provenance
-  stamp; hand-curated notes live in `docs/recipes/` (`USE_RECIPE=1`) and are a different,
+  stamp; hand-curated notes live in `docs/curated/` (`USE_CURATED=1`) and are a different,
   separately-labelled tier.
 - `loadGrounding()` treats an unstamped appmap as `curated` and warns; every run log records
   provenance plus the appmap's content hash, so a "grounded" claim is auditable afterwards.
-- **Never hand-edit a stamped appmap.** Regenerate it, or move the edit to `docs/recipes/`.
+- **Never hand-edit a stamped appmap.** Regenerate it, or move the edit to `docs/curated/`.
 
 **2026-08-01 — the same side door reopened twice, in new places.**
 
-1. *The curated tier contains the benchmark's answer.* `docs/recipes/yarn.md` names the
+1. *The curated tier contains the benchmark's answer.* `docs/curated/yarn.md` names the
    canonical task's control, its surface, its exact options AND the brand-vs-document scope
    split — and its own header says it was "assembled from an exploration pass on 2026-07-29",
    so it is not human notes either. `auditTaskPrompt` gates the TASK string; **nothing audits
@@ -324,25 +324,25 @@ watching runs fail at the very tasks later measured — the prompt-hygiene rule 
    human-notes comparison. Fixing it properly means writing the file blind to the benchmark
    tasks and re-timing it.
 2. *Scope warnings were leaking into every tier.* The appmap graph loaded whenever any
-   grounding prose loaded, so the curated and procedure arms received `scopeWarnings()` — the
+   grounding prose loaded, so the curated and recipe arms received `scopeWarnings()` — the
    most correctness-relevant output of the exploration pass — while their logs claimed a
    different tier. Now gated on `provenance === explore | explore-vision`. The graph still
    loads unconditionally for the mutation journal and teardown, which never touch the prompt.
 
-**Procedures (new tier, 2026-08-01) inherit this constraint and add one.** A procedure is
+**Recipes (new tier, 2026-08-01) inherit this constraint and add one.** A recipe is
 prose harvested from a judged-PASS run, so its trustworthiness is exactly the judge's. Two
 guards: harvesting refuses any run the judge did not pass (the wrong-scope class is a run that
 accurately describes doing the wrong thing, and writing that down would teach it onward), and
 harvesting refuses `--hinted` runs, because writing a dictated route down as "discovered"
 turns a one-run violation into a permanent input.
 
-**What is NOT guarded: nothing grades the procedure TEXT.** The judge grades the run. An
+**What is NOT guarded: nothing grades the recipe TEXT.** The judge grades the run. An
 omitted Save step, a wrong generalisation, or an ambiguous scope survives every gate. A
 mechanical prose check was considered and rejected — it can only ever be one-directional. It
 could flag a missing text-verified surface, but never an invented one, because a legitimate
 canvas step has no AX or DOM name to match against; it would prune exactly the vision-only
 knowledge that is hardest to acquire. The check is therefore empirical and downstream: phase 6
-grounds on the procedure and is itself judged, so a bad procedure shows up as phase 6
+grounds on the recipe and is itself judged, so a bad recipe shows up as phase 6
 underperforming. Adequate for a benchmark, an open problem for productization.
 
 ---
@@ -664,7 +664,7 @@ no behavioural test caught them — `RunArtifacts__AreAllRunScoped` is a source-
 fails the build on a `doObserve("bare-name")`.
 
 **Post-terminal writers must re-link the backup.** The backup is taken when the run ends, so
-anything written afterwards — a compiled recipe, a harvested procedure, an offline judge verdict
+anything written afterwards — a compiled procedure, a harvested recipe, an offline judge verdict
 — lands in live and not in archive unless the writer calls `archiveRun(stamp)` again. It is
 re-callable for exactly this. **Still owed: `judge.json` does not re-link.**
 
@@ -682,7 +682,7 @@ the run only if that function was also edited. **This has now happened three tim
 |---|---|
 | `APPMAP_VARIANT=novision` | two grounding passes had no consumer; `bench plan` printed a false claim |
 | `record` | all 16 filmed runs would have been unfilmed *duplicates of their phase-2 siblings* — `filmed()` derives them by adding only `record` and `n:1`, so dropping it erases the entire difference |
-| `useProcedures` | all 6 phase-6 runs would have measured the appmap tier |
+| `useRecipes` | all 6 phase-6 runs would have measured the appmap tier |
 
 The failure shape is the same each time and is the worst available: plausible, correctly-shaped
 data under the wrong label. `groundingChecked` catches the tier case, but only at collect time,
@@ -712,7 +712,7 @@ which no explore pass writes any more, since the writer emits the variant slug (
 - `buildRubric` returned `""` when the file was absent. Delete the legacy maps — which every
   hygiene rule here tells you to do — and **every wrong-scope run silently passes**.
 
-That verdict is not only reported: it gates procedure harvesting, so a wrong-scope run could
+That verdict is not only reported: it gates recipe harvesting, so a wrong-scope run could
 have become promoted grounding that teaches the mistake to everything downstream. The rubric is
 now keyed on the run's own backend, and an empty rubric warns loudly instead of passing quietly.
 
