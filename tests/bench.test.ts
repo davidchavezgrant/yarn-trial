@@ -1882,6 +1882,8 @@ test("writeReport__WritesNothing__When__TheManifestIsEmpty", () => {
 		);
 		assert.equal(fs.existsSync(withRow), true);
 	});
+});
+
 test("snapPx__ReachesTheChild__When__AnArmDeclaresIt", () => {
 	// The wire has swallowed a declared field four separate times: useProcedures at the runner,
 	// --backend at the CLI, record and procedureLineage on the control side. Walk it end to end

@@ -606,7 +606,7 @@ test("BuildState__MarksTheEntry__When__ItsCursorRenderIsOnThisMachine", () => {
 		// filmed run whose other artifacts never landed still has a take worth watching.
 		plantRecording(dir, "job-1", "humanized.mp4");
 		const s = buildState(manifest(entry({})), fleet([{ name: "mac1", reachable: true, state: "idle" }]), [], true);
-		assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.entries[0]?.video, true);
+		assert.equal(armView(s, "ax-grounded")?.passes[0]?.entries[0]?.video, true);
 	});
 });
 
@@ -616,7 +616,7 @@ test("BuildState__OmitsTheEntrysTake__When__OnlyTheRawCaptureIsPresent", () => {
 		// recording of a UI operating itself with no pointer, which reads as a broken video.
 		plantRecording(dir, "job-1", "window.mp4");
 		const s = buildState(manifest(entry({})), fleet([{ name: "mac1", reachable: true, state: "idle" }]), [], true);
-		assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.entries[0]?.video, undefined);
+		assert.equal(armView(s, "ax-grounded")?.passes[0]?.entries[0]?.video, undefined);
 	});
 });
 
@@ -626,7 +626,7 @@ test("BuildState__MarksAnUncollectedEntry__When__ItsRenderLandedBeforeCollect", 
 		// before any collect banks its numbers, and the column exists to reach footage.
 		plantRecording(dir, "job-1", "humanized.mp4");
 		const s = buildState(manifest(entry({ collected: false, state: "running" })), fleet([{ name: "mac1", reachable: true, state: "busy", jobId: "job-1" }]), [], true);
-		const e = armView(s, "p2-ax-grounded")?.passes[0]?.entries[0];
+		const e = armView(s, "ax-grounded")?.passes[0]?.entries[0];
 		assert.equal(e?.collected, false);
 		assert.equal(e?.video, true);
 	});
