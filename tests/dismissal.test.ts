@@ -89,3 +89,54 @@ test("checkDismissal__UsesTheWebVerbSet__When__TheTargetIsAWebsite", () => {
 	assert.equal(checkDismissal("external", [confirm], obsOf(confirm), { web: true }).refusal, undefined);
 	assert.ok(checkDismissal("external", [confirm], obsOf(confirm), { web: false }).refusal);
 });
+
+/**
+ * Every refusal must leave the model somewhere to go.
+ *
+ * On the 2026-08-03 Notion pass the model attempted four dismissals, was refused all four at
+ * actions 3, 23 and 24, and then never attempted another for 137 actions while the frontier
+ * climbed 57 -> 394. The rule was right and the correction was a dead end: it said "under a
+ * reason that fits" without naming one, and the closed set lives in a tool schema many turns
+ * back. These pin the fix as behaviour rather than wording — a refusal that names no remaining
+ * category is the regression.
+ */
+for (const [reason, mk] of [
+	["external", () => ({ targets: [el({ handle: 1, name: "Rename draft" })], size: 3 })],
+	["destroys-user-data", () => ({ targets: [el({ handle: 1, name: "New page" })], size: 3 })],
+	["repetitive-value", () => ({ targets: [el({ handle: 1, name: "Roadmap" }), el({ handle: 2, name: "Notes" })], size: 3 })],
+] as const) {
+	test(`checkDismissal__NamesARemainingCategory__When__ItRefuses_${reason}`, () => {
+		const { targets, size } = mk();
+		const verdict = checkDismissal(reason, [...targets], obsOf(...targets), { cohortSize: () => size });
+
+		assert.ok(verdict.refusal, `${reason} was supposed to be refused here`);
+		assert.match(verdict.refusal, /content/, "the refusal must name a category still open");
+		assert.match(verdict.refusal, /dead-end/, "the refusal must name a category still open");
+	});
+}
+
+test("checkDismissal__SuggestsNeitherGuardBackedCategory__When__ItRefuses", () => {
+	// Proposing `external` or `destroys-user-data` to a model that just failed one of them
+	// invites relabelling rather than reconsidering — the theatre the closed set exists to stop.
+	const target = el({ handle: 1, name: "New page" });
+	const refusal = String(checkDismissal("destroys-user-data", [target], obsOf(target)).refusal);
+	const suggestion = refusal.slice(refusal.indexOf("categories still open"));
+
+	assert.equal(/\bexternal\b/.test(suggestion), false, "must not offer a guard-backed category as the way out");
+});
+
+test("checkDismissal__AcceptsTheCategoriesItSuggests__When__TheModelTakesTheAdvice", () => {
+	// The suggestion is only honest if following it actually works: content and dead-end rest on
+	// judgements the harness cannot check and are accepted unconditionally. If that ever changes,
+	// the refusal starts sending the model into a second dead end and this fails.
+	const target = el({ handle: 1, name: "Roadmap" });
+	assert.equal(checkDismissal("content", [target], obsOf(target)).refusal, undefined);
+	assert.equal(checkDismissal("dead-end", [target], obsOf(target)).refusal, undefined);
+});
+
+test("DISMISS_REASONS__IsUnchangedByTheRefusalWording__When__TheClosedSetIsRead", () => {
+	// The 2026-08-03 change edits refusal TEXT only. If a future edit widens the set to make
+	// dismissal easier, that is a measurement change and must be made deliberately, not as a
+	// side effect of improving an error message.
+	assert.deepEqual([...DISMISS_REASONS], ["external", "destroys-user-data", "repetitive-value", "content", "dead-end"]);
+});

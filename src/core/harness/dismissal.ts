@@ -42,6 +42,29 @@ export interface DismissCheck {
 }
 
 /**
+ * The categories still open after a refusal, named in the refusal itself.
+ *
+ * A refusal that ends "dismiss them under a reason that fits" does not say WHICH fits, and the
+ * closed set is only in the tool schema — many turns back by the time the correction arrives.
+ * Measured on the 2026-08-03 Notion pass (`explore-2026-08-03T12-16-55-470`): 4 dismissals
+ * attempted, 4 refused, at actions 3, 23, 24 — and then none for the next 137 actions. The
+ * frontier climbed 57 -> 394 and never fell. The only Notion pass that ever reached
+ * frontier-empty ran three hours before this gate existed and dismissed 1075 controls.
+ *
+ * So the gate did not merely reprice dismissal on that app, it taught the model to stop asking.
+ * That is a failure of the CORRECTION, not of the rule: `content` and `dead-end` were accepted
+ * unconditionally the whole time and are exactly what a frontier of page links and document
+ * rows is made of.
+ *
+ * This widens nothing. `DISMISS_REASONS` is unchanged and every check below is unchanged; a
+ * refused claim is still refused. What changes is that the turn it costs now buys the model
+ * something. Deliberately does NOT suggest the two guard-backed categories — proposing
+ * `external` or `destroys-user-data` to a model that just failed one of them is an invitation
+ * to relabel rather than reconsider, which is the theatre this file exists to prevent.
+ */
+const REMAINING_REASONS = "content (a user's own document, draft or row) or dead-end (you already operated something equivalent)";
+
+/**
  * Verify a dismissal claim against the observation, so the category has to be earned.
  *
  * `web` selects the web verb sets, as everywhere else — a bare "Confirm" is an externality on
@@ -66,7 +89,8 @@ export function checkDismissal(
 			return {
 				refusal:
 					`None of those labels commits off the machine, so "external" does not apply. ` +
-					`If operating one would merely change something, that is not a reason to skip it — settings are reverted automatically after the pass.`,
+					`If operating one would merely change something, that is not a reason to skip it — settings are reverted automatically after the pass. ` +
+					`If these genuinely should be skipped, the categories still open are ${REMAINING_REASONS}.`,
 			};
 
 		return {};
@@ -77,7 +101,8 @@ export function checkDismissal(
 			return {
 				refusal:
 					`Nothing in those labels deletes, removes or overwrites anything, so "destroys-user-data" does not apply. ` +
-					`Creating something new is not destroying anything — press it, claim the result, and explore what opens.`,
+					`Creating something new is not destroying anything — press it, claim the result, and explore what opens. ` +
+					`If these genuinely should be skipped, the categories still open are ${REMAINING_REASONS}.`,
 			};
 
 		return {};
@@ -89,7 +114,7 @@ export function checkDismissal(
 			return {
 				refusal:
 					`"repetitive-value" is for a large list of interchangeable values (${REPETITIVE_MIN}+ of the same kind on one surface); ` +
-					`the largest group here has ${biggest}. These look like distinct controls — operate them, or dismiss them under a reason that fits.`,
+					`the largest group here has ${biggest}. These look like distinct controls — operate them, or skip them under ${REMAINING_REASONS}.`,
 			};
 
 		return {};
