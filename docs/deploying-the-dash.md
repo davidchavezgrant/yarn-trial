@@ -102,6 +102,20 @@ docker build -f Dockerfile.dash -t yarn-dash:2026-08-01 .
 docker run --rm -p 8080:10000 -e PORT=10000 -e DASH_AUTH='user:pass' yarn-dash:2026-08-01
 ```
 
+**`docker: command not found` on this machine, with Docker Desktop running.** The app lives at
+`/Applications/Development/Docker.app`, not `/Applications/Docker.app`, and the installer's 2022
+symlink at `/usr/local/bin/docker` still points at the old path — so it dangles while the daemon
+and its socket (`~/.docker/run/docker.sock`) are perfectly healthy. The CLI *and* the credential
+helper it shells (`docker-credential-desktop`, without which any build that touches a registry
+fails with `error getting credentials`) both sit in the app bundle:
+
+```bash
+export PATH="/Applications/Development/Docker.app/Contents/Resources/bin:$PATH"
+```
+
+Worth fixing permanently by repointing the symlink or adding that line to the shell profile;
+diagnosed 2026-08-03, Docker 28.3.0 client and server.
+
 ### Render — DEPLOYED 2026-08-03
 
 Live in the **Yarn** workspace (`tea-c9b5apvho1kjc8a5l9t0`), from a private image:
