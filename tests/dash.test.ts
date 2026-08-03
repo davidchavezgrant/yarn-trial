@@ -20,7 +20,7 @@ import { MATRIX, armAppmapSlug, armById } from "../src/bench/matrix.js";
  */
 
 const entry = (over: Partial<ManifestEntry>): ManifestEntry => ({
-	armId: "p2-ax-grounded",
+	armId: "ax-grounded",
 	jobId: "job-1",
 	host: "mac1",
 	submittedAt: "2026-07-31T20:00:00.000Z",
@@ -42,7 +42,7 @@ test("BuildState__MarksEntryRunning__When__FleetRowHoldsItsJob", () => {
 		[],
 		true,
 	);
-	const e = armView(s, "p2-ax-grounded")?.passes[0]?.entries[0];
+	const e = armView(s, "ax-grounded")?.passes[0]?.entries[0];
 	assert.equal(e?.status, "running");
 	assert.equal(e?.elapsedSec, 42);
 	assert.equal(e?.stalled, true);
@@ -56,14 +56,14 @@ test("BuildState__MarksEntryQueued__When__JobWaitsInHostQueue", () => {
 		[],
 		true,
 	);
-	const e = armView(s, "p2-ax-grounded")?.passes[0]?.entries[0];
+	const e = armView(s, "ax-grounded")?.passes[0]?.entries[0];
 	assert.equal(e?.status, "queued");
 	assert.equal(e?.queuePosition, 2);
 });
 
 test("BuildState__MarksAwaitingCollect__When__HostAnsweredWithoutTheJob", () => {
 	const s = buildState(manifest(entry({})), fleet([{ name: "mac1", reachable: true, state: "idle" }]), [], true);
-	assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.entries[0]?.status, "awaiting-collect");
+	assert.equal(armView(s, "ax-grounded")?.passes[0]?.entries[0]?.status, "awaiting-collect");
 });
 
 test("BuildState__MarksEntryFailed__When__HostRegistryReportsTheJobDied", () => {
@@ -88,7 +88,7 @@ test("BuildState__MarksEntryFailed__When__HostRegistryReportsTheJobDied", () => 
 		[],
 		true,
 	);
-	const entries = armView(s, "p2-ax-grounded")?.passes[0]?.entries ?? [];
+	const entries = armView(s, "ax-grounded")?.passes[0]?.entries ?? [];
 	assert.equal(entries.find((e) => e.jobId === "job-1")?.status, "failed");
 	assert.equal(entries.find((e) => e.jobId === "job-2")?.status, "crashed");
 	assert.equal(entries.find((e) => e.jobId === "job-3")?.status, "stopped");
@@ -103,7 +103,7 @@ test("BuildState__KeepsAwaitingCollect__When__HostRegistryReportsTheJobDone", ()
 		[],
 		true,
 	);
-	assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.entries[0]?.status, "awaiting-collect");
+	assert.equal(armView(s, "ax-grounded")?.passes[0]?.entries[0]?.status, "awaiting-collect");
 });
 
 test("BuildState__KeepsManifestState__When__FleetSnapshotPredatesTheSubmit", () => {
@@ -118,7 +118,7 @@ test("BuildState__KeepsManifestState__When__FleetSnapshotPredatesTheSubmit", () 
 		[],
 		true,
 	);
-	assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.entries[0]?.status, "queued");
+	assert.equal(armView(s, "ax-grounded")?.passes[0]?.entries[0]?.status, "queued");
 });
 
 test("BuildState__KeepsManifestState__When__FleetWasNeverPolled", () => {
@@ -130,13 +130,13 @@ test("BuildState__KeepsManifestState__When__FleetWasNeverPolled", () => {
 		[],
 		true,
 	);
-	assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.entries[0]?.status, "queued");
+	assert.equal(armView(s, "ax-grounded")?.passes[0]?.entries[0]?.status, "queued");
 });
 
 test("BuildState__KeepsManifestState__When__HostIsUnreachable", () => {
 	// An unreachable host proves nothing about the job, so the last-known state stands.
 	const s = buildState(manifest(entry({})), fleet([{ name: "mac1", reachable: false, state: "unknown", reason: "down" }]), [], true);
-	assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.entries[0]?.status, "running");
+	assert.equal(armView(s, "ax-grounded")?.passes[0]?.entries[0]?.status, "running");
 });
 
 test("BuildState__RollsUpSuccessAndCost__When__EntriesAreCollected", () => {
@@ -154,7 +154,7 @@ test("BuildState__RollsUpSuccessAndCost__When__EntriesAreCollected", () => {
 		[],
 		true,
 	);
-	const p = armView(s, "p2-ax-grounded")?.passes[0];
+	const p = armView(s, "ax-grounded")?.passes[0];
 	assert.equal(p?.collected, 2);
 	assert.equal(p?.successes, 1);
 	// The chip's "ran for" readout: the run log's own clock reaches the wire on collected entries.
@@ -207,7 +207,7 @@ test("BuildState__PricesTokensAtDefaultRates__When__RunRecordedNoModel", () => {
 	assert.equal(s.cost.passes[0]?.assumed, 1);
 	assert.equal(s.cost.passes[0]?.priced, 1);
 	// The arm's pass rollup and the spend-so-far line must agree with the hero over the same run.
-	const p = armView(s, "p2-ax-grounded")?.passes[0];
+	const p = armView(s, "ax-grounded")?.passes[0];
 	assert.ok(Math.abs((p?.usd ?? 0) - 2.5) < 1e-9);
 	assert.equal(p?.unpriced, 0);
 	assert.equal(p?.assumed, 1);
@@ -227,7 +227,7 @@ test("BuildState__LeavesRunUnpriced__When__ModelIsUnknownAndNoDefaultExists", ()
 	assert.equal(s.cost.unpriced, 1);
 	assert.equal(s.cost.assumedRuns, 0);
 	assert.equal(s.costSeries.length, 0);
-	assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.unpriced, 1);
+	assert.equal(armView(s, "ax-grounded")?.passes[0]?.unpriced, 1);
 });
 
 test("BuildState__ExcludesTokenlessEntriesFromPricing__When__EntriesRecordNoTokens", () => {
@@ -236,7 +236,7 @@ test("BuildState__ExcludesTokenlessEntriesFromPricing__When__EntriesRecordNoToke
 	// "Unpriced" stays reserved for runs that DID spend tokens nobody could price.
 	const s = buildState(
 		manifest(
-			entry({ armId: "p3-compile-ax", jobId: "compile-refused", host: "local", state: "failed", collected: true, note: "compile refused: hinted run" }),
+			entry({ armId: "compile-ax", jobId: "compile-refused", host: "local", state: "failed", collected: true, note: "compile refused: hinted run" }),
 			entry({ jobId: "job-ok", state: "done", collected: true, metrics: { success: true, model: "claude-opus-5", outputTokens: 100_000, endedAt: "2026-07-31T20:10:00.000Z" } }),
 			entry({ jobId: "job-bad", state: "failed", collected: true, metrics: { success: false, failureKind: "unready" } }),
 		),
@@ -252,8 +252,8 @@ test("BuildState__ExcludesTokenlessEntriesFromPricing__When__EntriesRecordNoToke
 	assert.equal(s.cost.passes[0]?.unpriced, 0);
 	assert.equal(s.costSeries.length, 1);
 	// Per-arm rollups agree: the tokenless failure sits in the same pass as the priced run.
-	assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.unpriced, 0);
-	assert.equal(armView(s, "p3-compile-ax")?.passes[0]?.unpriced, 0);
+	assert.equal(armView(s, "ax-grounded")?.passes[0]?.unpriced, 0);
+	assert.equal(armView(s, "compile-ax")?.passes[0]?.unpriced, 0);
 });
 
 test("BuildState__MarksCompileRefused__When__CollectedEntryFailedWithoutMetrics", () => {
@@ -262,16 +262,16 @@ test("BuildState__MarksCompileRefused__When__CollectedEntryFailedWithoutMetrics"
 	// refusal as Collected. Metrics absent → the manifest's own state decides.
 	const s = buildState(
 		manifest(
-			entry({ armId: "p3-compile-ax", jobId: "compile-refused", host: "local", state: "failed", collected: true, note: "compile refused: hinted run" }),
-			entry({ armId: "p3-compile-cdp", jobId: "compile-ok", host: "local", state: "done", collected: true }),
+			entry({ armId: "compile-ax", jobId: "compile-refused", host: "local", state: "failed", collected: true, note: "compile refused: hinted run" }),
+			entry({ armId: "compile-cdp", jobId: "compile-ok", host: "local", state: "done", collected: true }),
 		),
 		fleet([]),
 		[],
 		true,
 	);
-	assert.equal(armView(s, "p3-compile-ax")?.passes[0]?.entries[0]?.status, "refused");
+	assert.equal(armView(s, "compile-ax")?.passes[0]?.entries[0]?.status, "refused");
 	// A succeeded compile still reads "collected" — there is no run log to grade it further.
-	assert.equal(armView(s, "p3-compile-cdp")?.passes[0]?.entries[0]?.status, "collected");
+	assert.equal(armView(s, "compile-cdp")?.passes[0]?.entries[0]?.status, "collected");
 });
 
 test("BuildState__MarksEntryCrashed__When__CollectedFailureCarriesOnlyTechnical", () => {
@@ -282,7 +282,7 @@ test("BuildState__MarksEntryCrashed__When__CollectedFailureCarriesOnlyTechnical"
 	// moment it was collected, and no client color map could ever redden a "collected" status.
 	const s = buildState(
 		manifest(entry({
-			armId: "p1-explore-ax",
+			armId: "explore-ax",
 			jobId: "explore-dead",
 			state: "failed",
 			collected: true,
@@ -293,7 +293,7 @@ test("BuildState__MarksEntryCrashed__When__CollectedFailureCarriesOnlyTechnical"
 		[],
 		true,
 	);
-	assert.equal(armView(s, "p1-explore-ax")?.passes[0]?.entries[0]?.status, "crashed");
+	assert.equal(armView(s, "explore-ax")?.passes[0]?.entries[0]?.status, "crashed");
 });
 
 test("BuildState__MarksEntryFailed__When__CollectedEntryFailedWithMetricsButNoVerdict", () => {
@@ -301,12 +301,12 @@ test("BuildState__MarksEntryFailed__When__CollectedEntryFailedWithMetricsButNoVe
 	// metrics carrying only the stamp. The manifest's own state is still a failure signal —
 	// metrics existing must not silence it.
 	const s = buildState(
-		manifest(entry({ armId: "p1-explore-ax", jobId: "explore-late-death", state: "failed", collected: true, metrics: { graphNodes: 150 } })),
+		manifest(entry({ armId: "explore-ax", jobId: "explore-late-death", state: "failed", collected: true, metrics: { graphNodes: 150 } })),
 		fleet([]),
 		[],
 		true,
 	);
-	assert.equal(armView(s, "p1-explore-ax")?.passes[0]?.entries[0]?.status, "failed");
+	assert.equal(armView(s, "explore-ax")?.passes[0]?.entries[0]?.status, "failed");
 });
 
 test("BuildState__MarksGroundingMismatch__When__SuccessTrueRunGotTheWrongGrounding", () => {
@@ -320,7 +320,7 @@ test("BuildState__MarksGroundingMismatch__When__SuccessTrueRunGotTheWrongGroundi
 		[],
 		true,
 	);
-	assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.entries[0]?.status, "grounding-mismatch");
+	assert.equal(armView(s, "ax-grounded")?.passes[0]?.entries[0]?.status, "grounding-mismatch");
 });
 
 test("BuildState__ReportsDisagreement__When__SelfReportContradictsJudge", () => {
@@ -339,7 +339,7 @@ test("BuildState__CarriesExploreStamp__When__ArmIsExplore", () => {
 	const s = buildState(
 		manifest(
 			entry({
-				armId: "p1-explore-ax",
+				armId: "explore-ax",
 				jobId: "explore-1",
 				state: "done",
 				collected: true,
@@ -350,7 +350,7 @@ test("BuildState__CarriesExploreStamp__When__ArmIsExplore", () => {
 		[],
 		true,
 	);
-	const p = armView(s, "p1-explore-ax")?.passes[0];
+	const p = armView(s, "explore-ax")?.passes[0];
 	assert.equal(p?.explore?.controlsActuated, 47);
 	assert.equal(p?.explore?.controlsSeen, 396);
 	assert.equal(p?.explore?.scopeAmbiguities, 10);
@@ -361,21 +361,21 @@ test("BuildState__CarriesExploreStamp__When__ArmIsExplore", () => {
 const explorePasses = () =>
 	manifest(
 		entry({
-			armId: "p1-explore-ax",
+			armId: "explore-ax",
 			jobId: "explore-a",
 			state: "done",
 			collected: true,
 			metrics: { exploreActions: 96, exploreElapsed: "40m12s", controlsSeen: 396, controlsActuated: 47, controlsDismissed: 350, surfaces: 34, graphNodes: 150, graphEdges: 60, scopeAmbiguities: 10 },
 		}),
 		entry({
-			armId: "p1-explore-ax",
+			armId: "explore-ax",
 			jobId: "explore-husk",
 			state: "done",
 			collected: true,
 			metrics: { exploreActions: 5, exploreElapsed: "3m01s", controlsSeen: 12, controlsActuated: 3, controlsDismissed: 2, surfaces: 3, graphNodes: 8, graphEdges: 2, scopeAmbiguities: 0 },
 		}),
 		entry({
-			armId: "p1-explore-ax",
+			armId: "explore-ax",
 			jobId: "explore-c",
 			state: "done",
 			collected: true,
@@ -385,7 +385,7 @@ const explorePasses = () =>
 
 test("BuildState__MediansExploreAggregates__When__ADegeneratePassLands", () => {
 	const s = buildState(explorePasses(), fleet([]), [], true);
-	const ex = armView(s, "p1-explore-ax")?.passes[0]?.explore;
+	const ex = armView(s, "explore-ax")?.passes[0]?.explore;
 	// Median of {96,5,90} = 90 — the husk cannot drag the arm's numbers the way a mean would.
 	assert.equal(ex?.actions, 90);
 	assert.equal(ex?.controlsSeen, 380);
@@ -401,7 +401,7 @@ test("BuildState__MediansExploreAggregates__When__ADegeneratePassLands", () => {
 
 test("BuildState__CarriesPerEntryExploreStamp__When__PassesDiffer", () => {
 	const s = buildState(explorePasses(), fleet([]), [], true);
-	const entries = armView(s, "p1-explore-ax")?.passes[0]?.entries;
+	const entries = armView(s, "explore-ax")?.passes[0]?.entries;
 	const a = entries?.find((e) => e.jobId === "explore-a");
 	const husk = entries?.find((e) => e.jobId === "explore-husk");
 	// Each entry keeps ITS pass's own numbers — the dropdown shows these, the row the medians.
@@ -418,7 +418,7 @@ test("BuildState__OmitsExploreStamp__When__EntryIsATaskRun", () => {
 		[],
 		true,
 	);
-	assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.entries[0]?.exploreStamp, undefined);
+	assert.equal(armView(s, "ax-grounded")?.passes[0]?.entries[0]?.exploreStamp, undefined);
 });
 
 test("RankExplore__OrdersByNodesThenTiebreaks__When__PassesCompete", () => {
@@ -434,18 +434,18 @@ test("RankExplore__OrdersByNodesThenTiebreaks__When__PassesCompete", () => {
 test("BuildState__RanksExplorePassesPerTarget__When__MultipleArmsCollected", () => {
 	const s = buildState(
 		manifest(
-			entry({ armId: "p1-explore-ax", jobId: "e-ax", state: "done", collected: true, metrics: { graphNodes: 150, surfaces: 30, controlsActuated: 40 } }),
-			entry({ armId: "p1-explore-cdp", jobId: "e-cdp", state: "done", collected: true, metrics: { graphNodes: 90, surfaces: 28, controlsActuated: 44 } }),
+			entry({ armId: "explore-ax", jobId: "e-ax", state: "done", collected: true, metrics: { graphNodes: 150, surfaces: 30, controlsActuated: 40 } }),
+			entry({ armId: "explore-cdp", jobId: "e-cdp", state: "done", collected: true, metrics: { graphNodes: 90, surfaces: 28, controlsActuated: 44 } }),
 			entry({ jobId: "job-task", state: "done", collected: true, metrics: { success: true, steps: 5 } }),
 		),
 		fleet([]),
 		[],
 		true,
 	);
-	assert.deepEqual(armView(s, "p1-explore-ax")?.passes[0]?.exploreRank, { rank: 1, of: 2 });
-	assert.deepEqual(armView(s, "p1-explore-cdp")?.passes[0]?.exploreRank, { rank: 2, of: 2 });
+	assert.deepEqual(armView(s, "explore-ax")?.passes[0]?.exploreRank, { rank: 1, of: 2 });
+	assert.deepEqual(armView(s, "explore-cdp")?.passes[0]?.exploreRank, { rank: 2, of: 2 });
 	// Task arms never rank.
-	assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.exploreRank, undefined);
+	assert.equal(armView(s, "ax-grounded")?.passes[0]?.exploreRank, undefined);
 });
 
 test("BuildState__ExposesLineageAndTargetKey__When__ArmsRideTheWire", () => {
@@ -453,20 +453,20 @@ test("BuildState__ExposesLineageAndTargetKey__When__ArmsRideTheWire", () => {
 	// scope picker keys off targetKey — both must ride the wire for every arm.
 	const s = buildState(manifest(), fleet([]), [], false);
 	const byId = (id: string) => s.arms.find((a) => a.id === id);
-	assert.equal(byId("p2-ax-grounded")?.groundedBy, "p1-explore-ax");
-	assert.equal(byId("p2-cdp-grounded")?.groundedBy, "p1-explore-cdp");
+	assert.equal(byId("ax-grounded")?.groundedBy, "explore-ax");
+	assert.equal(byId("cdp-grounded")?.groundedBy, "explore-cdp");
 	// Curated (USE_RECIPE) arms are grounded — they nest too.
 	// The curated tier moved to cdp on 2026-08-01 — it measures ONBOARDING COST, which should be
 	// read on the shipping actuator, and it has no ax twin so it was never a comparison.
-	assert.equal(byId("p2-curated")?.groundedBy, "p1-explore-cdp");
+	assert.equal(byId("curated")?.groundedBy, "explore-cdp");
 	// Replays consume the same lineage as the run they were compiled from.
-	assert.equal(byId("p3-replay-cdp")?.groundedBy, "p1-explore-cdp");
+	assert.equal(byId("replay-cdp")?.groundedBy, "explore-cdp");
 	// Ungrounded arms and explore/compile arms carry no lineage.
-	assert.equal(byId("p2-ax-ungrounded")?.groundedBy, undefined);
-	assert.equal(byId("p1-explore-ax")?.groundedBy, undefined);
-	assert.equal(byId("p3-compile-ax")?.groundedBy, undefined);
+	assert.equal(byId("ax-ungrounded")?.groundedBy, undefined);
+	assert.equal(byId("explore-ax")?.groundedBy, undefined);
+	assert.equal(byId("compile-ax")?.groundedBy, undefined);
 	assert.ok(s.arms.every((a) => typeof a.targetKey === "string" && a.targetKey.length > 0));
-	assert.equal(byId("p2-ax-grounded")?.targetKey, "Yarn");
+	assert.equal(byId("ax-grounded")?.targetKey, "Yarn");
 });
 
 // The Sees check columns: perception as per-channel booleans, derived from the arm's
@@ -475,22 +475,22 @@ test("BuildState__ExposesLineageAndTargetKey__When__ArmsRideTheWire", () => {
 // axdomOff + noVision (bare AX tree).
 test("BuildState__SeesAxDomVision__When__AxArmRunsFullPerception", () => {
 	const s = buildState(manifest(), fleet([]), [], false);
-	assert.deepEqual(armView(s, "p2-ax-grounded")?.sees, { ax: true, dom: true, vision: true });
+	assert.deepEqual(armView(s, "ax-grounded")?.sees, { ax: true, dom: true, vision: true });
 });
 
 test("BuildState__SeesDomWithoutAx__When__ArmRunsTheCdpBackend", () => {
 	const s = buildState(manifest(), fleet([]), [], false);
-	assert.deepEqual(armView(s, "p2-cdp-grounded")?.sees, { ax: false, dom: true, vision: true });
+	assert.deepEqual(armView(s, "cdp-grounded")?.sees, { ax: false, dom: true, vision: true });
 });
 
 test("BuildState__SeesOnlyVision__When__ArmDeclaresNoAx", () => {
 	const s = buildState(manifest(), fleet([]), [], false);
-	assert.deepEqual(armView(s, "p1-explore-vision")?.sees, { ax: false, dom: false, vision: true });
+	assert.deepEqual(armView(s, "explore-vision")?.sees, { ax: false, dom: false, vision: true });
 });
 
 test("BuildState__SeesBareAx__When__ArmRunsAxdomOffWithoutVision", () => {
 	const s = buildState(manifest(), fleet([]), [], false);
-	assert.deepEqual(armView(s, "p2-min-context-grounded")?.sees, { ax: true, dom: false, vision: false });
+	assert.deepEqual(armView(s, "min-context-grounded")?.sees, { ax: true, dom: false, vision: false });
 });
 
 test("BuildState__OmitsArmPasses__When__NothingSubmitted", () => {
@@ -548,9 +548,9 @@ test("MatchPath__LeavesStepUnanchored__When__NothingMatches", () => {
 });
 
 test("GroundingArmId__PicksTheMapTheArmConsumed__When__TaskArm", () => {
-	assert.equal(groundingArmId(armById("p2-cdp-grounded")!), "p1-explore-cdp");
-	assert.equal(groundingArmId(armById("p2-ax-grounded")!), "p1-explore-ax");
-	assert.equal(groundingArmId(armById("p2-vision-only-grounded-visionmap")!), "p1-explore-vision");
+	assert.equal(groundingArmId(armById("cdp-grounded")!), "explore-cdp");
+	assert.equal(groundingArmId(armById("ax-grounded")!), "explore-ax");
+	assert.equal(groundingArmId(armById("vision-only-grounded-visionmap")!), "explore-vision");
 });
 
 test("BuildDetail__WalksRunThroughLiveMap__When__NoArchiveExists", () => {
@@ -894,9 +894,9 @@ test("NotedRunKeys__RecoversMintedSet__When__PassLogHoldsRunEvents", () => {
 	try {
 		plant(out, ["bench", "live", "narrative.jsonl"], [
 			JSON.stringify({ t: "2026-08-01T00:00:00.000Z", date: "2026-08-01", collected: 3, model: "m", text: "old pass-level note" }),
-			JSON.stringify({ t: "2026-08-01T01:00:00.000Z", runKey: "job-a", armId: "p2-ax-grounded", collectedAtMint: 4, model: "m", text: "note a" }),
+			JSON.stringify({ t: "2026-08-01T01:00:00.000Z", runKey: "job-a", armId: "ax-grounded", collectedAtMint: 4, model: "m", text: "note a" }),
 			'{"torn',
-			JSON.stringify({ t: "2026-08-01T02:00:00.000Z", runKey: "job-b", armId: "p2-ax-grounded", collectedAtMint: 5, model: "m", text: "note b" }),
+			JSON.stringify({ t: "2026-08-01T02:00:00.000Z", runKey: "job-b", armId: "ax-grounded", collectedAtMint: 5, model: "m", text: "note b" }),
 			"",
 		].join("\n"));
 		const noted = notedRunKeys(out);
@@ -916,7 +916,7 @@ test("AppendNarrativeEvent__RoundTripsThroughBothLogs__When__NoteIsMinted", () =
 	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-narr-"));
 	try {
 		fs.mkdirSync(path.join(out, "bench", "live", "job-rt"), { recursive: true });
-		const ev: NarrativeEvent = { t: "2026-08-01T03:00:00.000Z", runKey: "job-rt", armId: "p2-ax-grounded", collectedAtMint: 7, model: "test-model", text: "the note" };
+		const ev: NarrativeEvent = { t: "2026-08-01T03:00:00.000Z", runKey: "job-rt", armId: "ax-grounded", collectedAtMint: 7, model: "test-model", text: "the note" };
 		appendNarrativeEvent(ev, out);
 		assert.deepEqual(JSON.parse(fs.readFileSync(path.join(out, "bench", "live", "job-rt", "narrative.jsonl"), "utf8").trim()), ev);
 		const n = readPersistedNarrative("2026-08-01", out);
@@ -938,7 +938,7 @@ test("AppendNarrativeEvent__WritesIntoTheArchiveCopy__When__TheFailedRunWasEvict
 	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-narr-"));
 	try {
 		fs.mkdirSync(path.join(out, "bench", "archive", "job-ev"), { recursive: true });
-		const ev: NarrativeEvent = { t: "2026-08-01T04:00:00.000Z", runKey: "job-ev", armId: "p2-ax-grounded", collectedAtMint: 8, model: "test-model", text: "failed and evicted" };
+		const ev: NarrativeEvent = { t: "2026-08-01T04:00:00.000Z", runKey: "job-ev", armId: "ax-grounded", collectedAtMint: 8, model: "test-model", text: "failed and evicted" };
 		appendNarrativeEvent(ev, out);
 		assert.deepEqual(JSON.parse(fs.readFileSync(path.join(out, "bench", "archive", "job-ev", "narrative.jsonl"), "utf8").trim()), ev);
 		assert.equal(fs.existsSync(path.join(out, "bench", "live", "job-ev")), false, "the eviction must not be undone by a note");
@@ -968,8 +968,8 @@ test("ReadPersistedNarrative__ToleratesPreRunEvents__When__LogPredatesPerRunNote
 test("NarratorPrompt__FramesTheTriggeringRun__When__RunContextIsGiven", () => {
 	// Per-run mints keep the persona and the terse rules, add the completed run's framing and
 	// its own EntryView numbers ahead of the full-state digest.
-	const p = narratorPrompt({ progress: { collected: 9 } }, undefined, { runKey: "job-x", armId: "p2-cdp-grounded", stats: { steps: 9, usd: 0.12 } });
-	assert.ok(p.includes("A run just completed: job-x (arm p2-cdp-grounded)"));
+	const p = narratorPrompt({ progress: { collected: 9 } }, undefined, { runKey: "job-x", armId: "cdp-grounded", stats: { steps: 9, usd: 0.12 } });
+	assert.ok(p.includes("A run just completed: job-x (arm cdp-grounded)"));
 	assert.ok(p.includes("write the note for THIS run"));
 	assert.ok(p.includes('"steps": 9'));
 	assert.ok(p.includes("Write 2–3 sentences"));
@@ -1055,7 +1055,7 @@ test("BuildDetail__ServesCheckpointGraph__When__ExploreStillRunning", () => {
 	try {
 		fs.mkdirSync(path.join(dir, "out", "bench", "live", "job-ck"), { recursive: true });
 		fs.writeFileSync(path.join(dir, "out", "bench", "live", "job-ck", "checkpoint.json"), JSON.stringify({ app: "Yarn", ...GRAPH }));
-		const m = manifest(entry({ jobId: "job-ck", armId: "p1-explore-ax", state: "running", collected: false }));
+		const m = manifest(entry({ jobId: "job-ck", armId: "explore-ax", state: "running", collected: false }));
 		const d = buildDetail("job-ck", m, { dataDir: dir, benchRoot: path.join(dir, "bench") });
 		assert.equal(d.graphLive, true);
 		assert.ok(d.graphSource?.includes("checkpoint"), `source names the checkpoint: ${d.graphSource}`);
@@ -1074,7 +1074,7 @@ test("BuildDetail__PrefersFinalAppmap__When__RunDirHoldsCheckpointToo", () => {
 		fs.mkdirSync(run, { recursive: true });
 		fs.writeFileSync(path.join(run, "appmap.json"), JSON.stringify(GRAPH));
 		fs.writeFileSync(path.join(run, "checkpoint.json"), JSON.stringify({ ...GRAPH, nodes: GRAPH.nodes.slice(0, 1) }));
-		const m = manifest(entry({ jobId: "job-ck2", armId: "p1-explore-ax", state: "running", collected: false }));
+		const m = manifest(entry({ jobId: "job-ck2", armId: "explore-ax", state: "running", collected: false }));
 		const d = buildDetail("job-ck2", m, { dataDir: dir, benchRoot: path.join(dir, "bench") });
 		assert.equal(d.graphLive, undefined);
 		assert.equal(d.graphSource, "job-ck2/appmap.json (run dir)");
@@ -1092,7 +1092,7 @@ test("BuildDetail__PrefersRemoteCheckpoint__When__HandlerFetchedOne", () => {
 		const run = path.join(dir, "out", "bench", "live", "job-ck3");
 		fs.mkdirSync(run, { recursive: true });
 		fs.writeFileSync(path.join(run, "checkpoint.json"), JSON.stringify({ ...GRAPH, nodes: GRAPH.nodes.slice(0, 1) }));
-		const m = manifest(entry({ jobId: "job-ck3", armId: "p1-explore-ax", state: "running", collected: false }));
+		const m = manifest(entry({ jobId: "job-ck3", armId: "explore-ax", state: "running", collected: false }));
 		const d = buildDetail("job-ck3", m, { dataDir: dir, benchRoot: path.join(dir, "bench"), remoteCheckpoint: { app: "Yarn", ...GRAPH } });
 		assert.equal(d.graphLive, true);
 		assert.equal(d.graph?.nodes.length, GRAPH.nodes.length, "the remote copy's nodes, not the stale local one's");
@@ -1108,7 +1108,7 @@ test("BuildDetail__IgnoresCheckpoint__When__EntryCollected", () => {
 	try {
 		fs.mkdirSync(path.join(dir, "out", "bench", "live", "job-ck4"), { recursive: true });
 		fs.writeFileSync(path.join(dir, "out", "bench", "live", "job-ck4", "checkpoint.json"), JSON.stringify(GRAPH));
-		const m = manifest(entry({ jobId: "job-ck4", armId: "p1-explore-ax", state: "done", collected: true }));
+		const m = manifest(entry({ jobId: "job-ck4", armId: "explore-ax", state: "done", collected: true }));
 		const d = buildDetail("job-ck4", m, { dataDir: dir, benchRoot: path.join(dir, "bench") });
 		assert.equal(d.graphLive, undefined);
 		assert.ok(!d.graphSource?.includes("checkpoint"), `checkpoint must not serve a collected run: ${d.graphSource}`);
@@ -1126,8 +1126,8 @@ test("BuildDetail__CarriesTheRunsNarratorNote__When__RunDirHoldsNarrativeLog", (
 		fs.mkdirSync(path.join(dir, "out", "bench", "live", "job-n"), { recursive: true });
 		fs.writeFileSync(path.join(dir, "out", "bench", "live", "job-n", "run.json"), JSON.stringify({ task: "t", steps: [] }));
 		fs.writeFileSync(path.join(dir, "out", "bench", "live", "job-n", "narrative.jsonl"), [
-			JSON.stringify({ t: "2026-08-01T01:00:00.000Z", runKey: "job-n", armId: "p2-ax-grounded", collectedAtMint: 1, model: "m1", text: "first" }),
-			JSON.stringify({ t: "2026-08-01T02:00:00.000Z", runKey: "job-n", armId: "p2-ax-grounded", collectedAtMint: 2, model: "m2", text: "latest note" }),
+			JSON.stringify({ t: "2026-08-01T01:00:00.000Z", runKey: "job-n", armId: "ax-grounded", collectedAtMint: 1, model: "m1", text: "first" }),
+			JSON.stringify({ t: "2026-08-01T02:00:00.000Z", runKey: "job-n", armId: "ax-grounded", collectedAtMint: 2, model: "m2", text: "latest note" }),
 			"",
 		].join("\n"));
 		const m = manifest(entry({ jobId: "job-n", state: "done", collected: true }));
@@ -1149,15 +1149,15 @@ test("ParseDashArgs__DefaultsToPureReader__When__NoCollectFlagGiven", () => {
 
 test("groundingArmId__AttributesTheMapTheArmActuallyReads__When__VariantsCombine", () => {
 	// The bug this replaced tested APPMAP_VARIANT before axdomOff and short-circuited, so
-	// p2-min-context-grounded — which reads yarn.ax.noaxdom.novision — was attributed to
-	// p1-explore-no-vision, which writes yarn.ax.novision. Runs counted against a graph they
+	// min-context-grounded — which reads yarn.ax.noaxdom.novision — was attributed to
+	// explore-no-vision, which writes yarn.ax.novision. Runs counted against a graph they
 	// never read is precisely what the traversal-heat aggregation must not do.
-	const min = armById("p2-min-context-grounded")!;
+	const min = armById("min-context-grounded")!;
 	const attributed = groundingArmId(min);
 	assert.equal(armAppmapSlug(armById(attributed)!), armAppmapSlug(min), `attributed to ${attributed}, whose map is a different file`);
 
 	// Every task/replay arm that grounds at all must resolve to a REAL phase-1 arm — the old
-	// version still named p1-explore-web-cdp, deleted from the matrix.
+	// version still named explore-web-cdp, deleted from the matrix.
 	for (const arm of MATRIX) {
 		if (arm.kind === "explore" || arm.kind === "compile") continue;
 		if (arm.dispatch.noGrounding || arm.dispatch.useRecipe || arm.dispatch.useProcedures) continue;
@@ -1535,7 +1535,7 @@ test("BuildDetail__CarriesTheDiscoverySeries__When__ArmIsExplore", () => {
 			JSON.stringify({ t: "2026-08-01T10:02:00.000Z", kind: "progress", detail: { actions: 10, frontier: 99, seen: 170 } }),
 			JSON.stringify({ t: "2026-08-01T10:05:00.000Z", kind: "finish", detail: { stopped: "frontier-empty", actions: 25, nodes: 30 } }),
 		].join("\n") + "\n");
-		const m = manifest(entry({ jobId: "job-x", armId: "p1-explore-ax", state: "done", collected: true }));
+		const m = manifest(entry({ jobId: "job-x", armId: "explore-ax", state: "done", collected: true }));
 		const d = buildDetail("job-x", m, { dataDir: dir, benchRoot: path.join(dir, "bench") });
 		assert.equal(d.series?.length, 2);
 		assert.equal(d.series?.[1]?.stopped, "frontier-empty");
@@ -1576,7 +1576,7 @@ test("BuildState__AttachesLiveProgress__When__EntryUncollected", () => {
 		undefined,
 		live,
 	);
-	const e = armView(s, "p2-ax-grounded")?.passes[0]?.entries[0];
+	const e = armView(s, "ax-grounded")?.passes[0]?.entries[0];
 	assert.equal(e?.live?.steps, 3);
 	assert.equal(e?.live?.verified, 2);
 });
@@ -1595,7 +1595,7 @@ test("BuildState__OmitsLiveProgress__When__EntryCollected", () => {
 		undefined,
 		live,
 	);
-	const e = armView(s, "p2-ax-grounded")?.passes[0]?.entries[0];
+	const e = armView(s, "ax-grounded")?.passes[0]?.entries[0];
 	assert.equal(e?.live, undefined);
 	assert.equal(e?.steps, 5, "the collected number stands alone");
 });
@@ -1648,7 +1648,7 @@ test("BuildState__PricesLiveUsage__When__EntryUncollected", () => {
 		undefined,
 		live,
 	);
-	const pass = armView(s, "p2-ax-grounded")?.passes[0];
+	const pass = armView(s, "ax-grounded")?.passes[0];
 	const e = pass?.entries[0];
 	assert.equal(e?.live?.usd, estimateCost(tokens, "claude-opus-5"));
 	assert.equal(e?.live?.usd, 1.75);
@@ -1666,7 +1666,7 @@ test("BuildState__PricesLiveUsage__When__EntryUncollected", () => {
 		undefined,
 		live,
 	);
-	assert.equal(armView(s2, "p2-ax-grounded")?.passes[0]?.entries[0]?.live, undefined);
+	assert.equal(armView(s2, "ax-grounded")?.passes[0]?.entries[0]?.live, undefined);
 });
 
 test("StoreEvents__OmitsUsageLines__When__TailingRunEvents", () => {

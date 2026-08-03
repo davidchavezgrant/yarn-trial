@@ -80,7 +80,7 @@ test("MapsForApp__FiltersByAppField__When__OtherAppsShareTheDir", () => {
 const stateWith = (passModel: string): DashState =>
 	({
 		arms: [{
-			id: "p2-cdp-grounded", title: "Explored Task", phase: 2, kind: "task", n: 3, flags: "",
+			id: "cdp-grounded", title: "Explored Task", phase: 2, kind: "task", n: 3, flags: "",
 			app: "Yarn", perception: "DOM + vision", actuation: "CDP", targetKey: "Yarn",
 			passes: [{ model: passModel, submitted: 0, collected: 0, successes: 0, usd: 0, unpriced: 0, assumed: 0, rejections: 0, documentScopeMutations: 0, failureBreakdown: "", entries: [] }],
 		}],
@@ -89,14 +89,14 @@ const stateWith = (passModel: string): DashState =>
 const MANIFEST: Manifest = { date: "2026-07-31", createdAt: "", entries: [] };
 
 test("BuildGraphsData__ResolvesDefaultPass__When__ModelParamAbsent", () => {
-	const got = buildGraphsData("p2-cdp-grounded", undefined, MANIFEST, stateWith("(default)"));
+	const got = buildGraphsData("cdp-grounded", undefined, MANIFEST, stateWith("(default)"));
 	assert.ok(!("error" in got), JSON.stringify(got));
 	assert.equal(got.pass.model, "(default)");
 	assert.deepEqual(got.runs, []);
 });
 
 test("BuildGraphsData__NamesAvailablePasses__When__ModelDoesNotMatch", () => {
-	const got = buildGraphsData("p2-cdp-grounded", "nope", MANIFEST, stateWith("gpt-x"));
+	const got = buildGraphsData("cdp-grounded", "nope", MANIFEST, stateWith("gpt-x"));
 	assert.ok("error" in got);
 	assert.match(got.error, /gpt-x/);
 });

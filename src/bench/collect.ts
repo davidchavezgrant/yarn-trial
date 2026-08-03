@@ -152,7 +152,7 @@ export function journalScopes(journalPath: string): string[] {
  */
 export function parseAppmapStamp(md: string): RunMetrics {
 	// `explore-vision` must match too — the earlier `explore\s*\|` required the pipe right
-	// after "explore", so a vision-only pass's appmap parsed to NOTHING and p1-explore-vision
+	// after "explore", so a vision-only pass's appmap parsed to NOTHING and explore-vision
 	// would have collected no metrics at all while looking like a healthy arm.
 	const stamp = md.match(/<!--\s*provenance: explore(?:-vision)?\s*\|([^>]*)-->/)?.[1] ?? "";
 	const field = (name: string): string | undefined => stamp.match(new RegExp(`\\b${name}:\\s*([^|]+)`))?.[1]?.trim();
@@ -623,7 +623,7 @@ export function collectEntry(entry: ManifestEntry, job: JobRecord | undefined, d
 		// `web-app.notion.com.md`, and honoring the stale record over the shared derivation
 		// re-froze empty metrics on every re-collect. The record wins only when its file is there.
 		// armAppmapSlug, not a hand-assembled call: this one omitted axdomOff, so
-		// p1-explore-ax-noaxdom was graded against p1-explore-ax's map — the existsSync guard
+		// explore-ax-noaxdom was graded against explore-ax's map — the existsSync guard
 		// passing precisely BECAUSE the sibling's file was sitting there. The two arms would
 		// have reported byte-identical numbers and the sidecar would have looked worthless.
 		//
@@ -645,12 +645,12 @@ export function collectEntry(entry: ManifestEntry, job: JobRecord | undefined, d
 		 * docs/appmaps. So `own` exists for a pass that produced nothing usable, and since `own`
 		 * is preferred above, the "no appmap at" note can no longer fire. That silenced
 		 * `technicalFailure` for exactly the runs it exists to catch: on 2026-08-01
-		 * p1-explore-no-vision and p1-explore-ax-noaxdom published nothing and were counted as
+		 * explore-no-vision and explore-ax-noaxdom published nothing and were counted as
 		 * delivered samples, so re-running the phase would not have replaced them.
 		 *
 		 * Publication is what the next phase consumes, so publication is the test. Byte equality
 		 * rather than mere existence, because docs/appmaps may hold an OLDER map for this slug —
-		 * p1-explore-no-vision's target still held the previous day's file.
+		 * explore-no-vision's target still held the previous day's file.
 		 */
 		const published = fs.existsSync(derived) && fs.existsSync(own) && fs.readFileSync(derived, "utf8") === fs.readFileSync(own, "utf8");
 		if (!published && fs.existsSync(own)) notes.push(`map not published to ${path.relative(dataDir, derived)} — pass was demoted or superseded`);

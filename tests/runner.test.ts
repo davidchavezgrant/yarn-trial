@@ -2505,7 +2505,7 @@ test("createJob__NamesTheAppmapTheWayTheExploreWritesIt__When__TheTargetIsAWebUr
 test("childRunArgs__PassesPerceptionFlagsToExplore__When__ThePassIsVisionOnly", () => {
 	// The bug this exists for: only the TASK branch spread --no-ax/--no-vision, so a
 	// vision-only EXPLORE ran as an ordinary element-grounded pass. The flag was recorded on
-	// the job and crossed the wire; it was dropped here. Nothing failed — p1-explore-vision
+	// the job and crossed the wire; it was dropped here. Nothing failed — explore-vision
 	// reported done with a 153-node map stamped `provenance: explore | backend: ax`, which is
 	// the ax arm's own result wearing the vision arm's name.
 	const argv = childRunArgs("explore", { backend: "ax", noAx: true }, "Yarn", "");

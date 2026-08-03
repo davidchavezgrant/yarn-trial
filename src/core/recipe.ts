@@ -361,7 +361,7 @@ export function taskHash(task: string): string {
  * `(name, surface, role)` resolutions, and ax and cdp name the same controls differently — so
  * the two are not interchangeable artifacts that happen to share a task, they are different
  * recordings. Keyed on (app, task) alone, phase 3's two compile arms wrote the same path and
- * the cdp compile (9 steps) overwrote the ax one (11 steps). `p3-replay-ax` then deferred
+ * the cdp compile (9 steps) overwrote the ax one (11 steps). `replay-ax` then deferred
  * forever: its gate wanted an ax recipe and the only file on disk was cdp's.
  *
  * `procedureFileFor` already keys on backend for exactly this reason. Recipes were the tier

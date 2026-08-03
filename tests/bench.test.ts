@@ -57,7 +57,7 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// 2026-07-31 after their prerequisites were CHECKED rather than assumed (matrix.ts holds
 	// the full reasoning at each site): the Notion Calendar slice (4 arms × 2 = 8 runs — the
 	// app is installed on none of the three Macs, so every run would refuse at the readiness
-	// gate) and p2-vision-only-grounded (3 runs — its `.vision` appmap does not exist, and a
+	// gate) and vision-only-grounded (3 runs — its `.vision` appmap does not exist, and a
 	// missing map degrades to provenance "none", making it a silent duplicate of the
 	// ungrounded arm under a grounded label).
 	// Phase 2: core 12, plus 8 slices × 3 — the vision-only tier is now four arms
@@ -242,7 +242,7 @@ const entry = (armId: string, jobId: string, over: Partial<ManifestEntry> = {}):
 
 test("writeManifest__RoundTrips__When__ReadBack", () => {
 	withTemp("bench-", (dir) => {
-		const m: Manifest = { date: DATE, createdAt: "2026-07-31T09:00:00.000Z", entries: [entry("p1-explore-ax", "explore-j1")] };
+		const m: Manifest = { date: DATE, createdAt: "2026-07-31T09:00:00.000Z", entries: [entry("explore-ax", "explore-j1")] };
 		writeManifest(m, liveDir(dir));
 		assert.deepEqual(readManifest(DATE, liveDir(dir)), m);
 		assert.ok(fs.existsSync(manifestPath(DATE, liveDir(dir))));
@@ -258,15 +258,15 @@ test("readManifest__ReturnsEmpty__When__FileAbsent", () => {
 });
 
 test("recordSubmissions__DropsDuplicates__When__SameArmAndJobRecordedTwice", () => {
-	const m: Manifest = { date: DATE, createdAt: "", entries: [entry("p2-ax-grounded", "j1")] };
-	const next = recordSubmissions(m, [entry("p2-ax-grounded", "j1"), entry("p2-ax-grounded", "j2")]);
+	const m: Manifest = { date: DATE, createdAt: "", entries: [entry("ax-grounded", "j1")] };
+	const next = recordSubmissions(m, [entry("ax-grounded", "j1"), entry("ax-grounded", "j2")]);
 	assert.equal(next.entries.length, 2);
-	assert.equal(submittedCount(next, "p2-ax-grounded", BENCH_PRIMARY_MODEL), 2);
+	assert.equal(submittedCount(next, "ax-grounded", BENCH_PRIMARY_MODEL), 2);
 });
 
 test("updateEntry__ReplacesByKey__When__ArmAndJobMatch", () => {
-	const m: Manifest = { date: DATE, createdAt: "", entries: [entry("p2-ax-grounded", "j1"), entry("p2-ax-grounded", "j2")] };
-	const next = updateEntry(m, entry("p2-ax-grounded", "j2", { collected: true, state: "done" }));
+	const m: Manifest = { date: DATE, createdAt: "", entries: [entry("ax-grounded", "j1"), entry("ax-grounded", "j2")] };
+	const next = updateEntry(m, entry("ax-grounded", "j2", { collected: true, state: "done" }));
 	assert.equal(next.entries[0].collected, false);
 	assert.equal(next.entries[1].collected, true);
 	assert.equal(next.entries[1].state, "done");
@@ -376,18 +376,18 @@ test("runPhase__ShapesOptionsPerArm__When__Phase2Dispatches", async () => {
 		// Phase-1 gate satisfied: both Yarn explores collected.
 		let m = readManifest(DATE, liveDir(dir));
 		m = recordSubmissions(m, [
-			entry("p1-explore-ax", "explore-a", { collected: true, state: "done" }),
-			entry("p1-explore-cdp", "explore-c", { collected: true, state: "done" }),
+			entry("explore-ax", "explore-a", { collected: true, state: "done" }),
+			entry("explore-cdp", "explore-c", { collected: true, state: "done" }),
 			// The vision-only pass has to be collected too, and the gate is right to insist:
-			// p2-vision-only-grounded-visionmap reads the `.vision` map this pass writes, and
+			// vision-only-grounded-visionmap reads the `.vision` map this pass writes, and
 			// with no map loadGrounding degrades to provenance "none" — the arm would run as a
 			// silent duplicate of the ungrounded one. Phase 2 refusing here IS the protection.
-			entry("p1-explore-vision", "explore-v", { collected: true, state: "done" }),
-			entry("p1-explore-no-vision", "explore-nv", { collected: true, state: "done" }),
-			entry("p1-explore-ax-noaxdom", "explore-na", { collected: true, state: "done" }),
-			entry("p1-explore-ax-noaxdom-no-vision", "explore-nanv", { collected: true, state: "done" }),
-			entry("p1-explore-cdp-no-vision", "explore-cnv", { collected: true, state: "done" }),
-			entry("p1-explore-vision-cdp", "explore-vcdp", { collected: true, state: "done" }),
+			entry("explore-vision", "explore-v", { collected: true, state: "done" }),
+			entry("explore-no-vision", "explore-nv", { collected: true, state: "done" }),
+			entry("explore-ax-noaxdom", "explore-na", { collected: true, state: "done" }),
+			entry("explore-ax-noaxdom-no-vision", "explore-nanv", { collected: true, state: "done" }),
+			entry("explore-cdp-no-vision", "explore-cnv", { collected: true, state: "done" }),
+			entry("explore-vision-cdp", "explore-vcdp", { collected: true, state: "done" }),
 		]);
 		writeManifest(m, liveDir(dir));
 
@@ -469,12 +469,12 @@ test("runPhase__SubmitsOnlyMissingSamples__When__ManifestAlreadyHoldsSome", asyn
 	await withTempAsync("bench-", async (dir) => {
 		let m = readManifest(DATE, liveDir(dir));
 		m = recordSubmissions(m, [
-			entry("p1-explore-ax", "explore-a"),
-			entry("p1-explore-cdp", "explore-c"),
-			entry("p1-explore-vision", "explore-v"),
-			entry("p1-explore-ax-noaxdom", "explore-na"),
-			entry("p1-explore-ax-noaxdom-no-vision", "explore-nanv"),
-			entry("p1-explore-cdp-no-vision", "explore-cnv"),
+			entry("explore-ax", "explore-a"),
+			entry("explore-cdp", "explore-c"),
+			entry("explore-vision", "explore-v"),
+			entry("explore-ax-noaxdom", "explore-na"),
+			entry("explore-ax-noaxdom-no-vision", "explore-nanv"),
+			entry("explore-cdp-no-vision", "explore-cnv"),
 		]);
 		writeManifest(m, liveDir(dir));
 
@@ -491,8 +491,8 @@ test("runPhase__CompilesLocallyAndDispatchesReplays__When__Phase3HasCleanSources
 	await withTempAsync("bench-", async (dir) => {
 		let m = readManifest(DATE, liveDir(dir));
 		m = recordSubmissions(m, [
-			entry("p2-ax-grounded", "run-ax-1", { collected: true, state: "done", metrics: { success: true, finalCheckVerified: true } }),
-			entry("p2-cdp-grounded", "run-cdp-1", { collected: true, state: "done", metrics: { success: false } }),
+			entry("ax-grounded", "run-ax-1", { collected: true, state: "done", metrics: { success: true, finalCheckVerified: true } }),
+			entry("cdp-grounded", "run-cdp-1", { collected: true, state: "done", metrics: { success: false } }),
 		]);
 		writeManifest(m, liveDir(dir));
 
@@ -514,7 +514,7 @@ test("runPhase__CompilesLocallyAndDispatchesReplays__When__Phase3HasCleanSources
 		// Only the ax source is clean; the cdp compile waits for a successful cdp run.
 		assert.deepEqual(compiled, ["run-ax-1"]);
 
-		// Only the ax replay arm dispatches: p3-replay-norescue moved to cdp on 2026-08-01 (it
+		// Only the ax replay arm dispatches: replay-norescue moved to cdp on 2026-08-01 (it
 		// measures the unattended FLEET posture, a question about the shipping actuator), so it
 		// waits on the cdp compile like every other cdp replay.
 		// Reuse holds recipes AND procedures since 2026-08-03, so the stage dispatches both tiers
@@ -526,7 +526,7 @@ test("runPhase__CompilesLocallyAndDispatchesReplays__When__Phase3HasCleanSources
 		assert.equal(replays.filter((c) => c.noRescue === true).length, 0, "the no-rescue arm is cdp now and defers with the others");
 
 		const after = readManifest(DATE, liveDir(dir));
-		const compileEntry = after.entries.find((e) => e.armId === "p3-compile-ax");
+		const compileEntry = after.entries.find((e) => e.armId === "compile-ax");
 		assert.equal(compileEntry?.host, "local");
 		assert.equal(compileEntry?.collected, true);
 		assert.match(compileEntry?.recipe ?? "", /recipe\.json$/);
@@ -536,7 +536,7 @@ test("runPhase__CompilesLocallyAndDispatchesReplays__When__Phase3HasCleanSources
 test("runPhase__RecordsCompileRefusal__When__CompileFnThrows", async () => {
 	await withTempAsync("bench-", async (dir) => {
 		let m = readManifest(DATE, liveDir(dir));
-		m = recordSubmissions(m, [entry("p2-ax-grounded", "run-hinted", { collected: true, state: "done", metrics: { success: true } })]);
+		m = recordSubmissions(m, [entry("ax-grounded", "run-hinted", { collected: true, state: "done", metrics: { success: true } })]);
 		writeManifest(m, liveDir(dir));
 
 		const fake = fakeDispatch();
@@ -551,7 +551,7 @@ test("runPhase__RecordsCompileRefusal__When__CompileFnThrows", async () => {
 			log: () => {},
 		});
 		const after = readManifest(DATE, liveDir(dir));
-		const refusal = after.entries.find((e) => e.armId === "p3-compile-ax");
+		const refusal = after.entries.find((e) => e.armId === "compile-ax");
 		assert.equal(refusal?.state, "failed");
 		assert.match(refusal?.note ?? "", /--hinted/);
 		// No recipe means every ax replay deferred rather than dispatching without one. Scoped to
@@ -566,7 +566,7 @@ test("plannedRuns__ExcludesCompileArms__When__Phase3Planned", () => {
 });
 
 test("dispatchOptionsFor__CarriesRecipeAndQueue__When__ReplayArm", () => {
-	const arm = armById("p3-replay-norescue")!;
+	const arm = armById("replay-norescue")!;
 	const o = dispatchOptionsFor(arm, "docs/recipes/yarn.abc.recipe.json");
 	assert.equal(o.kind, "replay");
 	assert.equal(o.queue, true);
@@ -579,11 +579,11 @@ test("findCompileSource__SkipsTriedStamps__When__PreviousCompileRefused", () => 
 		date: DATE,
 		createdAt: "",
 		entries: [
-			entry("p2-ax-grounded", "run-1", { collected: true, metrics: { success: true } }),
-			entry("p2-ax-grounded", "run-2", { collected: true, metrics: { success: true } }),
+			entry("ax-grounded", "run-1", { collected: true, metrics: { success: true } }),
+			entry("ax-grounded", "run-2", { collected: true, metrics: { success: true } }),
 		],
 	};
-	assert.equal(findCompileSource(m, "p2-ax-grounded", new Set(["run-1"]), BENCH_PRIMARY_MODEL)?.jobId, "run-2");
+	assert.equal(findCompileSource(m, "ax-grounded", new Set(["run-1"]), BENCH_PRIMARY_MODEL)?.jobId, "run-2");
 });
 
 // --- collect: metrics off fixture artifacts ---
@@ -751,7 +751,7 @@ test("collect__MarksEntryWithMetrics__When__TaskRunArtifactsArePresent", async (
 			`${JSON.stringify({ kind: "setting", control: "Cursor Style", surface: "Screen Clip Settings", scope: "brand", before: "Arrow-first", after: "Pointer-first", step: 3 })}\n`,
 		);
 		let m = readManifest(DATE, liveDir(outRoot));
-		m = recordSubmissions(m, [entry("p2-ax-grounded", "job-1")]);
+		m = recordSubmissions(m, [entry("ax-grounded", "job-1")]);
 		writeManifest(m, liveDir(outRoot));
 
 		const outcome = await collect({
@@ -779,7 +779,7 @@ test("collect__PullsNothingAgain__When__RunASecondTime", async () => {
 		fs.mkdirSync(path.join(dir, "out/runs"), { recursive: true });
 		fs.writeFileSync(path.join(dir, "out/runs/job-1.json"), JSON.stringify(RUN_LOG));
 		let m = readManifest(DATE, liveDir(outRoot));
-		m = recordSubmissions(m, [entry("p2-ax-grounded", "job-1")]);
+		m = recordSubmissions(m, [entry("ax-grounded", "job-1")]);
 		writeManifest(m, liveDir(outRoot));
 
 		let pulls = 0;
@@ -808,7 +808,7 @@ test("collect__LeavesEntryPending__When__JobStillRunning", async () => {
 	await withTempAsync("bench-", async (dir) => {
 		const outRoot = path.join(dir, "out");
 		let m = readManifest(DATE, liveDir(outRoot));
-		m = recordSubmissions(m, [entry("p2-ax-grounded", "job-1")]);
+		m = recordSubmissions(m, [entry("ax-grounded", "job-1")]);
 		writeManifest(m, liveDir(outRoot));
 
 		const outcome = await collect({
@@ -829,7 +829,7 @@ test("collect__CountsRunAsFailure__When__TerminalJobHasNoRunLog", async () => {
 	await withTempAsync("bench-", async (dir) => {
 		const outRoot = path.join(dir, "out");
 		let m = readManifest(DATE, liveDir(outRoot));
-		m = recordSubmissions(m, [entry("p2-ax-grounded", "job-1")]);
+		m = recordSubmissions(m, [entry("ax-grounded", "job-1")]);
 		writeManifest(m, liveDir(outRoot));
 
 		const outcome = await collect({
@@ -856,7 +856,7 @@ test("collect__EvictsFailedRunFromLiveKeepingItsManifestRow__When__EntryIsTermin
 		fs.mkdirSync(runDir("job-bad", outRoot), { recursive: true });
 		fs.writeFileSync(path.join(runDir("job-bad", outRoot), RUN_FILES.log), JSON.stringify({ ...RUN_LOG, success: false }));
 		let m = readManifest(DATE, liveDir(outRoot));
-		m = recordSubmissions(m, [entry("p2-ax-grounded", "job-ok"), entry("p2-ax-grounded", "job-bad")]);
+		m = recordSubmissions(m, [entry("ax-grounded", "job-ok"), entry("ax-grounded", "job-bad")]);
 		writeManifest(m, liveDir(outRoot));
 
 		const outcome = await collect({
@@ -886,7 +886,7 @@ test("collect__RefusesEvictionAndNotesWhy__When__TheBackupCannotBeTaken", async 
 		fs.mkdirSync(runDir("job-bad", outRoot), { recursive: true });
 		fs.writeFileSync(path.join(runDir("job-bad", outRoot), RUN_FILES.log), JSON.stringify({ ...RUN_LOG, success: false }));
 		let m = readManifest(DATE, liveDir(outRoot));
-		m = recordSubmissions(m, [entry("p2-ax-grounded", "job-bad")]);
+		m = recordSubmissions(m, [entry("ax-grounded", "job-bad")]);
 		writeManifest(m, liveDir(outRoot));
 		// A FILE where the archive root belongs: every mkdir under it fails, so the backup cannot
 		// be taken and eviction must refuse rather than delete the only copy.
@@ -921,7 +921,7 @@ test("collect__ParsesAppmapArtifacts__When__ExploreEntryIsTerminal", async () =>
 			JSON.stringify({ nodes: [{ id: "a", title: "A", kind: "surface", scope: "brand" }], edges: [] }),
 		);
 		let m = readManifest(DATE, liveDir(outRoot));
-		m = recordSubmissions(m, [entry("p1-explore-ax", "explore-1")]);
+		m = recordSubmissions(m, [entry("explore-ax", "explore-1")]);
 		writeManifest(m, liveDir(outRoot));
 
 		const job = { ...doneJob("explore-1", {}), kind: "explore", artifacts: { log: "out/jobs/explore-1/log.txt", appmap: "docs/appmaps/yarn.md", appmapGraph: "docs/appmaps/yarn.json" } } as JobRecord;
@@ -947,13 +947,13 @@ test("renderReport__ListsStampsAndSections__When__ManifestHasEntries", () => {
 		date: DATE,
 		createdAt: "",
 		entries: [
-			entry("p2-ax-grounded", "job-1", { collected: true, state: "done", metrics: { success: true, steps: 4, elapsedSec: 52, modelCalls: 6, mutationScopes: ["brand"], queueWaitSec: 12, runSec: 60 } }),
-			entry("p2-ax-ungrounded", "job-2"),
+			entry("ax-grounded", "job-1", { collected: true, state: "done", metrics: { success: true, steps: 4, elapsedSec: 52, modelCalls: 6, mutationScopes: ["brand"], queueWaitSec: 12, runSec: 60 } }),
+			entry("ax-ungrounded", "job-2"),
 		],
 	};
 	const md = renderReport(m);
-	assert.match(md, /## Phase 1 — node discovery/);
-	assert.match(md, /## Phase 2 — backend × grounding \(core\)/);
+	assert.match(md, /## Stage 1 — Discovery/);
+	assert.match(md, /## Stage 2 — Configuration: backend × grounding \(core\)/);
 	// Notion was killed as an approach (David, 2026-08-01), so the SECTION it rendered — empty
 	// ever since the slice was cut — goes with it. An empty table reads as "we measured this and
 	// found nothing", which is the opposite of what happened.
@@ -964,7 +964,7 @@ test("renderReport__ListsStampsAndSections__When__ManifestHasEntries", () => {
 	const headings = md.split("\n").filter((l) => l.startsWith("## "));
 	assert.deepEqual(headings.filter((h) => /notion/i.test(h)), [], "no section may exist for arms that do not");
 	assert.match(md, /Notion arm was cut|Notion cut entirely/, "the cut should stay visible as a stated limit");
-	assert.match(md, /## Phase 3 — recipes/);
+	assert.match(md, /## Stage 3 — Reuse: recipes/);
 	assert.match(md, /## Timing/);
 	assert.match(md, /## For Aman/);
 		// The stamp line now names the MODEL too, because the pass declares one — that is the
@@ -972,7 +972,7 @@ test("renderReport__ListsStampsAndSections__When__ManifestHasEntries", () => {
 	assert.match(md, /`job-1` \(mac1, azure\/gpt-5\.6-sol\)/);
 	assert.match(md, /`job-2` \(mac1, azure\/gpt-5\.6-sol, uncollected\)/);
 	// The collected arm's row carries its numbers; the arm with no collected runs shows —.
-	assert.match(md, /\| p2-ax-grounded \|[^\n]*\| 1\/3 \| 1\/1 \| — \| 4 \| 52 \| 6 \|/);
+	assert.match(md, /\| ax-grounded \|[^\n]*\| 1\/3 \| 1\/1 \| — \| 4 \| 52 \| 6 \|/);
 	assert.match(md, /TODO: which backend/);
 });
 
@@ -1029,12 +1029,12 @@ test("runPhase__GatesPhase2OnThisPassesExplores__When__AnotherModelAlreadyExplor
 });
 
 test("archiveDirFor__KeysOnModelArmAndJob__When__PassesOrSamplesShareOneManifest", () => {
-	const base = { armId: "p1-explore-ax", jobId: "j", host: "mac1", submittedAt: "", state: "done", collected: true };
+	const base = { armId: "explore-ax", jobId: "j", host: "mac1", submittedAt: "", state: "done", collected: true };
 	const sol = archiveDirFor("/bench/2026-07-31", { ...base, model: "openai/gpt-5.6-sol:nitro" });
 	const fable = archiveDirFor("/bench/2026-07-31", { ...base, model: "claude-fable-5" });
 	assert.notEqual(sol, fable, "each model pass archives its own maps");
-	assert.match(sol, /appmaps\/openai-gpt-5.6-sol-nitro\/p1-explore-ax\/j$/);
-	assert.match(archiveDirFor("/b", base), /appmaps\/default\/p1-explore-ax\/j$/);
+	assert.match(sol, /appmaps\/openai-gpt-5.6-sol-nitro\/explore-ax\/j$/);
+	assert.match(archiveDirFor("/b", base), /appmaps\/default\/explore-ax\/j$/);
 
 	// And per JOB, because an explore arm now runs n=2: both samples write the same live
 	// filename on their own Macs, so an arm-keyed archive would keep only the one collected
@@ -1063,7 +1063,7 @@ test("failureKind__ClassifiesEachShape__When__RunsFailDifferently", () => {
 
 test("poisonedHosts__FlagsTheHost__When__LastThreeRunsFailIdentically", () => {
 	const entry = (host: string, jobId: string, kind?: string, success = false) => ({
-		armId: "p2-ax-grounded", jobId, host, submittedAt: "", state: "done", collected: true,
+		armId: "ax-grounded", jobId, host, submittedAt: "", state: "done", collected: true,
 		metrics: { success, ...(kind ? { failureKind: kind } : {}) },
 	}) as any;
 	const m = (entries: any[]) => ({ date: "2026-07-31", createdAt: "", entries }) as any;
@@ -1133,7 +1133,7 @@ test("armAppmapSlug__GivesEveryExploreArmItsOwnFile__When__TheMatrixIsWalked", (
 	// the survivor is decided by explore ordering. That happened twice on 2026-08-01: first
 	// every Yarn explore wrote yarn.json (ax 156 nodes, cdp 196, no-vision 180 — last writer
 	// won), then the first fix added the BACKEND but not the perception tier, so
-	// p1-explore-ax and p1-explore-no-vision still collided. Neither was visible in any test
+	// explore-ax and explore-no-vision still collided. Neither was visible in any test
 	// because the arms individually looked fine; only the pair was wrong.
 	const explores = MATRIX.filter((a) => a.kind === "explore");
 	const byslug = new Map<string, string[]>();
@@ -1143,11 +1143,11 @@ test("armAppmapSlug__GivesEveryExploreArmItsOwnFile__When__TheMatrixIsWalked", (
 
 	// And every dimension that varies must actually appear in the name, or a future arm
 	// varying only in that dimension collides silently.
-	const yarnAx = explores.find((a) => a.id === "p1-explore-ax");
+	const yarnAx = explores.find((a) => a.id === "explore-ax");
 	assert.ok(yarnAx);
 	assert.equal(armAppmapSlug(yarnAx), "yarn.ax", "backend in the name");
-	assert.equal(armAppmapSlug(explores.find((a) => a.id === "p1-explore-no-vision")!), "yarn.ax.novision", "perception tier in the name");
-	assert.equal(armAppmapSlug(explores.find((a) => a.id === "p1-explore-vision")!), "yarn.ax.vision", "vision-only tier in the name");
+	assert.equal(armAppmapSlug(explores.find((a) => a.id === "explore-no-vision")!), "yarn.ax.novision", "perception tier in the name");
+	assert.equal(armAppmapSlug(explores.find((a) => a.id === "explore-vision")!), "yarn.ax.vision", "vision-only tier in the name");
 	// The web arms are gone, but the derivation must still handle a URL target — restoring
 	// them must not require rediscovering that a host and a backend both belong in the name.
 	assert.equal(appmapSlug("https://app.notion.com", { backend: "cdp" }), "web-app.notion.com.cdp");
@@ -1160,10 +1160,10 @@ test("armAppmapSlug__IsWhatTaskArmsWillRead__When__TheyGroundOnAPass", () => {
 	// controls for reasons that read as backend weakness.
 	const exploreFor = (backend: string) => MATRIX.find((a) => a.kind === "explore" && a.dispatch.backend === backend && !a.dispatch.noAx && !a.dispatch.noVision && a.app === "Yarn");
 	for (const backend of ["ax", "cdp"]) {
-		const task = MATRIX.find((a) => a.id === `p2-${backend}-grounded`);
+		const task = MATRIX.find((a) => a.id === `${backend}-grounded`);
 		const explore = exploreFor(backend);
 		assert.ok(task && explore, backend);
-		assert.equal(armAppmapSlug(task), armAppmapSlug(explore), `p2-${backend}-grounded must read what p1-explore-${backend} wrote`);
+		assert.equal(armAppmapSlug(task), armAppmapSlug(explore), `${backend}-grounded must read what explore-${backend} wrote`);
 	}
 });
 
@@ -1186,7 +1186,7 @@ test("armTitle__NamesTheArmWithoutRepeatingPerception__When__ShownBesideIt", () 
 
 test("MATRIX__ConsumesEveryMapItProduces__When__ExploresAndTaskArmsArePaired", () => {
 	// A grounding pass costs ~30 minutes and ~$14. One whose map no arm reads is that spent
-	// for a comparison alone — which is what p1-explore-no-vision was until APPMAP_VARIANT
+	// for a comparison alone — which is what explore-no-vision was until APPMAP_VARIANT
 	// learned "novision". The reverse is worse: an arm reading a map nothing writes finds
 	// nothing, and loadGrounding degrades a miss to provenance "none" — ungrounded under a
 	// grounded label, the failure mode this matrix has hit three separate ways.
@@ -1224,10 +1224,10 @@ test("groundingChecked__FlagsARunThatDidNotGetItsDeclaredGrounding__When__Proven
 	// for a whole class: a map that never synced to the host, a variant that never crossed the
 	// wire, a slug naming a sibling's file. Each produces a plausible number under a confident
 	// label, and loadGrounding turns a missing map into provenance "none" without complaint.
-	const grounded = MATRIX.find((a) => a.id === "p2-ax-grounded")!;
-	const ungrounded = MATRIX.find((a) => a.id === "p2-ax-ungrounded")!;
-	const curated = MATRIX.find((a) => a.id === "p2-curated")!;
-	const visionmap = MATRIX.find((a) => a.id === "p2-vision-only-grounded-visionmap")!;
+	const grounded = MATRIX.find((a) => a.id === "ax-grounded")!;
+	const ungrounded = MATRIX.find((a) => a.id === "ax-ungrounded")!;
+	const curated = MATRIX.find((a) => a.id === "curated")!;
+	const visionmap = MATRIX.find((a) => a.id === "vision-only-grounded-visionmap")!;
 
 	assert.equal(expectedProvenance(grounded), "explore");
 	assert.equal(expectedProvenance(ungrounded), "none");
@@ -1279,7 +1279,7 @@ test("MATRIX__FilmsEveryMeasuredConfig__When__PhaseFiveIsDerived", () => {
 	for (const m of measured) assert.ok(filmedShapes.has(shape(m)), `${m.id} is measured but never filmed`);
 	// Including the floor and the minimum-context pair — the reorder question (does demo
 	// conduct break this config?) applies hardest where the config is already marginal.
-	for (const id of ["p2-min-context-ungrounded", "p2-vision-only-ungrounded"]) {
+	for (const id of ["min-context-ungrounded", "vision-only-ungrounded"]) {
 		const m = MATRIX.find((a) => a.id === id);
 		assert.ok(m && filmedShapes.has(shape(m)), `${id} has no filmed twin`);
 	}
@@ -1318,7 +1318,7 @@ test("submittedCount__SkipsTechnicalFailures__When__ARunDiedProducingNothing", (
 	// `bench phase --go` uses, so excluding these makes the next run of the phase refill them —
 	// one code path for "submit what is missing", whatever the reason it is missing.
 	const e = (jobId: string, over: Partial<ManifestEntry> = {}): ManifestEntry => ({
-		armId: "p1-explore-cdp",
+		armId: "explore-cdp",
 		jobId,
 		host: "mac1",
 		submittedAt: "2026-08-01T06:00:00.000Z",
@@ -1331,14 +1331,14 @@ test("submittedCount__SkipsTechnicalFailures__When__ARunDiedProducingNothing", (
 		createdAt: "2026-08-01T06:00:00.000Z",
 		entries: [e("a"), e("b", { state: "failed", technical: { kind: "crashed", detail: "died on acquisition" } }), e("c")],
 	};
-	assert.equal(submittedCount(m, "p1-explore-cdp"), 2, "the crashed run must not consume a sample");
+	assert.equal(submittedCount(m, "explore-cdp"), 2, "the crashed run must not consume a sample");
 	// The entry STAYS — "two runs died acquiring the app" is worth knowing, and deleting the
 	// evidence would make a broken Mac look like a slow one.
-	assert.equal(entriesForArm(m, "p1-explore-cdp").length, 3);
+	assert.equal(entriesForArm(m, "explore-cdp").length, 3);
 });
 
 test("technicalFailure__SeparatesHarnessFromAgent__When__ARunFails", () => {
-	const explore = armById("p1-explore-cdp");
+	const explore = armById("explore-cdp");
 	// Died before producing anything → not a result.
 	assert.equal(technicalFailure("orphaned", {}, explore, [])?.kind, "orphaned");
 	assert.equal(technicalFailure("failed", { failureKind: "crashed" }, explore, [])?.kind, "crashed");
@@ -1520,7 +1520,7 @@ test("watchPhase__NeverTouchesRuns__When__ItGivesUp", async () => {
 });
 
 test("technicalFailure__CatchesADemotedExplore__When__NothingWasPublished", () => {
-	// The miscount from 2026-08-01, as a test. p1-explore-no-vision and p1-explore-ax-noaxdom
+	// The miscount from 2026-08-01, as a test. explore-no-vision and explore-ax-noaxdom
 	// both published NO map — one left the previous day's file in place, the other wrote none —
 	// yet both were classified non-technical and counted as delivered samples, so re-running the
 	// phase would not have replaced them.
@@ -1532,7 +1532,7 @@ test("technicalFailure__CatchesADemotedExplore__When__NothingWasPublished", () =
 	//
 	// The product of an explore arm is a PUBLISHED map, because that is what the next phase
 	// reads. So publication is the test.
-	const explore = armById("p1-explore-ax-noaxdom");
+	const explore = armById("explore-ax-noaxdom");
 	assert.ok(explore, "fixture arm must exist");
 	assert.equal(technicalFailure("failed", {}, explore, ["map not published to docs/appmaps/yarn.ax.noaxdom.md — pass was demoted or superseded"])?.kind, "crashed");
 	// Still catches the older shape, where nothing was written at all.
@@ -1546,14 +1546,14 @@ test("collectEntry__FlagsAnUnpublishedMap__When__TheRunOnlyWroteItsOwnCopy", () 
 	// writeArtifacts and the classifier — a unit test that feeds the note directly (which the
 	// original did) passes while production silently does the wrong thing.
 	withTemp("collect-pub-", (dir) => {
-		const arm = armById("p1-explore-ax-noaxdom")!;
+		const arm = armById("explore-ax-noaxdom")!;
 		const slug = armAppmapSlug(arm);
 		const jobId = "explore-demoted";
 		const dataOut = path.join(dir, "out");
 		const stamp = "<!-- provenance: explore | app: Yarn | actions: 24 -->\n";
 
 		// The run folder holds a map (a demoted pass writes one); docs/appmaps holds an OLDER,
-		// different file for the same slug — exactly what p1-explore-no-vision left behind.
+		// different file for the same slug — exactly what explore-no-vision left behind.
 		fs.mkdirSync(runDir(jobId, dataOut), { recursive: true });
 		fs.writeFileSync(runPath(jobId, RUN_FILES.appmap, dataOut), `${stamp}demoted pass\n`);
 		fs.mkdirSync(path.join(dir, "docs", "appmaps"), { recursive: true });
@@ -1575,15 +1575,15 @@ test("renderReport__ShowsEveryRun__When__AnArmHasRepeatedSamples", () => {
 		date: DATE,
 		createdAt: "",
 		entries: [
-			entry("p1-explore-cdp", "job-a", { collected: true, state: "done", metrics: { controlsActuated: 136, graphNodes: 207, surfaces: 44 } }),
-			entry("p1-explore-cdp", "job-b", { collected: true, state: "done", metrics: { controlsActuated: 119, graphNodes: 144, surfaces: 12 } }),
+			entry("explore-cdp", "job-a", { collected: true, state: "done", metrics: { controlsActuated: 136, graphNodes: 207, surfaces: 44 } }),
+			entry("explore-cdp", "job-b", { collected: true, state: "done", metrics: { controlsActuated: 119, graphNodes: 144, surfaces: 12 } }),
 		],
 	};
 	// Scoped to the Phase 1 SECTION — later sections (Timing) list the same arm ids — and matched
-	// on the exact cell, because `p1-explore-cdp` is a prefix of `p1-explore-cdp-no-vision`.
+	// on the exact cell, because `explore-cdp` is a prefix of `explore-cdp-no-vision`.
 	const md = renderReport(m);
-	const phase1 = md.slice(md.indexOf("## Phase 1")).split("\n## ")[0];
-	const rows = phase1.split("\n").filter((l) => /^\| p1-explore-cdp \|/.test(l));
+	const phase1 = md.slice(md.indexOf("## Stage 1")).split("\n## ")[0];
+	const rows = phase1.split("\n").filter((l) => /^\| explore-cdp \|/.test(l));
 	assert.equal(rows.length, 2, "both samples must render");
 	assert.ok(
 		rows.some((r) => r.includes("| 136 |")) && rows.some((r) => r.includes("| 119 |")),
@@ -1610,9 +1610,9 @@ test("renderReport__MarksRescuedPasses__When__ARunSurvivedABlackout", () => {
 	const m: Manifest = {
 		date: DATE,
 		createdAt: "",
-		entries: [entry("p1-explore-ax", "job-x", { collected: true, state: "done", metrics: { controlsActuated: 85, blackouts: 1, relaunches: 1 } })],
+		entries: [entry("explore-ax", "job-x", { collected: true, state: "done", metrics: { controlsActuated: 85, blackouts: 1, relaunches: 1 } })],
 	};
-	assert.match(renderReport(m), /p1-explore-ax ⟲1/);
+	assert.match(renderReport(m), /explore-ax ⟲1/);
 });
 
 test("dispatchOptionsFor__PinsTheArmsOwnModel__When__ThePassRunsAnother", () => {
@@ -1620,11 +1620,11 @@ test("dispatchOptionsFor__PinsTheArmsOwnModel__When__ThePassRunsAnother", () => 
 	// "some runs with Claude" had nowhere to live short of re-dispatching a 45-run phase. An
 	// arm pin lets a few Claude cells sit beside their Sol twins in one pass — which is also the
 	// only way the report's per-model rows become a comparison instead of two separate tables.
-	const claude = MATRIX.find((a) => a.id === "p7-claude-cdp-grounded");
+	const claude = MATRIX.find((a) => a.id === "claude-cdp-grounded");
 	assert.ok(claude, "the Claude comparison arm must exist");
 	assert.equal(dispatchOptionsFor(claude!, undefined, "azure/gpt-5.6-sol").model, BENCH_ALT_MODEL);
 	// An unpinned arm still follows the pass.
-	const sol = MATRIX.find((a) => a.id === "p7-create-cdp-grounded");
+	const sol = MATRIX.find((a) => a.id === "create-cdp-grounded");
 	assert.equal(dispatchOptionsFor(sol!, undefined, "azure/gpt-5.6-sol").model, "azure/gpt-5.6-sol");
 });
 
@@ -1689,7 +1689,7 @@ test("creationArms__CarryAStepBudgetThatFitsTheTask__When__TheDefaultWouldCutThe
 	// was the right fix against a default of 15 and the wrong one against a default of 100 with
 	// a stall detector: it put a ceiling back in front of a run that was still making progress.
 	// Three runs hit 30 with verified steps inside their last eight.
-	const create = MATRIX.filter((a) => a.id.startsWith("p7-create-"));
+	const create = MATRIX.filter((a) => a.id.startsWith("create-"));
 	assert.ok(create.length >= 15, "the creation task covers the phase-2 grid");
 	for (const a of create)
 		assert.ok(a.dispatch.steps === undefined || a.dispatch.steps > 19, `${a.id} caps below a known-good run's 19 steps`);

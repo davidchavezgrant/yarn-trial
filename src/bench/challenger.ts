@@ -117,9 +117,9 @@ export function challengerNeedsExplore(plan: ChallengerPlan): Arm | undefined {
 	// Match the explore to a grounded arm's backend: an ax arm needs the ax pass, and a
 	// vision-only arm needs the vision pass, whose map is a different artifact entirely.
 	const armNeeding = plan.arms.find((a) => !a.dispatch.noGrounding && !a.dispatch.useRecipe);
-	if (armNeeding?.dispatch.noAx) return armById("p1-explore-vision");
+	if (armNeeding?.dispatch.noAx) return armById("explore-vision");
 
-	return armById(`p1-explore-${armNeeding?.dispatch.backend ?? "ax"}`);
+	return armById(`explore-${armNeeding?.dispatch.backend ?? "ax"}`);
 }
 
 /** Collected challenger entries for an arm, for the head-to-head table. */

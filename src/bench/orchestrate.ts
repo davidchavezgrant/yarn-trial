@@ -142,8 +142,8 @@ export function dispatchOptionsFor(arm: Arm, recipe?: string, model?: string): D
 		// and sets APPMAP_VARIANT on the child. Anything else in arm.env has no wire lane and
 		// would silently not reach the run — refuse loudly at plan time, not here.
 		// Forward whatever the arm declared. Restricting this to "vision" meant
-		// APPMAP_VARIANT=novision never crossed the wire: p2-ax-grounded-no-vision and
-		// p2-cdp-grounded-no-vision silently read the WITH-screenshots maps, the two
+		// APPMAP_VARIANT=novision never crossed the wire: ax-grounded-no-vision and
+		// cdp-grounded-no-vision silently read the WITH-screenshots maps, the two
 		// element-only grounding passes had no consumer at all, and `bench plan` printed
 		// "crosses the wire as appmapVariant" — a claim that was false.
 		...(arm.env?.APPMAP_VARIANT ? { appmapVariant: arm.env.APPMAP_VARIANT as "vision" | "novision" } : {}),

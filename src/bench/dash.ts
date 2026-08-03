@@ -210,8 +210,8 @@ export interface PassView {
 export interface ArmView {
 	id: string;
 	/**
-	 * Plain English, derived — "Explored Task" rather than `p2-ax-grounded`. The ids say
-	 * nothing about DOM attrs or vision, and `p2-vision-only-grounded-visionmap` is
+	 * Plain English, derived — "Explored Task" rather than `ax-grounded`. The ids say
+	 * nothing about DOM attrs or vision, and `vision-only-grounded-visionmap` is
 	 * unreadable at a glance. armTitle's wording mapped through the dash's Explore-family
 	 * copy (displayTitle below) — labels only, ids and flags keep the wire words.
 	 */
@@ -1628,11 +1628,11 @@ function heatFor(
  */
 export function groundingArmId(arm: Arm): string {
 	// ONE derivation, not a parallel decision tree. The hand-written version tested
-	// APPMAP_VARIANT before axdomOff and short-circuited, so p2-min-context-grounded — which
-	// reads yarn.ax.noaxdom.novision — was attributed to p1-explore-no-vision, which writes
+	// APPMAP_VARIANT before axdomOff and short-circuited, so min-context-grounded — which
+	// reads yarn.ax.noaxdom.novision — was attributed to explore-no-vision, which writes
 	// yarn.ax.novision. The run itself was fine; the dash counted its path against a graph it
 	// never read, which is exactly what the traversal-heat comment forbids. It also still named
-	// p1-explore-web-cdp, an arm deleted from the matrix.
+	// explore-web-cdp, an arm deleted from the matrix.
 	//
 	// armAppmapSlug already answers "which map file does this arm touch" for BOTH kinds: for an
 	// explore arm the one it writes, for a task arm the one it reads. Matching on it cannot

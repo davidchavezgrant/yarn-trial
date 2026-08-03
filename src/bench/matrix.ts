@@ -187,7 +187,11 @@ export interface ArmDispatch {
 }
 
 export interface Arm {
-	/** Stable slug, e.g. "p2-ax-grounded". Manifest entries key on it. */
+	/**
+	 * Stable slug naming the CELL, e.g. "ax-grounded" — not the stage it sits in. Manifest
+	 * entries key on it, so an id that encoded its position (the old `p2-`, `p7-` prefixes)
+	 * meant re-homing an arm silently orphaned its history. Re-homing is now free.
+	 */
 	id: string;
 	phase: Phase;
 	kind: ArmKind;
@@ -333,7 +337,7 @@ const task = (id: string, dispatch: ArmDispatch, informs: string, over: Partial<
  */
 const DISCOVERY: Arm[] = [
 	...BACKENDS.map((backend): Arm => ({
-		id: `p1-explore-${backend}`,
+		id: `explore-${backend}`,
 		phase: 1,
 		kind: "explore",
 		app: BENCH_APP,
@@ -355,7 +359,7 @@ const DISCOVERY: Arm[] = [
 		informs: "controls seen/actuated/dismissed, obs latency, pass duration, map size, scope ambiguities",
 	})),
 	/**
-	 * ~~p1-explore-web-cdp (Notion)~~ — DROPPED 2026-08-01 (David's call, on time).
+	 * ~~explore-web-cdp (Notion)~~ — DROPPED 2026-08-01 (David's call, on time).
 	 *
 	 * The prompt and frontier fixes require re-running every grounding pass, and this was the
 	 * longest run in the matrix by a wide margin: 1h14m and $24.45 against ~30m and ~$14 for a
@@ -381,7 +385,7 @@ const DISCOVERY: Arm[] = [
 	 * It is a cost question above all. The Notion pass spent 2.5M input and 17.8M cache-read
 	 * tokens, and screenshots are the bulk of that — so if an element-only pass produces a
 	 * comparable map, onboarding a new app gets materially cheaper, which is exactly the
-	 * per-app budget Jasper described. Read `nodes` and `surfaces` against p1-explore-ax,
+	 * per-app budget Jasper described. Read `nodes` and `surfaces` against explore-ax,
 	 * which differs from this arm in nothing but the screenshot channel.
 	 */
 	/**
@@ -395,7 +399,7 @@ const DISCOVERY: Arm[] = [
 	 * unanswered — and this is the arm that answers it.
 	 */
 	{
-		id: "p1-explore-vision-cdp",
+		id: "explore-vision-cdp",
 		phase: 1,
 		kind: "explore",
 		app: BENCH_APP,
@@ -408,10 +412,10 @@ const DISCOVERY: Arm[] = [
 		 */
 		n: 2,
 		dispatch: { backend: "cdp", noAx: true },
-		informs: "does vision-only discovery improve when its clicks land — surfaces/nodes against p1-explore-vision on ax",
+		informs: "does vision-only discovery improve when its clicks land — surfaces/nodes against explore-vision on ax",
 	},
 	{
-		id: "p1-explore-no-vision",
+		id: "explore-no-vision",
 		phase: 1,
 		kind: "explore",
 		app: BENCH_APP,
@@ -429,34 +433,34 @@ const DISCOVERY: Arm[] = [
 	 * attributes onto AX elements, which on Yarn named 955 of 1044 otherwise-anonymous nodes.
 	 * A map IS names, so a pass without it should produce a measurably worse one — and that
 	 * is the only test of whether the sidecar earns its keep AT GROUNDING TIME. The existing
-	 * p2-ax-grounded-axdom-off arm tests it at RUN time, against a map that had it.
+	 * ax-grounded-axdom-off arm tests it at RUN time, against a map that had it.
 	 *
 	 * Adding one costs the same as adding three: six runs is two waves across three Macs and
 	 * nine is three, so the marginal cost of the last two is tokens, not time.
 	 */
 	{
-		id: "p1-explore-ax-noaxdom",
+		id: "explore-ax-noaxdom",
 		phase: 1,
 		kind: "explore",
 		app: BENCH_APP,
 		n: 1,
 		dispatch: { backend: "ax", axdomOff: true },
-		informs: "does the axdom sidecar earn its keep at GROUNDING time — map size and named-control count vs p1-explore-ax",
+		informs: "does the axdom sidecar earn its keep at GROUNDING time — map size and named-control count vs explore-ax",
 	},
 	{
-		id: "p1-explore-ax-noaxdom-no-vision",
+		id: "explore-ax-noaxdom-no-vision",
 		phase: 1,
 		kind: "explore",
 		app: BENCH_APP,
 		n: 1,
 		dispatch: { backend: "ax", axdomOff: true, noVision: true },
-		// Consumed by p2-min-context-grounded since 2026-08-01 — it was comparison-only until
+		// Consumed by min-context-grounded since 2026-08-01 — it was comparison-only until
 		// David pointed out that the least-context condition is exactly the one worth running
 		// a task in: it measures how much the agent can work out on the fly.
 		informs: "the bare AX alone: the floor of the element channel, with neither DOM attrs nor Vision",
 	},
 	{
-		id: "p1-explore-cdp-no-vision",
+		id: "explore-cdp-no-vision",
 		phase: 1,
 		kind: "explore",
 		app: BENCH_APP,
@@ -479,7 +483,7 @@ const DISCOVERY: Arm[] = [
 	 * measuring it against an element list. Read those numbers as claims, not counts.
 	 */
 	{
-		id: "p1-explore-vision",
+		id: "explore-vision",
 		phase: 1,
 		kind: "explore",
 		app: BENCH_APP,
@@ -492,8 +496,8 @@ const DISCOVERY: Arm[] = [
 
 /** Phase 2 core — backend × grounding, n=3 per cell. */
 const CONFIG_CORE: Arm[] = BACKENDS.flatMap((backend) => [
-	task(`p2-${backend}-ungrounded`, { backend, noGrounding: true }, "ad-hoc discovery floor on this backend"),
-	task(`p2-${backend}-grounded`, { backend }, "what a grounding pass buys on this backend"),
+	task(`${backend}-ungrounded`, { backend, noGrounding: true }, "ad-hoc discovery floor on this backend"),
+	task(`${backend}-grounded`, { backend }, "what a grounding pass buys on this backend"),
 ]);
 
 /** Phase 2 permutation slices — each maps to a fork in the implementation Aman inherits. */
@@ -511,7 +515,7 @@ const CONFIG_SLICES: Arm[] = [
 	 * `AXDOMClassList` — attributes that exist only because the target is Chromium. Switch it
 	 * off and what remains is AX with no DOM behind it, actuated through the
 	 * accessibility API: exactly the surface a native AppKit or SwiftUI app presents. The
-	 * grounding matches, too — `p1-explore-ax-noaxdom` writes the map these read, so the
+	 * grounding matches, too — `explore-ax-noaxdom` writes the map these read, so the
 	 * limitation applies END TO END rather than only at run time.
 	 *
 	 * IT IS AN OPTIMISTIC BOUND, and the report must say so. Chromium derives its AX content FROM
@@ -528,27 +532,27 @@ const CONFIG_SLICES: Arm[] = [
 	 * app (docs/research/2026-07-30-native-mac-apps-investigation.md).
 	 */
 	task(
-		"p2-ax-grounded-axdom-off",
+		"ax-grounded-axdom-off",
 		{ backend: "ax", axdomOff: true },
 		"NATIVE-EQUIVALENT, grounded: AX with no DOM behind it, mapped and run under the same limit. Also answers whether the Swift sidecar earns its keep end to end.",
 	),
 	/**
 	 * The cell the native tier was missing: cold AND native-equivalent, screenshots available.
-	 * Its counterpart `p2-ax-ungrounded` has the sidecar, and `p2-min-context-ungrounded` also
+	 * Its counterpart `ax-ungrounded` has the sidecar, and `min-context-ungrounded` also
 	 * drops vision — so without this there was no way to say "no DOM, no map, but it can see",
 	 * which is the honest starting position for an app nobody has onboarded yet.
 	 */
 	task(
-		"p2-ax-noaxdom-ungrounded",
+		"ax-noaxdom-ungrounded",
 		{ backend: "ax", axdomOff: true, noGrounding: true },
 		"NATIVE-EQUIVALENT, cold: no DOM attributes, no map, Vision on — the un-onboarded native app",
 	),
 	// Grounds on the map an element-only pass wrote, so the map's vocabulary matches what this
 	// run can perceive — the same reason the vision arm reads the vision map. Also the only
-	// thing that consumes p1-explore-no-vision's output; without it that pass writes an
+	// thing that consumes explore-no-vision's output; without it that pass writes an
 	// artifact nobody reads.
-	task("p2-ax-grounded-no-vision", { backend: "ax", noVision: true }, "what the Vision channel buys on ax", { env: { APPMAP_VARIANT: "novision" } }),
-	task("p2-cdp-grounded-no-vision", { backend: "cdp", noVision: true }, "same on cdp — DOM snapshot is text-rich; fleet-scale cost", { env: { APPMAP_VARIANT: "novision" } }),
+	task("ax-grounded-no-vision", { backend: "ax", noVision: true }, "what the Vision channel buys on ax", { env: { APPMAP_VARIANT: "novision" } }),
+	task("cdp-grounded-no-vision", { backend: "cdp", noVision: true }, "same on cdp — DOM snapshot is text-rich; fleet-scale cost", { env: { APPMAP_VARIANT: "novision" } }),
 	/**
 	 * MINIMUM CONTEXT, both tiers (David, 2026-08-01). Bare AX: no DOM attributes from
 	 * the sidecar, no screenshots. It is the most impoverished condition an agent can be asked
@@ -557,19 +561,19 @@ const CONFIG_SLICES: Arm[] = [
 	 * Two reasons this pair earns six runs. It is the only test of how well the agent figures
 	 * things out ON THE FLY when almost nothing is handed to it — the deployment case where
 	 * the sidecar is unavailable and screenshots are too expensive at fleet scale. And the
-	 * grounded half is the only consumer of p1-explore-ax-noaxdom-no-vision's map, which was
+	 * grounded half is the only consumer of explore-ax-noaxdom-no-vision's map, which was
 	 * otherwise a 30-minute pass written for a comparison alone.
 	 *
 	 * The ungrounded half is the floor of the entire matrix: least perception AND no map. Every
 	 * other arm should beat it, and an arm that does not is telling you its condition adds
 	 * nothing.
 	 */
-	task("p2-min-context-grounded", { backend: "ax", axdomOff: true, noVision: true }, "NATIVE-EQUIVALENT, harshest grounded: bare AX, no Vision, mapped under the same limit", {
+	task("min-context-grounded", { backend: "ax", axdomOff: true, noVision: true }, "NATIVE-EQUIVALENT, harshest grounded: bare AX, no Vision, mapped under the same limit", {
 		env: { APPMAP_VARIANT: "novision" },
 	}),
-	task("p2-min-context-ungrounded", { backend: "ax", axdomOff: true, noVision: true, noGrounding: true }, "NATIVE-EQUIVALENT floor: bare AX, no Vision, no map — can it work it out on the fly"),
+	task("min-context-ungrounded", { backend: "ax", axdomOff: true, noVision: true, noGrounding: true }, "NATIVE-EQUIVALENT floor: bare AX, no Vision, no map — can it work it out on the fly"),
 		task(
-		"p2-curated",
+		"curated",
 		{ backend: "cdp", useRecipe: true },
 		// TASK-CONTAMINATED, and the numbers must be reported as such. docs/recipes/yarn.md names
 		// the canonical task's control, its surface, its exact options AND the brand-vs-document
@@ -579,7 +583,7 @@ const CONFIG_SLICES: Arm[] = [
 		"explore pass vs a curated tier that CONTAINS THIS TASK'S ANSWER — an upper bound on grounding, not a human-notes comparison",
 	),
 	// Vision-only is ax-backend-only by construction: cdp observations ARE ref lists.
-	task("p2-vision-only-ungrounded", { backend: "ax", noAx: true, noGrounding: true }, "the floor: Vision alone, cold", { axRationale: "Vision-only is ax-only by construction — a cdp observation IS a ref list, so 'Vision only' cannot be expressed on that backend" }),
+	task("vision-only-ungrounded", { backend: "ax", noAx: true, noGrounding: true }, "the floor: Vision alone, cold", { axRationale: "Vision-only is ax-only by construction — a cdp observation IS a ref list, so 'Vision only' cannot be expressed on that backend" }),
 	/**
 	 * Vision-only run against the ORDINARY stamped appmap — the one an ax explore pass wrote.
 	 * No new infrastructure: docs/appmaps/<slug>.md already exists.
@@ -601,10 +605,10 @@ const CONFIG_SLICES: Arm[] = [
 	 * useless at BOTH stages is still unmeasured — that needs the vision-only explore pass.
 	 * The id says `axmap` so a reader of the report cannot miss which it is.
 	 */
-	task("p2-vision-only-grounded-axmap", { backend: "ax", noAx: true }, "does explore-written prose lift a Vision-only agent (map from an element-perceiving pass)", { axRationale: "Vision-only is ax-only by construction — a cdp observation IS a ref list, so 'Vision only' cannot be expressed on that backend" }),
+	task("vision-only-grounded-axmap", { backend: "ax", noAx: true }, "does explore-written prose lift a Vision-only agent (map from an element-perceiving pass)", { axRationale: "Vision-only is ax-only by construction — a cdp observation IS a ref list, so 'Vision only' cannot be expressed on that backend" }),
 	/**
 	 * The AX-hostile-app story, measured properly: grounding AND actuation both from
-	 * screenshots only. Consumes the `.vision` map that p1-explore-vision writes, so it is
+	 * screenshots only. Consumes the `.vision` map that explore-vision writes, so it is
 	 * gated on phase 1 having run — with no map, loadGrounding degrades to provenance "none"
 	 * and this silently becomes a duplicate of the ungrounded arm. `bench collect` records
 	 * provenance per run, so check it reads `explore-vision` before believing this row.
@@ -614,12 +618,12 @@ const CONFIG_SLICES: Arm[] = [
 	 * this asks whether it can be dropped ENTIRELY.
 	 */
 	task(
-		"p2-vision-only-grounded-visionmap",
+		"vision-only-grounded-visionmap",
 		{ backend: "ax", noAx: true },
 		"grounding and actuation both Vision-only — the app-with-no-usable-AX deploy story",
 		{ env: { APPMAP_VARIANT: "vision" }, axRationale: "Vision-only is ax-only by construction — a cdp observation IS a ref list, so 'Vision only' cannot be expressed on that backend" },
 	),
-	task("p2-vision-only-curated", { backend: "ax", noAx: true, useRecipe: true }, "same against the human-written tier", { axRationale: "Vision-only is ax-only by construction — a cdp observation IS a ref list, so 'Vision only' cannot be expressed on that backend" }),
+	task("vision-only-curated", { backend: "ax", noAx: true, useRecipe: true }, "same against the human-written tier", { axRationale: "Vision-only is ax-only by construction — a cdp observation IS a ref list, so 'Vision only' cannot be expressed on that backend" }),
 ];
 
 /**
@@ -661,27 +665,27 @@ const CONFIG_SLICES: Arm[] = [
  */
 const REUSE_RECIPES: Arm[] = [
 	...BACKENDS.map((backend): Arm => ({
-		id: `p3-compile-${backend}`,
+		id: `compile-${backend}`,
 		phase: 3,
 		kind: "compile",
 		app: BENCH_APP,
 		n: 1,
 		dispatch: { backend },
-		sourceArm: `p2-${backend}-grounded`,
+		sourceArm: `${backend}-grounded`,
 		informs: "compile success; what the gate refuses",
 	})),
 	...BACKENDS.map((backend): Arm => ({
-		id: `p3-replay-${backend}`,
+		id: `replay-${backend}`,
 		phase: 3,
 		kind: "replay",
 		app: BENCH_APP,
 		n: 3,
 		dispatch: { backend },
-		sourceArm: `p3-compile-${backend}`,
+		sourceArm: `compile-${backend}`,
 		informs: "steps re-resolved vs rescued, model calls (target 0), wall-clock + tokens vs live grounded",
 	})),
 	{
-		id: "p3-replay-norescue",
+		id: "replay-norescue",
 		phase: 3,
 		kind: "replay",
 		app: BENCH_APP,
@@ -689,7 +693,7 @@ const REUSE_RECIPES: Arm[] = [
 		// cdp, not ax: this measures the UNATTENDED FLEET POSTURE, which is a question about
 		// how the shipping configuration behaves with no operator, not about the fallback.
 		dispatch: { backend: "cdp", noRescue: true },
-		sourceArm: "p3-compile-cdp",
+		sourceArm: "compile-cdp",
 		informs: "unattended-fleet posture: does the happy path hold with ZERO model calls",
 	},
 ];
@@ -702,27 +706,27 @@ const REUSE_RECIPES: Arm[] = [
  * are skipped, the compile runs, and the replays go out.
  */
 const GEN_SECOND_TASK: Arm[] = [
-	task("p4-ungrounded", { backend: "cdp", noGrounding: true }, "is everything above cursor-task-specific", { phase: 4, task: PHASE4_TASK, n: 2 }),
-	task("p4-grounded", { backend: "cdp" }, "is everything above cursor-task-specific", { phase: 4, task: PHASE4_TASK, n: 2 }),
+	task("blur-ungrounded", { backend: "cdp", noGrounding: true }, "is everything above cursor-task-specific", { phase: 4, task: PHASE4_TASK, n: 2 }),
+	task("blur-grounded", { backend: "cdp" }, "is everything above cursor-task-specific", { phase: 4, task: PHASE4_TASK, n: 2 }),
 	{
-		id: "p4-compile",
+		id: "blur-compile",
 		phase: 4,
 		kind: "compile",
 		app: BENCH_APP,
 		n: 1,
-		// Follows p4-grounded: a recipe compiled from a cdp run resolves cdp's control names.
+		// Follows blur-grounded: a recipe compiled from a cdp run resolves cdp's control names.
 		dispatch: { backend: "cdp" },
-		sourceArm: "p4-grounded",
+		sourceArm: "blur-grounded",
 		informs: "does compile generalize past the canonical task",
 	},
 	{
-		id: "p4-replay",
+		id: "blur-replay",
 		phase: 4,
 		kind: "replay",
 		app: BENCH_APP,
 		n: 2,
 		dispatch: { backend: "cdp" },
-		sourceArm: "p4-compile",
+		sourceArm: "blur-compile",
 		informs: "does replay generalize past the canonical task",
 	},
 ];
@@ -743,7 +747,7 @@ const GEN_SECOND_TASK: Arm[] = [
  * dispatching a phase.
  *
  * The comparison is three-way against arms that already exist at n=3 on the same task and
- * backend: p2-<backend>-ungrounded (nothing), p2-<backend>-grounded (the appmap), and these
+ * backend: <backend>-ungrounded (nothing), <backend>-grounded (the appmap), and these
  * (a previous run's write-up). USE_PROCEDURES REPLACES the appmap rather than adding to it —
  * stacking them would measure neither.
  */
@@ -764,27 +768,27 @@ const REUSE_PROCEDURES: Arm[] = [
 	 * phase-6 gate refuses dispatch rather than silently running it as an appmap arm.
 	 */
 	...BACKENDS.map((backend): Arm => ({
-		id: `p6-${backend}-procedure-from-ungrounded`,
+		id: `${backend}-procedure-from-ungrounded`,
 		phase: 3,
 		kind: "task",
 		app: BENCH_APP,
 		task: CANONICAL_TASK,
 		n: 3,
 		dispatch: { backend, useProcedures: true, procedureLineage: "ungrounded" as const },
-		sourceArm: `p2-${backend}-ungrounded`,
+		sourceArm: `${backend}-ungrounded`,
 		informs:
 			"THE replacement question: can a write-up by an agent that had no map stand in for the exploration pass? " +
-			"vs p2-<backend>-ungrounded (what its author knew) and p2-<backend>-grounded (the sweep it would replace).",
+			"vs <backend>-ungrounded (what its author knew) and <backend>-grounded (the sweep it would replace).",
 	})),
 	...BACKENDS.map((backend): Arm => ({
-	id: `p6-${backend}-procedure`,
+	id: `${backend}-procedure`,
 	phase: 3,
 	kind: "task",
 	app: BENCH_APP,
 	task: CANONICAL_TASK,
 	n: 3,
 	dispatch: { backend, useProcedures: true },
-	sourceArm: `p2-${backend}-grounded`,
+	sourceArm: `${backend}-grounded`,
 	informs:
 		"does a frozen, judge-passed route beat live appmap grounding ON THE TASK IT WAS HARVESTED FROM? " +
 		"NOT a replacement claim — its procedure presupposes the sweep; the -from-ungrounded arm above is that claim. " +
@@ -834,7 +838,7 @@ const REUSE_PROCEDURES: Arm[] = [
  */
 const filmed = (arm: Arm): Arm => ({
 	...arm,
-	id: `p5-${arm.id.replace(/^p[0-9]-/, "")}-filmed`,
+	id: `${arm.id}-filmed`,
 	phase: 5,
 	n: 1,
 	dispatch: { ...arm.dispatch, record: true },
@@ -877,7 +881,7 @@ const creationArms = (): Arm[] =>
 		.filter((a) => a.kind === "task")
 		.map((a) => ({
 			...a,
-			id: a.id.replace(/^p2-/, "p7-create-"),
+			id: `create-${a.id}`,
 			phase: 4 as Phase,
 			task: CREATION_TASK,
 			// NO arm-level budget. 30 was the right fix against a default of 15 and became the
@@ -893,7 +897,7 @@ const GEN_TASK_AND_MODEL: Arm[] = [
 	...creationArms(),
 	// Same three cells as Sol ran, one variable changed. Canonical task on purpose: it is the
 	// only task with 45 runs of Sol baseline behind it.
-	task("p7-vision-only-cdp-curated", { backend: "cdp", noAx: true, useRecipe: true }, "vision-only against the human-written tier — completes the grid ax already has", { phase: 2 }),
+	task("vision-only-cdp-curated", { backend: "cdp", noAx: true, useRecipe: true }, "vision-only against the human-written tier — completes the grid ax already has", { phase: 2 }),
 	/**
 	 * An ELEMENT-perceiving agent reading a map written from PIXELS.
 	 *
@@ -907,12 +911,12 @@ const GEN_TASK_AND_MODEL: Arm[] = [
 	 * as an element-written one, then onboarding an app whose AX tree is useless costs a vision
 	 * pass and nothing else — which is the native-app generalisation story, priced.
 	 */
-	task("p7-cdp-grounded-visionmap", { backend: "cdp" }, "is a map written from pixels any good to an agent that can see elements", {
+	task("cdp-grounded-visionmap", { backend: "cdp" }, "is a map written from pixels any good to an agent that can see elements", {
 		phase: 2,
 		env: { APPMAP_VARIANT: "vision" },
 	}),
-	task("p7-claude-cdp-ungrounded", { backend: "cdp", noGrounding: true, model: BENCH_ALT_MODEL }, "is the ungrounded floor a model property or a general one", { phase: 4 }),
-	task("p7-claude-cdp-grounded", { backend: "cdp", model: BENCH_ALT_MODEL }, "does grounding lift Claude the way it lifts Sol", { phase: 4 }),
+	task("claude-cdp-ungrounded", { backend: "cdp", noGrounding: true, model: BENCH_ALT_MODEL }, "is the ungrounded floor a model property or a general one", { phase: 4 }),
+	task("claude-cdp-grounded", { backend: "cdp", model: BENCH_ALT_MODEL }, "does grounding lift Claude the way it lifts Sol", { phase: 4 }),
 	/**
 	 * Vision-only, re-run on the actuator that can aim.
 	 *
@@ -926,19 +930,19 @@ const GEN_TASK_AND_MODEL: Arm[] = [
 	 * coordinates act consumes), so these arms measure what the condition was always for. If
 	 * they still fail, THAT is the perception result — and it will be the first honest one.
 	 */
-	task("p7-vision-only-cdp-ungrounded", { backend: "cdp", noAx: true, noGrounding: true }, "vision-only floor on an actuator that can aim", { phase: 2 }),
-	task("p7-vision-only-cdp-grounded", { backend: "cdp", noAx: true }, "does a map lift vision-only once its clicks land (map from an element-perceiving pass)", { phase: 2 }),
+	task("vision-only-cdp-ungrounded", { backend: "cdp", noAx: true, noGrounding: true }, "vision-only floor on an actuator that can aim", { phase: 2 }),
+	task("vision-only-cdp-grounded", { backend: "cdp", noAx: true }, "does a map lift vision-only once its clicks land (map from an element-perceiving pass)", { phase: 2 }),
 	/**
 	 * Vision-only at BOTH stages on cdp — the ax pair's `-visionmap` arm, on an actuator whose
 	 * screenshot pixels and click coordinates are the same space. This is the honest version of
 	 * the app-with-no-usable-AX deploy story: the ax pair could only ever answer it through a
 	 * click path that misses by ~40px on this app.
 	 */
-	task("p7-vision-only-cdp-visionmap", { backend: "cdp", noAx: true }, "grounding AND actuation vision-only, on the backend that can aim", {
+	task("vision-only-cdp-visionmap", { backend: "cdp", noAx: true }, "grounding AND actuation vision-only, on the backend that can aim", {
 		phase: 2,
 		env: { APPMAP_VARIANT: "vision" },
 	}),
-	task("p7-claude-cdp-procedure-from-ungrounded", { backend: "cdp", useProcedures: true, procedureLineage: "ungrounded", model: BENCH_ALT_MODEL }, "does the replacement result survive a model change — the finding most worth a second model", { phase: 4 }),
+	task("claude-cdp-procedure-from-ungrounded", { backend: "cdp", useProcedures: true, procedureLineage: "ungrounded", model: BENCH_ALT_MODEL }, "does the replacement result survive a model change — the finding most worth a second model", { phase: 4 }),
 ];
 
 // Phase 7 joins the derivation rather than being remembered — that is the whole point of the
@@ -962,12 +966,12 @@ const GEN_TASK_AND_MODEL: Arm[] = [
  * n=2 because the offset is intermittent, and an intermittent fault seen once is a rumour.
  */
 const DIAGNOSTICS: Arm[] = [
-	task("p8-geometry-ax", { backend: "ax" }, "is the AX→screenshot transform sound when nothing stages the window", {
+	task("geometry-ax", { backend: "ax" }, "is the AX→screenshot transform sound when nothing stages the window", {
 		phase: 9,
 		n: 2,
 		axRationale: "the transform under test IS the ax path's; cdp needs none (scale:\"css\" ties screenshot pixels to the coordinates act consumes)",
 	}),
-	task("p8-geometry-ax-filmed", { backend: "ax", record: true }, "does staging the window perturb the geometry the harness reads", {
+	task("geometry-ax-filmed", { backend: "ax", record: true }, "does staging the window perturb the geometry the harness reads", {
 		phase: 9,
 		n: 2,
 		axRationale: "same transform, with the window resize --record performs — the difference between the two arms IS the measurement",
@@ -1034,7 +1038,7 @@ export const phaseRunCount = (phase: Phase): number => phaseArms(phase).reduce((
  * sharing a filename means the later pass silently overwrites the earlier. That happened
  * twice on 2026-08-01: first every Yarn explore wrote yarn.json (ax 156 nodes, cdp 196,
  * no-vision 180, last writer won), then the first fix added the backend but not the tier so
- * p1-explore-ax and p1-explore-no-vision still collided.
+ * explore-ax and explore-no-vision still collided.
  */
 export const armAppmapSlug = (arm: Arm): string =>
 	appmapSlug(arm.app, {

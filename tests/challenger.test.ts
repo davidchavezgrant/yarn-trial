@@ -28,17 +28,17 @@ const manifest = (entries: ManifestEntry[]): Manifest => ({ date: "2026-07-31", 
 
 /** Three arms of clearly different quality, so ranking is unambiguous. */
 const SPREAD = manifest([
-	entry("p2-ax-grounded", "a1", { success: true, steps: 5 }),
-	entry("p2-ax-grounded", "a2", { success: true, steps: 5 }),
-	entry("p2-ax-ungrounded", "b1", { success: true, steps: 12 }),
-	entry("p2-ax-ungrounded", "b2", { success: false, steps: 15 }),
-	entry("p2-vision-only-ungrounded", "c1", { success: false, steps: 15 }),
-	entry("p2-vision-only-ungrounded", "c2", { success: false, steps: 15 }),
+	entry("ax-grounded", "a1", { success: true, steps: 5 }),
+	entry("ax-grounded", "a2", { success: true, steps: 5 }),
+	entry("ax-ungrounded", "b1", { success: true, steps: 12 }),
+	entry("ax-ungrounded", "b2", { success: false, steps: 15 }),
+	entry("vision-only-ungrounded", "c1", { success: false, steps: 15 }),
+	entry("vision-only-ungrounded", "c2", { success: false, steps: 15 }),
 ]);
 
 test("scoreArms__ScoresOnlyTheGivenModelsRuns__When__TwoPassesShareAManifest", () => {
-	const m = manifest([...SPREAD.entries, entry("p2-ax-grounded", "x1", { success: false, steps: 30 }, "claude-fable-5")]);
-	const grounded = scoreArms(m, PRIMARY).find((s) => s.armId === "p2-ax-grounded");
+	const m = manifest([...SPREAD.entries, entry("ax-grounded", "x1", { success: false, steps: 30 }, "claude-fable-5")]);
+	const grounded = scoreArms(m, PRIMARY).find((s) => s.armId === "ax-grounded");
 	// The challenger's own run must not drag down the primary's score — that would let the
 	// challenger influence the choice of the arm it is about to be measured on.
 	assert.equal(grounded?.runs, 2);
@@ -48,28 +48,28 @@ test("scoreArms__ScoresOnlyTheGivenModelsRuns__When__TwoPassesShareAManifest", (
 test("planChallenger__PicksTheWinnerAndTheHardestArm__When__PhaseTwoIsCollected", () => {
 	const plan = planChallenger(SPREAD, PRIMARY);
 	assert.ok(plan);
-	assert.equal(plan.winner.armId, "p2-ax-grounded");
+	assert.equal(plan.winner.armId, "ax-grounded");
 	// The divergence arm is where the primary struggled most — the place a different model is
 	// most likely to behave differently, and the reason the slice is not just the winner.
-	assert.equal(plan.divergence.armId, "p2-vision-only-ungrounded");
+	assert.equal(plan.divergence.armId, "vision-only-ungrounded");
 	assert.equal(plan.arms.length, 2);
 });
 
 test("planChallenger__BreaksSuccessTiesByFewerSteps__When__TwoArmsBothAlwaysSucceed", () => {
 	const m = manifest([
-		entry("p2-ax-grounded", "a1", { success: true, steps: 9 }),
-		entry("p2-cdp-grounded", "b1", { success: true, steps: 4 }),
-		entry("p2-ax-ungrounded", "c1", { success: false, steps: 15 }),
+		entry("ax-grounded", "a1", { success: true, steps: 9 }),
+		entry("cdp-grounded", "b1", { success: true, steps: 4 }),
+		entry("ax-ungrounded", "c1", { success: false, steps: 15 }),
 	]);
 	const plan = planChallenger(m, PRIMARY);
 	// Both succeed; the cheaper one wins. Success rate alone would have made this a coin flip.
-	assert.equal(plan?.winner.armId, "p2-cdp-grounded");
+	assert.equal(plan?.winner.armId, "cdp-grounded");
 });
 
 test("planChallenger__StillSpansTwoArms__When__EveryArmScoresIdentically", () => {
 	const m = manifest([
-		entry("p2-ax-grounded", "a1", { success: true, steps: 5 }),
-		entry("p2-cdp-grounded", "b1", { success: true, steps: 5 }),
+		entry("ax-grounded", "a1", { success: true, steps: 5 }),
+		entry("cdp-grounded", "b1", { success: true, steps: 5 }),
 	]);
 	const plan = planChallenger(m, PRIMARY);
 	assert.ok(plan);
@@ -95,15 +95,15 @@ test("planChallenger__WarnsAgainstComparingTokens__When__ItReportsItsPlan", () =
 test("challengerNeedsExplore__RequiresTheChallengersOwnMap__When__AnArmIsGrounded", () => {
 	const plan = planChallenger(SPREAD, PRIMARY);
 	assert.ok(plan);
-	// p2-ax-grounded consumes a map, and each model grounds itself — the challenger cannot
+	// ax-grounded consumes a map, and each model grounds itself — the challenger cannot
 	// inherit the primary's appmap.
-	assert.equal(challengerNeedsExplore(plan)?.id, "p1-explore-ax");
+	assert.equal(challengerNeedsExplore(plan)?.id, "explore-ax");
 });
 
 test("challengerNeedsExplore__SkipsTheExplore__When__NeitherArmConsumesAMap", () => {
 	const m = manifest([
-		entry("p2-ax-ungrounded", "a1", { success: true, steps: 8 }),
-		entry("p2-vision-only-ungrounded", "b1", { success: false, steps: 15 }),
+		entry("ax-ungrounded", "a1", { success: true, steps: 8 }),
+		entry("vision-only-ungrounded", "b1", { success: false, steps: 15 }),
 	]);
 	const plan = planChallenger(m, PRIMARY);
 	assert.ok(plan);
@@ -114,12 +114,12 @@ test("challengerNeedsExplore__SkipsTheExplore__When__NeitherArmConsumesAMap", ()
 
 test("challengerNeedsExplore__PicksTheVisionPass__When__TheGroundedArmIsVisionOnly", () => {
 	const m = manifest([
-		entry("p2-vision-only-grounded-visionmap", "a1", { success: true, steps: 6 }),
-		entry("p2-ax-ungrounded", "b1", { success: false, steps: 15 }),
+		entry("vision-only-grounded-visionmap", "a1", { success: true, steps: 6 }),
+		entry("ax-ungrounded", "b1", { success: false, steps: 15 }),
 	]);
 	const plan = planChallenger(m, PRIMARY);
 	assert.ok(plan);
 	// A vision-only arm reads the `.vision` map, a different artifact from the ax pass's —
 	// grounding it with the wrong explore would silently measure the wrong tier.
-	assert.equal(challengerNeedsExplore(plan)?.id, "p1-explore-vision");
+	assert.equal(challengerNeedsExplore(plan)?.id, "explore-vision");
 });

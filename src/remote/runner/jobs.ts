@@ -300,7 +300,7 @@ function artifactsFor(id: string, init: JobInit): JobArtifacts {
 		// ONE derivation, shared with the pass that writes the file (explore/state.ts) and every
 		// reader that looks for it — see appmapSlug's header for the four-way divergence this
 		// replaced, and why each divergence surfaced as "no appmap" for a map that existed.
-		// axdomOff included: without it p1-explore-ax-noaxdom's record named yarn.ax — its
+		// axdomOff included: without it explore-ax-noaxdom's record named yarn.ax — its
 		// SIBLING'S map — and collect's existsSync guard passed because that file exists.
 		const slug = appmapSlug(init.url ?? init.app, {
 			visionOnly: Boolean(init.noAx),

@@ -469,7 +469,7 @@ test("recipeFileFor__SeparatesBackends__When__OneTaskIsRecordedOnBoth", () => {
 	// ax and cdp name the same controls differently, so a recipe — a frozen sequence of
 	// (name, surface, role) resolutions — is per BACKEND, not merely per task. Keyed on
 	// (app, task) alone, phase 3's two compile arms wrote one path: the cdp compile's 9 steps
-	// overwrote the ax compile's 11, and p3-replay-ax deferred forever because its gate wanted
+	// overwrote the ax compile's 11, and replay-ax deferred forever because its gate wanted
 	// an ax recipe and the only file present was cdp's.
 	const ax = recipeFileFor("/r", "yarn", "change the cursor type", "ax");
 	const cdp = recipeFileFor("/r", "yarn", "change the cursor type", "cdp");
