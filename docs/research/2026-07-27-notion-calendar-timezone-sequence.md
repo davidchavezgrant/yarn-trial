@@ -70,7 +70,7 @@ touch), recording findings as it goes and emitting grounding notes to
 `docs/appmaps/<app-slug>.md`. `src/agent.ts` auto-loads those notes into its system
 prompt. Shared plumbing extracted to `src/harness.ts`.
 
-Exploration run on Notion Calendar: 20 actions, 12 findings — full layout, task recipes,
+Exploration run on Notion Calendar: 20 actions, 12 findings — full layout, task procedures,
 and quirks we never found manually (⌘, doesn't open Settings through the driver;
 background scroll unavailable; pressing "c" instantly creates+saves an event and escape
 does NOT discard it — the explorer hit that trap and recovered by deleting via

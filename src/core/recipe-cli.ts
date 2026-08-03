@@ -1,350 +1,177 @@
+/**
+ * `./run recipes harvest <stamp> | list | promote <stamp>` — turning judged-PASS runs into
+ * reusable task knowledge.
+ *
+ * Offline by construction: this reads a finished run's log and judge verdict, makes ONE model
+ * call, and writes prose. It never drives an app, and it is never invoked by a run — which is
+ * what keeps the harvest out of the cost and latency of the runs being measured. See
+ * recipe.ts for why that matters more than the convenience of doing it at `done()`.
+ *
+ * Two destinations, deliberately separate. `harvest` writes into the run's own folder, where it
+ * is the record of what that run taught. `promote` copies it to docs/recipes/, where
+ * `loadGrounding` can find it — and promotion is the step that makes a recipe an INPUT to
+ * future runs, so it is the step that has to be deliberate. `harvest --promote` does both when
+ * you already know you want it.
+ */
 import fs from "node:fs";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { Driver } from "./driver.js";
-import { envNum } from "../env.js";
+import type Anthropic from "@anthropic-ai/sdk";
+import { archiveRun, recipesDir, RUN_FILES, runFile, runPath } from "../paths.js";
+import { makeClient, retryTransient } from "./harness.js";
+import { readJsonOr } from "../fsutil.js";
+import { slugOf } from "./procedure.js";
 import {
-	appSlug,
-	ensureObservable,
-	findWindow,
-	loadAppMapGraph,
-	makeClient,
-	observe,
-	onInterrupt,
-	OUT,
-	resetToHome,
-	runEvent,
-	runKey,
-	teeConsole,
-} from "./harness.js";
-import { readJournal } from "./journal.js";
-import { startOverlay } from "./overlay.js";
-import { compileRecipe, readRecipe, type Recipe, RecipeCompileError, recipeFileFor } from "./recipe.js";
-import { modelRescue, replayRecipe } from "./replay.js";
-import { runTeardown } from "./teardown.js";
-import { LIVE_DIR, RUN_FILES, archiveRun, recipesDir, relToData, runDir, runFile, runPath } from "../paths.js";
-import { electronTarget, parseTarget } from "./target.js";
-import { coldStart } from "./coldstart.js";
-import { type DriverSync, finishRecording, newRecording, startRecording } from "./agent/recording.js";
+	harvestPrompt,
+	HARVEST_SYSTEM,
+	harvestRefusal,
+	type HarvestSource,
+	type JudgeVerdict,
+	lineageOf,
+	recipeFileFor,
+	recipeHeader,
+	RecipeError,
+	writeRecipe,
+} from "./recipe.js";
 
 /**
- * Recipe compilation and replay, as a CLI.
+ * Read a run and its verdict, refuse if the run may not become a recipe, otherwise ask the
+ * model for the prose. Returns the body WITH its provenance stamp.
  *
- *   npm run recipe -- compile <stamp>            run log -> docs/recipes/<slug>.<hash>.recipe.json
- *   npm run recipe -- replay <file|stamp> [--url <https://…>] [--no-rescue] [--no-cleanup]
- *
- * compile: freezes a SUCCESSFUL run's verified steps into a replayable sequence. It refuses
- * failed runs, unverified steps, and pixel-only steps — see compileRecipe for why each
- * refusal is what makes a recipe worth having.
- *
- * replay: runs the sequence with NO model calls on the happy path. Each step re-resolves
- * its control by (name, surface, role) against a fresh observation and is gated by the
- * recorded expectation through the same `verify()` a live run uses. A broken step gets one
- * bounded model rescue (RECIPE_RESCUE_STEPS, default 3) unless --no-rescue; without rescue
- * a drifted app fails the replay, which is the honest unattended default.
- *
- * Replays journal their mutations and run the standard teardown afterwards (CLEANUP env
- * applies; --no-cleanup skips), so a replayed demo puts the app back like any other run.
- *
- * Compiled recipes live beside the curated prose in docs/recipes/ but are machine output
- * with a provenance stamp — the appmap rule applies: never hand-edit one; re-record it.
+ * `callModel` is injectable so the tests exercise refusals and prompt assembly without spending
+ * anything — the same posture as the bench judge.
  */
+export async function harvest(
+	stamp: string,
+	opts: { callModel?: (system: string, prompt: string) => Promise<string>; model?: string } = {},
+): Promise<{ body: string; run: HarvestSource; judge: JudgeVerdict }> {
+	const logPath = runFile(stamp, RUN_FILES.log);
+	if (!fs.existsSync(logPath)) throw new RecipeError(`no run log at ${logPath}`);
+	const run = JSON.parse(fs.readFileSync(logPath, "utf8")) as HarvestSource;
+	const judge = readJsonOr<JudgeVerdict | undefined>(runFile(stamp, RUN_FILES.judge), undefined);
 
-/**
- * How long to let a freshly relaunched app paint before the first step resolves a control.
- * Mirrors explore/loop.ts and the task agent's home probe — 8 x 2s covers a cold Electron
- * relaunch while a genuinely blank target still fails fast instead of burning a fleet slot.
- */
-const FIRST_OBSERVATION_TRIES = Number(process.env.REPLAY_FIRST_OBS_TRIES ?? 8);
-const FIRST_OBSERVATION_WAIT_MS = Number(process.env.REPLAY_FIRST_OBS_WAIT_MS ?? 2000);
+	const refusal = harvestRefusal(run, judge);
+	if (refusal) throw new RecipeError(refusal);
+
+	const call =
+		opts.callModel ??
+		(async (system: string, prompt: string): Promise<string> => {
+			const { client, model } = makeClient(opts.model ?? process.env.RECIPE_MODEL);
+			// No reasoning-effort field, matching the other small utility calls (judge, teardown,
+			// replay rescue): this is a transcription task over an already-decided route, not a
+			// problem to think about.
+			const r = await retryTransient(() =>
+				client.messages.create({ model, max_tokens: 1500, system, messages: [{ role: "user", content: prompt }] }),
+			);
+
+			return r.content
+				.filter((b): b is Anthropic.TextBlock => b.type === "text")
+				.map((b) => b.text)
+				.join("\n")
+				.trim();
+		});
+
+	const prose = await call(HARVEST_SYSTEM, harvestPrompt(run));
+	if (!prose.trim()) throw new RecipeError("model returned an empty recipe");
+
+	return { body: recipeHeader(run, stamp, judge!) + prose, run, judge: judge! };
+}
+
+/** Every promoted recipe, for `list`. */
+export function listRecipes(dir = recipesDir()): Array<{ file: string; app?: string; task?: string; from?: string }> {
+	let names: string[];
+	try {
+		names = fs.readdirSync(dir).filter((n) => n.endsWith(".recipe.md"));
+	} catch {
+		return [];
+	}
+
+	return names.map((n) => {
+		const head = fs.readFileSync(path.join(dir, n), "utf8").slice(0, 500);
+		const field = (k: string): string | undefined => new RegExp(`${k}: ([^|>]*)`).exec(head)?.[1]?.trim();
+
+		return { file: n, ...(field("app") ? { app: field("app") } : {}), ...(field("task") ? { task: field("task") } : {}), ...(field("from") ? { from: field("from") } : {}) };
+	});
+}
 
 function usage(): never {
-	console.error("usage:");
-	console.error("  npm run recipe -- compile <stamp>");
-	console.error("  npm run recipe -- replay <file|stamp> [--url <https://…>] [--record] [--no-rescue] [--no-cleanup]");
+	console.error("usage: ./run recipes harvest <stamp> [--promote]   judged-PASS run -> its own recipe.md");
+	console.error("       ./run recipes promote <stamp>               copy a harvested recipe into docs/recipes/");
+	console.error("       ./run recipes list                          what future runs can be grounded on");
 	process.exit(1);
-}
-
-export function compileFromStamp(stamp: string): { recipe: Recipe; path: string } {
-	const logPath = runFile(stamp, RUN_FILES.log);
-	if (!fs.existsSync(logPath)) throw new RecipeCompileError(`no run log at ${logPath}`);
-	const recipe = compileRecipe(JSON.parse(fs.readFileSync(logPath, "utf8")), stamp);
-	if (recipe.hintedPrompt)
-		// Compiling a hinted run would launder the hint: the recipe replays clean while its
-		// route was dictated. The stamp records it; the refusal keeps the tier honest.
-		throw new RecipeCompileError("run was --hinted — its route was dictated, not discovered; re-run goal-only and compile that");
-	const path = recipeFileFor(recipesDir(), recipe.slug, recipe.task, recipe.backend);
-	fs.mkdirSync(recipesDir(), { recursive: true });
-	// A copy inside the SOURCE run's folder: compiling is something that run produced, and the
-	// folder is the source of truth for what a run produced. docs/recipes stays the place a
-	// recipe is found by name.
-	try {
-		fs.mkdirSync(runDir(stamp), { recursive: true });
-		fs.writeFileSync(runPath(stamp, RUN_FILES.recipe), JSON.stringify(recipe, null, "\t"));
-		// And re-link the backup. This write lands LONG after the source run terminated and took
-		// its backup, so without this the recipe exists in live and not in archive — and the whole
-		// point of the archive is that dropping the live copy loses nothing. Any post-terminal
-		// writer has this obligation; archiveRun only links what the archive is missing.
-		archiveRun(stamp);
-	} catch {
-		// The source run may predate the consolidated layout; the canonical write above stands.
-	}
-	fs.writeFileSync(path, `${JSON.stringify(recipe, null, "\t")}\n`);
-
-	return { recipe, path };
-}
-
-/** replay <arg> accepts a recipe file path or a run stamp (resolved to its compiled file). */
-function recipeFor(arg: string): Recipe {
-	if (fs.existsSync(arg)) return readRecipe(arg);
-	const logPath = runFile(arg, RUN_FILES.log);
-	if (fs.existsSync(logPath)) {
-		const runLog = JSON.parse(fs.readFileSync(logPath, "utf8"));
-		const slug = compileRecipe(runLog, arg).slug;
-		// Backend-keyed first, legacy name second: recipes compiled before the backend joined the
-		// key are still on disk and still replayable.
-		for (const p of [recipeFileFor(recipesDir(), slug, runLog.task, runLog.backend), recipeFileFor(recipesDir(), slug, runLog.task)])
-			if (fs.existsSync(p)) return readRecipe(p);
-		throw new RecipeCompileError(`no compiled recipe for ${arg} — run: npm run recipe -- compile ${arg}`);
-	}
-	throw new RecipeCompileError(`${arg} is neither a recipe file nor a run stamp`);
 }
 
 async function main(): Promise<void> {
 	const argv = process.argv.slice(2);
-	const verb = argv[0];
-	if (verb === "compile") {
-		const stamp = argv[1];
-		if (!stamp) usage();
-		const { recipe, path } = compileFromStamp(stamp);
-		console.log(`compiled ${recipe.steps.length} step(s) from ${stamp}`);
-		console.log(`  task:    ${recipe.task}`);
-		console.log(`  backend: ${recipe.backend}${recipe.finalEvidence ? "" : "  (no final goal check in source run — replay will gate on steps alone)"}`);
-		console.log(`  wrote:   ${path}`);
+	const [verb, arg] = argv;
+
+	if (!verb || verb === "list") {
+		const rows = listRecipes();
+		if (!rows.length) {
+			console.log(`no recipes in ${recipesDir()}`);
+			console.log("harvest one from a judged-PASS run: ./run recipes harvest <stamp> --promote");
+
+			return;
+		}
+		for (const r of rows) console.log(`${r.file}\n  ${r.app ?? "?"} — ${r.task ?? "?"}${r.from ? `  (from ${r.from})` : ""}`);
+		console.log(`\n${rows.length} recipe(s) in ${recipesDir()}`);
 
 		return;
 	}
-	if (verb !== "replay" || !argv[1]) usage();
 
-	const urlIdx = argv.indexOf("--url");
-	const url = urlIdx >= 0 ? argv[urlIdx + 1] : undefined;
-	const noRescue = argv.includes("--no-rescue");
-	const noCleanup = argv.includes("--no-cleanup");
-	/**
-	 * A replay is the best filming candidate in the matrix: zero model calls on the happy path
-	 * means no thinking gaps to hide in post. It could not be filmed at all before — this CLI
-	 * had no --record and the runner's replay argv never passed one — so the two filmed-replay
-	 * arms were declared and impossible.
-	 */
-	const record = argv.includes("--record");
-	const recipe = recipeFor(argv[1]);
-
-	// A cdp recipe against a website needs the URL back — the run log's `app` is only the
-	// host, and guessing a scheme would navigate the replay somewhere the recording never
-	// was. Same operator-input rule as cleanup's --url, for the same reason.
-	const wantCdp = recipe.backend === "cdp" || !!url;
-	if (recipe.backend === "cdp" && !url && recipe.app.includes("."))
-		throw new RecipeCompileError(`this recipe was recorded on a web target — pass --url https://${recipe.app}`);
-	let target = url ? parseTarget(["--url", url], recipe.app).target : parseTarget([], recipe.app).target;
-	// An app target driven over CDP must be marked cdpAttach, exactly as agent/cli.ts:73 and
-	// explore/cli.ts:63 do it — that flag is what lets acquisition (re)launch the app with
-	// --remote-debugging-port. Replay was the one entry point that never got it, and it went
-	// unnoticed because replay had only ever been run by hand against an already-flagged app.
-	// The first fleet dispatch of it failed 6 for 6 across two Macs: nothing was listening on
-	// :9222, nothing was allowed to relaunch Yarn, and the runs died before writing a log —
-	// which collect reasonably but wrongly read as two poisoned hosts.
-	if (wantCdp && target.kind === "app") target = electronTarget(recipe.app);
-	// runKey, not mintRunKey: a dispatched replay is handed RUN_STAMP by the runner, and the
-	// job id must be the key the run log and journal land under — the same contract task and
-	// explore runs already honour (see src/core/harness/run.ts).
-	const stamp = runKey("replay-", recipe.slug);
-	// A replay is a run: its console output lands in the run folder like any other artifact.
-	// The tee stands down under the runner, which already redirects stdio into this file.
-	teeConsole(stamp);
-	const journalPath = runPath(stamp, RUN_FILES.journal);
-	const recordingDir = runPath(stamp, RUN_FILES.recording);
-	const framesDir = `${recordingDir}/frames`;
-	const videoPath = `${recordingDir}/window.mp4`;
-	const rec = newRecording();
-	// The frame poller and the replay's own acts share the driver, so they share a mutex — the
-	// same contract a live run's step loop honours.
-	const sync: DriverSync = { busy: false, lastActionAt: 0 };
-
-	console.log(`=== replay: ${recipe.task} (${recipe.app}, ${recipe.steps.length} steps, from ${recipe.compiledFrom}) ===`);
-	runEvent(stamp, "start", { mode: "replay", task: recipe.task, app: recipe.app, backend: wantCdp ? "cdp" : "ax", recipeSteps: recipe.steps.length });
-	// wantCdp is the replay's actual delivery, whatever the recipe says: a cdp replay keeps
-	// its hands off the operator's input, so it shows no banner (backendSeizesInput).
-	const overlay = startOverlay("drive", `Agent replaying on ${recipe.app} — do not touch`, wantCdp ? "cdp" : "ax");
-	/**
-	 * BEFORE EITHER BACKEND ACQUIRES. A recipe records a route through a freshly launched app,
-	 * so replaying into whatever the last run left behind measures that drift rather than the
-	 * recipe.
-	 *
-	 * It used to sit inside the try below, ahead of the AX `findWindow` — which reads as "before
-	 * acquisition" only on the AX path. On CDP, acquisition is the line under this one, so the
-	 * quit landed AFTER attach and killed the page the replay had just connected to: "the page
-	 * this run was driving closed and no successor window appeared — saw: (no pages)", on every
-	 * fleet replay. Locally it never showed, because the app was already running and flagged, so
-	 * the relaunch that follows a quit happened to restore a usable endpoint before observe.
-	 */
-	await coldStart(target, recipe.app);
-	// Lazy, matching the rest of core/: no static value-imports of backends/.
-	const cdp = wantCdp ? await (await import("../backends/cdp.js")).CdpBackend.acquire(target) : undefined;
-	const driver = cdp ? undefined : await Driver.start("replay");
-	const interrupted = onInterrupt(async () => {
-		await driver?.close();
-		await cdp?.close();
-	});
-	// The client is created lazily-but-upfront: rescue and teardown share it. --no-rescue
-	// with CLEANUP=off never calls the model at all, and makeClient itself is offline.
-	const { client, model } = makeClient();
-	const graph = loadAppMapGraph(recipe.slug);
-	let exitCode = 1;
-
-	try {
-		// The cold start ran before acquisition (see above), so this handle is of the app the
-		// quit-and-relaunch produced.
-		let win = cdp ? undefined : await findWindow(driver!, recipe.app);
-		if (!cdp) {
-			await driver!.act({ kind: "tool", name: "launch_app", args: { name: recipe.app } });
-			await new Promise((r) => setTimeout(r, 1500));
-			win = await ensureObservable(driver!, win!, recipe.app);
-		}
-		await overlay.countdown();
-		overlay.setDriving(true);
-		// After acquisition and BEFORE the home reset, matching a live run: the video opens on
-		// the app being put into a known state rather than on whatever the last job left.
-		if (record) await startRecording({ cdp, driver, win, app: recipe.app, overlay, recordingDir, framesDir, rec, sync });
-
-		// Same normalisation as a live run: a recipe records a route FROM HOME, so replaying
-		// from wherever the last run ended measures the app's drift, not the recipe's.
-		if (cdp) console.log(`home reset: ${await cdp.goHome()}`);
-		else {
-			const reset = await resetToHome(driver!, win!, recipe.app, graph);
-			console.log(`home reset: ${reset.result} — ${reset.detail}`);
-		}
-		if (interrupted()) return;
-
-		const doObserve = (name: string) => (cdp ? cdp.observe(name) : observe(driver!, win!, name));
-		/**
-		 * Let the relaunched app paint before step 1 resolves anything.
-		 *
-		 * The cold start quits the app; on CDP, acquisition returns as soon as the DEBUG PORT
-		 * answers, which Electron's main process opens well before the renderer has content. So
-		 * quit → relaunch → attach → resolve raced the first paint, and every no-rescue replay
-		 * died on `[1/9] click "New Draft" — no control named "New Draft"` with zero model calls.
-		 * The rescued arm gave it away: ONE rescue was enough and one run then completed, which
-		 * cannot happen if the control is truly absent.
-		 *
-		 * Explore hit the identical race after its own cold start and solved it this way
-		 * (FIRST_OBSERVATION_TRIES in explore/loop.ts); the task agent's home probe is the same
-		 * shape. Sample, stop on content, give up after a bounded wait and let step 1 report the
-		 * honest failure.
-		 */
-		for (let attempt = 0; attempt < FIRST_OBSERVATION_TRIES; attempt++) {
-			const first = await doObserve(`${LIVE_DIR}/${stamp}/${RUN_FILES.steps}/replay-step-0`);
-			if (first.appContent > 0) break;
-			if (attempt === 0) console.log(`first observation is empty — waiting for ${recipe.app} to paint`);
-			await new Promise((r) => setTimeout(r, FIRST_OBSERVATION_WAIT_MS));
-		}
-		const result = await replayRecipe(recipe, {
-			driver,
-			cdp,
-			win,
-			observe: doObserve,
-			...(noRescue ? {} : { client, model, rescue: modelRescue }),
-			graph,
-			journalPath,
-			// The engine has no stamp — this is where its structured events gain one.
-			event: (kind, detail) => runEvent(stamp, kind, detail),
-		});
-
-		const rescued = result.steps.filter((s) => s.outcome === "rescued").length;
-		console.log(
-			`replay ${result.ok ? "SUCCEEDED" : "FAILED"}: ` +
-				`${result.steps.filter((s) => s.outcome !== "failed").length}/${recipe.steps.length} steps` +
-				`${rescued ? ` (${rescued} rescued)` : ""}, ${result.modelCalls} model call(s)`,
-		);
-		runEvent(stamp, "verdict", {
-			success: result.ok,
-			summary: `${result.steps.filter((s) => s.outcome !== "failed").length}/${recipe.steps.length} steps${rescued ? `, ${rescued} rescued` : ""}, ${result.modelCalls} model call(s)`,
-		});
-
-		// The replay writes a run log of the same shape as a live run — one writer, in this
-		// function, fields derived in one place (the a86cafc lesson).
-		fs.mkdirSync(runDir(stamp), { recursive: true });
-		// And the recipe it replayed, so the folder answers "what was this replay meant to do"
-		// without resolving a docs/recipes filename that a later recompile changes (the name
-		// carries a content hash).
-		fs.writeFileSync(runPath(stamp, RUN_FILES.recipe), JSON.stringify(recipe, null, "\t"));
-		fs.writeFileSync(
-			runPath(stamp, RUN_FILES.log),
-			`${JSON.stringify(
-				{
-					task: recipe.task,
-					app: recipe.app,
-					backend: cdp ? "cdp" : "ax",
-					replayOf: recipe.compiledFrom,
-					recipeSteps: recipe.steps.length,
-					modelCalls: result.modelCalls,
-					success: result.ok,
-					...(result.finalCheck ? { finalCheck: result.finalCheck } : {}),
-					steps: result.records,
-					...(record ? { video: relToData(videoPath) } : {}),
-				},
-				null,
-				"\t",
-			)}\n`,
-		);
-
-		const cleanupMode = process.env.CLEANUP ?? "advisory";
-		if (!noCleanup && cleanupMode !== "off" && !interrupted()) {
-			const journal = readJournal(journalPath);
-			if (journal.length) {
-				const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, modelCalls: 0 };
-				const report = await runTeardown({
-					stepsDir: `${LIVE_DIR}/${stamp}/${RUN_FILES.steps}`,
-					driver,
-					cdp,
-					client,
-					model,
-					app: recipe.app,
-					journal,
-					claimed: [],
-					graph,
-					steps: [],
-					budget: envNum("CLEANUP_STEPS", 10),
-					mode: cleanupMode,
-					vision: false,
-					usage,
-				});
-				runEvent(stamp, "cleanup", { restored: report.restored ?? 0, failed: report.failed ?? 0 });
-			}
-		}
-
-		exitCode = result.ok ? 0 : 1;
-	} catch (err) {
-		// Name the cause in the event log before rethrowing to main's catch — a replay that
-		// died mid-acquire otherwise leaves an event log that just stops after "start".
-		runEvent(stamp, "fatal", { error: (err instanceof Error ? err.message : String(err)).slice(0, 300) });
-		throw err;
-	} finally {
-		overlay.setDriving(false);
-		await driver?.close();
-		await cdp?.close();
-		overlay.stop();
-		// Same contract as a live run: the run directory gets a hard-linked backup at the end,
-		// and a backup that fails does not turn a finished replay into a crashed one.
+	if (verb === "harvest") {
+		if (!arg) usage();
+		const { body } = await harvest(arg);
+		const file = writeRecipe(runPath(arg, RUN_FILES.recipe), body);
+		console.log(`harvested: ${file}`);
+		// The run's backup was taken when it terminated; this write lands long after, so it
+		// reaches the archive only if we re-link. Same obligation as the procedure compile.
 		try {
-			archiveRun(stamp);
-		} catch (err) {
-			console.log(`backup: could not copy ${stamp} to out/bench/archive — ${err instanceof Error ? err.message : String(err)}`);
-		}
+			archiveRun(arg);
+		} catch {}
+		if (argv.includes("--promote")) promoteRecipe(arg);
+		else console.log(`promote it into docs/recipes/ (making it loadable by future runs): ./run recipes promote ${arg}`);
+
+		return;
 	}
-	process.exit(exitCode);
+
+	if (verb === "promote") {
+		if (!arg) usage();
+		promoteRecipe(arg);
+
+		return;
+	}
+
+	usage();
+}
+
+/**
+ * Copy a run's harvested recipe into docs/recipes/, making it an INPUT to future runs.
+ * Exported (with injectable roots) for the bench autopilot's promote stage; the deliberateness
+ * argument still holds there — the operator's one `autopilot --go` covers a stage whose whole
+ * job is promotion, printed in the plan, which is not a side effect of dispatching a phase.
+ */
+export function promoteRecipe(stamp: string, opts: { out?: string; dir?: string; log?: (s: string) => void } = {}): string {
+	const log = opts.log ?? console.log;
+	const src = runFile(stamp, RUN_FILES.recipe, opts.out);
+	if (!fs.existsSync(src)) throw new RecipeError(`no harvested recipe for ${stamp} — run: ./run recipes harvest ${stamp}`);
+	const run = JSON.parse(fs.readFileSync(runFile(stamp, RUN_FILES.log, opts.out), "utf8")) as HarvestSource;
+	// run.backend is what actually DROVE (the run log records the post-fallback backend), which
+	// is the right axis: a recipe written from an ax run names ax's surface labels.
+	const dest = recipeFileFor(opts.dir ?? recipesDir(), slugOf(run as Record<string, unknown>, stamp), run.task ?? "", run.backend, lineageOf(run));
+	fs.mkdirSync(path.dirname(dest), { recursive: true });
+	fs.copyFileSync(src, dest);
+	log(`promoted: ${dest}`);
+	log(
+		`future runs ground on it with USE_RECIPES=1${lineageOf(run) === "ungrounded" ? " RECIPE_LINEAGE=ungrounded" : ""} (run log will record provenance "recipe")`,
+	);
+
+	return dest;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
 	main().catch((err) => {
-		console.error(err instanceof RecipeCompileError ? err.message : err);
+		console.error(err instanceof RecipeError ? `REFUSED: ${err.message}` : err);
 		process.exit(1);
 	});
+

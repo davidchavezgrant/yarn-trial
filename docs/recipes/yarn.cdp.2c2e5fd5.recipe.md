@@ -1,4 +1,4 @@
-<!-- provenance: procedure | app: Yarn | task: show me how to change the cursor type | from: 2026-08-01T19-54-26-382-yarn | judge: PASS | backend: cdp | lineage: grounded -->
+<!-- provenance: recipe | app: Yarn | task: show me how to change the cursor type | from: 2026-08-01T19-54-26-382-yarn | judge: PASS | backend: cdp | lineage: grounded -->
 
 1. Click **New Draft** to open a new draft in the editor.
 2. Enter a title in the **Untitled** title field; the verified example used **Scratch Cursor Type Demo 1337700534**.

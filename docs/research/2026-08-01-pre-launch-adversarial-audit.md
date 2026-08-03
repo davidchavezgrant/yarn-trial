@@ -33,7 +33,7 @@ the entire class of defect here is invisible to the test suite as it stood.
 ### 1. Two flags never crossed the wire (Agent B)
 
 `dispatchOptionsFor` translates an arm into a job order by spelling out every field by hand. It
-was missing `record` and `useProcedures`.
+was missing `record` and `useRecipes`.
 
 The recording flag is the worse of the two, because of how filmed arms are derived:
 
@@ -45,7 +45,7 @@ Filming is the *only* difference between a phase-5 arm and its phase-2 sibling. 
 and all 16 filmed runs become bit-identical re-runs under different arm ids — no footage, 16
 rows reading "done", and nothing detecting it because the manifest never records `record`.
 
-`useProcedures` would have made all 6 phase-6 runs measure the appmap tier. That one *is*
+`useRecipes` would have made all 6 phase-6 runs measure the appmap tier. That one *is*
 caught by `groundingChecked`, but only at collect time, after the runs are paid for.
 
 **This is the third occurrence of the class** (`APPMAP_VARIANT=novision` was the second, and
@@ -69,7 +69,7 @@ No explore pass writes that any more — the writer emits variant slugs (`yarn.a
 - `buildRubric` returns `""` when the file is absent. **Delete the legacy maps — which every
   hygiene rule in this repo says to do — and every wrong-scope run silently passes.**
 
-That verdict is not merely reported. It gates procedure harvesting, so a wrong-scope run could
+That verdict is not merely reported. It gates recipe harvesting, so a wrong-scope run could
 have become promoted grounding that teaches the mistake to everything downstream.
 
 Fixed: rubric keyed on the run's own backend; an empty rubric warns loudly.
@@ -117,11 +117,11 @@ costs N extra steps" would have silently included "and started from an arbitrary
 Fixed: home falls back to the full-perception map for that backend. Home is a property of the
 app, not of the channel that mapped it.
 
-### 5. Both procedure arms read one file (both agents, independently)
+### 5. Both recipe arms read one file (both agents, independently)
 
-`procedureFileFor` keyed on `(app, task)` only, so `p6-ax-procedure` and `p6-cdp-procedure`
+`recipeFileFor` keyed on `(app, task)` only, so `p6-ax-recipe` and `p6-cdp-recipe`
 resolved to the same path. Whichever was promoted last wins, and one arm grounds on the other
-backend's vocabulary — with nothing downstream to catch it, since provenance reads `"procedure"`
+backend's vocabulary — with nothing downstream to catch it, since provenance reads `"recipe"`
 either way.
 
 Appmaps carry a backend axis for exactly this reason: the ax and cdp passes name the same
@@ -151,12 +151,12 @@ fine" produce the same output.**
 
 | finding | fix |
 |---|---|
-| Filmed-replay arms were impossible — `recipe-cli.ts` had no `--record` and the runner never passed one | implemented on both sides, with the live run's ordering (record before home reset, assemble before teardown) |
-| Nothing synced `docs/procedures/` to the fleet, so phase 6 would ground on nothing | `syncProcedures` / `autoSyncProcedures`, mirroring recipes, gated on `useProcedures` |
-| `bench harvest` wrote a post-terminal artifact without re-linking the archive | one `archiveRun` call; a purge would otherwise drop harvested procedures and force a re-spend |
+| Filmed-replay arms were impossible — `procedure-cli.ts` had no `--record` and the runner never passed one | implemented on both sides, with the live run's ordering (record before home reset, assemble before teardown) |
+| Nothing synced `docs/recipes/` to the fleet, so phase 6 would ground on nothing | `syncRecipes` / `autoSyncRecipes`, mirroring procedures, gated on `useRecipes` |
+| `bench harvest` wrote a post-terminal artifact without re-linking the archive | one `archiveRun` call; a purge would otherwise drop harvested recipes and force a re-spend |
 | Dash attributed `p2-min-context-grounded` to a sibling's map (variant tested before `axdomOff`) and still named a deleted arm | `groundingArmId` derives from `armAppmapSlug` — one derivation instead of a parallel decision tree |
 | `humanizePulled` shelled out with `cwd: process.cwd()` | `resourcesRoot()`; cwd is not a valid input here (see `paths.ts` header) |
-| Phase 6 had no dispatch gate — a missing procedure only warned on the child's console | refuses dispatch, naming the expected path and the judge → harvest → promote workflow |
+| Phase 6 had no dispatch gate — a missing recipe only warned on the child's console | refuses dispatch, naming the expected path and the judge → harvest → promote workflow |
 
 ---
 
@@ -164,13 +164,13 @@ fine" produce the same output.**
 
 **Relabelled rather than fixed** — the arms are honest now about what they can support:
 
-- *Phase 6 cannot make a replacement claim* on its own. Its procedures are distilled from
+- *Phase 6 cannot make a replacement claim* on its own. Its recipes are distilled from
   appmap-grounded runs, so they presuppose the sweep. **Partially addressed**: David added
-  `p6-{ax,cdp}-procedure-from-ungrounded`, harvested from a judged-PASS ungrounded run, which is
+  `p6-{ax,cdp}-recipe-from-ungrounded`, harvested from a judged-PASS ungrounded run, which is
   the only arm that can speak to whether the exploration pass needs to exist. It may prove
   unrunnable — a judged-PASS ungrounded run is rare because of the wrong-scope class — and that
   refusal is itself an answer.
-- *The curated tier contains the benchmark's answer.* `docs/recipes/yarn.md` names the canonical
+- *The curated tier contains the benchmark's answer.* `docs/curated/yarn.md` names the canonical
   task's control, surface, exact options and the brand-vs-document split, and its own header says
   it was assembled from a 2026-07-29 exploration pass — so it is neither "human notes" nor
   uncontaminated. `auditTaskPrompt` gates the task string; **nothing audits grounding text**.
@@ -183,7 +183,7 @@ fine" produce the same output.**
 
 **Accepted as known limits:**
 
-- *Nothing grades procedure prose.* A mechanical check is one-directional in the wrong way — it
+- *Nothing grades recipe prose.* A mechanical check is one-directional in the wrong way — it
   could flag a missing text-verified surface but never an invented one, because a legitimate
   canvas step has no AX or DOM name to match against. It would prune exactly the vision-only
   knowledge that is hardest to acquire. Left empirical: phase 6 is itself judged.

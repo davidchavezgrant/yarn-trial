@@ -110,7 +110,7 @@ export function parseRunMetrics(runLog: Record<string, any>): RunMetrics {
 			: {}),
 		...(typeof runLog.finalCheck?.verified === "boolean" ? { finalCheckVerified: runLog.finalCheck.verified } : {}),
 		...(runLog.visualCheck?.verdict ? { visualVerdict: String(runLog.visualCheck.verdict) } : {}),
-		...(typeof runLog.recipeSteps === "number" ? { recipeSteps: runLog.recipeSteps } : {}),
+		...(typeof runLog.procedureSteps === "number" ? { procedureSteps: runLog.procedureSteps } : {}),
 		// Replay records mark a rescue in modelReasoning ("rescued after: …") — see replay.ts.
 		...(typeof runLog.replayOf === "string"
 			? { rescuedSteps: steps.filter((s) => typeof s.modelReasoning === "string" && s.modelReasoning.startsWith("rescued")).length }
@@ -392,8 +392,8 @@ async function humanizePulled(entry: ManifestEntry, job: Record<string, any> | u
  */
 export function expectedProvenance(arm: Arm): RunMetrics["provenance"] {
 	if (arm.dispatch.noGrounding) return "none";
-	if (arm.dispatch.useProcedures) return "procedure";
-	if (arm.dispatch.useRecipe) return "curated";
+	if (arm.dispatch.useRecipes) return "recipe";
+	if (arm.dispatch.useCurated) return "curated";
 
 	return arm.env?.APPMAP_VARIANT === "vision" ? "explore-vision" : "explore";
 }

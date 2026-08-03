@@ -330,7 +330,7 @@ export async function main(): Promise<void> {
 	 * The scope-warning PROMPT SECTION is gated on the tier, not merely on the graph existing.
 	 *
 	 * The graph is explore-pass output. Injecting its collision warnings into a run grounded on
-	 * the CURATED or PROCEDURE tier would hand that arm the most correctness-relevant part of
+	 * the CURATED or RECIPE tier would hand that arm the most correctness-relevant part of
 	 * the exploration pass while its log says it was grounded on something else — and scope
 	 * warnings are exactly what stops the wrong-scope failure the ungrounded arms all hit. The
 	 * curated arm's stated question ("explore pass vs 10 minutes of human notes") and phase 6's
@@ -435,7 +435,7 @@ export async function main(): Promise<void> {
 		// of the four tiers and the model's trust in the notes should match what they are: a
 		// sweep of the app, a human's notes, or one earlier agent's successful route.
 		const groundingHeading =
-			grounding.provenance === "procedure"
+			grounding.provenance === "recipe"
 				? `# How a previous agent completed this exact task in ${app} (verified, and independently graded correct — follow it, adapting where the app differs)`
 				: grounding.provenance === "curated"
 					? `# App notes for ${app} (written by hand — accurate but not exhaustive)`

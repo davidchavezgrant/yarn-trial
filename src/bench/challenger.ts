@@ -112,11 +112,11 @@ export function planChallenger(m: Manifest, primaryModel: string | undefined): C
  * an explore that would go unused.
  */
 export function challengerNeedsExplore(plan: ChallengerPlan): Arm | undefined {
-	const grounded = plan.arms.some((a) => !a.dispatch.noGrounding && !a.dispatch.useRecipe);
+	const grounded = plan.arms.some((a) => !a.dispatch.noGrounding && !a.dispatch.useCurated);
 	if (!grounded) return undefined;
 	// Match the explore to a grounded arm's backend: an ax arm needs the ax pass, and a
 	// vision-only arm needs the vision pass, whose map is a different artifact entirely.
-	const armNeeding = plan.arms.find((a) => !a.dispatch.noGrounding && !a.dispatch.useRecipe);
+	const armNeeding = plan.arms.find((a) => !a.dispatch.noGrounding && !a.dispatch.useCurated);
 	if (armNeeding?.dispatch.noAx) return armById("explore-vision");
 
 	return armById(`explore-${armNeeding?.dispatch.backend ?? "ax"}`);

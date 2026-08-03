@@ -236,7 +236,7 @@ test("RunArtifacts__AreAllRunScoped__When__EveryWriterIsChecked", () => {
 
 test("PostTerminalWrites__ReachTheBackup__When__TheyLandAfterTheRunEnded", () => {
 	// A run's backup is taken when it terminates, so anything written to the folder LATER — a
-	// recipe compiled from it, an offline judge verdict, a humanized render — exists in live and
+	// procedure compiled from it, an offline judge verdict, a humanized render — exists in live and
 	// not in archive unless the writer re-links. That silently breaks the property the archive
 	// exists for: that dropping the live copy loses nothing.
 	//
@@ -247,16 +247,16 @@ test("PostTerminalWrites__ReachTheBackup__When__TheyLandAfterTheRunEnded", () =>
 		archiveRun("run-f", root);
 
 		// Later: a compile, a judge, a render.
-		fs.writeFileSync(runPath("run-f", RUN_FILES.recipe, root), '{"steps":[]}');
+		fs.writeFileSync(runPath("run-f", RUN_FILES.procedure, root), '{"steps":[]}');
 		fs.writeFileSync(runPath("run-f", RUN_FILES.judge, root), '{"trajectory":"PASS"}');
-		for (const f of [RUN_FILES.recipe, RUN_FILES.judge])
+		for (const f of [RUN_FILES.procedure, RUN_FILES.judge])
 			assert.equal(fs.existsSync(path.join(archiveRunDir("run-f", root), f)), false, `${f} should not be backed up yet`);
 
 		archiveRun("run-f", root);
-		for (const f of [RUN_FILES.recipe, RUN_FILES.judge]) assert.ok(fs.existsSync(path.join(archiveRunDir("run-f", root), f)), f);
+		for (const f of [RUN_FILES.procedure, RUN_FILES.judge]) assert.ok(fs.existsSync(path.join(archiveRunDir("run-f", root), f)), f);
 
 		// And the run survives losing live, which is the point.
 		fs.rmSync(runDir("run-f", root), { recursive: true, force: true });
-		assert.equal(fs.readFileSync(path.join(archiveRunDir("run-f", root), RUN_FILES.recipe), "utf8"), '{"steps":[]}');
+		assert.equal(fs.readFileSync(path.join(archiveRunDir("run-f", root), RUN_FILES.procedure), "utf8"), '{"steps":[]}');
 	});
 });

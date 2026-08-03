@@ -27,12 +27,12 @@ test("coldStart__IsReachedByEveryRunKind__When__TheSourceIsRead", () => {
 	// it belongs to every run kind. A test on the SOURCE because the alternative is three live
 	// runs against a real app.
 	const root = path.resolve(import.meta.dirname, "..", "src", "core");
-	for (const f of ["explore.ts", "agent/run.ts", "recipe-cli.ts"])
+	for (const f of ["explore.ts", "agent/run.ts", "procedure-cli.ts"])
 		assert.match(fs.readFileSync(path.join(root, f), "utf8"), /coldStart\(/, `${f} must cold-start its target`);
 
-	// And in recipe-cli it must precede acquisition: quitting after findWindow leaves the run
+	// And in procedure-cli it must precede acquisition: quitting after findWindow leaves the run
 	// holding a window id for a process that no longer exists — the very failure being fixed.
-	const replay = fs.readFileSync(path.join(root, "recipe-cli.ts"), "utf8");
+	const replay = fs.readFileSync(path.join(root, "procedure-cli.ts"), "utf8");
 	assert.ok(replay.indexOf("coldStart(") < replay.indexOf("findWindow("), "cold start must run before the window is acquired");
 });
 

@@ -49,13 +49,13 @@ sample sizes and are deliberately absent. Everything qualitative about grounding
 - **Sign-in needs a human, and that decides the deployment model.** SSO+MFA can't be
   automated and credentials must never reach the model, so sessions live on persistent
   machines, signed in once per app by a person. (§8)
-- **Recipe replay is built and proven:** a verified run compiles into a replayable
+- **Procedure replay is built and proven:** a verified run compiles into a replayable
   sequence that re-runs with zero model calls, the model invoked only when a step breaks.
   The live round trip worked first try; the design constraints it imposes on action
   records (stable descriptors, expectation stored with the action) apply from day one. (§9)
 - **Two artifacts come out of a successful run, and they are not the same thing.** A
-  *recipe* is a frozen click sequence — machine replay, exact target resolution, errors
-  rather than adapts. A *procedure* is prose describing the route, for a later agent to read
+  *procedure* is a frozen click sequence — machine replay, exact target resolution, errors
+  rather than adapts. A *recipe* is prose describing the route, for a later agent to read
   and adapt. Build both seams from day one; the data they need is the same StepRecords. (§9)
 - **Put every rule in code.** Each rule we kept by convention — prompt hygiene, log
   writing, provenance — was broken within a day; each one moved into code held. (§7)
@@ -414,10 +414,10 @@ Design decisions that took iteration to get right:
 
 The measurement rule (task prompts state the GOAL only, method knowledge lives in
 declared inputs) has a side door: **the grounding artifact itself.** Our original appmaps
-were partly hand-written and contained recipes for the exact tasks being measured — so
-"grounded" runs measured recipe-following. The fix is structural: `docs/appmaps/` holds
+were partly hand-written and contained procedures for the exact tasks being measured — so
+"grounded" runs measured note-following. The fix is structural: `docs/appmaps/` holds
 ONLY stamped explore output (machine provenance header, content hash recorded in every
-run log); hand-curated notes live in `docs/recipes/`, a separately-declared tier. Never
+run log); hand-curated notes live in `docs/curated/`, a separately-declared tier. Never
 hand-edit a stamped map. In production this translates to: **grounding artifacts need
 provenance metadata and an integrity story**, or your quality metrics quietly measure
 your ops team's annotations.
@@ -708,24 +708,24 @@ The full constraint list is LIMITATIONS §12; the architecture-shaping subset:
 - **A native (SwiftUI) shell.** Sized twice, rejected twice: Electron is Yarn's actual
   deployment target and the driver ecosystem has first-party Electron support. Only
   revisit if the deliverable becomes signed-app-quality live capture.
-- **Recipe compilation — now BUILT (`src/core/recipe.ts`, `replay.ts`, `recipe-cli.ts`);
+- **Procedure compilation — now BUILT (`src/core/procedure.ts`, `replay.ts`, `procedure-cli.ts`);
   copy the design, not just the idea.** Grounding-time thinking → deterministic replay
   with the model only as exception handler; the live round trip (cdp Wikipedia run →
   compile → replay) passed with 0 model calls. The load-bearing decisions:
   - **Compile only from verified evidence.** The compiler refuses failed runs, unverified
     steps, pixel-only steps, and `--hinted` runs (compiling one launders the hint into a
-    clean-looking recipe). A recipe asserts effects; an unverified step observed none.
+    clean-looking procedure). A procedure asserts effects; an unverified step observed none.
   - **Strip volatile handles, keep stable descriptors.** `element_index`/`ref` are
     per-observation walk orders; each step re-resolves by (name → surface → role),
     narrowing progressively, and **ambiguity is an error, never a guess** — two same-named
     controls are the dual-scope trap again, now with no model watching.
-  - **A recipe is not a trusted macro.** Every replayed step is gated by the same
+  - **A procedure is not a trusted macro.** Every replayed step is gated by the same
     `verify()` as a live run — recorded expectation, fresh haystack, discrimination
-    baseline — and the recipe's final evidence is checked against a fresh last
+    baseline — and the procedure's final evidence is checked against a fresh last
     observation. Skipping the checks because "it worked when recorded" is how drift
     ships broken demos.
   - **Rescue is bounded and harness-checked.** A broken step gets one mini-loop
-    (default 3 actions) whose success check is the RECIPE's expectation — teardown's
+    (default 3 actions) whose success check is the PROCEDURE's expectation — teardown's
     trick: the model cannot widen a check it didn't write. Unattended fleet mode runs
     with rescue off; a drifted app fails honestly and gets re-recorded.
   - Replays journal mutations and run teardown like any run; waits are dropped at
@@ -733,11 +733,11 @@ The full constraint list is LIMITATIONS §12; the architecture-shaping subset:
 
 ---
 
-## 10. Procedures: the artifact between a map and a recipe (built 2026-08-01)
+## 10. Recipes: the artifact between a map and a procedure (built 2026-08-01)
 
 A successful run can produce two reusable artifacts, and conflating them costs you both.
 
-| | appmap | **procedure** | compiled recipe |
+| | appmap | **recipe** | compiled procedure |
 |---|---|---|---|
 | answers | *where things are* | *how to do this class of task* | *replay these exact clicks* |
 | scope | per app | per (app, backend, task) | per (app, task) |
@@ -745,7 +745,7 @@ A successful run can produce two reusable artifacts, and conflating them costs y
 | brittleness | robust, topological | robust, adaptable prose | exact `(name, surface, role)`; a renamed control is an ERROR |
 
 We had the outer two and nothing in the middle. A map never says which route to take, in what
-order, or that the change must be committed before it survives a panel close. A recipe has all
+order, or that the change must be committed before it survives a panel close. A procedure has all
 of that and cannot be read as knowledge — it replays one task with one set of values.
 
 **Harvest offline, never at `done()`.** Two reasons, and the second is the one that matters.
@@ -755,13 +755,13 @@ agent's own claim about its own success — which is precisely what fails in the
 class, where four runs accurately described doing the wrong thing. So harvesting reads a
 *finished* run plus its independent judge verdict, and refuses anything the judge did not pass.
 
-**Key procedures by lineage, not just by task.** A procedure distilled from a run that HAD a map
+**Key recipes by lineage, not just by task.** A recipe distilled from a run that HAD a map
 presupposes the mapping pass — you cannot conclude the pass is replaceable from an artifact that
-requires it. A procedure distilled from an *ungrounded* run is the honest replacement claim. They
+requires it. A recipe distilled from an *ungrounded* run is the honest replacement claim. They
 are different experiments and must not share a filename. Derive the lineage from the source run's
 own recorded provenance, never from a label an operator types.
 
-**Keep pixel-verified steps.** Our recipe compiler refuses them — correctly, because a replay
+**Keep pixel-verified steps.** Our procedure compiler refuses them — correctly, because a replay
 must re-check an expectation mechanically and "some pixels changed" is not re-checkable. We
 copied that gate into the harvester and it was wrong: **canvas content is invisible to both AX
 and the DOM**, which is the entire reason a pixel-delta verification layer exists. A drag across
@@ -775,8 +775,8 @@ omitted Save step or an ambiguous scope survives every gate. A mechanical comple
 tempting and is one-directional in the wrong way: it can flag a missing text-verified surface but
 never an invented one, because a legitimate canvas step has no name to match against — so it
 would prune exactly the vision-only knowledge that is hardest to acquire. We left the check
-empirical: the arm that grounds on a procedure is itself judged, so a bad procedure shows up as
-that arm underperforming. Fine for a benchmark; an open problem if you ship procedures.
+empirical: the arm that grounds on a recipe is itself judged, so a bad recipe shows up as
+that arm underperforming. Fine for a benchmark; an open problem if you ship recipes.
 
 ---
 
@@ -790,7 +790,7 @@ and it is the one to build defences against.
 **A grader with no answer key returns a confident pass.** Our offline judge loads the appmap's
 scope-collision list as its rubric, and was reading it from a slug no exploration pass writes any
 more. When the file is absent the rubric builder returned `""` — so with the legacy file deleted,
-*every* wrong-scope run silently passes. That verdict also gates procedure harvesting, so it
+*every* wrong-scope run silently passes. That verdict also gates recipe harvesting, so it
 could have promoted a wrong-scope route as reusable grounding. **Never let "I could not check"
 and "I checked and it was fine" produce the same output.**
 
@@ -827,8 +827,8 @@ each set field arrives. It caught a regression I introduced ten seconds later.
 | cua boundary (the whole thing) | `src/core/driver.ts` (196 lines) |
 | Explore: frontier, dismissal, salvage, descent, home | `src/core/explore.ts` |
 | Journal/teardown/cleanup | `src/core/journal.ts`, `src/core/teardown.ts`, `src/core/cleanup.ts` |
-| Recipe replay: format, compiler, resolution, engine, rescue | `src/core/recipe.ts`, `src/core/replay.ts`, `src/core/recipe-cli.ts` |
-| Procedures: harvest gates, lineage, the grounding tier | `src/core/procedure.ts`, `src/core/procedure-cli.ts`, `src/bench/harvest.ts` |
+| Procedure replay: format, compiler, resolution, engine, rescue | `src/core/procedure.ts`, `src/core/replay.ts`, `src/core/procedure-cli.ts` |
+| Recipes: harvest gates, lineage, the grounding tier | `src/core/recipe.ts`, `src/core/recipe-cli.ts`, `src/bench/harvest.ts` |
 | Run-data layout, hard-linked backups, `./run runs` | `src/paths.ts`, `src/core/runs-cli.ts` |
 | Offline run judge + bench integration | `src/core/judge.ts`, `src/bench/judge.ts` (report's `## Judge` section) |
 | Humanize: track building, motion fitting, rendering | `src/cursor/humanize.ts`, `src/cursor/track.ts`, `src/cursor/render.ts`, `scripts/fit-motion.py` |

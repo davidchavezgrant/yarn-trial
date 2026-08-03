@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { beats, type MapVersion, planTransfers, readAppmaps, readRecipes, type Source, summarise, syncAppmaps, syncRecipes } from "../src/remote/control/appmaps.js";
+import { beats, type MapVersion, planTransfers, readAppmaps, readProcedures, type Source, summarise, syncAppmaps, syncProcedures } from "../src/remote/control/appmaps.js";
 import type { SshResult, SshRunner } from "../src/remote/control/ssh.js";
 import { host, inventory } from "./fixtures.js";
 
@@ -351,84 +351,84 @@ test("summarise__SaysAlreadyInSync__When__NothingMoved", () => {
 	assert.equal(summarise({ transfers: [], hosts: [], adopted: [], dryRun: false }), "already in sync");
 });
 
-// ── recipes ──────────────────────────────────────────────────────────────────────────────
+// ── procedures ──────────────────────────────────────────────────────────────────────────────
 
-/** Write one compiled recipe into `dir`. Omit `compiledAt` for an unstamped (mid-write) one. */
-function writeRecipe(dir: string, stem: string, compiledAt?: string): void {
+/** Write one compiled procedure into `dir`. Omit `compiledAt` for an unstamped (mid-write) one. */
+function writeProcedure(dir: string, stem: string, compiledAt?: string): void {
 	fs.mkdirSync(dir, { recursive: true });
 	fs.writeFileSync(
-		path.join(dir, `${stem}.recipe.json`),
+		path.join(dir, `${stem}.procedure.json`),
 		compiledAt ? JSON.stringify({ version: 1, slug: stem.split(".")[0], compiledAt, steps: [] }) : "{ torn mid-wri",
 	);
 }
 
-test("readRecipes__KeysOnTheWholeStem__When__OneAppHasTwoTaskRecipes", () => {
-	// One app legitimately compiles one recipe per task (the task hash is in the filename);
+test("readProcedures__KeysOnTheWholeStem__When__OneAppHasTwoTaskProcedures", () => {
+	// One app legitimately compiles one procedure per task (the task hash is in the filename);
 	// keying on the app alone would make them shadow each other in the plan.
 	const dir = tmp();
-	writeRecipe(dir, "yarn.abc123", "2026-07-31T10:00:00.000Z");
-	writeRecipe(dir, "yarn.def456", "2026-07-30T10:00:00.000Z");
+	writeProcedure(dir, "yarn.abc123", "2026-07-31T10:00:00.000Z");
+	writeProcedure(dir, "yarn.def456", "2026-07-30T10:00:00.000Z");
 	fs.writeFileSync(path.join(dir, "yarn.md"), "curated prose — committed, not synced");
 
-	const recipes = readRecipes(dir);
-	assert.deepEqual([...recipes.keys()].sort(), ["yarn.abc123.recipe", "yarn.def456.recipe"]);
-	assert.equal(recipes.get("yarn.abc123.recipe")?.capturedAt, "2026-07-31T10:00:00.000Z");
-	assert.deepEqual(recipes.get("yarn.abc123.recipe")?.files, ["yarn.abc123.recipe.json"]);
+	const procedures = readProcedures(dir);
+	assert.deepEqual([...procedures.keys()].sort(), ["yarn.abc123.procedure", "yarn.def456.procedure"]);
+	assert.equal(procedures.get("yarn.abc123.procedure")?.capturedAt, "2026-07-31T10:00:00.000Z");
+	assert.deepEqual(procedures.get("yarn.abc123.procedure")?.files, ["yarn.abc123.procedure.json"]);
 });
 
-test("readRecipes__TreatsItAsUnstamped__When__TheFileDoesNotParse", () => {
+test("readProcedures__TreatsItAsUnstamped__When__TheFileDoesNotParse", () => {
 	// Rsynced mid-write, same as the appmap case: unstamped never overwrites anything.
 	const dir = tmp();
-	writeRecipe(dir, "yarn.abc123");
-	const v = readRecipes(dir).get("yarn.abc123.recipe");
+	writeProcedure(dir, "yarn.abc123");
+	const v = readProcedures(dir).get("yarn.abc123.procedure");
 	assert.equal(v?.capturedAt, undefined);
 });
 
-test("syncRecipes__FansTheRecipeOut__When__OnlyTheHubHasIt", async () => {
-	// The pre-replay fan-out: the runner refuses a replay whose recipe file is absent, so
+test("syncProcedures__FansTheProcedureOut__When__OnlyTheHubHasIt", async () => {
+	// The pre-replay fan-out: the runner refuses a replay whose procedure file is absent, so
 	// this is what makes a replay dispatch to any Mac admissible. Injected rsync — no fleet.
 	const local = tmp();
 	const stage = tmp();
 	const mac1 = tmp();
-	writeRecipe(local, "yarn.abc123", "2026-07-31T10:00:00.000Z");
+	writeProcedure(local, "yarn.abc123", "2026-07-31T10:00:00.000Z");
 	fs.mkdirSync(mac1, { recursive: true });
 
-	const r = await syncRecipes({
+	const r = await syncProcedures({
 		inventory: inventory(host("mac1", "10.0.0.1")),
 		localDir: local,
 		stageDir: stage,
 		run: doctorRuns(),
-		rsync: fakeRecipeRsync({ "10.0.0.1": mac1 }),
+		rsync: fakeProcedureRsync({ "10.0.0.1": mac1 }),
 	});
 
-	assert.deepEqual(r.transfers, [{ slug: "yarn.abc123.recipe", from: "local", to: "mac1", reason: "missing" }]);
-	assert.deepEqual(fs.readdirSync(mac1), ["yarn.abc123.recipe.json"]);
+	assert.deepEqual(r.transfers, [{ slug: "yarn.abc123.procedure", from: "local", to: "mac1", reason: "missing" }]);
+	assert.deepEqual(fs.readdirSync(mac1), ["yarn.abc123.procedure.json"]);
 });
 
-test("syncRecipes__PrefersTheNewerCompile__When__BothSidesHoldOne", async () => {
+test("syncProcedures__PrefersTheNewerCompile__When__BothSidesHoldOne", async () => {
 	// `compiledAt` travels inside the artifact, so a git checkout's fresh mtimes cannot make
-	// an old recipe beat a re-recorded one.
+	// an old procedure beat a re-recorded one.
 	const local = tmp();
 	const stage = tmp();
 	const mac1 = tmp();
-	writeRecipe(local, "yarn.abc123", "2026-07-29T10:00:00.000Z");
-	writeRecipe(mac1, "yarn.abc123", "2026-07-31T10:00:00.000Z");
+	writeProcedure(local, "yarn.abc123", "2026-07-29T10:00:00.000Z");
+	writeProcedure(mac1, "yarn.abc123", "2026-07-31T10:00:00.000Z");
 
-	const r = await syncRecipes({
+	const r = await syncProcedures({
 		inventory: inventory(host("mac1", "10.0.0.1")),
 		localDir: local,
 		stageDir: stage,
 		run: doctorRuns(),
-		rsync: fakeRecipeRsync({ "10.0.0.1": mac1 }),
+		rsync: fakeProcedureRsync({ "10.0.0.1": mac1 }),
 	});
 
-	assert.deepEqual(r.adopted, ["yarn.abc123.recipe"]);
-	const adopted = JSON.parse(fs.readFileSync(path.join(local, "yarn.abc123.recipe.json"), "utf8")) as { compiledAt: string };
+	assert.deepEqual(r.adopted, ["yarn.abc123.procedure"]);
+	const adopted = JSON.parse(fs.readFileSync(path.join(local, "yarn.abc123.procedure.json"), "utf8")) as { compiledAt: string };
 	assert.equal(adopted.compiledAt, "2026-07-31T10:00:00.000Z");
 });
 
-/** fakeRsync, retargeted at docs/recipes — the remote rel the recipe sync collects from. */
-function fakeRecipeRsync(roots: Record<string, string>) {
+/** fakeRsync, retargeted at docs/procedures — the remote rel the procedure sync collects from. */
+function fakeProcedureRsync(roots: Record<string, string>) {
 	const localise = (spec: string): string => {
 		const at = spec.indexOf(":");
 		if (at < 0) return spec;
@@ -437,7 +437,7 @@ function fakeRecipeRsync(roots: Record<string, string>) {
 		const root = roots[addr];
 		if (!root) return spec;
 
-		return remote.replace(/^.*?yarn-trial\/docs\/recipes/, root);
+		return remote.replace(/^.*?yarn-trial\/docs\/procedures/, root);
 	};
 
 	return async (argv: string[]): Promise<SshResult> => {

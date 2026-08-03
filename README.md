@@ -107,20 +107,20 @@ Once a run succeeds, there are two ways to reuse it — a MACHINE replay and a k
 write-up, which are different things:
 
 ```sh
-./run recipe compile <stamp>        # -> docs/recipes/<slug>.<hash>.recipe.json
-./run recipe replay <file|stamp>    # zero model calls unless the app has drifted
-./run recipe replay <stamp> --record   # filmed: no model latency to hide in post
+./run procedure compile <stamp>        # -> docs/procedures/<slug>.<hash>.procedure.json
+./run procedure replay <file|stamp>    # zero model calls unless the app has drifted
+./run procedure replay <stamp> --record   # filmed: no model latency to hide in post
 ```
 
-A recipe is a frozen click sequence: targets re-resolve by exact (name, surface, role), so a
-renamed control is an error rather than an adaptation. A **procedure** is the other half —
+A procedure is a frozen click sequence: targets re-resolve by exact (name, surface, role), so a
+renamed control is an error rather than an adaptation. A **recipe** is the other half —
 prose describing the route, for a later agent to read and adapt:
 
 ```sh
-./run judge <stamp>                    # a procedure may only come from a judged-PASS run
-./run procedures harvest <stamp>       # -> out/bench/live/<stamp>/procedure.md
-./run procedures promote <stamp>       # -> docs/procedures/…  (makes it loadable)
-USE_PROCEDURES=1 ./run "<same task>" "Yarn"
+./run judge <stamp>                    # a recipe may only come from a judged-PASS run
+./run recipes harvest <stamp>       # -> out/bench/live/<stamp>/recipe.md
+./run recipes promote <stamp>       # -> docs/recipes/…  (makes it loadable)
+USE_RECIPES=1 ./run "<same task>" "Yarn"
 ```
 
 Harvesting is deliberately offline — it never runs inside a measured run, and it refuses any
@@ -130,7 +130,7 @@ wrong thing would otherwise teach that to everything downstream.
 ### Where run data lives
 
 **One directory per run**: `out/bench/live/<runKey>/` holds `run.json`, `journal.jsonl`,
-`judge.json`, `appmap.md`, `procedure.md`, `recipe.json`, `steps/` and `recording/`. That
+`judge.json`, `appmap.md`, `recipe.md`, `procedure.json`, `steps/` and `recording/`. That
 directory is the canonical record; `out/bench/archive/<runKey>/` is a hard-linked backup taken
 when the run ends, so removing the live copy loses nothing.
 

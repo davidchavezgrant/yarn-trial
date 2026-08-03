@@ -111,7 +111,7 @@ test("dispatch__CarriesEveryArmFlagInTheSpec__When__BenchmarkOptionsAreSet", asy
 		noAx: true,
 		axdomOff: true,
 		noGrounding: true,
-		useRecipe: true,
+		useCurated: true,
 		inventory: FLEET,
 		run,
 		...noSync,
@@ -123,9 +123,9 @@ test("dispatch__CarriesEveryArmFlagInTheSpec__When__BenchmarkOptionsAreSet", asy
 	assert.equal(spec.noAx, true);
 	assert.equal(spec.axdomOff, true);
 	assert.equal(spec.noGrounding, true);
-	assert.equal(spec.useRecipe, true);
+	assert.equal(spec.useCurated, true);
 	// Booleans, not strings: the runner's flag() gate refuses "true"/"false" by design.
-	for (const key of ["noAx", "axdomOff", "noGrounding", "useRecipe", "record", "noVision", "noRescue"]) assert.equal(typeof spec[key], "boolean", key);
+	for (const key of ["noAx", "axdomOff", "noGrounding", "useCurated", "record", "noVision", "noRescue"]) assert.equal(typeof spec[key], "boolean", key);
 	// And none of it landed on an argv position.
 	assert.equal(calls[0].argv.includes("--backend"), false);
 	assert.equal(calls[0].argv.includes("cdp"), false);
@@ -139,11 +139,11 @@ test("dispatch__SendsAbsentFlagsAsFalse__When__NoArmIsAsked", async () => {
 	const spec = specOf(calls[0].argv);
 	// `backend` stays off the wire entirely, so the child CLI's own default decides.
 	assert.equal("backend" in spec, false);
-	assert.equal("recipe" in spec, false);
+	assert.equal("procedure" in spec, false);
 	assert.equal(spec.noAx, false);
 	assert.equal(spec.axdomOff, false);
 	assert.equal(spec.noGrounding, false);
-	assert.equal(spec.useRecipe, false);
+	assert.equal(spec.useCurated, false);
 });
 
 test("dispatch__CarriesCleanupOffInTheSpec__When__CleanupOffIsAsked", async () => {
@@ -178,8 +178,8 @@ test("dispatch__RelaysTheRunnersRefusal__When__CleanupValueIsInvalid", async () 
 	if (!result.ok) assert.match(result.error, /cleanup must be "off"/);
 });
 
-test("dispatch__SyncsRecipesBeforeTheSubmit__When__TheKindIsReplay", async () => {
-	// The runner refuses a replay whose recipe file is absent, so the fan-out must land the
+test("dispatch__SyncsProceduresBeforeTheSubmit__When__TheKindIsReplay", async () => {
+	// The runner refuses a replay whose procedure file is absent, so the fan-out must land the
 	// file before the submit asks — order is the property under test.
 	const order: string[] = [];
 	const { run } = recorder((_h, argv) => {
@@ -191,7 +191,7 @@ test("dispatch__SyncsRecipesBeforeTheSubmit__When__TheKindIsReplay", async () =>
 		host: "mac2",
 		kind: "replay",
 		app: "Yarn",
-		recipe: "docs/recipes/yarn.abc123.recipe.json",
+		procedure: "docs/procedures/yarn.abc123.procedure.json",
 		noRescue: true,
 		inventory: FLEET,
 		run,
@@ -200,32 +200,32 @@ test("dispatch__SyncsRecipesBeforeTheSubmit__When__TheKindIsReplay", async () =>
 
 			return undefined;
 		},
-		syncRecipes: async () => {
-			order.push("recipe-sync");
+		syncProcedures: async () => {
+			order.push("procedure-sync");
 
-			return "recipes: yarn.abc123.recipe local → mac2 (missing)";
+			return "procedures: yarn.abc123.procedure local → mac2 (missing)";
 		},
 	});
 
 	assert.equal(result.ok, true);
 	if (!result.ok) return;
-	assert.deepEqual(order, ["recipe-sync", "appmap-sync", "submit"]);
+	assert.deepEqual(order, ["procedure-sync", "appmap-sync", "submit"]);
 	// The fan-out's note reaches the operator like the appmap one does.
-	assert.equal(result.syncNote, "recipes: yarn.abc123.recipe local → mac2 (missing)");
+	assert.equal(result.syncNote, "procedures: yarn.abc123.procedure local → mac2 (missing)");
 });
 
-test("dispatch__PutsRecipeAndNoRescueInTheSpec__When__TheKindIsReplay", async () => {
+test("dispatch__PutsProcedureAndNoRescueInTheSpec__When__TheKindIsReplay", async () => {
 	const { run, calls } = recorder(() => ok({ jobId: "replay-j1", pid: 7, artifacts: { log: "out/jobs/replay-j1/log.txt" } }));
 	const result = await dispatch({
 		host: "mac2",
 		kind: "replay",
 		app: "Yarn",
-		recipe: "docs/recipes/yarn.abc123.recipe.json",
+		procedure: "docs/procedures/yarn.abc123.procedure.json",
 		noRescue: true,
 		inventory: FLEET,
 		run,
 		...noSync,
-		syncRecipes: async () => undefined,
+		syncProcedures: async () => undefined,
 	});
 
 	assert.equal(result.ok, true);
@@ -234,14 +234,14 @@ test("dispatch__PutsRecipeAndNoRescueInTheSpec__When__TheKindIsReplay", async ()
 	assert.equal(spec.kind, "replay");
 	// Relative, exactly as given: the runner resolves it against ITS data root and owns the
 	// path-discipline check — nothing here rewrites or absolutises it.
-	assert.equal(spec.recipe, "docs/recipes/yarn.abc123.recipe.json");
+	assert.equal(spec.procedure, "docs/procedures/yarn.abc123.procedure.json");
 	assert.equal(spec.noRescue, true);
 });
 
-test("dispatch__RefusesLocally__When__AReplayNamesNoRecipe", async () => {
+test("dispatch__RefusesLocally__When__AReplayNamesNoProcedure", async () => {
 	await assert.rejects(
-		() => dispatch({ host: "mac1", kind: "replay", app: "Yarn", inventory: FLEET, run: async () => ok({}), ...noSync, syncRecipes: async () => undefined }),
-		/needs a recipe path/,
+		() => dispatch({ host: "mac1", kind: "replay", app: "Yarn", inventory: FLEET, run: async () => ok({}), ...noSync, syncProcedures: async () => undefined }),
+		/needs a procedure path/,
 	);
 });
 
@@ -852,10 +852,10 @@ test("dispatch__NamesTheTimeout__When__TheSubmitGetsNoAnswer", async () => {
 test("dispatchCli__ParsesEveryArmFlag__When__AnOperatorSetsOneByHand", () => {
 	// The bench arms set backend/noAx/axdomOff/noGrounding programmatically, so nothing noticed
 	// the CLI never parsed them: `--backend ax` was accepted in silence and the run came back
-	// cdp. Same shape as the runner dropping useProcedures — every layer agrees the field
+	// cdp. Same shape as the runner dropping useRecipes — every layer agrees the field
 	// exists, one link never touches it, nothing errors, and the run is quietly the wrong arm.
 	const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "remote", "control", "dispatch.ts"), "utf8");
-	for (const flag of ["--backend", "--no-ax", "--axdom-off", "--no-grounding", "--use-recipe", "--use-procedures", "--model"])
+	for (const flag of ["--backend", "--no-ax", "--axdom-off", "--no-grounding", "--use-curated", "--use-recipes", "--model"])
 		assert.ok(src.includes(`"${flag}"`), `the dispatch CLI must let an operator set ${flag}`);
 	// And it must be documented, or an operator cannot discover it.
 	const usage = src.slice(src.indexOf("const USAGE"), src.indexOf("const USAGE") + 400);

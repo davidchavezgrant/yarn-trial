@@ -3,7 +3,7 @@
 Living doc: everything we've learned driving macOS apps with `@trycua/cua-driver`.
 Started 2026-07-29 for the yarn-trial prototype; written for people new to cua.
 Raw session notes live in `docs/research/`; app-specific findings in `docs/appmaps/`
-(autonomous exploration output) and `docs/recipes/` (hand-curated notes).
+(autonomous exploration output) and `docs/curated/` (hand-written notes).
 
 ## What cua-driver is (as we use it)
 
@@ -299,8 +299,8 @@ Its own quirks, measured:
   grounded runs hit 0 dead ends vs 2 (a Settings detour) ungrounded, and found quirks
   manual testing missed.
 - **Verified sequences beat re-derivation.** Once a sequence works, record it
-  (`docs/research/`, `docs/recipes/`) — the exact element roles, delivery modes, and
-  verification substrings. This is the seed of recipe compilation.
+  (`docs/research/`, `docs/procedures/`) — the exact element roles, delivery modes, and
+  verification substrings. This is the seed of procedure compilation.
 - **Tolerate loose tool schemas.** OpenRouter doesn't enforce tool input schemas
   strictly — handle a missing `expectation` by flagging it in the tool result,
   not crashing.

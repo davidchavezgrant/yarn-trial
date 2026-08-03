@@ -1,566 +1,265 @@
+/**
+ * Recipes — the harvest gates and the grounding tier.
+ *
+ * Almost everything worth testing here is a REFUSAL. A recipe is prose a future agent will
+ * act on, so the failure mode is not an exception, it is a confident and reusable wrong answer.
+ * The gates are what stand between "this run succeeded" and "write down how it did it".
+ */
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import type { InteractiveElement, ObservationBundle } from "../src/core/harness.js";
-import {
-	armAction,
-	compileRecipe,
-	needsTarget,
-	type Recipe,
-	RecipeCompileError,
-	recipeFileFor,
-	resolveTarget,
-} from "../src/core/recipe.js";
-import { readRecipe } from "../src/core/recipe.js";
-import { replayRecipe, type ReplayDeps } from "../src/core/replay.js";
-import type { StepRecord } from "../src/types.js";
+import { harvestPrompt, harvestRefusal, lineageOf, recipeFileFor, recipeHeader, routeOf, type HarvestSource } from "../src/core/recipe.js";
+import { harvestSourceArms } from "../src/bench/harvest.js";
+import { expectedProvenance } from "../src/bench/collect.js";
+import { armById, phaseArms, recipeArms } from "../src/bench/matrix.js";
+import { taskHash } from "../src/core/procedure.js";
 
-// --- fixtures -------------------------------------------------------------------------
-
-const ie = (name: string, over: Partial<InteractiveElement> = {}): InteractiveElement => ({
-	handle: 0,
-	role: "AXButton",
-	name,
-	surface: "",
-	value: "",
-	x: 0,
-	y: 0,
-	w: 0,
-	h: 0,
-	...over,
-});
-
-const obsWith = (interactive: InteractiveElement[], haystack = ""): ObservationBundle => ({
-	elementsText: "",
-	haystack: haystack.toLowerCase(),
-	screenshotB64: "",
-	title: "",
-	interactive,
-	appContent: interactive.length,
-	domEnriched: 0,
-	frames: new Map(),
-});
-
-const step = (over: Partial<StepRecord> = {}): StepRecord => ({
-	index: 1,
-	timestamp: "2026-07-31T00:00:00Z",
-	action: { kind: "tool", name: "click", args: { pid: 1, window_id: 2, element_index: 18 } },
-	expectation: { description: "opens", textIncludes: ["Settings"] },
-	verified: true,
-	verificationChannel: "text",
-	verificationNote: "ok",
-	targetName: "Open Settings",
-	targetRole: "AXButton",
-	...over,
-});
-
-const runLog = (over: Record<string, unknown> = {}): Record<string, any> => ({
+const PASSING: HarvestSource = {
 	task: "show me how to change the cursor type",
 	app: "Yarn",
-	backend: "ax",
 	success: true,
-	grounding: { tier: "explore" },
-	finalCheck: { verified: true, evidence: { description: "done", textIncludes: ["Pointer-first"] } },
-	steps: [step()],
-	...over,
-});
-
-// --- compile --------------------------------------------------------------------------
-
-test("compileRecipe__StripsVolatileHandles__When__StepsCarryThem", () => {
-	const r = compileRecipe(runLog(), "2026-07-31T00-00-00-000-yarn");
-	assert.deepEqual(r.steps[0].action.args, {});
-	assert.equal(r.steps[0].target?.name, "Open Settings");
-	assert.equal(r.steps[0].target?.role, "AXButton");
-});
-
-test("compileRecipe__CarriesTheTargetSurface__When__TheStepRecordedOne", () => {
-	// The gap that made the dual-scope tests below vacuous for months: resolveTarget was well
-	// covered with a surface HANDED to it, but nothing checked that compileRecipe ever produces
-	// one. It did not — surfaceOf() read `targetSurface` through an `as any` while step.ts never
-	// wrote the field — so every compiled recipe carried name+role only, and the narrowing
-	// branch those tests exercise could not fire on a real replay.
-	const r = compileRecipe(runLog({ steps: [step({ targetSurface: "Brand Kit" })] }), "s-yarn");
-	assert.equal(r.steps[0].target?.surface, "Brand Kit");
-});
-
-test("compileRecipe__OmitsTheSurface__When__TheStepPredatesTheField", () => {
-	// Old recipes and old run logs stay replayable: absent means "resolve by name and role",
-	// which is exactly what they have always done.
-	const r = compileRecipe(runLog(), "s-yarn");
-	assert.equal(r.steps[0].target?.surface, undefined);
-	assert.equal(r.steps[0].target?.name, "Open Settings");
-});
-
-test("compileRecipe__KeepsPayloadArgs__When__ActionCarriesTextAndKeys", () => {
-	const r = compileRecipe(
-		runLog({
-			steps: [
-				step({
-					action: { kind: "tool", name: "type_text", args: { pid: 1, window_id: 2, element_index: 4, text: "Fritz Lang" } },
-					targetName: "Search",
-					targetRole: "AXTextField",
-				}),
-			],
-		}),
-		"s-yarn",
-	);
-	assert.deepEqual(r.steps[0].action.args, { text: "Fritz Lang" });
-});
-
-test("compileRecipe__CarriesFinalEvidence__When__TheRunHadAGoalCheck", () => {
-	const r = compileRecipe(runLog(), "s-yarn");
-	assert.deepEqual(r.finalEvidence, { description: "done", textIncludes: ["Pointer-first"] });
-});
-
-test("compileRecipe__Refuses__When__TheRunFailed", () => {
-	assert.throws(() => compileRecipe(runLog({ success: false }), "s-yarn"), RecipeCompileError);
-});
-
-test("compileRecipe__Refuses__When__AStepWasNotVerified", () => {
-	assert.throws(
-		() => compileRecipe(runLog({ steps: [step({ verified: false })] }), "s-yarn"),
-		/was not verified/,
-	);
-});
-
-test("compileRecipe__Refuses__When__AStepVerifiedByPixelsOnly", () => {
-	// A pixel delta proves SOMETHING changed; a recipe's value is knowing WHAT to check.
-	assert.throws(
-		() => compileRecipe(runLog({ steps: [step({ verificationChannel: "pixel" })] }), "s-yarn"),
-		/pixels only/,
-	);
-});
-
-test("compileRecipe__DropsWaits__When__TheRunContainedThem", () => {
-	const r = compileRecipe(
-		runLog({
-			steps: [
-				step(),
-				step({ index: 2, action: { kind: "tool", name: "wait", args: { seconds: 300 } }, targetName: undefined }),
-			],
-		}),
-		"s-yarn",
-	);
-	assert.equal(r.steps.length, 1);
-});
-
-test("compileRecipe__StampsProvenance__When__Compiled", () => {
-	const r = compileRecipe(runLog(), "2026-07-31T00-00-00-000-yarn");
-	assert.equal(r.compiledFrom, "2026-07-31T00-00-00-000-yarn");
-	assert.equal(r.slug, "yarn");
-	assert.deepEqual(r.grounding, { tier: "explore" });
-});
-
-test("recipeFileFor__SeparatesTasks__When__OneAppHasSeveral", () => {
-	const a = recipeFileFor("/r", "yarn", "change the cursor type");
-	const b = recipeFileFor("/r", "yarn", "create a new draft");
-	assert.notEqual(a, b);
-	assert.match(a, /^\/r\/yarn\.[0-9a-f]{8}\.recipe\.json$/);
-});
-
-test("readRecipe__RoundTrips__When__WrittenToDisk", () => {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "recipe-"));
-	const r = compileRecipe(runLog(), "s-yarn");
-	const p = path.join(dir, "x.recipe.json");
-	fs.writeFileSync(p, JSON.stringify(r));
-	assert.deepEqual(readRecipe(p), r);
-	assert.throws(() => {
-		fs.writeFileSync(p, JSON.stringify({ ...r, version: 2 }));
-		readRecipe(p);
-	}, /version/);
-});
-
-// --- target resolution ----------------------------------------------------------------
-
-test("resolveTarget__ResolvesByName__When__TheNameIsUnique", () => {
-	const obs = obsWith([ie("Save", { handle: 7 }), ie("Cancel", { handle: 8 })]);
-	assert.deepEqual(resolveTarget({ name: "Save" }, obs), { handle: 7 });
-});
-
-test("resolveTarget__NarrowsBySurface__When__TwoControlsShareAName", () => {
-	// The dual-scope trap: same control name on the brand panel and the document panel.
-	// Resolution must pick by the RECORDED surface, never guess.
-	const obs = obsWith([
-		ie("Cursor Style", { handle: 3, surface: "Brand Kit" }),
-		ie("Cursor Style", { handle: 9, surface: "Screen Recording Settings" }),
-	]);
-	assert.deepEqual(resolveTarget({ name: "Cursor Style", surface: "Brand Kit" }, obs), { handle: 3 });
-});
-
-test("resolveTarget__ReportsAmbiguity__When__NothingSeparatesTwins", () => {
-	const obs = obsWith([ie("Save Changes", { handle: 1 }), ie("Save Changes", { handle: 2 })]);
-	const r = resolveTarget({ name: "Save Changes" }, obs);
-	assert.ok("error" in r && /2 controls/.test(r.error));
-});
-
-test("resolveTarget__ResolvesByName__When__TheSurfaceWasRenamed", () => {
-	// Progressive narrowing, not absolute gating: a renamed panel must not strand a
-	// control whose name is still unique.
-	const obs = obsWith([ie("Save", { handle: 5, surface: "Renamed Panel" })]);
-	assert.deepEqual(resolveTarget({ name: "Save", surface: "Old Panel" }, obs), { handle: 5 });
-});
-
-test("resolveTarget__ReportsMissing__When__TheControlIsGone", () => {
-	const r = resolveTarget({ name: "Save" }, obsWith([ie("Cancel")]));
-	assert.ok("error" in r && /no control named "Save"/.test(r.error));
-});
-
-// --- arming ---------------------------------------------------------------------------
-
-test("armAction__UsesRef__When__BackendIsCdp", () => {
-	const s = { action: { name: "click", args: {} }, expectation: { description: "" } };
-	assert.deepEqual(armAction(s, "e12", "cdp"), { name: "click", ref: "e12" });
-	assert.deepEqual(armAction(s, 18, "ax"), { name: "click", element_index: 18 });
-});
-
-test("needsTarget__False__When__CoordinatesArePayload", () => {
-	// A canvas drag recorded x/y because there was never an element; its target field is
-	// provenance, not addressing, and resolution must not be attempted.
-	assert.equal(
-		needsTarget({
-			action: { name: "click", args: { x: 100, y: 200 } },
-			target: { name: "timeline" },
-			expectation: { description: "" },
-		}),
-		false,
-	);
-	assert.equal(
-		needsTarget({ action: { name: "click", args: {} }, target: { name: "Save" }, expectation: { description: "" } }),
-		true,
-	);
-});
-
-// --- replay ---------------------------------------------------------------------------
-
-/**
- * A scripted CDP-shaped backend: observations come from a queue, acts are recorded. The
- * engine's contract is observe/act, so the fake implements exactly that — the same pattern
- * as cleanup's scripted driver.
- */
-function fakeDeps(observations: ObservationBundle[], opts: Partial<ReplayDeps> = {}) {
-	const acts: any[] = [];
-	let i = 0;
-	const cdp = {
-		act: async (a: any) => {
-			acts.push(a);
-
-			return "ok";
-		},
-	} as any;
-
-	return {
-		acts,
-		deps: {
-			cdp,
-			observe: async () => observations[Math.min(i++, observations.length - 1)],
-			log: () => {},
-			...opts,
-		} as ReplayDeps,
-	};
-}
-
-const recipeOf = (steps: Recipe["steps"], over: Partial<Recipe> = {}): Recipe => ({
-	version: 1,
-	task: "t",
-	app: "A",
-	slug: "a",
 	backend: "cdp",
-	compiledFrom: "src-stamp",
-	compiledAt: "2026-07-31T00:00:00Z",
-	steps,
-	...over,
+	steps: [
+		{ index: 0, action: { name: "click" }, targetName: "Brand Kit", targetSurface: "home", verified: true, verificationChannel: "text", expectation: { textIncludes: ["Brand Kit"] } },
+		{ index: 1, action: { name: "click" }, targetName: "Cursor Style", targetSurface: "Screen Clips", verified: true, verificationChannel: "text" },
+	],
+	finalCheck: { evidence: { textIncludes: ["Arrow"] } },
+};
+
+const PASS_VERDICT = { trajectory: "PASS", scopeDisclosed: "yes" };
+
+test("harvestRefusal__Accepts__When__TheRunSucceededAndTheJudgePassed", () => {
+	assert.equal(harvestRefusal(PASSING, PASS_VERDICT), undefined);
 });
 
-test("replayRecipe__VerifiesWithZeroModelCalls__When__TheAppMatchesTheRecording", async () => {
-	process.env.RECIPE_SETTLE_MS = "0";
-	const r = recipeOf(
-		[
-			{
-				action: { name: "click", args: {} },
-				target: { name: "Open Settings" },
-				expectation: { description: "", textIncludes: ["Settings Panel"] },
-			},
-		],
-		{ finalEvidence: { description: "", textIncludes: ["Settings Panel"] } },
-	);
-	const { deps, acts } = fakeDeps([
-		obsWith([ie("Open Settings", { handle: "e5" })], "Library"),
-		obsWith([ie("Close", { handle: "e9" })], "Settings Panel"),
-		obsWith([], "Settings Panel"),
-	]);
-	const result = await replayRecipe(r, deps);
-	assert.equal(result.ok, true);
-	assert.equal(result.modelCalls, 0);
-	assert.deepEqual(acts, [{ name: "click", ref: "e5" }]);
-	assert.equal(result.steps[0].outcome, "verified");
+test("harvestRefusal__Refuses__When__TheJudgeDidNotPass", () => {
+	// THE gate. The wrong-scope class is a run whose every internal check passed and which
+	// accurately described what it did — where what it did was change a per-document override
+	// instead of the brand default. All four ungrounded runs of the cursor task did this. A
+	// recipe harvested from one would teach every later run to repeat it, and would present
+	// as the recipe tier outperforming the appmap.
+	assert.match(harvestRefusal(PASSING, { trajectory: "FAIL" }) ?? "", /only a judged-PASS run/);
+	assert.match(harvestRefusal(PASSING, { trajectory: "UNPROVEN" }) ?? "", /TRAJECTORY UNPROVEN/);
+	// No verdict at all is refused too — "not yet judged" must not read as "fine".
+	assert.match(harvestRefusal(PASSING, undefined) ?? "", /no judge verdict/);
 });
 
-test("replayRecipe__FailsTheStep__When__TheCheckDoesNotDiscriminate", async () => {
-	process.env.RECIPE_SETTLE_MS = "0";
-	// The recorded text is already on screen BEFORE the action: same verify() authority as
-	// a live run — a non-discriminating pass proves nothing and must not count.
-	const r = recipeOf([
-		{
-			action: { name: "click", args: {} },
-			target: { name: "Open Settings" },
-			expectation: { description: "", textIncludes: ["Library"] },
-		},
-	]);
-	const { deps } = fakeDeps([
-		obsWith([ie("Open Settings", { handle: "e5" })], "Library"),
-		obsWith([], "Library"),
-	]);
-	const result = await replayRecipe(r, deps);
-	assert.equal(result.ok, false);
-	assert.equal(result.steps[0].outcome, "failed");
-	assert.match(result.steps[0].note, /check failed/);
+test("harvestRefusal__Refuses__When__TheRunWasHinted", () => {
+	// compileProcedure refuses hinted runs for the same reason, and here it is worse: a procedure
+	// replays one task, a recipe becomes a reusable input. Writing a dictated route down as
+	// something an agent discovered turns a one-run measurement violation into a permanent one.
+	assert.match(harvestRefusal({ ...PASSING, hintedPrompt: true }, PASS_VERDICT) ?? "", /dictated, not discovered/);
 });
 
-test("replayRecipe__StopsAtTheBrokenStep__When__ATargetCannotResolve", async () => {
-	process.env.RECIPE_SETTLE_MS = "0";
-	const r = recipeOf([
-		{ action: { name: "click", args: {} }, target: { name: "Gone" }, expectation: { description: "", textIncludes: ["x"] } },
-		{ action: { name: "click", args: {} }, target: { name: "Never Reached" }, expectation: { description: "", textIncludes: ["y"] } },
-	]);
-	const { deps, acts } = fakeDeps([obsWith([ie("Other")], "start")]);
-	const result = await replayRecipe(r, deps);
-	assert.equal(result.ok, false);
-	assert.equal(result.steps.length, 1);
-	assert.deepEqual(acts, [], "an unresolved target must not act at all");
-	assert.match(result.steps[0].note, /no control named "Gone"/);
+test("harvestRefusal__Refuses__When__NothingWasVerifiedAtAll", () => {
+	assert.match(harvestRefusal({ ...PASSING, success: false }, PASS_VERDICT) ?? "", /did not succeed/);
+	const none = { ...PASSING, steps: PASSING.steps!.map((s) => ({ ...s, verified: false })) };
+	assert.match(harvestRefusal(none, PASS_VERDICT) ?? "", /no verified steps/);
 });
 
-test("replayRecipe__InvokesRescueOnce__When__AStepBreaksAndRescueIsWired", async () => {
-	process.env.RECIPE_SETTLE_MS = "0";
-	const rescueCalls: string[] = [];
-	const r = recipeOf(
-		[
-			{
-				action: { name: "click", args: {} },
-				target: { name: "Moved Button" },
-				expectation: { description: "", textIncludes: ["Opened"] },
-			},
-		],
-		{ finalEvidence: { description: "", textIncludes: ["Opened"] } },
-	);
-	const { deps } = fakeDeps(
-		[
-			obsWith([ie("Renamed Button", { handle: "e2" })], "start"),
-			obsWith([], "start"), // pre-rescue re-observation
-			obsWith([], "Opened"), // post-rescue observation
-			obsWith([], "Opened"), // final check
-		],
-		{
-			client: {} as any,
-			model: "m",
-			rescue: async (a) => {
-				rescueCalls.push(a.problem);
-
-				return { ok: true, note: "rescued in 1 action(s)", calls: 1 };
-			},
-		},
-	);
-	const result = await replayRecipe(r, deps);
-	assert.equal(result.ok, true);
-	assert.equal(result.modelCalls, 1);
-	assert.equal(result.steps[0].outcome, "rescued");
-	assert.match(rescueCalls[0], /no control named "Moved Button"/);
-});
-
-test("replayRecipe__FailsHonestly__When__RescueIsDisabled", async () => {
-	process.env.RECIPE_SETTLE_MS = "0";
-	const r = recipeOf([
-		{ action: { name: "click", args: {} }, target: { name: "Gone" }, expectation: { description: "", textIncludes: ["x"] } },
-	]);
-	// No client/rescue in deps: the deterministic-only mode a fleet runs unattended.
-	const { deps } = fakeDeps([obsWith([], "start")]);
-	const result = await replayRecipe(r, deps);
-	assert.equal(result.ok, false);
-	assert.equal(result.modelCalls, 0);
-});
-
-test("replayRecipe__GatesOnFinalEvidence__When__TheRecipeCarriesIt", async () => {
-	process.env.RECIPE_SETTLE_MS = "0";
-	// Every step verifies but the goal state is absent from the final observation: the
-	// replay must fail overall, same authority as done(success) grading in the live loop.
-	const r = recipeOf(
-		[
-			{
-				action: { name: "click", args: {} },
-				target: { name: "Open Settings" },
-				expectation: { description: "", textIncludes: ["Settings Panel"] },
-			},
-		],
-		{ finalEvidence: { description: "", textIncludes: ["Pointer-first"] } },
-	);
-	const { deps } = fakeDeps([
-		obsWith([ie("Open Settings", { handle: "e5" })], "Library"),
-		obsWith([], "Settings Panel"),
-		obsWith([], "Settings Panel but not the goal value"),
-	]);
-	const result = await replayRecipe(r, deps);
-	assert.equal(result.ok, false);
-	assert.equal(result.finalCheck?.verified, false);
-});
-
-test("replayRecipe__WritesStepRecords__When__Replaying", async () => {
-	process.env.RECIPE_SETTLE_MS = "0";
-	const r = recipeOf([
-		{
-			action: { name: "click", args: {} },
-			target: { name: "Open Settings" },
-			expectation: { description: "", textIncludes: ["Settings Panel"] },
-		},
-	]);
-	const { deps } = fakeDeps([
-		obsWith([ie("Open Settings", { handle: "e5" })], "Library"),
-		obsWith([], "Settings Panel"),
-	]);
-	const result = await replayRecipe(r, deps);
-	assert.equal(result.records.length, 1);
-	assert.equal(result.records[0].verified, true);
-	assert.equal(result.records[0].verificationChannel, "text");
-	assert.match(result.records[0].modelReasoning ?? "", /src-stamp/);
-});
-
-test("replayEntryPoints__MarkTheAppTargetForAttach__When__DrivingOverCdp", () => {
-	// An app target driven over CDP must carry cdpAttach: that flag is what lets acquisition
-	// (re)launch the app with --remote-debugging-port. agent/cli.ts and explore/cli.ts both do
-	// it; recipe-cli.ts did not, and the gap was invisible locally because a hand-run replay
-	// always followed a flagged launch by some earlier command.
+test("harvestRefusal__AcceptsAPixelOnlyRun__When__TheJudgePassedIt", () => {
+	// David's catch, and it is the difference between this and compileProcedure. A replay must
+	// re-check an expectation mechanically, so "some pixels changed" is correctly refused there.
+	// A recipe is prose for a model — and canvas content is invisible to BOTH the AX tree and
+	// the DOM, which is the entire reason pixelDelta exists as a verification layer.
 	//
-	// The first fleet dispatch of phase 3 failed 6 for 6 across two Macs: nothing listening on
-	// :9222, nothing permitted to relaunch Yarn, runs dead before they wrote a log — which
-	// collect read as two poisoned hosts, blaming the machines for a one-line omission.
+	// A drag across Yarn's editor canvas, a timeline handle, anything inside the NLE behind the
+	// template flow: real, necessary actions whose only evidence is that the right region
+	// repainted. Refusing them would reject a judged-PASS canvas run outright, or harvest it with
+	// a silent hole exactly where the hard part was.
+	const canvas: HarvestSource = {
+		...PASSING,
+		steps: [
+			{ index: 0, action: { name: "click" }, targetName: "Editor", targetSurface: "Project", verified: true, verificationChannel: "text" },
+			{ index: 1, action: { name: "drag" }, targetSurface: "Canvas", verified: true, verificationChannel: "pixel" },
+		],
+	};
+	assert.equal(harvestRefusal(canvas, PASS_VERDICT), undefined);
+
+	// And the step survives into the route, LABELLED — the model has to describe it by where it
+	// happened and what visibly changed, because there is no control name to hand the next agent.
+	const route = routeOf(canvas);
+	assert.match(route, /drag/);
+	assert.match(route, /PIXELS ONLY/);
+	assert.match(route, /no text label/);
+});
+
+test("routeOf__ShowsOnlyVerifiedSteps__When__TheRunMixedThem", () => {
+	// The prompt must not contain steps nobody observed, or the model will happily write them
+	// into the recipe as though they were part of the route.
+	const mixed: HarvestSource = {
+		...PASSING,
+		steps: [...PASSING.steps!, { index: 2, action: { name: "click" }, targetName: "Never Verified", verified: false }],
+	};
+	const route = routeOf(mixed);
+	assert.match(route, /Brand Kit/);
+	assert.equal(route.includes("Never Verified"), false);
+	// And the prompt carries the task and app, since a recipe is keyed by both.
+	const prompt = harvestPrompt(mixed);
+	assert.match(prompt, /show me how to change the cursor type/);
+	assert.match(prompt, /Yarn/);
+});
+
+test("recipeFileFor__KeysOnAppAndTask__When__NamingTheFile", () => {
+	// A recipe for one task must never be found by a run doing a different task on the same
+	// app — that is the whole difference between this and an appmap. Same identity function as
+	// compiled procedures, shared rather than reimplemented so the two cannot disagree.
+	const task = "show me how to change the cursor type";
+	assert.notEqual(recipeFileFor("/d", "yarn", task), recipeFileFor("/d", "yarn", "create a two-scene script"));
+	assert.ok(recipeFileFor("/d", "yarn", task).endsWith(`yarn.${taskHash(task)}.recipe.md`));
+
+	// And by BACKEND, for the reason appmaps already carry that axis: ax and cdp name the same
+	// surfaces differently, so a recipe is no more backend-portable than a map. Without it
+	// ax-recipe and cdp-recipe resolve to one file, the second promote overwrites
+	// the first, and one arm grounds on the other backend's write-up with nothing to catch it.
+	assert.notEqual(recipeFileFor("/d", "yarn", task, "ax"), recipeFileFor("/d", "yarn", task, "cdp"));
+});
+
+test("recipeHeader__StampsProvenance__When__Written", () => {
+	// loadGrounding treats an unstamped file as curated, exactly as it does for appmaps: machine
+	// output has to prove it is machine output, or a human's note wearing a generated filename
+	// gets counted as a measured tier.
+	const head = recipeHeader(PASSING, "2026-08-01T00-00-00-000-yarn", PASS_VERDICT);
+	assert.match(head, /^<!-- provenance: recipe \|/);
+	assert.match(head, /from: 2026-08-01T00-00-00-000-yarn/);
+	assert.match(head, /judge: PASS/);
+});
+
+test("expectedProvenance__ExpectsRecipe__When__TheArmAsksForOne", () => {
+	// The silent-fallback guard. USE_RECIPES with no file on disk degrades to the appmap, so
+	// without this an arm that never received its recipe would report clean numbers under the
+	// wrong tier label. groundingChecked compares this against what the run log recorded.
+	for (const arm of recipeArms(3)) assert.equal(expectedProvenance(arm), "recipe", arm.id);
+	assert.equal(expectedProvenance(armById("ax-grounded")!), "explore");
+	assert.equal(expectedProvenance(armById("curated")!), "curated");
+});
+
+test("harvestSourceArms__CoversBothLineages__When__Phase6IsRead", () => {
+	// Two experiments, and both must be harvestable: from a GROUNDED run ("does a frozen route
+	// beat the map it came from") and from an UNGROUNDED one ("can a write-up replace the map").
+	// Only the second can speak to whether the exploration pass needs to exist at all.
 	//
-	// A CANARY over source, not a proof: standing up a CDP endpoint in a unit test costs more
-	// than it is worth, and the three call sites word the branch differently. What it catches is
-	// an entry point that loses the upgrade entirely — which is exactly how this shipped.
-	for (const rel of ["agent/cli.ts", "explore/cli.ts", "recipe-cli.ts"]) {
-		const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "core", rel), "utf8");
-		assert.ok(
-			/=\s*electronTarget\(/.test(src),
-			`${rel} drives an app over cdp and must upgrade its target with electronTarget(), or acquisition cannot relaunch the app`,
-		);
+	// Note the trap this replaced: the old check asserted /grounded$/, which "ax-ungrounded"
+	// also matches — so it would have passed while proving nothing.
+	const sources = harvestSourceArms();
+	for (const id of sources) assert.ok(armById(id), `${id} is not a real arm`);
+	assert.ok(sources.some((id) => /-ungrounded$/.test(id)), "no ungrounded source — the replacement question is unanswerable");
+	assert.ok(sources.some((id) => /(?<!un)grounded$/.test(id)), "no grounded source");
+	// And no OTHER tier may be a source: a curated-tier run's route would carry that tier's
+	// knowledge into a recipe and make the recipe look better than it is.
+	for (const id of sources) {
+		const arm = armById(id)!;
+		assert.equal(arm.dispatch.useCurated, undefined, `${id} is the curated tier`);
+		assert.equal(arm.dispatch.useRecipes, undefined, `${id} is itself recipe-grounded`);
 	}
 });
 
-test("replay__QuitsTheAppBeforeAcquiring__When__ColdStartingARun", () => {
-	// Ordering, asserted as ordering. coldStart quits the target so acquisition relaunches it
-	// clean; run it AFTER a backend has attached and it kills the very page/window the replay
-	// just connected to.
+test("recipeFileFor__SeparatesLineages__When__BothAreHarvestedForOneTask", () => {
+	// Same app, same backend, same task, different experiments — they cannot share a filename or
+	// the second promote silently overwrites the first and one arm reads the other's write-up.
+	const task = "show me how to change the cursor type";
+	assert.notEqual(recipeFileFor("/d", "yarn", task, "ax", "grounded"), recipeFileFor("/d", "yarn", task, "ax", "ungrounded"));
+	// Lineage is DERIVED from the source run's own provenance, never typed by an operator.
+	assert.equal(lineageOf({ ...PASSING, grounding: { provenance: "explore" } }), "grounded");
+	assert.equal(lineageOf({ ...PASSING, grounding: { provenance: "none" } }), "ungrounded");
+	assert.equal(lineageOf({ ...PASSING }), "ungrounded", "a run log with no grounding block had none");
+});
+
+test("Phase6Arms__ReplaceTheAppmapRatherThanStack__When__Declared", () => {
+	// USE_RECIPES is a replacement tier, like USE_CURATED. An arm that carried both would
+	// measure neither, and the question the phase exists to answer — can a write-up stand IN FOR
+	// the exploration pass — would be unanswerable from its own data.
+	const arms = recipeArms(3);
+	assert.ok(arms.length > 0);
+	for (const a of arms) {
+		assert.equal(a.dispatch.useRecipes, true, a.id);
+		// Lineage must match the source arm's tier, or the arm reads a recipe whose author
+		// knew something different from what the arm's label claims.
+		const src = armById(a.sourceArm!)!;
+		assert.equal(a.dispatch.recipeLineage === "ungrounded", Boolean(src.dispatch.noGrounding), `${a.id} lineage disagrees with ${src.id}`);
+		assert.equal(a.dispatch.useCurated, undefined, `${a.id} stacks the curated tier`);
+		assert.equal(a.dispatch.noGrounding, undefined, `${a.id} stacks the ungrounded flag`);
+		// Comparable to the arms it is measured against: same task, same n.
+		assert.equal(a.task, armById(a.sourceArm!)!.task, a.id);
+		assert.equal(a.n, armById(a.sourceArm!)!.n, a.id);
+	}
+});
+
+test("LoadGrounding__ReadsARecipe__When__UseRecipesIsSetAndOneExists", async () => {
+	// End to end through the real loader: the tier resolves, the stamp is honoured, and the run
+	// log will record provenance "recipe".
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "yarn-proc-"));
+	const prev = { data: process.env.YARN_RUNNER_DATA, use: process.env.USE_RECIPES };
+	try {
+		process.env.YARN_RUNNER_DATA = root;
+		process.env.USE_RECIPES = "1";
+		const task = "show me how to change the cursor type";
+		const dir = path.join(root, "docs", "recipes");
+		fs.mkdirSync(dir, { recursive: true });
+		fs.writeFileSync(recipeFileFor(dir, "yarn", task, "cdp"), `${recipeHeader(PASSING, "s", PASS_VERDICT)}1. Open Brand Kit.\n`);
+
+		const { loadGrounding } = await import("../src/core/agent/grounding.js");
+		const g = loadGrounding("yarn", "cdp", task);
+		assert.equal(g.provenance, "recipe");
+		assert.match(g.notes ?? "", /Open Brand Kit/);
+
+		// A DIFFERENT task on the same app must not find it — the appmap tier takes over, and
+		// with no appmap on disk that is "none", never the other task's recipe.
+		assert.equal(loadGrounding("yarn", "cdp", "create a two-scene script").provenance, "none");
+		// Nor may the OTHER backend find it: ax and cdp name surfaces differently, so an
+		// ax-derived write-up is not a cdp arm's grounding.
+		assert.equal(loadGrounding("yarn", "ax", task).provenance, "none");
+	} finally {
+		if (prev.data === undefined) delete process.env.YARN_RUNNER_DATA;
+		else process.env.YARN_RUNNER_DATA = prev.data;
+		if (prev.use === undefined) delete process.env.USE_RECIPES;
+		else process.env.USE_RECIPES = prev.use;
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("LoadGrounding__Refuses__When__ARetiredTierNameIsSet", async () => {
+	// The guard is only worth having if it is WIRED, and a call missing from the one function
+	// that chooses a tier is exactly the shape of bug this rename could leave behind. Asserted
+	// through loadGrounding rather than through refuseRetiredEnv, which tests itself elsewhere.
+	const prev = process.env.USE_PROCEDURES;
+	try {
+		process.env.USE_PROCEDURES = "1";
+		const { loadGrounding } = await import("../src/core/agent/grounding.js");
+		assert.throws(() => loadGrounding("yarn", "cdp", "show me how to change the cursor type"), /USE_PROCEDURES/);
+		// Even with NO_GROUNDING set, which returns before any file is looked at: a stale name
+		// must not be answered with a clean ungrounded run either.
+		process.env.NO_GROUNDING = "1";
+		assert.throws(() => loadGrounding("yarn", "cdp", "t"), /retired/);
+	} finally {
+		delete process.env.NO_GROUNDING;
+		if (prev === undefined) delete process.env.USE_PROCEDURES;
+		else process.env.USE_PROCEDURES = prev;
+	}
+});
+
+test("ScopeWarnings__AreWithheldFromNonExploreTiers__When__TheGraphIsOnDisk", () => {
+	// The confound David caught. The appmap GRAPH is explore-pass output, and its scope-collision
+	// warnings are the single most correctness-relevant thing grounding provides — they are what
+	// stopped the wrong-scope failure that all four ungrounded cursor runs hit.
 	//
-	// That is what happened: the call sat inside the try block ahead of the AX `findWindow`,
-	// which reads as "before acquisition" on the AX path only — the CDP acquire is earlier in
-	// the function. Every fleet replay died with "the page this run was driving closed and no
-	// successor window appeared — saw: (no pages)". Locally it never showed, because the app was
-	// already running and the post-quit relaunch restored an endpoint before the first observe.
-	const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "core", "recipe-cli.ts"), "utf8");
-	const cold = src.indexOf("await coldStart(");
-	assert.ok(cold > 0, "replay must cold-start the app");
-	for (const acquire of ["CdpBackend.acquire(target)", "await findWindow(driver!"])
-		assert.ok(cold < src.indexOf(acquire), `coldStart must precede ${acquire} — quitting after attach kills what was attached`);
-});
-
-test("recipeFileFor__SeparatesBackends__When__OneTaskIsRecordedOnBoth", () => {
-	// ax and cdp name the same controls differently, so a recipe — a frozen sequence of
-	// (name, surface, role) resolutions — is per BACKEND, not merely per task. Keyed on
-	// (app, task) alone, phase 3's two compile arms wrote one path: the cdp compile's 9 steps
-	// overwrote the ax compile's 11, and replay-ax deferred forever because its gate wanted
-	// an ax recipe and the only file present was cdp's.
-	const ax = recipeFileFor("/r", "yarn", "change the cursor type", "ax");
-	const cdp = recipeFileFor("/r", "yarn", "change the cursor type", "cdp");
-	assert.notEqual(ax, cdp);
-	assert.match(ax, /\.ax\.recipe\.json$/);
-	// Omitting the backend still yields the legacy name, so recipes compiled before the key
-	// changed remain findable rather than silently unreplayable.
-	assert.match(recipeFileFor("/r", "yarn", "change the cursor type"), /^\/r\/yarn\.[0-9a-f]{8}\.recipe\.json$/);
-});
-
-test("replay__WaitsForTheAppToPaint__When__TheColdStartJustRelaunchedIt", () => {
-	// On CDP, acquisition returns as soon as the DEBUG PORT answers — which Electron's main
-	// process opens well before the renderer has content. Without a wait, step 1 resolves
-	// against a blank page: every no-rescue replay died on `[1/9] click "New Draft" — no
-	// control named "New Draft"` with zero model calls, while the rescued arm needed just ONE
-	// rescue and then completed, which is impossible if the control is genuinely absent.
+	// The graph was being loaded whenever ANY grounding prose loaded, so a curated or recipe
+	// arm was getting the explore pass's warnings while its run log said it was grounded on
+	// something else. Both arms' questions — "explore pass vs human notes" and "can a write-up
+	// replace the exploration pass" — are unanswerable if the pass is quietly in every arm.
 	//
-	// explore/loop.ts hit the same race after its own cold start and polls; this asserts replay
-	// does too, and that the poll precedes the step loop rather than trailing it.
-	const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "core", "recipe-cli.ts"), "utf8");
-	const poll = src.indexOf("FIRST_OBSERVATION_TRIES; attempt++");
-	assert.ok(poll > 0, "replay must poll for first paint after the cold start");
-	assert.ok(poll < src.indexOf("await replayRecipe("), "the paint wait must precede the step loop");
-});
-
-test("resolveTarget__PicksTheRecordedTwin__When__NothingElseSeparatesThem", () => {
-	// Yarn's Library carries two controls named "New Draft". Identity cannot separate them, so
-	// resolution refused — correctly, but that stopped every no-rescue replay dead on step 1
-	// (0/3, zero model calls). The recording always knew which one it used.
-	const obs = obsWith([ie("New Draft", { handle: 4 }), ie("New Draft", { handle: 9 })]);
-	assert.deepEqual(resolveTarget({ name: "New Draft", ordinal: 1 }, obs), { handle: 9 });
-	assert.deepEqual(resolveTarget({ name: "New Draft", ordinal: 0 }, obs), { handle: 4 });
-});
-
-test("resolveTarget__StillRefuses__When__TheTwinCountChanged", () => {
-	// An index into a DIFFERENT list is not evidence. If the page no longer has the number of
-	// twins the recording saw, it is not the page that was recorded and the ordinal means
-	// nothing — refusing beats clicking the wrong control confidently.
-	const obs = obsWith([ie("New Draft", { handle: 4 }), ie("New Draft", { handle: 9 }), ie("New Draft", { handle: 11 })]);
-	const r = resolveTarget({ name: "New Draft", ordinal: 5 }, obs);
-	assert.ok("error" in r && /ambiguous/.test(r.error));
-});
-
-test("resolveTarget__PrefersIdentity__When__SurfaceAlreadySeparatesTwins", () => {
-	// The ordinal is a LAST resort: document order is weaker evidence than a name, and letting
-	// it win would send a click to the wrong panel whenever a list reordered.
-	const obs = obsWith([
-		ie("Cursor Style", { handle: 3, surface: "Brand Kit" }),
-		ie("Cursor Style", { handle: 9, surface: "Screen Recording Settings" }),
-	]);
-	assert.deepEqual(resolveTarget({ name: "Cursor Style", surface: "Brand Kit", ordinal: 1 }, obs), { handle: 3 });
-});
-
-test("compileRecipe__Parameterises__When__TheRecordedValueWasGeneratedPerRun", () => {
-	// Replay typed the recorded scratch name verbatim, so the SECOND replay found the field
-	// already reading it: "expectation met, but every check was ALREADY satisfied before the
-	// action — no evidence the action changed anything." The check is right; the recipe was
-	// wrong to promise a value that stops being new after one use.
-	const r = compileRecipe(
-		runLog({
-			steps: [
-				step({
-					action: { kind: "tool", name: "type_text", args: { element_index: 4, text: "Scratch Cursor Type Demo 1337700534" } },
-					targetName: "Untitled",
-					targetRole: "textbox",
-					expectation: { description: "title updates", textIncludes: ["Scratch Cursor Type Demo 1337700534"], textExcludes: ["Untitled Draft"] },
-				}),
-			],
-		}),
-		"s-yarn",
-	);
-	// Text and the checks that quote it must move TOGETHER, or replay types one value and
-	// asserts another.
-	assert.equal(r.steps[0].action.args.text, "Scratch Cursor Type Demo {{unique}}");
-	assert.deepEqual(r.steps[0].expectation.textIncludes, ["Scratch Cursor Type Demo {{unique}}"]);
-	assert.deepEqual(r.steps[0].expectation.textExcludes, ["Untitled Draft"]);
-});
-
-test("compileRecipe__LeavesMeaningfulNumbersAlone__When__TheyAreNotGeneratedIds", () => {
-	// "2 scenes" and "1080" are content, not a per-run token. Six-plus digits is the line.
-	const r = compileRecipe(
-		runLog({
-			steps: [
-				step({
-					action: { kind: "tool", name: "type_text", args: { element_index: 4, text: "Scene 2 at 1080p" } },
-					targetName: "Script",
-					expectation: { description: "typed", textIncludes: ["Scene 2 at 1080p"] },
-				}),
-			],
-		}),
-		"s-yarn",
-	);
-	assert.equal(r.steps[0].action.args.text, "Scene 2 at 1080p");
+	// A source-level check, because the alternative is a full agent run: the gate is one
+	// expression, and what matters is that it names the provenance rather than the graph.
+	const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "core", "agent", "run.ts"), "utf8");
+	assert.match(src, /const fromExplore = Boolean\(grounding\.notes\) && \(grounding\.provenance === "explore" \|\| grounding\.provenance === "explore-vision"\)/);
+	assert.match(src, /const warnings = graph && fromExplore \? scopeWarnings\(graph\) : ""/);
+	// The graph itself must load UNCONDITIONALLY — including for NO_GROUNDING arms. It never
+	// reaches the model: detectMutation reads it to label a change's settingKey and scope, and
+	// teardown reads it to plan restores. Gating it on grounding.notes inverted the sign of the
+	// matrix's most important claim, because an ungrounded arm could then never journal a
+	// document-scope mutation and the report would show grounding CAUSING wrong-scope changes.
+	assert.match(src, /const graph = loadAppMapGraph\(slug, backendKind\);/);
+	assert.equal(/const graph = grounding\.notes \? loadAppMapGraph/.test(src), false, "the analysis graph must not be gated on the tier");
 });

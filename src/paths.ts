@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
  * Two roots, because packaging splits them:
  *
  *   DATA      writable — out/ and the appmaps the explorer generates
- *   RESOURCES read-only — the checkout itself: recipes, native sidecars, src/ for spawning
+ *   RESOURCES read-only — the checkout itself: procedures, native sidecars, src/ for spawning
  *
  * In a checkout they are the same directory, and every path below resolves to exactly the
  * value it had when it was written from cwd. That equality is the point: this refactor is a
@@ -147,22 +147,22 @@ export const RUN_FILES = {
 	appmap: "appmap.md",
 	appmapGraph: "appmap.json",
 	/**
-	 * The recipe compiled FROM this run (`recipe compile <stamp>`), or, on a replay, the recipe it
-	 * replayed. `docs/recipes/` remains where a recipe is looked up BY NAME; this copy makes the
+	 * The procedure compiled FROM this run (`procedure compile <stamp>`), or, on a replay, the procedure it
+	 * replayed. `docs/procedures/` remains where a procedure is looked up BY NAME; this copy makes the
 	 * run folder answer "what did this run do" without a second lookup that a rename can break.
 	 */
-	recipe: "recipe.json",
+	procedure: "procedure.json",
 	/**
-	 * Task-level procedural knowledge harvested FROM this run: prose describing how to accomplish
-	 * the goal in this app, written for a future agent to read.
+	 * The recipe harvested FROM this run: task-level knowledge as prose, describing how to
+	 * accomplish the goal in this app, written for a future agent to read.
 	 *
 	 * Distinct from both neighbours. `appmap.md` is topology — where things are, task-agnostic,
-	 * and it never says which route to take. `recipe.json` is a frozen click sequence replayed by
+	 * and it never says which route to take. `procedure.json` is a frozen click sequence replayed by
 	 * machine with exact (name, surface, role) resolution, so a renamed control is an error rather
 	 * than an adaptation. This is the middle tier: how to do this CLASS of task, prose a model can
 	 * adapt when the control moved or the value differs.
 	 */
-	procedure: "procedure.md",
+	recipe: "recipe.md",
 	/**
 	 * The standalone cleanup CLI's receipt (src/core/cleanup.ts): what it planned per journal
 	 * entry and what came of the attempt. An ordinary run folds this into run.json
@@ -328,31 +328,54 @@ export function legacyRunPath(key: string, name: string, root = outDir()): strin
 }
 
 /**
- * Explorer output. Writable because `explore` generates it, and separate from recipes
- * because the provenance split between them is load-bearing: stamped appmaps are machine
- * output, recipes are curated by hand, and conflating the two is what made an earlier
- * measurement report recipe-following as autonomous grounding.
+ * FOUR DIRECTORIES, ONE CLASS OF INPUT EACH. The vocabulary, because two of these words were
+ * swapped on 2026-08-03 and every reader since has to know which way round they now are:
+ *
+ *   docs/appmaps/     topology, generated   — where the controls are, task-agnostic
+ *   docs/curated/     prose, hand-written   — a human's notes on how to do the task
+ *   docs/recipes/     prose, harvested      — a previous agent's write-up of a run that worked
+ *   docs/procedures/  steps, compiled       — a frozen click sequence, replayed by machine
+ *
+ * A PROCEDURE is machine-readable and replaces the model; a RECIPE is prose and informs it. The
+ * first three are grounding tiers (an agent READS one before it starts, and they replace rather
+ * than stack); the fourth is not grounding at all — a replay executes it with no model in the loop.
+ *
+ * The provenance split across directories is load-bearing rather than tidy: stamped appmaps and
+ * harvested recipes are machine output, docs/curated is written by hand, and conflating those is
+ * what made an earlier measurement report note-following as autonomous grounding. Filenames alone
+ * would not have caught it.
  */
 export function appmapsDir(): string {
 	return `${dataRoot()}/docs/appmaps`;
 }
 
-/** Curated, hand-written, read-only at runtime. */
-export function recipesDir(): string {
-	return `${resourcesRoot()}/docs/recipes`;
+/** Hand-written prose notes. `resourcesRoot`: they ship with the checkout, and nothing writes them. */
+export function curatedDir(): string {
+	return `${resourcesRoot()}/docs/curated`;
 }
 
 /**
- * Harvested procedures — machine output, like docs/appmaps and unlike docs/recipes.
+ * Compiled procedures — machine-readable steps, written by `procedure compile` from a run that
+ * succeeded and read back by `procedure replay`.
  *
- * A SEPARATE directory from recipes, not a filename convention inside it, because the two are
- * different classes of input and this project has already been burned once by letting curated
- * and generated grounding share a home: appmaps that were partly hand-written made a measurement
- * report recipe-following as autonomous grounding. `dataRoot`, not `resourcesRoot`, because
- * unlike recipes these are written at runtime.
+ * `resourcesRoot` because a compile is a checkout-level artifact that the fleet sync fans out, in
+ * contrast to docs/recipes below; in a checkout the two roots are the same directory anyway.
  */
 export function proceduresDir(): string {
-	return `${dataRoot()}/docs/procedures`;
+	return `${resourcesRoot()}/docs/procedures`;
+}
+
+/**
+ * Harvested recipes — prose, machine-written, like docs/appmaps and unlike docs/curated.
+ *
+ * A SEPARATE directory from docs/curated, not a filename convention inside it, because the two are
+ * different classes of input and this project has already been burned once by letting curated
+ * and generated grounding share a home: appmaps that were partly hand-written made a measurement
+ * report note-following as autonomous grounding. `dataRoot`, not `resourcesRoot`, because unlike
+ * curated notes these are written at runtime.
+ */
+export function recipesDir(): string {
+	return `${dataRoot()}/docs/recipes`;
 }
 
 /** Compiled sidecars that ship with the code (`native/axdom`, `native/liveview`). */

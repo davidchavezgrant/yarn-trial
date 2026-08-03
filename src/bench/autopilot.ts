@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { appSlug, archiveDir, dataRoot as dataRootDir, liveDir, outDir, proceduresDir as proceduresDirDefault, RUN_FILES, relToData, runFile } from "../paths.js";
+import { appSlug, archiveDir, dataRoot as dataRootDir, liveDir, outDir, recipesDir as recipesDirDefault, RUN_FILES, relToData, runFile } from "../paths.js";
 import { execSync } from "node:child_process";
 import { poisonedHosts as poisonedHostsFn } from "./collect.js";
 import { manifestCost, usd } from "./cost.js";
 import type { BenchHarvestOutcome } from "./harvest.js";
 import type { BenchJudgeOutcome } from "./judge.js";
 import { entriesForArm, type Manifest, manifestPath, readManifest, utcDate } from "./manifest.js";
-import { type Arm, BENCH_PRIMARY_MODEL, PHASES, STAGES, orderStages, type Phase, phaseArms, procedureArms, stageOf } from "./matrix.js";
+import { type Arm, BENCH_PRIMARY_MODEL, PHASES, STAGES, orderStages, type Phase, phaseArms, recipeArms, stageOf } from "./matrix.js";
 import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, auditPhase, findCompileSource, interruptedPass, plannedRuns, runPhase } from "./orchestrate.js";
 import { type PhaseProgress, phaseProgress, watchPhase } from "./watch.js";
 
@@ -42,12 +42,12 @@ import { type PhaseProgress, phaseProgress, watchPhase } from "./watch.js";
  *    harness/host problem, and more submissions are money down the same hole. The retry budget
  *    stops the line instead (default 2 technical failures per arm).
  *  - Phase 3/4 second waves: compiles need collected clean sources and replays need compiled
- *    recipes, so those phases legitimately take more than one dispatch→drain round. The wave
+ *    procedures, so those phases legitimately take more than one dispatch→drain round. The wave
  *    loop re-runs the phase until nothing is pending — and a wave that changes NOTHING
  *    (blocked compile, refused source) is recorded as a finding and moved past, never spun on.
  *  - Judge before harvest, harvest before promote, promote before phase 6: the stage planner
  *    inserts them in that order automatically when phase 6 is requested. A phase-6 arm whose
- *    procedure cannot exist (no judged-PASS source run — likely for the ungrounded lineage) is
+ *    recipe cannot exist (no judged-PASS source run — likely for the ungrounded lineage) is
  *    reported as the finding it is; the runnable arms still run.
  *  - Spend: `--max-usd` is a hard ceiling checked before every dispatch wave, so an unattended
  *    pass cannot silently burn past what the operator meant to spend.
@@ -98,7 +98,7 @@ export interface AutopilotOptions {
 	maxUsd?: number;
 	outRoot?: string;
 	dataDir?: string;
-	proceduresDir?: string;
+	recipesDir?: string;
 	log?: (s: string) => void;
 	/** Injected by tests. Production lazily loads the real implementations. */
 	runPhaseFn?: (phase: Phase) => Promise<number>;
@@ -119,7 +119,7 @@ export function orderedPhases(phases: Phase[]): Phase[] {
 /**
  * The stage list, in execution order. A stage's own `before` declares the workflow steps that
  * must precede it — Reuse asks for judge→harvest→promote, because harvest refuses unjudged runs
- * and the procedure gate refuses unpromoted ones.
+ * and the recipe gate refuses unpromoted ones.
  *
  * This used to be `if (p === 6)`. Moving it onto the stage means a future stage that needs the
  * same preparation gets it by saying so, rather than by someone editing this loop.
@@ -145,7 +145,7 @@ export const stageTitle = (s: Stage): string => (s.kind === "phase" ? `phase ${s
 
 /**
  * What a phase still owes: dispatchable runs (incl. deferred replays) plus compile arms that
- * have no recipe yet but DO have an untried clean source. A compile with no viable source is
+ * have no procedure yet but DO have an untried clean source. A compile with no viable source is
  * not pending — it is blocked, and the wave loop's no-progress check is what names that.
  */
 export interface PendingWork {
@@ -157,7 +157,7 @@ export interface PendingWork {
 export function pendingWork(phase: Phase, m: Manifest, model?: string): PendingWork {
 	const runs = plannedRuns(phase, m, model).length;
 	const compiles = phaseArms(phase)
-		.filter((a) => a.kind === "compile" && !entriesForArm(m, a.id, model).some((e) => e.recipe))
+		.filter((a) => a.kind === "compile" && !entriesForArm(m, a.id, model).some((e) => e.procedure))
 		.filter((a) => {
 			const tried = new Set(entriesForArm(m, a.id, model).map((e) => e.jobId));
 
@@ -192,14 +192,14 @@ export const unreadyRuns = (m: Manifest, phase: Phase, model?: string): string[]
 export const passSpend = (m: Manifest): number => manifestCost(m.entries).usd;
 
 /**
- * Progress fingerprint for one phase: entry count, recipes, collected. A full wave
+ * Progress fingerprint for one phase: entry count, procedures, collected. A full wave
  * (dispatch → drain → collect) that leaves this unchanged cannot be helped by another wave.
  */
 const fingerprint = (m: Manifest, phase: Phase, model?: string): string => {
 	const ids = new Set(phaseArms(phase).map((a) => a.id));
 	const mine = m.entries.filter((e) => ids.has(e.armId) && e.model === model);
 
-	return `${mine.length}:${mine.filter((e) => e.recipe).length}:${mine.filter((e) => e.collected).length}`;
+	return `${mine.length}:${mine.filter((e) => e.procedure).length}:${mine.filter((e) => e.collected).length}`;
 };
 
 export interface DriveContext {
@@ -298,12 +298,12 @@ export async function driveToCompletion(phase: Phase, ctx: DriveContext): Promis
 /** One phase-6 arm's promote state: the file it needs, and the harvested candidates that could fill it. */
 export interface PromoteOutcome {
 	promoted: string[];
-	/** Arm ids phase 6 will skip — no promotable procedure exists. A finding, not an error. */
+	/** Arm ids phase 6 will skip — no promotable recipe exists. A finding, not an error. */
 	blocked: string[];
 }
 
 /**
- * Promote harvested procedures until every phase-6 arm's expected file exists, or its
+ * Promote harvested recipes until every phase-6 arm's expected file exists, or its
  * candidates run out. Promotion derives lineage/backend from the run log itself (never from the
  * arm), so a candidate is verified by re-checking the expected path after each promote — a
  * grounded-lineage file cannot satisfy an ungrounded arm by construction.
@@ -312,39 +312,39 @@ export async function promoteForPhase6(opts: {
 	manifest: Manifest;
 	model?: string;
 	dataOut: string;
-	proceduresDir: string;
+	recipesDir: string;
 	promoteFn: (stamp: string) => Promise<void>;
 	log: (s: string) => void;
 }): Promise<PromoteOutcome> {
-	const { procedureFileFor } = await import("../core/procedure.js");
+	const { recipeFileFor } = await import("../core/recipe.js");
 	const outcome: PromoteOutcome = { promoted: [], blocked: [] };
 
 	/**
-	 * One promotion per procedure FILE, not per arm.
+	 * One promotion per recipe FILE, not per arm.
 	 *
 	 * Several arms share a slot — a filmed twin wants the same (app, task, backend, lineage)
-	 * procedure as the arm it films, and the Claude cell wants the same one its Sol twin does.
+	 * recipe as the arm it films, and the Claude cell wants the same one its Sol twin does.
 	 * Iterating arms promoted the identical file up to three times and, worse, reported one
-	 * missing procedure as three blocked arms. Deduping on the path the loop already computes
+	 * missing recipe as three blocked arms. Deduping on the path the loop already computes
 	 * fixes both, and the representative is the arm that can actually fill it: an arm with no
 	 * `sourceArm` has no candidate run to harvest from and would report the slot unfillable
 	 * while its twin sat there able to fill it.
 	 */
 	const slots = new Map<string, Arm>();
-	for (const arm of procedureArms()) {
-		const key = procedureFileFor(opts.proceduresDir, appSlug(arm.app), arm.task ?? "", arm.dispatch.backend, arm.dispatch.procedureLineage ?? "grounded");
+	for (const arm of recipeArms()) {
+		const key = recipeFileFor(opts.recipesDir, appSlug(arm.app), arm.task ?? "", arm.dispatch.backend, arm.dispatch.recipeLineage ?? "grounded");
 		const held = slots.get(key);
 		if (!held || (!held.sourceArm && arm.sourceArm)) slots.set(key, arm);
 	}
 
 	for (const [wanted, arm] of slots) {
 		if (fs.existsSync(wanted)) {
-			opts.log(`… ${arm.id}: procedure already promoted (${relToData(wanted)})`);
+			opts.log(`… ${arm.id}: recipe already promoted (${relToData(wanted)})`);
 			continue;
 		}
 
 		const candidates = entriesForArm(opts.manifest, arm.sourceArm ?? "", opts.model).filter((e) =>
-			fs.existsSync(runFile(e.jobId, RUN_FILES.procedure, opts.dataOut)),
+			fs.existsSync(runFile(e.jobId, RUN_FILES.recipe, opts.dataOut)),
 		);
 		let filled = false;
 		for (const c of candidates) {
@@ -365,7 +365,7 @@ export async function promoteForPhase6(opts: {
 		}
 		if (!filled) {
 			outcome.blocked.push(arm.id);
-			opts.log(`– ${arm.id}: no promotable procedure from ${arm.sourceArm} — phase 6 skips this arm. That refusal is a finding (see harvest's refused list for why each source run declined).`);
+			opts.log(`– ${arm.id}: no promotable recipe from ${arm.sourceArm} — phase 6 skips this arm. That refusal is a finding (see harvest's refused list for why each source run declined).`);
 		}
 	}
 
@@ -379,7 +379,7 @@ export async function autopilot(opts: AutopilotOptions = {}): Promise<number> {
 	const outRoot = opts.outRoot ?? outDir();
 	const liveRoot = liveDir(outRoot);
 	const dataOut = path.join(opts.dataDir ?? dataRootDir(), "out");
-	const procDir = opts.proceduresDir ?? proceduresDirDefault();
+	const procDir = opts.recipesDir ?? recipesDirDefault();
 	const intervalSec = Math.max(15, opts.intervalSec ?? 120);
 	const phases = orderedPhases(opts.phases ?? DEFAULT_PHASES);
 	if (!phases.length) {
@@ -523,8 +523,8 @@ export async function autopilot(opts: AutopilotOptions = {}): Promise<number> {
 	const promoteFn =
 		opts.promoteFn ??
 		(async (stamp: string) => {
-			const { promoteProcedure } = await import("../core/procedure-cli.js");
-			promoteProcedure(stamp, { log });
+			const { promoteRecipe } = await import("../core/recipe-cli.js");
+			promoteRecipe(stamp, { log });
 		});
 	const collectFn =
 		opts.collectFn ??
@@ -566,8 +566,8 @@ export async function autopilot(opts: AutopilotOptions = {}): Promise<number> {
 			if (head && lastHead && head !== lastHead)
 				log(`⚠ HEAD moved since the last phase (${lastHead.slice(0, 7)} → ${head.slice(0, 7)}) — this phase's runs will execute DIFFERENT code than the previous phase's. Comparability across phases is now on you.`);
 			lastHead = head ?? lastHead;
-			if (procedureArms(stage.phase).length > 0 && phase6Blocked.length === procedureArms(stage.phase).length) {
-				log(`phase 6 skipped entirely: no arm has a promoted procedure. That is the finding — no judged-PASS source run produced one (the likely case for the ungrounded lineage; see harvest's refusals).`);
+			if (recipeArms(stage.phase).length > 0 && phase6Blocked.length === recipeArms(stage.phase).length) {
+				log(`phase 6 skipped entirely: no arm has a promoted recipe. That is the finding — no judged-PASS source run produced one (the likely case for the ungrounded lineage; see harvest's refusals).`);
 				continue;
 			}
 			if (stageOf(stage.phase)?.kind === "deliverable") log(`filmed pass — cursor compositing stays manual afterwards: npm run humanize -- <stamp>`);
@@ -593,7 +593,7 @@ export async function autopilot(opts: AutopilotOptions = {}): Promise<number> {
 		}
 
 		if (stage.kind === "promote") {
-			const outcome = await promoteForPhase6({ manifest: readManifest(date, liveRoot), model, dataOut, proceduresDir: procDir, promoteFn, log });
+			const outcome = await promoteForPhase6({ manifest: readManifest(date, liveRoot), model, dataOut, recipesDir: procDir, promoteFn, log });
 			phase6Blocked = outcome.blocked;
 		}
 
@@ -608,7 +608,7 @@ export async function autopilot(opts: AutopilotOptions = {}): Promise<number> {
 			const m = readManifest(date, liveRoot);
 			log(`\nautopilot complete (+${elapsed()}). Spend: ${usd(passSpend(m))}.`);
 			for (const p of phases) log(`  ${describePhase(p)}`);
-			if (phase6Blocked.length && phase6Blocked.length < procedureArms().length) log(`  reuse ran without: ${phase6Blocked.join(", ")} (no promotable procedure — a finding)`);
+			if (phase6Blocked.length && phase6Blocked.length < recipeArms().length) log(`  reuse ran without: ${phase6Blocked.join(", ")} (no promotable recipe — a finding)`);
 			if (collected.reportPath) log(`report: ${collected.reportPath}`);
 			if (phases.some((p) => stageOf(p)?.kind === "deliverable")) log(`filmed stamps need manual compositing: npm run humanize -- <stamp>`);
 			if (process.env.ANTHROPIC_ADMIN_KEY) log(`reconcile against Anthropic's accounting: ./run bench truecost`);

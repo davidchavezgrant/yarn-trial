@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { appmapsDir, appSlug, dataRoot, nativeDir, outDir, recipesDir, relToData, resourcesRoot } from "../src/paths.js";
+import { appmapsDir, appSlug, dataRoot, nativeDir, outDir, proceduresDir, relToData, resourcesRoot } from "../src/paths.js";
 
 /**
  * The contract these tests defend is "no behaviour change in a checkout". paths.ts exists to
@@ -42,7 +42,7 @@ test("outDir__MatchesLegacyCwdPath__When__RunningFromCheckout", () => {
 		// These four are verbatim what the code built from process.cwd() before the refactor.
 		assert.equal(outDir(), `${REPO}/out`);
 		assert.equal(appmapsDir(), `${REPO}/docs/appmaps`);
-		assert.equal(recipesDir(), `${REPO}/docs/recipes`);
+		assert.equal(proceduresDir(), `${REPO}/docs/procedures`);
 		assert.equal(nativeDir(), `${REPO}/native`);
 	});
 });
@@ -70,7 +70,7 @@ test("dataRoot__UsesOverride__When__EnvVarIsSet", () => {
 		// Writable and read-only roots move independently: a packaged app relocates data to
 		// userData while resources stay in the bundle.
 		assert.equal(resourcesRoot(), REPO);
-		assert.equal(recipesDir(), `${REPO}/docs/recipes`);
+		assert.equal(proceduresDir(), `${REPO}/docs/procedures`);
 	});
 });
 

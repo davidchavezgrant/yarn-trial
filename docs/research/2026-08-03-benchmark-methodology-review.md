@@ -1,6 +1,6 @@
 # What the benchmark can and cannot tell us — a review of the experiment itself
 
-**Date**: 2026-08-03 · **Scope**: the backend × grounding × recipe matrix
+**Date**: 2026-08-03 · **Scope**: the backend × grounding × procedure matrix
 (`docs/plans/2026-07-31-benchmark-matrix.md`), read against the **completed** 165-run pass —
 165/165 collected, 107 successes, $227.17, 817k output tokens.
 
@@ -40,7 +40,7 @@ hints. Four axes:
 |---|---|
 | Actuation backend | AX (accessibility tree + Swift DOM sidecar) · CDP (DevTools protocol direct) |
 | Perception | screenshots on/off · DOM attributes on/off · vision-only |
-| Grounding tier | none · explore-generated appmap · pixel-written appmap · curated prose · harvested procedure · compiled replay |
+| Grounding tier | none · explore-generated appmap · pixel-written appmap · curated prose · harvested recipe · compiled replay |
 | Task | settings toggle · motion blur · **video creation** (the product flow) |
 
 n=3 per cell across three colo Macs, re-graded by an offline adversarial judge.
@@ -49,7 +49,7 @@ n=3 per cell across three colo Macs, re-graded by an offline adversarial judge.
 
 ## 2. What we can learn from it
 
-**The strongest result: procedures work.** 12/12 across four arms, both backends, both lineages
+**The strongest result: recipes work.** 12/12 across four arms, both backends, both lineages
 (harvested from grounded *and* ungrounded source runs), plus 2/3 on the Fable twin. The
 explore → run → judge → harvest → promote loop closes. Only result in the matrix at n=12.
 
@@ -143,7 +143,7 @@ finding above could be a fact about Yarn.
    before `groundingChecked` reported they had measured the wrong tier.
 6. **Block host assignment by arm** — round-robin so each arm gets one run per Mac. Free, and it
    removes an uncontrolled variable currently free to align with the treatment.
-7. **Write a blind human-notes recipe.** The curated tier names the benchmark's own answer and
+7. **Write a blind human-notes procedure.** The curated tier names the benchmark's own answer and
    was assembled from an explore pass, so it is an upper bound on grounding, not human notes.
 8. **Judge across families** — the judge shares a model family with the agent in 156 of 165 runs.
 9. **Report spread, not just means.** At n=3, "8.7 steps" is a different finding if it is 8/9/9

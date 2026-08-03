@@ -169,7 +169,7 @@ export function buildRubric(slug: string, backend?: string): string {
 	 *
 	 * The `""` return below is the more dangerous half: with the legacy file deleted — which
 	 * every hygiene rule here says to do — every wrong-scope run gets a rubric-free prompt and
-	 * silently passes. That verdict then gates procedure harvesting, so a wrong-scope run could
+	 * silently passes. That verdict then gates recipe harvesting, so a wrong-scope run could
 	 * become promoted grounding that teaches phase 6 the mistake.
 	 */
 	const map = loadAppMapGraph(slug, backend);

@@ -1,10 +1,10 @@
 /**
- * `./run bench harvest` — turn the pass's judged-PASS runs into procedures, in bulk.
+ * `./run bench harvest` — turn the pass's judged-PASS runs into recipes, in bulk.
  *
- * Mirrors `bench judge` deliberately: idempotent (a run whose procedure.md exists is skipped),
+ * Mirrors `bench judge` deliberately: idempotent (a run whose recipe.md exists is skipped),
  * per-run failures recorded rather than fatal, and a separate operator verb rather than
  * something a phase does on its way past. That last property is the important one. Promoting a
- * procedure makes it an INPUT to every later run of the same task, and an input tier must never
+ * recipe makes it an INPUT to every later run of the same task, and an input tier must never
  * appear as a side effect of dispatching a phase — that is how sample independence dies quietly.
  *
  * Workflow: runs land → `bench judge` → `bench harvest` → `bench phase 6 --go`.
@@ -16,17 +16,17 @@
  *   ungrounded source → "can a write-up by an agent that had no map REPLACE the map"
  *
  * They must not merge. `lineageOf` keys the promoted file on the source run's own recorded
- * provenance, so a procedure cannot be filed under a tier its author did not have.
+ * provenance, so a recipe cannot be filed under a tier its author did not have.
  *
  * Harvesting from anything ELSE — a curated-tier run, say — would fold that tier's knowledge into
- * a procedure and make it look better than it is, which is why this is a whitelist.
+ * a recipe and make it look better than it is, which is why this is a whitelist.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { archiveRun, dataRoot as dataRootDir, liveDir, outDir, RUN_FILES, runFile, runPath } from "../paths.js";
-import { harvest as harvestOne } from "../core/procedure-cli.js";
-import { writeProcedure } from "../core/procedure.js";
-import { armById, procedureArms } from "./matrix.js";
+import { harvest as harvestOne } from "../core/recipe-cli.js";
+import { writeRecipe } from "../core/recipe.js";
+import { armById, recipeArms } from "./matrix.js";
 import { readManifest, utcDate } from "./manifest.js";
 
 const TERMINAL = new Set(["done", "failed", "stopped", "orphaned"]);
@@ -39,8 +39,8 @@ export interface BenchHarvestOutcome {
 	failed: Array<{ jobId: string; error: string }>;
 }
 
-/** The arms phase 6 grounds on — the only runs eligible to become procedures. */
-export const harvestSourceArms = (): string[] => [...new Set(procedureArms().map((a) => a.sourceArm).filter((x): x is string => Boolean(x)))];
+/** The arms phase 6 grounds on — the only runs eligible to become recipes. */
+export const harvestSourceArms = (): string[] => [...new Set(recipeArms().map((a) => a.sourceArm).filter((x): x is string => Boolean(x)))];
 
 export async function harvestBench(opts?: {
 	date?: string;
@@ -68,7 +68,7 @@ export async function harvestBench(opts?: {
 
 		const dataOut = path.join(dataDir, "out");
 		if (!fs.existsSync(runFile(entry.jobId, RUN_FILES.log, dataOut))) continue;
-		if (fs.existsSync(runFile(entry.jobId, RUN_FILES.procedure, dataOut))) {
+		if (fs.existsSync(runFile(entry.jobId, RUN_FILES.recipe, dataOut))) {
 			outcome.skipped.push(entry.jobId);
 			log(`… ${entry.armId} ${entry.jobId}: already harvested — skipping`);
 			continue;
@@ -76,9 +76,9 @@ export async function harvestBench(opts?: {
 
 		try {
 			const { body } = await run(entry.jobId);
-			writeProcedure(runPath(entry.jobId, RUN_FILES.procedure, dataOut), body);
+			writeRecipe(runPath(entry.jobId, RUN_FILES.recipe, dataOut), body);
 			// Post-terminal write: the run's backup was taken when it ended, so without this the
-			// procedure lives only in live and a `runs purge` drops it — and harvest's own
+			// recipe lives only in live and a `runs purge` drops it — and harvest's own
 			// idempotence check searches the archive, so it would then re-spend a model call.
 			try {
 				archiveRun(entry.jobId, dataOut);
@@ -89,8 +89,8 @@ export async function harvestBench(opts?: {
 			const msg = (e as Error).message;
 			// A refusal and a transport failure are different findings and must not be one list:
 			// "the judge did not pass this run" is the gate working, "the model was unreachable"
-			// is a retry. Distinguished by the ProcedureError name rather than by prose.
-			if ((e as Error).constructor?.name === "ProcedureError") {
+			// is a retry. Distinguished by the RecipeError name rather than by prose.
+			if ((e as Error).constructor?.name === "RecipeError") {
 				outcome.refused.push({ jobId: entry.jobId, reason: msg });
 				log(`– ${entry.armId} ${entry.jobId}: refused — ${msg}`);
 			} else {
@@ -105,7 +105,7 @@ export async function harvestBench(opts?: {
 			`${outcome.refused.length} refused, ${outcome.failed.length} failed`,
 	);
 	if (outcome.harvested.length)
-		log(`promote them so phase 6 can load them: ${outcome.harvested.map((s) => `./run procedures promote ${s}`).join(" && ")}`);
+		log(`promote them so phase 6 can load them: ${outcome.harvested.map((s) => `./run recipes promote ${s}`).join(" && ")}`);
 
 	return outcome;
 }

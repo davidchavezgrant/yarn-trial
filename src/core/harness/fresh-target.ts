@@ -155,7 +155,7 @@ export interface ResolvedRect {
 
 /**
  * Re-resolve a stale target against the fresh tree. Exact (role, name) identity first — the
- * same identity recipes and the journal match on — then rect overlap breaks ties. Ambiguity
+ * same identity procedures and the journal match on — then rect overlap breaks ties. Ambiguity
  * falls back to the stale rect rather than guessing between distinct candidates (replay.ts's
  * rule, with a rect fallback instead of an error because a click must still land somewhere).
  */

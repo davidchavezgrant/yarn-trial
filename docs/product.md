@@ -67,9 +67,9 @@ handed to it.
 **2. The setup pass pays for itself — and what it really buys is correctness, not speed.**
 We give each app a one-time "scouting" pass that writes down where things live. The early
 comparisons were invalid: the notes had been hand-edited over time to include step-by-step
-recipes for the exact tasks we were measuring, so we were partly measuring "does telling the
+procedures for the exact tasks we were measuring, so we were partly measuring "does telling the
 agent the answer help" — not a question. The pipeline has since been split so the two can't
-be confused again (machine-written notes and hand-written recipes are separate tiers, and
+be confused again (machine-written notes and hand-written procedures are separate tiers, and
 each run records which it used), and the comparison was re-run clean.
 
 Result: with scouting, roughly **half the steps and half the cost** — 4 steps vs 10 on the
@@ -91,7 +91,7 @@ and it dropped from 17 steps to 6. The measurement was flawed as an autonomy res
 the original log has since been lost to hand-copying, so the exact figure is unauditable —
 but the direction is solid and worth pursuing: after a task succeeds once, save the exact
 sequence and replay it, only waking the model when something doesn't match. Scouting makes
-the first run cheaper; recipes make every run after it nearly free and fully deterministic.
+the first run cheaper; procedures make every run after it nearly free and fully deterministic.
 This is still the clearest next investment; it just needs a clean measurement.
 
 **4. Latency stopped being a problem.**
@@ -202,7 +202,7 @@ flakiness.
 ### Q5. What happens when the agent can't do it?
 
 Right now it stops and says so honestly, which is the correct engineering behaviour but not
-yet a product behaviour. Options: silently retry, fall back to a scripted recipe, hand off to
+yet a product behaviour. Options: silently retry, fall back to a scripted procedure, hand off to
 a human operator, or surface "we can't demo this yet." Related: a task can *partly* succeed —
 Yarn's draft-rename attempt failed while the rest of the task worked. Is a partial demo
 publishable?
@@ -241,7 +241,7 @@ building it from controls.
 | Some app surfaces can't be driven at all | Medium | Yarn's own preview canvas is invisible to accessibility APIs; drags on it work but can't be text-verified. Every app will have a few of these; they need to be found during scouting, not during a demo |
 | Per-app setup doesn't scale | Medium | Fine at ten apps, unclear at hundreds — and a finished pass is ~40 min, not ~6. Q3 |
 | Demos change the wrong setting and still look correct | **High** | Re-measured and confirmed: without scouting notes, every run edited a per-project override instead of the global default, and reported success truthfully. Scouting fixes it; nothing verifies it independently (item 2) |
-| Cost per demo | Low–Medium | Real but small today, and recipes should cut it hard |
+| Cost per demo | Low–Medium | Real but small today, and procedures should cut it hard |
 | Latency | **Resolved** | Yarn's post pipeline absorbs it |
 
 ---
@@ -255,7 +255,7 @@ building it from controls.
 2. **Third app, chosen by Yarn.** Directly attacks the generalization risk. Websites and a
    native app have each had first runs; what's missing is depth on an app *Yarn picks*,
    ideally something visually driven.
-3. **Recipes.** The cost and determinism story for production, on the strength of the
+3. **Procedures.** The cost and determinism story for production, on the strength of the
    17-steps-to-6 direction rather than that specific number. Still the clearest unbuilt
    lever.
 4. **Settle Q2.** Whose workspace the demos run in. Q1 is decided; this one is cheap to

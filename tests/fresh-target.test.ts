@@ -215,9 +215,9 @@ test("Verify__StillRuns__When__DriverReportsIncompleteDelivery", async () => {
 });
 
 test("executeAction__RecordsTheTargetSurface__When__TheElementHasOne", async () => {
-	// The write half of recipe replay's dual-scope disambiguation. Tested HERE rather than
-	// against a StepRecord fixture because the fixture is what let this ship broken: recipe.ts
-	// read `targetSurface` through an `as any`, compileRecipe's tests handed it one directly,
+	// The write half of procedure replay's dual-scope disambiguation. Tested HERE rather than
+	// against a StepRecord fixture because the fixture is what let this ship broken: procedure.ts
+	// read `targetSurface` through an `as any`, compileProcedure's tests handed it one directly,
 	// and nothing checked that a real step ever produced the field. It did not, for months.
 	const el = (over: Partial<InteractiveElement> = {}): InteractiveElement => ({
 		handle: 3,
@@ -267,7 +267,7 @@ test("executeAction__RecordsTheTargetSurface__When__TheElementHasOne", async () 
 
 	assert.equal(records.length, 1);
 	assert.equal(records[0].targetName, "Cursor Style");
-	// The field a compiled recipe carries into resolveTarget's narrowing branch. Without it,
+	// The field a compiled procedure carries into resolveTarget's narrowing branch. Without it,
 	// two same-named controls are unresolvable and the replay errors instead of running.
 	assert.equal(records[0].targetSurface, "Brand Kit");
 });

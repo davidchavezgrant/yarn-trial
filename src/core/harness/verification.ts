@@ -455,7 +455,7 @@ export function auditTaskPrompt(task: string): PromptAudit {
 	const vocab = [...new Set([...(task.match(DRIVER_VOCAB) ?? []), ...(task.match(AX_ROLE) ?? [])].map((m) => m.toLowerCase()))];
 	// OCCURRENCES, not unique spellings. A dictated click-path — "click Brand Kit, click
 	// Screen Clips, click Cursor Style" — is four hints that all spell "click", and deduping
-	// them to one collapsed a complete method recipe below the ≥2 threshold and passed it as
+	// them to one collapsed a complete method procedure below the ≥2 threshold and passed it as
 	// goal-only. The threshold still allows ONE incidental mechanic verb ("...the Save
 	// button"); two or more describe HOW rather than WHAT.
 	// Navigation directives join the mechanics tally rather than tripping alone: a task whose

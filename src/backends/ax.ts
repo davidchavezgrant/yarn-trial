@@ -272,6 +272,6 @@ export function activationFailure(err: unknown): { applied: false; error: string
 
 // The ax path's model-facing surface, re-exported so this module is the one-stop shop —
 // mirroring cdp.ts's cdpActTool/cdpRules. The definitions STAY in actions.ts: the rest of
-// the harness (verification, teardown, recipes) shares them, and moving them would churn
+// the harness (verification, teardown, procedures) shares them, and moving them would churn
 // every one of those imports for nothing.
 export { ACT_TOOL, DEMO_ACT_TOOL, DEMO_DRIVER_RULES, DRIVER_RULES } from "../core/harness/actions.js";

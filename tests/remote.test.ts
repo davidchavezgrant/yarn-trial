@@ -196,7 +196,7 @@ test("encodeSpec__RoundTripsVerbatim__When__TaskContainsShellMetacharacters", ()
 
 test("encodeSpec__RoundTripsTheArmFields__When__ABenchmarkSubmitCrosses", () => {
 	// The benchmark arms cross the wire as typed spec fields — booleans stay booleans (the
-	// runner's flag() gate refuses strings), and the recipe path is a plain relative string
+	// runner's flag() gate refuses strings), and the procedure path is a plain relative string
 	// the runner validates on its side. Nothing of it may surface on an argv position.
 	const spec = {
 		kind: "replay",
@@ -205,14 +205,14 @@ test("encodeSpec__RoundTripsTheArmFields__When__ABenchmarkSubmitCrosses", () => 
 		noAx: true,
 		axdomOff: false,
 		noGrounding: true,
-		useRecipe: false,
+		useCurated: false,
 		noRescue: true,
-		recipe: "docs/recipes/yarn.abc123.recipe.json",
+		procedure: "docs/procedures/yarn.abc123.procedure.json",
 	};
 	assert.deepEqual(decodeSpec(encodeSpec(spec)), spec);
 
 	const argv = sshArgv(host("mac1", "10.0.0.1"), runnerArgv("submit", spec));
-	for (const token of ["--backend", "cdp", "--no-ax", "AXDOM", "NO_GROUNDING", "USE_RECIPE", "--no-rescue", "docs/recipes"])
+	for (const token of ["--backend", "cdp", "--no-ax", "AXDOM", "NO_GROUNDING", "USE_CURATED", "--no-rescue", "docs/procedures"])
 		assert.equal(argv.some((a) => a.includes(token) && !/^[A-Za-z0-9+/=]+$/.test(a)), false, `${token} leaked onto the argv`);
 });
 

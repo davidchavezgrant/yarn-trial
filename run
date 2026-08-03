@@ -70,10 +70,10 @@ ${b}run${n}
 
 ${b}ground & replay${n}
   explore "App" | --url <https://site>   grounding pass -> docs/appmaps/
-  recipe compile <stamp>                 freeze a successful run into a replayable recipe
-  recipe replay <file|stamp>             replay it — zero model calls unless a step breaks
-  procedures harvest <stamp> [--promote] judged-PASS run -> prose on how to do that task
-  procedures list|promote <stamp>         what future runs can ground on / make one loadable
+  procedure compile <stamp>              freeze a successful run into a replayable procedure
+  procedure replay <file|stamp>          replay it — zero model calls unless a step breaks
+  recipes harvest <stamp> [--promote]    judged-PASS run -> prose on how to do that task
+  recipes list|promote <stamp>           what future runs can ground on / make one loadable
   appmaps [--sync] [--app <name>]        which Mac holds which grounding; --sync converges the fleet
 
 ${b}run data${n}  (out/bench/live is canonical; out/bench/archive is a hard-linked backup)
@@ -136,7 +136,7 @@ EOF
 # A run started while another is in flight kills BOTH: the second driver session shuts down
 # the shared daemon (LIMITATIONS §6). Cheaper to refuse here than to lose a 20-action run.
 assert_no_run_in_flight() {
-	if pgrep -f "tsx src/core/(agent|explore|recipe-cli)\.ts" >/dev/null 2>&1; then
+	if pgrep -f "tsx src/core/(agent|explore|procedure-cli)\.ts" >/dev/null 2>&1; then
 		die "a run is already in flight — driver sessions are not concurrent-safe (LIMITATIONS §6).
 Wait for it, or: pkill -f 'tsx src/'"
 	fi
@@ -165,13 +165,13 @@ explore)
 	exec npx tsx src/core/explore.ts "$@"
 	;;
 
-procedures)
+recipes)
 	# Offline: reads a finished run's log + judge verdict, one model call, writes prose. Never
 	# drives an app, so no assert_no_run_in_flight — harvesting while the fleet runs is fine
 	# and is in fact the normal case.
 	have_key || die "no API key: export OPENROUTER_API_KEY or ANTHROPIC_API_KEY (or put it in .env)"
 	shift
-	exec npx tsx src/core/procedure-cli.ts "$@"
+	exec npx tsx src/core/recipe-cli.ts "$@"
 	;;
 
 runs)
@@ -182,14 +182,14 @@ runs)
 	exec npx tsx src/core/runs-cli.ts "$@"
 	;;
 
-recipe)
+procedure)
 	# compile needs no key (pure file transform); replay may need one for rescue + teardown,
 	# but --no-rescue with CLEANUP=off is fully offline, so the key check stays soft here.
-	[[ $# -ge 3 || ${2:-} == compile ]] || die 'usage: ./run recipe compile <stamp> | ./run recipe replay <file|stamp> [--url <https://…>] [--no-rescue]'
+	[[ $# -ge 3 || ${2:-} == compile ]] || die 'usage: ./run procedure compile <stamp> | ./run procedure replay <file|stamp> [--url <https://…>] [--no-rescue]'
 	# Replays drive the same single driver session as agent/explore (LIMITATIONS §6).
 	assert_no_run_in_flight
 	shift
-	exec npx tsx src/core/recipe-cli.ts "$@"
+	exec npx tsx src/core/procedure-cli.ts "$@"
 	;;
 
 enroll)

@@ -70,7 +70,7 @@ budgeted input). `auditTaskPrompt()` (`src/core/harness.ts`) rejects hinted prom
 `--hinted` opts in and stamps the run log. This is enforced in code because it was
 violated twice on 2026-07-29 while enforced by memory. Corollary: run logs are written
 only by the harness, never hand-copied; stamped appmaps are never hand-edited (curated
-knowledge goes in `docs/recipes/`, a *different* declared input, `USE_RECIPE=1`).
+knowledge goes in `docs/curated/`, a *different* declared input, `USE_CURATED=1`).
 
 **Revisit if**: never. This one is doctrine (set by David, 2026-07-29).
 
@@ -89,15 +89,15 @@ honest), salvages its map from the transcript if the driver dies, and declares t
 `home` state for run resets. A finished Yarn pass measured 40 min / 96 actions — ~2.8% of
 Jasper's ~24h/app budget (the old "~5–6 min" figure measured a budget-truncated pass).
 
-**Revisit if**: exploration stops paying for itself on some app class, or recipe
+**Revisit if**: exploration stops paying for itself on some app class, or procedure
 compilation (below) subsumes it.
 
-## 4a. Procedures: a third grounding tier, harvested rather than swept (2026-08-01)
+## 4a. Recipes: a third grounding tier, harvested rather than swept (2026-08-01)
 
-An appmap is topology and a compiled recipe is a frozen click sequence; between them sits
+An appmap is topology and a compiled procedure is a frozen click sequence; between them sits
 task-level prose — "here is the route that worked for this goal" — and nothing produced it.
-`./run procedures harvest <stamp>` distils one from a finished run, keyed by (app, backend,
-task, **lineage**), loaded with `USE_PROCEDURES=1` as a REPLACEMENT for the appmap.
+`./run recipes harvest <stamp>` distils one from a finished run, keyed by (app, backend,
+task, **lineage**), loaded with `USE_RECIPES=1` as a REPLACEMENT for the appmap.
 
 Three decisions worth the words:
 
@@ -109,19 +109,19 @@ Three decisions worth the words:
 - **Promotion is a separate, deliberate step.** Harvesting records what a run taught;
   promoting makes it an input to every later run of that task. An input tier appearing as a
   side effect of dispatching a phase is how sample independence dies quietly.
-- **Lineage is part of the key.** A procedure from a run that HAD a map presupposes the sweep;
+- **Lineage is part of the key.** A recipe from a run that HAD a map presupposes the sweep;
   one from an ungrounded run is the honest "can this replace exploration" claim. Different
   experiments, so different files, and the lineage is derived from the source run's recorded
   provenance rather than typed by an operator.
 
-**Revisit if**: procedures measurably replace the exploration pass (phase 6 answers this), or
+**Revisit if**: recipes measurably replace the exploration pass (phase 6 answers this), or
 if the ungrounded lineage proves unharvestable — which would itself answer the onboarding
 question.
 
 ## 4b. Run artifacts: one directory per run, hard-linked backup (2026-08-01)
 
 `out/bench/live/<runKey>/` holds everything a run produces — log, journal, judge verdict,
-appmap, procedure, recipe, step frames, recording, job record, console log. It replaced three
+appmap, recipe, procedure, step frames, recording, job record, console log. It replaced three
 sibling trees keyed by the same stamp. Nothing was lost under the old layout, but every
 consumer needed its own five-way fan-out and each was a place to forget a branch: the fleet
 pull forgot step frames for long enough that the offline judge returned VISUAL UNAVAILABLE for
@@ -130,7 +130,7 @@ a whole matrix.
 `out/bench/archive/<runKey>/` is a hard-linked backup taken when a run terminates — zero disk
 cost on hundreds of megabytes of frames, and it survives the live copy being deleted, which is
 what makes `./run runs drop <stamp>` a safe way to retire a failed run before re-running it.
-Post-terminal writers (recipe compile, procedure harvest) must re-link; `archiveRun` is
+Post-terminal writers (procedure compile, recipe harvest) must re-link; `archiveRun` is
 re-callable for exactly that.
 
 **Revisit if**: live and archive ever land on different filesystems, where the link degrades to
@@ -203,39 +203,39 @@ canonical task: **"show me how to change the cursor type"**.
 **Deferred, with rationale on file**: native-AppKit generalization (out of scope per
 David 2026-07-30 — focus on Electron; two probes ran anyway: Calculator succeeded,
 Hex Fiend failed on activation policy —
-`docs/research/2026-07-30-native-mac-apps-investigation.md`). Recipe compilation was
+`docs/research/2026-07-30-native-mac-apps-investigation.md`). Procedure compilation was
 deferred here until 2026-07-31; it is now built — §8a.
 
-## 8a. Recipe replay: thinking paid once, checking never skipped (2026-07-31)
+## 8a. Procedure replay: thinking paid once, checking never skipped (2026-07-31)
 
-`compileRecipe()` (`src/core/recipe.ts`) freezes a SUCCESSFUL run log into a replayable
-sequence; `replayRecipe()` (`src/core/replay.ts`) re-runs it with zero model calls on
+`compileProcedure()` (`src/core/procedure.ts`) freezes a SUCCESSFUL run log into a replayable
+sequence; `replayProcedure()` (`src/core/replay.ts`) re-runs it with zero model calls on
 the happy path. The decisions that hold it together:
 
 - **Compile only from verified evidence.** Failed runs, unverified steps, pixel-only
-  steps and `--hinted` runs are refused — a recipe asserts effects, and compiling a
+  steps and `--hinted` runs are refused — a procedure asserts effects, and compiling a
   hinted run would launder the hint into a clean-looking artifact.
 - **Volatile handles are stripped; identity is (name, surface, role).** Element indices
   and CDP refs are per-observation walk orders. Each step re-resolves against a fresh
   observation, narrowing progressively; **ambiguity is an error, never a guess** — two
   same-named controls are the §4 dual-scope trap with no model watching.
-- **A recipe is not a trusted macro.** Every replayed step is gated by the same
+- **A procedure is not a trusted macro.** Every replayed step is gated by the same
   `verify()` as a live run (recorded expectation, fresh haystack, discrimination
-  baseline), and the recipe's final evidence is re-checked against a fresh last
+  baseline), and the procedure's final evidence is re-checked against a fresh last
   observation. Replays journal mutations and run teardown like any run.
 - **The model is the exception handler, bounded and harness-checked.** A broken step
-  gets one rescue mini-loop (RECIPE_RESCUE_STEPS, default 3) whose success check is the
-  RECIPE's expectation — teardown's pattern: the model cannot widen a check it did not
+  gets one rescue mini-loop (PROCEDURE_RESCUE_STEPS, default 3) whose success check is the
+  PROCEDURE's expectation — teardown's pattern: the model cannot widen a check it did not
   write. `--no-rescue` is the unattended default posture: a drifted app fails honestly
   and gets re-recorded.
-- Compiled recipes live in `docs/recipes/*.recipe.json` — machine output, stamped with
+- Compiled procedures live in `docs/procedures/*.procedure.json` — machine output, stamped with
   `compiledFrom` + the source run's grounding tier; the never-hand-edit rule applies.
 
 Verified live 2026-07-31: a cdp Wikipedia run (2/2 text-verified) compiled and replayed
 end-to-end — 2/2 steps, final goal check PASSED, 0 model calls.
 
 **Revisit if**: replay failure rates on real drift show the rescue budget is wrong in
-either direction, or recipes need parameterization (today a recipe replays its recorded
+either direction, or procedures need parameterization (today a procedure replays its recorded
 values verbatim; "search for X" with a different X is a new recording).
 
 ## 9. Web targets are a target KIND, not a specially-named app (2026-07-30)

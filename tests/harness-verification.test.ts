@@ -47,7 +47,7 @@ test("auditTaskPrompt__Passes__When__GoalNamesUiSurfacesButNotMechanics", () => 
 });
 
 test("auditTaskPrompt__Passes__When__SingleIncidentalMechanicVerb", () => {
-	// One mechanic verb is usually phrasing, not a recipe; two or more is a dictated path.
+	// One mechanic verb is usually phrasing, not a procedure; two or more is a dictated path.
 	assert.equal(auditTaskPrompt("Create an event by clicking the plus button").hinted, false);
 });
 
@@ -60,7 +60,7 @@ test("auditTaskPrompt__ReportsEveryReason__When__PromptHasMultipleHintKinds", ()
 });
 
 test("auditTaskPrompt__Flags__When__DictatedClickPathRepeatsOneVerb", () => {
-	// A complete method recipe spelling "click" four times is four hints, not one — deduping
+	// A complete method procedure spelling "click" four times is four hints, not one — deduping
 	// them before the threshold used to pass this as goal-only.
 	const audit = auditTaskPrompt("Click Brand Kit, click Screen Clips, click Cursor Style, click Pointer-first");
 	assert.equal(audit.hinted, true);

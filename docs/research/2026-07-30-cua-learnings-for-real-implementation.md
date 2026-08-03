@@ -37,7 +37,7 @@ vendor-specific. The ratio is the headline.
 - **Grounding as a pipeline stage.** explore → stamped appmap → agent: ≈2–2.5× fewer
   actions/tokens and — more importantly — scope *correctness*. Exploration cost 40min/96
   actions ≈ 2.8% of the ~24h/app budget. Provenance discipline (stamped machine output vs
-  curated recipes as separately-declared inputs) exists because contamination happened
+  curated procedures as separately-declared inputs) exists because contamination happened
   twice; it's process, not code.
 - **Measurement hygiene enforced in code.** Goal-only task prompts, `auditTaskPrompt()`,
   harness-written run logs. The rule was violated twice when enforced by memory and zero
@@ -195,7 +195,7 @@ verification holes closed structurally rather than by vigilance. The trial's mos
 expensive lessons were all of the form "a rule enforced by memory was violated within a
 day" — the real implementation should start where that ended.
 
-**Recipe compilation is the production lever either actuator must serve.** Grounding-time
+**Procedure compilation is the production lever either actuator must serve.** Grounding-time
 thinking → deterministic replay with the model as exception handler is the cost/throughput
 story for a fleet (and cua even ships an unused `replay_trajectory`). Whatever backend is
 chosen, recorded actions must be replayable without a model in the loop; CDP makes this

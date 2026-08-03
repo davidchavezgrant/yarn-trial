@@ -1,4 +1,4 @@
-<!-- provenance: procedure | app: Yarn | task: show me how to change the cursor type | from: 2026-08-01T19-54-18-799-yarn | judge: PASS | backend: ax | lineage: grounded -->
+<!-- provenance: recipe | app: Yarn | task: show me how to change the cursor type | from: 2026-08-01T19-54-18-799-yarn | judge: PASS | backend: ax | lineage: grounded -->
 
 1. Click **New Draft** to open a draft editor. Confirm the editor shows **Project actions** and the script entry area.
 

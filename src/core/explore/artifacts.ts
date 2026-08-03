@@ -11,7 +11,7 @@ import { archiveRun } from "../../paths.js";
  * Machine-readable stamp distinguishing autonomous exploration output from
  * hand-curated notes. loadGrounding() in agent.ts treats unstamped appmaps as
  * "curated" and the run log records the difference — hand edits to a stamped
- * file MUST remove the stamp (or move the file to docs/recipes/).
+ * file MUST remove the stamp (or move the file to docs/procedures/).
  */
 export const provenanceHeader = (p: {
 	app: string;
@@ -52,7 +52,7 @@ export const provenanceHeader = (p: {
 			// itself is the only witness to what it saw, so these tallies cannot bound coverage.
 			"<!-- controls tallies are DECLARED — self-reported by the model from screenshots, not measured against an element list. A control the pass never declared is invisible to these numbers. -->\n"
 		: "<!-- controls actuated/seen is a LOWER BOUND ON BREADTH, not a coverage percentage: the denominator only grows as surfaces are opened, and operating a control is not understanding it. -->\n") +
-	"<!-- Written by src/core/explore.ts. DO NOT HAND-EDIT: edits make this a curated recipe, not exploration output — move such notes to docs/recipes/<app>.md instead. -->\n\n";
+	"<!-- Written by src/core/explore.ts. DO NOT HAND-EDIT: edits make this a curated procedure, not exploration output — move such notes to docs/curated/<app>.md instead. -->\n\n";
 
 export const hm = (ms: number): string => {
 	const m = Math.max(0, Math.round(ms / 60000));

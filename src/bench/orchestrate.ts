@@ -6,7 +6,7 @@ import { CHALLENGER_N, challengerNeedsExplore, planChallenger } from "./challeng
 import { collect } from "./collect.js";
 import { manifestCost } from "./cost.js";
 import { fetchTrueCost, reconcile } from "./truecost.js";
-import { BENCH_APP, BENCH_PRIMARY_MODEL, MATRIX, PHASES, armById, discoveryArmsFor, flagsLine, isPhase, perceptionLine, armModel, phaseArms, phaseRunCount, procedureArms, stageCompiles, stageNeedsMaps, stageOf, type Arm, type Phase } from "./matrix.js";
+import { BENCH_APP, BENCH_PRIMARY_MODEL, MATRIX, PHASES, armById, discoveryArmsFor, flagsLine, isPhase, perceptionLine, armModel, phaseArms, phaseRunCount, recipeArms, stageCompiles, stageNeedsMaps, stageOf, type Arm, type Phase } from "./matrix.js";
 import {
 	entriesForArm,
 	type Manifest,
@@ -34,15 +34,15 @@ import {
  *
  * Top-up semantics: an arm with entries already in today's manifest only submits the
  * difference up to its n. Re-running a phase after a partial submit (or for phase 3/4's
- * second wave, where replays need a compiled recipe) is therefore safe and cheap.
+ * second wave, where replays need a compiled procedure) is therefore safe and cheap.
  */
 
 /**
  * The wire contract MERGED, and this type went with it.
  *
  * It used to be `Omit<DispatchOptions, "kind"> &` eleven redeclared fields, because
- * `DispatchOptions` did not yet carry `backend`/`noAx`/`axdomOff`/`noGrounding`/`useRecipe`/
- * `recipe`/`noRescue`/`url`/`appmapVariant`/`model` and `JobKind` had no `"replay"`. All of
+ * `DispatchOptions` did not yet carry `backend`/`noAx`/`axdomOff`/`noGrounding`/`useCurated`/
+ * `procedure`/`noRescue`/`url`/`appmapVariant`/`model` and `JobKind` had no `"replay"`. All of
  * them landed (dispatch.ts declares each, jobs.ts's union includes replay), so the local copy
  * was duplication and the `as DispatchOptions` at the call site had stopped bridging a gap and
  * started suppressing real type errors — a cast that outlives its reason is worse than the
@@ -75,8 +75,8 @@ export interface PhaseOptions {
 	 */
 	host?: string;
 	compileFn?: CompileFn;
-	/** Where promoted procedures live (phase-6 gate). Injected by tests; defaults to paths'. */
-	proceduresDir?: string;
+	/** Where promoted recipes live (phase-6 gate). Injected by tests; defaults to paths'. */
+	recipesDir?: string;
 	log?: (line: string) => void;
 }
 
@@ -111,7 +111,7 @@ export function plannedRuns(phase: Phase, manifest: Manifest, model?: string): P
 }
 
 /** The DispatchOptions a planned run crosses with. Task text goes over VERBATIM (property 1). */
-export function dispatchOptionsFor(arm: Arm, recipe?: string, model?: string): DispatchOptions {
+export function dispatchOptionsFor(arm: Arm, procedure?: string, model?: string): DispatchOptions {
 	const d = arm.dispatch;
 
 	return {
@@ -127,9 +127,9 @@ export function dispatchOptionsFor(arm: Arm, recipe?: string, model?: string): D
 		...(d.noAx ? { noAx: true } : {}),
 		...(d.axdomOff ? { axdomOff: true } : {}),
 		...(d.noGrounding ? { noGrounding: true } : {}),
-		...(d.useRecipe ? { useRecipe: true } : {}),
-		...(d.useProcedures ? { useProcedures: true } : {}),
-		...(d.procedureLineage ? { procedureLineage: d.procedureLineage } : {}),
+		...(d.useCurated ? { useCurated: true } : {}),
+		...(d.useRecipes ? { useRecipes: true } : {}),
+		...(d.recipeLineage ? { recipeLineage: d.recipeLineage } : {}),
 		// `record` is the DELIVERABLE flag: without it phase 5 is not "unfilmed", it is a
 		// bit-identical re-run of its phase-2 sibling under a different arm id — 16 runs of
 		// plausible, wrong-labelled data producing no footage. `filmed()` derives those arms by
@@ -139,7 +139,7 @@ export function dispatchOptionsFor(arm: Arm, recipe?: string, model?: string): D
 		...(d.snapPx !== undefined ? { snapPx: d.snapPx } : {}),
 		...(d.noRescue ? { noRescue: true } : {}),
 		...(d.url ? { url: d.url } : {}),
-		...(recipe ? { recipe } : {}),
+		...(procedure ? { procedure } : {}),
 		// The one env arm has a first-class wire field now: the runner validates the variant
 		// and sets APPMAP_VARIANT on the child. Anything else in arm.env has no wire lane and
 		// would silently not reach the run — refuse loudly at plan time, not here.
@@ -183,7 +183,7 @@ export function findCompileSource(manifest: Manifest, sourceArmId: string, tried
 
 /**
  * Phase 3/4 compiles, run LOCALLY: a compile is a pure file transform on a pulled run log
- * (recipe-cli's compileFromStamp keeps every refusal gate). A refusal is recorded in the
+ * (procedure-cli's compileFromStamp keeps every refusal gate). A refusal is recorded in the
  * manifest as a failed-but-collected entry — "what the gate refuses" is a phase-3 datum,
  * not an orchestrator error.
  */
@@ -191,9 +191,9 @@ async function runCompiles(phase: Phase, manifest: Manifest, opts: Required<Pick
 	const compileFn = opts.compileFn ?? (await defaultCompile());
 	let m = manifest;
 	for (const arm of phaseArms(phase).filter((a) => a.kind === "compile")) {
-		// A recipe on file is the done condition — a recorded REFUSAL does not retire the arm,
+		// A procedure on file is the done condition — a recorded REFUSAL does not retire the arm,
 		// so a later collect that lands a cleaner source run gets the compile retried.
-		if (entriesForArm(m, arm.id, opts.model).some((e) => e.recipe)) {
+		if (entriesForArm(m, arm.id, opts.model).some((e) => e.procedure)) {
 			opts.log(`${arm.id}: already compiled — skipping`);
 			continue;
 		}
@@ -215,7 +215,7 @@ async function runCompiles(phase: Phase, manifest: Manifest, opts: Required<Pick
 		};
 		try {
 			const { path } = compileFn(source.jobId);
-			m = recordSubmissions(m, [{ ...entry, recipe: relToData(path) }]);
+			m = recordSubmissions(m, [{ ...entry, procedure: relToData(path) }]);
 			opts.log(`${arm.id}: compiled ${source.jobId} -> ${relToData(path)}`);
 		} catch (e) {
 			m = recordSubmissions(m, [{ ...entry, state: "failed", note: `compile refused: ${(e as Error).message}` }]);
@@ -227,9 +227,9 @@ async function runCompiles(phase: Phase, manifest: Manifest, opts: Required<Pick
 	return m;
 }
 
-/** The recipe a replay arm replays: its compile arm's manifest entry, when the compile succeeded. */
-const recipeFor = (manifest: Manifest, arm: Arm, model?: string): string | undefined =>
-	entriesForArm(manifest, arm.sourceArm ?? "", model).find((e) => e.recipe && e.state === "done")?.recipe;
+/** The procedure a replay arm replays: its compile arm's manifest entry, when the compile succeeded. */
+const procedureFor = (manifest: Manifest, arm: Arm, model?: string): string | undefined =>
+	entriesForArm(manifest, arm.sourceArm ?? "", model).find((e) => e.procedure && e.state === "done")?.procedure;
 
 /**
  * Dispatch the challenger slice. Deliberately NOT a phase: its arms are resolved from
@@ -419,57 +419,57 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 	}
 
 	/**
-	 * Phase 6 needs a PROMOTED procedure per arm, which no phase produces — harvesting and
+	 * Phase 6 needs a PROMOTED recipe per arm, which no phase produces — harvesting and
 	 * promoting are deliberate operator steps (see harvest.ts for why). Without this gate a
-	 * missing procedure only warns on the child's console and the run proceeds as an ordinary
-	 * appmap-grounded one: six runs of data labelled "procedure" that measured the appmap tier.
+	 * missing recipe only warns on the child's console and the run proceeds as an ordinary
+	 * appmap-grounded one: six runs of data labelled "recipe" that measured the appmap tier.
 	 * groundingChecked catches it, but only at collect, after the runs are paid for.
 	 *
-	 * PER ARM since 2026-08-01: an arm without its procedure is SKIPPED loudly, the rest
+	 * PER ARM since 2026-08-01: an arm without its recipe is SKIPPED loudly, the rest
 	 * dispatch. All-or-nothing meant the arm most likely to be unharvestable (the ungrounded
 	 * lineage — a judged-PASS ungrounded run is rare by design) held the runnable arms hostage.
 	 * Only when EVERY arm is missing does the phase refuse outright, as before.
 	 */
-	let missingProcedures = new Set<string>();
-	if (procedureArms(phase).length > 0 && !opts.force) {
-		const { proceduresDir } = await import("../paths.js");
-		const { procedureFileFor } = await import("../core/procedure.js");
+	let missingRecipes = new Set<string>();
+	if (recipeArms(phase).length > 0 && !opts.force) {
+		const { recipesDir } = await import("../paths.js");
+		const { recipeFileFor } = await import("../core/recipe.js");
 		const fs6 = await import("node:fs");
-		const dir = opts.proceduresDir ?? proceduresDir();
+		const dir = opts.recipesDir ?? recipesDir();
 		const wanted = (a: (typeof MATRIX)[number]): string =>
-			procedureFileFor(dir, appSlug(a.app), a.task ?? "", a.dispatch.backend, a.dispatch.procedureLineage ?? "grounded");
-		const missing = procedureArms(phase).filter((a) => !fs6.existsSync(wanted(a)));
+			recipeFileFor(dir, appSlug(a.app), a.task ?? "", a.dispatch.backend, a.dispatch.recipeLineage ?? "grounded");
+		const missing = recipeArms(phase).filter((a) => !fs6.existsSync(wanted(a)));
 		/**
 		 * Refuse outright only when skipping the blocked arms would leave NOTHING to dispatch.
 		 *
-		 * The old rule — every procedure arm missing → refuse the phase — was written when a
-		 * phase WAS the procedure tier and the two statements meant the same thing. After the
-		 * stage reorganisation they do not: Generalization holds one procedure arm among
-		 * twenty-two, so a single unharvested procedure would have refused the whole stage and
+		 * The old rule — every recipe arm missing → refuse the phase — was written when a
+		 * phase WAS the recipe tier and the two statements meant the same thing. After the
+		 * stage reorganisation they do not: Generalization holds one recipe arm among
+		 * twenty-two, so a single unharvested recipe would have refused the whole stage and
 		 * taken sixty runs of task-and-model work down with it. Skip-loudly is already the
 		 * per-arm behaviour; this just stops the all-missing shortcut from over-reaching.
 		 */
 		const dispatchable = phaseArms(phase).filter((a) => a.kind !== "compile");
 		if (missing.length && missing.length === dispatchable.length && opts.go) {
-			log(`REFUSED: every dispatchable arm in this stage grounds on a promoted procedure, and none exists.`);
-			log(`Workflow: runs land → \`./run bench judge\` → \`./run bench harvest\` → \`./run procedures promote <stamp>\`, then re-run.`);
+			log(`REFUSED: every dispatchable arm in this stage grounds on a promoted recipe, and none exists.`);
+			log(`Workflow: runs land → \`./run bench judge\` → \`./run bench harvest\` → \`./run recipes promote <stamp>\`, then re-run.`);
 			log(`Expected at: ${missing.map((a) => relToData(wanted(a))).join(", ")}`);
 
 			return EXIT_REFUSED;
 		}
 		if (missing.length) {
-			missingProcedures = new Set(missing.map((a) => a.id));
-			for (const a of missing) log(`– ${a.id}: no promoted procedure at ${relToData(wanted(a))} — SKIPPED (harvest + promote a source run, then re-run phase 6)`);
+			missingRecipes = new Set(missing.map((a) => a.id));
+			for (const a of missing) log(`– ${a.id}: no promoted recipe at ${relToData(wanted(a))} — SKIPPED (harvest + promote a source run, then re-run phase 6)`);
 		}
 	}
 
 	// Compiles are local and cheap, but they are still phase work — gated like everything else.
 	if (opts.go && stageCompiles(phase)) manifest = await runCompiles(phase, manifest, { ...opts, log });
 
-	const planned = plannedRuns(phase, manifest, opts.model).filter((p) => !missingProcedures.has(p.arm.id));
-	// Resolve replay recipes AFTER compiles so a single --go does compile-then-replay when
-	// the sources are already collected; a missing recipe defers the replay to a later re-run.
-	const ready = planned.filter((p) => p.arm.kind !== "replay" || recipeFor(manifest, p.arm, opts.model) !== undefined);
+	const planned = plannedRuns(phase, manifest, opts.model).filter((p) => !missingRecipes.has(p.arm.id));
+	// Resolve replay procedures AFTER compiles so a single --go does compile-then-replay when
+	// the sources are already collected; a missing procedure defers the replay to a later re-run.
+	const ready = planned.filter((p) => p.arm.kind !== "replay" || procedureFor(manifest, p.arm, opts.model) !== undefined);
 	const deferred = planned.filter((p) => !ready.includes(p));
 
 	if (!opts.go) {
@@ -493,8 +493,8 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 	let submitted = 0;
 	let refused = 0;
 	for (const p of ready) {
-		const recipe = p.arm.kind === "replay" ? recipeFor(manifest, p.arm, opts.model) : undefined;
-		const result = await dispatchFn({ ...dispatchOptionsFor(p.arm, recipe, opts.model), ...(opts.host ? { host: opts.host } : {}) });
+		const procedure = p.arm.kind === "replay" ? procedureFor(manifest, p.arm, opts.model) : undefined;
+		const result = await dispatchFn({ ...dispatchOptionsFor(p.arm, procedure, opts.model), ...(opts.host ? { host: opts.host } : {}) });
 		if (!result.ok) {
 			refused++;
 			log(`✗ ${p.arm.id} [${p.sample + 1}/${p.arm.n}]: ${result.error}`);
@@ -517,7 +517,7 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 				// whole arm every pass: three arms sat at n=6 with the wrong model on all six.
 				...(armModel(p.arm, opts.model) ? { model: armModel(p.arm, opts.model) } : {}),
 				...(p.arm.env ? { env: p.arm.env } : {}),
-				...(recipe ? { recipe } : {}),
+				...(procedure ? { procedure } : {}),
 			},
 		]);
 		// After every accept, not at the end: a dead laptop mid-phase must not orphan the
@@ -537,7 +537,7 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 /** `bench plan` — the whole resolved matrix, no side effects. */
 export function printPlan(log: (line: string) => void = console.log): void {
 	const total = MATRIX.reduce((sum, a) => sum + a.n, 0);
-	log(`benchmark matrix — ${MATRIX.length} arms, ${total} runs (dom cut; Notion cut entirely; procedures added 2026-08-01 — reasons in matrix.ts)`);
+	log(`benchmark matrix — ${MATRIX.length} arms, ${total} runs (dom cut; Notion cut entirely; recipes added 2026-08-01 — reasons in matrix.ts)`);
 	for (const phase of PHASES) {
 		const st = stageOf(phase);
 		const note = [st?.inCorePass ? "" : "optional", st?.before?.length ? `needs ${st.before.join(" → ")} first` : "", st?.note]
@@ -567,9 +567,9 @@ async function defaultDispatch(): Promise<DispatchFn> {
 }
 
 async function defaultCompile(): Promise<CompileFn> {
-	// Lazy: recipe-cli drags the driver + SDK at import time, which `bench plan` and every
+	// Lazy: procedure-cli drags the driver + SDK at import time, which `bench plan` and every
 	// test must not pay for.
-	const { compileFromStamp } = await import("../core/recipe-cli.js");
+	const { compileFromStamp } = await import("../core/procedure-cli.js");
 
 	return (stamp) => ({ path: compileFromStamp(stamp).path });
 }
@@ -703,10 +703,10 @@ autopilot
          Without --go: prints the plan and current progress, dispatches nothing. Your --go
          here is David's explicit-go gate, given once for the printed span. Holds no leash:
          Ctrl-C never touches a run, and re-running resumes from the manifest.
-harvest  turns judged-PASS phase-2 runs into procedures — prose describing the route that
+harvest  turns judged-PASS phase-2 runs into recipes — prose describing the route that
          worked, for a later agent to ground on. Refuses any run the judge did not pass, so
          run \`bench judge\` first. Writes into each run's own folder; promoting one into
-         docs/procedures/ (\`./run procedures promote <stamp>\`) is a SEPARATE, deliberate step,
+         docs/recipes/ (\`./run recipes promote <stamp>\`) is a SEPARATE, deliberate step,
          because that is what makes it an input to phase 6.`;
 
 async function main(argv: string[]): Promise<number> {

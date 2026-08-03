@@ -132,13 +132,13 @@ export async function executeAction(
 	 * Which of several identical twins this action operated, 0-based — recorded ONLY when
 	 * name+role+surface genuinely fail to separate them.
 	 *
-	 * Yarn's Library has two controls named "New Draft". A compiled recipe described the target
+	 * Yarn's Library has two controls named "New Draft". A compiled procedure described the target
 	 * by identity alone, so replay could not tell them apart and correctly refused rather than
 	 * guess — which stopped every no-rescue replay on step 1, 0/3 with zero model calls. The
 	 * recording always knew which one it used; it simply never wrote it down.
 	 *
-	 * Undefined when identity already resolves, so a recipe carries an index only where an index
-	 * is the last thing left. See RecipeTarget.ordinal for why that ordering matters.
+	 * Undefined when identity already resolves, so a procedure carries an index only where an index
+	 * is the last thing left. See ProcedureTarget.ordinal for why that ordering matters.
 	 */
 	const targetOrdinal = ((): number | undefined => {
 		if (!target) return undefined;
@@ -485,7 +485,7 @@ export async function executeAction(
 		// that the recording frames show — instead of the stale observation's rect.
 		// `targetSurface` comes off the observation element in BOTH branches, including the demo
 		// one: DemoPlan.target carries only the geometry it re-resolved, while the surface is a
-		// property of the control in the tree and is the same either way. Recipe replay needs it
+		// property of the control in the tree and is the same either way. Procedure replay needs it
 		// to separate two same-named controls (see StepRecord.targetSurface).
 		...(plan?.target
 			? {
