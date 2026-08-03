@@ -144,7 +144,9 @@ function commitGraph(p: { graphPath: string; outPath: string }, nodes: number): 
 	fs.writeFileSync(p.outPath, "# committed map\n");
 	fs.writeFileSync(
 		p.graphPath,
-		JSON.stringify({ app: "Yarn", capturedAt: "2026-08-01T00:00:00.000Z", provenance: "explore", nodes: Array.from({ length: nodes }, (_, i) => ({ id: `n${i}` })), edges: [] }),
+		// TODAY's stamp: only a map from THIS pass can withhold a fresh one, so a fixed past date
+		// would make the committed map a different pass's and the withhold would (correctly) not fire.
+		JSON.stringify({ app: "Yarn", capturedAt: new Date().toISOString(), provenance: "explore", nodes: Array.from({ length: nodes }, (_, i) => ({ id: `n${i}` })), edges: [] }),
 	);
 }
 

@@ -160,9 +160,14 @@ export const writeArtifacts = (p: Pass, out: FinishInput, stopped: StopReason, s
 	 * demoted to the salvage files alongside it, promoted by hand.
 	 */
 	let committedNodes = 0;
+	let committedAt = "";
 	try {
-		committedNodes = ((JSON.parse(fs.readFileSync(p.graphPath, "utf8")) as AppMap).nodes ?? []).length;
+		const committed = JSON.parse(fs.readFileSync(p.graphPath, "utf8")) as AppMap;
+		committedNodes = (committed.nodes ?? []).length;
+		committedAt = committed.capturedAt ?? "";
 	} catch {} // no committed map, or an unparseable one — nothing to protect
+	/** Same UTC day = same pass; a pass is keyed by date. */
+	const committedThisPass = committedAt.slice(0, 10) === new Date().toISOString().slice(0, 10);
 	/**
 	 * `frontier-conceded` is a model finish but NOT a publishable one, and the distinction is the
 	 * whole reason the concede exit is safe to offer.
@@ -216,7 +221,10 @@ export const writeArtifacts = (p: Pass, out: FinishInput, stopped: StopReason, s
 	 * the new one by hand — the `cp` lines below are that path. Safe here because the fleet pins
 	 * one build and these maps are structural rather than instance-bound.
 	 */
-	const smallerThanCommitted = committedNodes > 0 && p.graphNodes.size < committedNodes;
+	// Only a map from THIS pass can withhold this one. Across passes the fresh map publishes even
+	// when it is smaller, or the pass grounds phase 2 on a previous pass's maps — which is exactly
+	// what happened on 2026-08-03, for 5 of 11 arms, invisibly to the phase-2 gate.
+	const smallerThanCommitted = committedThisPass && committedNodes > 0 && p.graphNodes.size < committedNodes;
 	const demoted = salvaged || stopped === "frontier-conceded" || (!modelFinished && !beatsBaseline) || smallerThanCommitted;
 	// The run's own copy is written ALWAYS, and first: whatever this pass produced belongs with
 	// the pass, at a path nothing later can overwrite. Publishing to docs/appmaps is the separate,

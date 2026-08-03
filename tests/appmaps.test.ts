@@ -115,10 +115,36 @@ test("beats__HoldsThemEqual__When__TheStampsAreIdentical", () => {
  * `explore-ax`'s 120-node map over its 166-node sibling.
  */
 test("beats__PrefersTheLargerMap__When__BothCarryNodeCounts", () => {
-	const bigOld = version("yarn", "2026-07-29T09:00:00.000Z", 166);
-	const smallNew = version("yarn", "2026-07-30T11:03:00.000Z", 120);
+	// SAME DAY, because that is the case the rule is for: two samples of one arm finishing minutes
+	// apart. The fixture used to straddle two dates, which the same-pass scoping later made wrong.
+	const bigOld = version("yarn", "2026-08-01T09:00:00.000Z", 166);
+	const smallNew = version("yarn", "2026-08-01T11:03:00.000Z", 120);
 	assert.equal(beats(bigOld, smallNew), true, "the larger map wins even though it is older");
 	assert.equal(beats(smallNew, bigOld), false, "and the newer smaller one does not take the slot back");
+});
+
+/**
+ * ACROSS passes, recency wins even when the older map is bigger (David, 2026-08-03).
+ *
+ * Coverage-beats-recency exists to pick between two samples of ONE pass. Applied across passes it
+ * stops a pass grounding on itself: on the day the rule landed a fresh 158-node yarn.cdp.novision
+ * was refused by an 08-01 map of 170, and 5 of 11 arm maps at phase-2 dispatch belonged to an
+ * earlier pass — while the phase-2 gate still called the pass self-grounded, because its premise
+ * is that this pass's explores overwrite the last one's.
+ */
+test("beats__PrefersTheFresherMap__When__TheBiggerOneIsFromAnEarlierPass", () => {
+	const bigOld = version("yarn", "2026-08-01T14:11:03.216Z", 170);
+	const smallNew = version("yarn", "2026-08-03T17:46:22.302Z", 158);
+	assert.equal(beats(smallNew, bigOld), true, "a different pass's map must not block this pass's");
+	assert.equal(beats(bigOld, smallNew), false);
+});
+
+/** Within one pass the original rule still holds: the fuller map takes the slot. */
+test("beats__PrefersTheLargerMap__When__BothWereCapturedInTheSamePass", () => {
+	const bigEarly = version("yarn", "2026-08-03T09:00:00.000Z", 249);
+	const smallLate = version("yarn", "2026-08-03T17:00:00.000Z", 120);
+	assert.equal(beats(bigEarly, smallLate), true, "same day: coverage decides");
+	assert.equal(beats(smallLate, bigEarly), false);
 });
 
 /** Equal coverage carries no signal, so the stamp decides — and a re-run of an arm still lands. */

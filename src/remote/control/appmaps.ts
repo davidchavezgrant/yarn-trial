@@ -187,6 +187,9 @@ export function readRecipes(dir: string): Map<string, MapVersion> {
  * there is no evidence either way, and overwriting on no evidence is how a good map gets
  * replaced by a worse one.
  */
+/** Two maps belong to the same pass when they were captured on the same UTC day — a pass is keyed by date. */
+const sameCapture = (a?: string, b?: string): boolean => Boolean(a && b && a.slice(0, 10) === b.slice(0, 10));
+
 export function beats(a: MapVersion, b: MapVersion): boolean {
 	// COVERAGE FIRST, recency second (David, 2026-08-03). Two samples of one arm land minutes
 	// apart on different Macs, and the old rule handed the slot to whichever finished later —
@@ -206,7 +209,13 @@ export function beats(a: MapVersion, b: MapVersion): boolean {
 	// (0.0.119 on all three Macs, checked) and these maps are structural, so a larger older map
 	// does not describe a UI that has moved. If the target app ever ships a UI change mid-pass,
 	// this rule will hold the pre-change map until someone promotes the new one by hand.
-	if (a.nodes !== undefined && b.nodes !== undefined && a.nodes !== b.nodes) return a.nodes > b.nodes;
+	// SAME PASS ONLY (David, 2026-08-03). Coverage beats recency between two samples of one pass,
+	// which is the case it was built for; across passes recency wins, or a pass stops grounding on
+	// itself. Observed the day the rule landed: a fresh 158-node yarn.cdp.novision was refused by
+	// an 08-01 map of 170, and 5 of 11 arm maps at phase-2 dispatch belonged to an earlier pass —
+	// while `hasCollectedExplores` still reported the pass self-grounded, because its premise is
+	// that this pass's explores overwrite the last one's.
+	if (sameCapture(a.capturedAt, b.capturedAt) && a.nodes !== undefined && b.nodes !== undefined && a.nodes !== b.nodes) return a.nodes > b.nodes;
 	// Equal coverage, or either side prose-only: fall back to the stamp. Strictly-greater keeps
 	// the tie behaviour the transfer planner depends on — ties go to the earlier source, and
 	// `local` is passed first, so two maps stamped in the same millisecond do not ping-pong.
