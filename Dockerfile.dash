@@ -13,8 +13,15 @@
 # into the runtime drags Electron (~150 MB) along with it, and a compile is where a broken
 # deploy should fail — at build time, not on the first request.
 
+# PLATFORM IS PINNED, not inherited from the build host. Every Mac here is Apple Silicon, so an
+# unpinned `docker build` produces linux/arm64 — and Render rejects it outright ("Images must be
+# built with the platform linux/amd64"), which is the good failure. Cloud Run and Fargate would
+# take the arm64 image and then need matching arm runtimes, which is the bad one. Pinning both
+# stages means the image is the same wherever it is built, and it is what makes npm resolve
+# @trycua/cua-driver-linux-x64-gnu rather than the arm64 sibling.
+#
 # ---- build: compile src/ to plain JS ---------------------------------------------------------
-FROM node:22-slim AS build
+FROM --platform=linux/amd64 node:22-slim AS build
 WORKDIR /app
 # The lockfile alone first, so a source edit does not invalidate the dependency layer.
 COPY package.json package-lock.json ./
@@ -25,7 +32,7 @@ COPY electron/ ./electron/
 RUN npx tsc -p tsconfig.electron.json
 
 # ---- runtime -------------------------------------------------------------------------------
-FROM node:22-slim AS runtime
+FROM --platform=linux/amd64 node:22-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 # --omit=dev drops Electron, tsx and typescript. The three runtime packages that remain

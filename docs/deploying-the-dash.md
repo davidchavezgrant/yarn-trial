@@ -68,13 +68,55 @@ docker build -f Dockerfile.dash -t yarn-dash:2026-08-01 .
 docker run --rm -p 8080:10000 -e PORT=10000 -e DASH_AUTH='user:pass' yarn-dash:2026-08-01
 ```
 
-### Render
+### Render — DEPLOYED 2026-08-03
 
-`render.yaml` is committed as a Blueprint. Apply via Blueprints → New Blueprint Instance, or
-drive the REST API with a `RENDER_API_KEY`. Two notes: `DASH_AUTH` is `sync: false`, so Render
-prompts and stores it as a secret — never commit the value; and a build-from-repo needs the
-snapshot in git (`git add -f snapshots/current`), which is the argument for pushing a prebuilt
-image instead.
+Live in the **Yarn** workspace (`tea-c9b5apvho1kjc8a5l9t0`), from a private image:
+
+| | |
+|---|---|
+| URL | <https://yarn-bench-dash.onrender.com> (Basic auth) |
+| service | `srv-d9o382u7bikc73csivm0` · starter · oregon · `autoDeploy: no` |
+| image | `ghcr.io/davidchavezgrant/yarn-bench-dash:2026-08-01` (**private** package) |
+| registry credential | `rgc-d9o36ptaeets73cvdgl0` (`ghcr-davidchavezgrant`) |
+| health check | `/healthz` |
+
+Why an image and not build-from-repo: `davidchavezgrant/yarn-trial` **is a public GitHub repo**
+(verified `"private": false`, 2026-08-03 — earlier notes calling it private are stale). A
+build-from-repo needs `git add -f snapshots/current`, which would publish 852 run logs, per-run
+costs and appmaps of Yarn's app to a public repo. The image path keeps all of it out of git.
+
+`render.yaml` remains committed for the build-from-repo route, should the repo ever go private.
+
+**The CLI cannot create services** — `render services` only lists, and the CLI's own token 401s
+against `api.render.com`. Creation needs a REST API key (Dashboard → Account Settings → API
+Keys): `POST /v1/registrycredentials`, then `POST /v1/services` with `image.imagePath` +
+`registryCredentialId` and `serviceDetails.env: "image"`.
+
+**Build for linux/amd64 or Render rejects the image.** Every Mac here is Apple Silicon, so an
+unpinned build produces arm64 and `POST /v1/services` fails with *"points to an image with an
+invalid platform"*. `Dockerfile.dash` pins `--platform=linux/amd64` on both stages, and a
+cross-build needs buildx, not the classic builder:
+
+```bash
+docker buildx build --platform linux/amd64 -f Dockerfile.dash \
+  -t ghcr.io/davidchavezgrant/yarn-bench-dash:<date> --push .
+```
+
+Pushing to ghcr needs `write:packages` on the gh token
+(`gh auth refresh -h github.com -s write:packages,read:packages`), then
+`gh auth token | docker login ghcr.io -u <user> --password-stdin`.
+
+**Redeploying a new pass:** snapshot → buildx build/push under a new tag → `PATCH
+/v1/services/srv-d9o382u7bikc73csivm0` with the new `imagePath` → `POST …/deploys`. `autoDeploy`
+is off deliberately: the image is data, and data should not redeploy because a registry tag moved.
+
+#### Hygiene debt on this deployment
+
+The registry credential holds a **broadly-scoped personal token** — the same `gh` OAuth token
+that carries `repo`, `workflow`, `gist` and `write:packages`, stored in the *company's* Render
+workspace where other members can use it to pull. Replace it with a fine-grained PAT scoped to
+`read:packages` on that one package, and note that `gho_` tokens expire, which would break image
+pulls at some later date with a confusing "unauthorized" on deploy.
 
 ### Google Cloud Run — the least work per deploy
 
