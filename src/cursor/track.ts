@@ -857,6 +857,10 @@ export interface BuildTrackInput {
 	stamp: string;
 	app: string;
 	task: string;
+	/** Which backend DROVE the run, as recorded in the run log — not what was asked for. Decides
+	 *  whether the app painted its own hover highlight into the frames; see the hover block in
+	 *  buildTrack. Absent (a run log too old to record it) is treated as "it did not". */
+	backend?: string;
 	runLog: string;
 	steps: RunLogStep[];
 	turns: TrajectoryTurn[];
@@ -887,6 +891,10 @@ export interface BuildTrackInput {
 export function buildTrack(input: BuildTrackInput): MotionTrack {
 	const rand = makeRandom(input.seed ?? 0x5eed);
 	const allJoined = joinSteps(input.steps, input.turns);
+	// The CDP path moves an injected pointer onto the target and dwells there, so the app's own
+	// `:hover` fires and lands in frames. Every other actuation path clicks without a pointer
+	// ever resting on the control.
+	const appPaintsHover = input.backend === "cdp";
 
 	/**
 	 * Decide which actions the take contains BEFORE building the timeline, because dropping an
@@ -1119,29 +1127,29 @@ export function buildTrack(input: BuildTrackInput): MotionTrack {
 			at = target;
 			cursor.push({ tMs: dispatchMs, x: at.x, y: at.y, type });
 			/**
-			 * Light the control up while the pointer waits on it.
+			 * Light the control up from the same crossing, so tint and pointer change together —
+			 * but only when the app did not light it up itself.
 			 *
-			 * The app itself almost never does: AX actuation leaves the physical pointer wherever
-			 * it was, so no mouseover fires and no highlight is painted — on one run the real
-			 * pointer was inside the window for 12 of 164 frames. A cursor resting on a control
-			 * that stays inert reads as not really being there.
+			 * On AX it never does: actuation leaves the physical pointer wherever it was, so no
+			 * mouseover fires — on one run the real pointer was inside the window for 12 of 164
+			 * frames. A cursor resting on a control that stays inert reads as not really being
+			 * there, and a synthetic tint is the only thing available.
+			 *
+			 * On CDP the app paints its own, and as of 2026-08-03 we film it: an injected
+			 * mouse.move fires genuine `:hover`, and DEMO_DWELL_MS now outlasts the frame
+			 * cadence so a frame lands inside the dwell (measured 3–4 frames per click, the
+			 * control's own rect changing 50–64%). Real pixels beat a 6% darkening we invented,
+			 * so stop inventing one. This gate is why the dwell constant and this file have to
+			 * move together: shorten the dwell again and CDP takes lose hover entirely.
 			 *
 			 * Only when the step recorded the control's own rect. Inferring a box from the cursor
 			 * position would put a highlight on whatever the pointer happens to overlap, including
 			 * nothing at all.
 			 */
-			/**
-			 * Light the control up from the same crossing, so tint and pointer change together.
-			 *
-			 * The app itself almost never paints a hover: AX actuation leaves the physical pointer
-			 * wherever it was, so no mouseover fires — on one run the real pointer was inside the
-			 * window for 12 of 164 frames. A cursor resting on a control that stays inert reads as
-			 * not really being there.
-			 */
 			const hoverFrom = moveStart + enterAt * squeeze;
 			// The click can precede the pointer's arrival when an action's footage was trimmed, and
 			// a span that ends before it starts renders as a permanent highlight.
-			if (rectForHover && completeMs > hoverFrom)
+			if (!appPaintsHover && rectForHover && completeMs > hoverFrom)
 				hovers.push({
 					startMs: hoverFrom,
 					endMs: completeMs,

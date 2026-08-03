@@ -490,12 +490,31 @@ export function webPageChoice(urls: string[], origin: string): { index: number; 
 }
 
 /**
- * Demo-mode pointer pacing. The dwell sits between the move and the press so a :hover
- * transition has real wall-clock to render before the click's effect replaces it —
- * 150–250ms per the plan; long enough for a CSS transition, short enough not to read as
- * hesitation. The press delay holds the button down like a finger, not a zero-width tap.
+ * Slowest observed gap between two captured frames during an act: p90 579ms, max 634ms over
+ * the 146 frames of run 2026-08-02T18-51-49-069. The frame loop ASKS for 120ms
+ * (RESPONSE_POLL_MS in src/core/agent/recording.ts), but each page.screenshot() costs ~220ms
+ * on top, and that is the number that governs — not one gap in that run came in under 220ms.
  */
-const DEMO_DWELL_MS = 200;
+const FRAME_GAP_CEILING_MS = 640;
+
+/**
+ * Demo-mode pointer pacing. The dwell sits between the move and the press so a :hover
+ * transition has real wall-clock to render before the click's effect replaces it.
+ *
+ * It must also outlast the camera, which is what the original 200ms missed: the app really
+ * does paint a hover here (an injected mouse.move fires genuine :hover), but at 200ms the
+ * dwell was shorter than the FASTEST gap between frames ever observed, so the one moment
+ * demo mode exists to film could not land in a frame. Not "often missed" — uncatchable.
+ * Nothing surfaced it because the humanizer synthesizes a hover tint unconditionally
+ * (src/cursor/track.ts), so every recording looked like hover worked.
+ *
+ * So: clear FRAME_GAP_CEILING_MS with room. It reads as a deliberate pause rather than
+ * hesitation, and inter-action latency is explicitly not a cost here — Jasper's pipeline
+ * speeds demos up in post (see CLAUDE.md, "From Jasper's reply").
+ *
+ * The press delay holds the button down like a finger, not a zero-width tap.
+ */
+const DEMO_DWELL_MS = 700;
 const DEMO_PRESS_MS = 60;
 /** Per-character delay for demo typing — the plate shows text arriving, not appearing. */
 const DEMO_TYPE_DELAY_MS = 70;

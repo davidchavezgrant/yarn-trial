@@ -146,11 +146,15 @@ function main(): void {
 	let steps: RunLogStep[] = [];
 	let app = "unknown";
 	let task = "";
+	let backend: string | undefined;
 	if (fs.existsSync(runLogPath)) {
 		const log = JSON.parse(fs.readFileSync(runLogPath, "utf8"));
 		steps = log.steps ?? [];
 		app = log.app ?? app;
 		task = log.task ?? task;
+		// `backend` is what actually DROVE — a cdp run that fell back to ax records "ax" — which
+		// is the right question here, since it decides whether the app painted its own hover.
+		backend = log.backend;
 	} else {
 		console.log(`no run log at ${runLogPath} — pointer types will default to arrow`);
 	}
@@ -229,6 +233,7 @@ function main(): void {
 		stamp,
 		app,
 		task,
+		backend,
 		runLog: fs.existsSync(runLogPath) ? path.relative(process.cwd(), runLogPath) : "",
 		steps,
 		turns,

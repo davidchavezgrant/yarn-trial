@@ -421,11 +421,15 @@ test("demoClickPlan__PointsAtTheBoxCentre__When__PlanningAClick", () => {
 	assert.equal(plan.clickCount, 1);
 });
 
-test("demoClickPlan__DwellsWithinTheHoverWindow__When__AnyVerbIsPlanned", () => {
-	// 150–250ms per the plan: long enough for a :hover transition to render into polled
-	// frames, short enough not to read as hesitation on film.
+test("demoClickPlan__DwellsLongerThanTheSlowestFrameGap__When__AnyVerbIsPlanned", () => {
+	// The dwell has to outlast the CAMERA, not just a CSS transition. Measured on run
+	// 2026-08-02T18-51-49-069: 146 frames, p90 gap 579ms, max 634ms, and not one gap under
+	// 220ms — so the previous 150–250ms window could never land a frame inside the hover,
+	// and the app's real :hover was filmed exactly zero times. Nothing caught it because
+	// the humanizer paints a synthetic tint regardless. Floor, not a range: a longer dwell
+	// only films more, and latency is absorbed downstream.
 	const plan = demoClickPlan({ x: 0, y: 0, width: 10, height: 10 }, "click");
-	assert.ok(plan.dwellMs >= 150 && plan.dwellMs <= 250, `dwell ${plan.dwellMs}ms outside 150–250`);
+	assert.ok(plan.dwellMs > 640, `dwell ${plan.dwellMs}ms cannot outlast the 634ms worst observed frame gap`);
 });
 
 test("demoClickPlan__UsesTheRightButton__When__TheVerbIsRightClick", () => {

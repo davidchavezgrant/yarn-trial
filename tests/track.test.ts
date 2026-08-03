@@ -397,7 +397,7 @@ test("toOutputMs__MapsIntoCompressedTimeline__When__GapPrecedesAction", () => {
 });
 
 /** A minimal two-click run: enough to observe where the pointer waits between actions. */
-const twoClickTrack = (): ReturnType<typeof buildTrack> => {
+const twoClickTrack = (backend?: string): ReturnType<typeof buildTrack> => {
 	const base = 1_000_000;
 	const mk = (epochMs: number, x: number, y: number): TrajectoryTurn => ({
 		tool: "click",
@@ -414,6 +414,7 @@ const twoClickTrack = (): ReturnType<typeof buildTrack> => {
 		stamp: "t",
 		app: "Yarn",
 		task: "t",
+		backend,
 		runLog: "",
 		steps: [
 			{ index: 1, timestamp: "", action: { kind: "tool", name: "click" }, targetRole: "AXButton", targetRect: { x: 90, y: 780, w: 150, h: 30 } },
@@ -450,11 +451,11 @@ test("buildTrack__WaitsAtTheNextTarget__When__ModelThinksBetweenActions", () => 
 	);
 });
 
-test("buildTrack__EmitsHoverSpans__When__StepsCarryTargetRects", () => {
-	// The app paints no hover of its own: AX actuation leaves the physical pointer elsewhere, so no
-	// mouseover fires — measured at 12 of 164 frames on a real run. Without a synthesized highlight
-	// the cursor rests on a control that never lights up.
-	const track = twoClickTrack();
+test("buildTrack__EmitsHoverSpans__When__TheActuationPaintsNoHoverItself", () => {
+	// The AX path paints no hover of its own: actuation leaves the physical pointer elsewhere, so
+	// no mouseover fires — measured at 12 of 164 frames on a real run. Without a synthesized
+	// highlight the cursor rests on a control that never lights up.
+	const track = twoClickTrack("ax");
 	assert.equal(track.hovers.length, 2);
 	for (const h of track.hovers) {
 		assert.ok(h.endMs > h.startMs, "a hover span must have duration");
@@ -463,6 +464,21 @@ test("buildTrack__EmitsHoverSpans__When__StepsCarryTargetRects", () => {
 	// Each span ends at its own click, so the highlight is up while the pointer waits.
 	const clicks = track.events.filter((e) => e.kind === "mousedown");
 	assert.ok(track.hovers[0].endMs <= clicks[1].tMs);
+});
+
+test("buildTrack__EmitsNoHoverSpans__When__TheBackendIsCdp", () => {
+	// CDP moves an injected pointer onto the target and dwells, so the app fires real `:hover` and
+	// paints its own highlight — and since DEMO_DWELL_MS was raised past the frame cadence
+	// (2026-08-03) that highlight lands in frames. Synthesizing a second one on top would tint a
+	// control the app has already tinted. Measured on run 2026-08-03T04-57-06-276: 3–4 frames
+	// inside every dwell, target rect changing 50–64%.
+	assert.equal(twoClickTrack("cdp").hovers.length, 0);
+});
+
+test("buildTrack__SynthesizesHover__When__TheRunLogPredatesTheBackendField", () => {
+	// An old run log has no `backend`, and guessing "cdp" would silently strip the highlight from
+	// takes that genuinely need it. Unknown means synthesize.
+	assert.equal(twoClickTrack(undefined).hovers.length, 2);
 });
 
 test("buildTrack__SkipsActions__When__TheyPrecedeTheFirstUsableFrame", () => {
