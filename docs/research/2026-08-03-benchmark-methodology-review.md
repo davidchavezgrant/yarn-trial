@@ -1,260 +1,194 @@
 # What the benchmark can and cannot tell us — a review of the experiment itself
 
 **Date**: 2026-08-03 · **Scope**: the backend × grounding × recipe matrix
-(`docs/plans/2026-07-31-benchmark-matrix.md`), its 100 collected runs as of the 08-01 report,
-and the 203-run pass currently draining.
+(`docs/plans/2026-07-31-benchmark-matrix.md`), read against the **completed** 165-run pass —
+165/165 collected, 107 successes, $227.17, 817k output tokens.
 
-This is a review of the *method*, not a results report. The results live in
-`docs/research/2026-08-01-backend-grounding-recipe-benchmarks.md` (auto-generated) and the
-conclusions in `FOR_AMAN.md`. Nothing here regenerates; it is meant to be argued with.
-
----
-
-## 0. Read this first — a live defect
-
-`src/core/agent/run.ts:898` is a dangling `if` with no braces:
-
-```ts
-if (!outcome)
-
-console.log(`\n=== runaway backstop (${MAX_STEPS} steps) reached without done ===`);
-outcome = { success: false, summary: `runaway backstop (…) reached`, stopReason: "step-ceiling" };
-```
-
-The guard covers the `console.log` only. The assignment runs unconditionally, so any run that
-leaves the loop with `break` has its verdict overwritten. Exactly one path does: the new stall
-detector added in the same commit (`91c9993`, 21:26 local). Success and interrupt both `return`,
-which is why they survive — the comment at line 582 explains that this was already a known trap.
-
-Observed live at 01:33 UTC: run `2026-08-03T00-51-05-395` stalled at step 22 and recorded
-`verdict success=false summary=runaway backstop (100 steps) reached`.
-
-**Impact**: every stalled run in the pass now running is filed as `step-ceiling` instead of
-`stalled`. That is the precise distinction commit `91c9993` was written to create, and
-`collect.ts:492` keeps the two apart specifically so a budget can't be read as a capability
-limit. The remedy the wrong label implies — "re-run with a bigger budget" — is the opposite of
-what a stalled run needs. Success rates are unaffected; the failure taxonomy is not.
-
-Fix is one line (`{ … }` around both statements). Mid-pass it means moving HEAD while the fleet
-rsyncs per phase, so it is a judgment call, not an automatic yes.
+This is a review of the *method*, not a results report. The results live in the auto-generated
+report and the conclusions in `FOR_AMAN.md`. Nothing here regenerates; it is meant to be argued
+with. Written mid-pass and revised once the data landed; the two headline findings **reversed**
+between those drafts, which is itself the argument for not writing conclusions early.
 
 ---
 
-## 1. What this experiment actually is
+## 0. The defect that ran through this pass — found, fixed, data repaired
 
-An agent drives a real macOS Electron app (Yarn) toward a goal stated in plain language, with
-no hints. The matrix varies four things and measures what happens:
+`run.ts:898` was a dangling `if` with no braces, so the runaway-backstop assignment ran
+unconditionally and overwrote the stall verdict one line after it was set. The stall detector
+worked perfectly; only its answer was destroyed — the failure mode that looks exactly like a
+feature nobody built.
+
+Two sessions caught it independently, from different directions: live, watching a run stop at
+step 22 and log `runaway backstop (100 steps) reached`; and statistically, noticing 30
+`step-ceiling` failures with a median of 16 steps against a backstop of 100. Fixed in `ab31ba2`.
+
+**The data is repaired**, re-derived from step counts — a run that stopped before its own cap
+stalled. Final: **27 stalls, 3 genuine ceilings** (creation arms at their budget of 30). Before
+the repair the pass carried 30 step-ceiling labels and zero stalls.
+
+Worth keeping as the specimen it is: an operating limit recorded as a capability verdict, which
+is the same error the 15-step budget made a day earlier, recurring *inside its own fix*.
+
+---
+
+## 1. What this experiment is
+
+An agent drives a real macOS Electron app (Yarn) toward a goal stated in plain language, with no
+hints. Four axes:
 
 | Axis | Levels |
 |---|---|
 | Actuation backend | AX (accessibility tree + Swift DOM sidecar) · CDP (DevTools protocol direct) |
 | Perception | screenshots on/off · DOM attributes on/off · vision-only |
-| Grounding tier | none · explore-generated appmap · curated prose · harvested procedure · compiled replay |
-| Task | settings toggle (canonical) · auto-time sync · video creation (phase 7, in flight) |
+| Grounding tier | none · explore-generated appmap · pixel-written appmap · curated prose · harvested procedure · compiled replay |
+| Task | settings toggle · motion blur · **video creation** (the product flow) |
 
-n=3 per cell, ~203 planned runs across three colo Macs, re-graded afterward by an offline
-adversarial judge. ~$154 in model spend for the 100 runs collected so far.
-
-The design is deliberately not a full factorial — each arm is tied to a build decision. That is
-the right call and it is what makes the results usable. The problems below are mostly about
-resolution and confounds, not about the shape.
+n=3 per cell across three colo Macs, re-graded by an offline adversarial judge.
 
 ---
 
 ## 2. What we can learn from it
 
-Ordered by how much weight the evidence bears.
+**The strongest result: procedures work.** 12/12 across four arms, both backends, both lineages
+(harvested from grounded *and* ungrounded source runs), plus 2/3 on the Fable twin. The
+explore → run → judge → harvest → promote loop closes. Only result in the matrix at n=12.
 
-**Solid.**
+**Replay does not work.** 1/3 with rescue, 0/3 without, 0/1 filmed, judge failed all six. The
+zero-model-call happy path is the entire value proposition and it does not hold.
 
-- **Procedures work.** Phase 6: 12/12 pass across four arms, both backends, both lineages
-  (harvested from grounded *and* from ungrounded source runs). The
-  explore → run → judge → harvest → promote loop closes. This is the strongest positive result
-  in the matrix and the only one at n=12.
-- **Replay does not work.** `p3-replay-cdp` 1/3, `p3-replay-norescue` 0/3, filmed replays 0/1
-  each, judge failed all six. Recipes compile and then fail to re-execute. The zero-model-call
-  happy path — the entire value proposition — does not hold.
-- **The lean configurations are not the weak ones.** On the settings task, `min-context`
-  (no vision, no DOM attrs) is the cheapest arm *and* the shortest: 7.3 steps, $1.15, 3/3.
-  Full-perception ax is 10 steps, $3.32. Whatever the expensive channels are buying, it is not
-  visible in outcomes on this task.
-- **CDP is cheaper per run without discovering less.** Per-screen observations are ~50–75 nodes
-  against ax's ~165–185; cost is roughly a third; and the phase-1 maps it produced are *larger*
-  (144–207 nodes vs 120–166). "Leaner, not blinder" holds at the discovery level.
-- **The axdom Swift sidecar does not convert.** It names 955 of 1044 anonymous nodes and changes
-  nothing measurable: grounded ax 3/3 at 10 steps with it, 3/3 at 10.3 steps without.
-- **Self-reported success is more honest than feared.** One judge disagreement in ~50 judged
-  runs, and it was the expected class (wrong scope on a replay). The wrong-scope failure is real
-  but not endemic once scope warnings are in the prompt.
+**The product flow reversed the grounding finding.** This is the most important thing the pass
+produced, and it only appeared because a second task was added:
 
-**Suggestive, worth acting on, not worth quoting as a number.**
+| | settings task | creation task |
+|---|---|---|
+| cdp ungrounded | 3/3 | **0/3** |
+| cdp grounded | 3/3 | **3/3** |
+| ax ungrounded | 1/3 | 3/3 |
+| ax grounded | 3/3 | 2/3 |
 
-- Grounding's value looks backend-dependent — it rescues ax and does nothing for cdp. See §3 for
-  why the specific numbers won't support that sentence.
-- Curated prose is the leanest tier that still passes (5.7 steps, $0.69) and, per the phase-6
-  work, the only tier that produced brand-scope correctness. See §3 on why that tier is
-  mislabeled.
+On a dropdown toggle, cdp needs no grounding and ax appears to. On Yarn's actual product flow it
+is the other way round. "Grounding's value is backend-dependent" — the headline of the 08-01
+report — does not survive contact with a second task. What it actually depends on is the **task**.
+Anyone shipping "skip grounding on cdp" off the settings data would have shipped the wrong thing.
 
-**Operational facts, measured, useful regardless of the matrix.**
+**Vision-only works, but only from a map written in its own modality.** David's "big thing we
+want to test", answered:
 
-- ~$1–3 per settings task; $5–18 and 20–60 minutes per explore pass; 10–25s of model latency per
-  action. That prices unattended demo generation as viable and interactive assistance as not.
-- 29% of archived runs died at the sign-in gate. AX flakiness historically costs about one run in
-  three. Queue wait routinely exceeds run time by 10×.
+| vision-only arm | result |
+|---|---|
+| ungrounded | 0/3 |
+| grounded on the **element**-written map | 0/3 |
+| grounded on the **pixel**-written map | **2/3** |
+| curated human prose | **2/3** |
+
+An element-written appmap is worth nothing to an agent that sees only pixels; a pixel-written one
+rescues it. That distinction was invisible until the budget bug was fixed — the pixel-map arm read
+0/3 in the 08-01 report purely because 15 steps truncated it.
+
+**Lean still beats rich on the settings task** — `min-context` (no vision, no DOM attrs) is 3/3
+and the cheapest arm. On the creation task the lean cells hold at 2/3.
+
+**Operational base rates**: $227 and 817k output tokens for 165 runs; 65% overall success;
+explore passes 20–60 min and $5–18 each; 10–25s of model latency per action.
 
 ---
 
 ## 3. What we cannot learn from it
 
-**The measurement is at its ceiling.** Eleven of fifteen phase-2 arms scored 3/3. When almost
-every configuration passes, the design has no room left to discriminate, and the arms that *did*
-differ are the ones with the least evidence behind them.
+**The settings task is exhausted.** Every core and slice arm is now 3/3 except the single
+full-perception ax cell. It has no discriminating power left and should not receive another
+sample.
 
-**n=3 on a binary outcome resolves almost nothing.** The headline comparison — ax ungrounded 1/3
-against everything else at 3/3 — is a two-run difference. Worse, the other two ungrounded ax
-variants scored 3/3 and 2/3 on the same task. Pooled, ungrounded ax is 6/9 and grounded ax is
-12/12: Fisher's exact p ≈ 0.063, two-tailed. The spread *among the ungrounded variants* is as
-large as the grounded-vs-ungrounded gap, which is what noise looks like.
+**"Grounding rescues ax" is now clearly unsupported.** Pooled across the three ungrounded ax
+variants: 7/9, against 12/12 grounded. Fisher exact two-tailed **p = 0.171** — weaker than the
+0.063 the mid-pass draft computed, because a re-run flipped `min-context-ungrounded` to 3/3. Only
+`ax-ungrounded` is low at 1/3, and both its siblings are 3/3. The cell, not the treatment.
 
-**Every vision-only result is currently void.** Commit `91c9993` found that thirteen runs stopped
-at exactly the old 15-step cap and that every vision-only arm was among them. Those 0/3 rows were
-reported as perception failures; they may have been budget failures. Eleven re-runs are queued
-right now. Until they land, "screenshots alone cannot do this" is unsupported — and it was one of
-the four questions the matrix was built to answer.
+**Six runs are void, and the guard caught it at the wrong time.** Both cdp visionmap arms declared
+`explore-vision` and ran with no map — `groundingChecked` flagged all six as
+`grounding-mismatch`. So `cdp-grounded-visionmap`'s clean 3/3 measured something other than what
+its name says, and the question the arm exists for — *is a pixel-written map any use to an agent
+that can see elements?* — is unanswered. The detector worked; it fires at collect, after the runs
+are paid for.
 
-**The curated tier is not a human-notes baseline.** `docs/recipes/yarn.md` names the benchmark
-task's control, its surface, its options, and the brand-vs-document scope split, and its own
-header says it was assembled from an explore pass. `auditTaskPrompt` gates the task string;
-nothing audits grounding text. It is an upper bound on grounding, not "what ten minutes of human
-notes buys" — which kills the most quotable comparison in the matrix.
+**The model comparison is not usable.** Fable is 6/9, but all three failures are 2-step `gave-up`
+verdicts across three *different* arms. An identical early abort on three distinct configs is a
+systematic signature — a refusal or a prompt-format mismatch — not three capability failures. Read
+as a model gap it is simply wrong; the arms are plausibly 3/3 with one systematic abort each.
+Diagnose the 2-step exit before anyone quotes 6/9.
 
-**One app, effectively one task.** Every Notion arm was cut, so cross-app transfer is unmeasured.
-Native AppKit is out of scope and one of two attempts failed. The canonical task is a 5–13 step
-lookup-and-toggle; phase 4 is n=2 on one backend. Phase 7 is the first real long-horizon task and
-it is incomplete.
+**95 of 165 runs are unjudged** (judge coverage 70/165). Every wrong-scope claim, and every check
+of self-reported success, is confined to the older runs. The creation task — where verification is
+weakest — has no judge verdicts at all.
 
-**The model comparison is not a comparison.** Fable has one collected run. Each model ran at its
-own maximum effort — defensible as a deployment question, but it means a difference cannot be
-attributed to the model. They also bill on different physics: `cache_control` is silently ignored
-for OpenAI models over OpenRouter, so the system prompt is charged in full every turn on one side
-and not the other. Costs are published-rate estimates, not invoices.
+**Verification still cannot prove which control it verified** (LIMITATIONS §8), and the creation
+runs are where that bites: 8–14 unverifiable steps out of 15, one success passing with nine.
 
-**Verification cannot prove which control it verified** (LIMITATIONS §8). Success on a dual-scope
-setting means a string appeared in a flattened bag of labels. The offline judge patches this
-after the fact, but the judge is one model's opinion graded against a rubric derived from the
-appmap — which is itself one of the treatments. And the judge is pinned to `gpt-5.6-sol`, the
-same model under test in 100 of 101 arms: same-family grading throughout.
+**Still one app.** Every Notion arm was cut, so cross-app transfer remains unmeasured, and every
+finding above could be a fact about Yarn.
 
-**The grounding inputs are n=1–2 and unstable.** Phase-1 passes are the input to every grounded
-arm. Two runs of the identical ax arm produced 120 and 166 nodes; two runs of the identical cdp
-arm produced 6609 and 293 `seen` controls. Two passes carry `⟲` restarts after AX blackouts. A
-phase-2 result partly reflects which of two quite different maps happened to be written that day.
-The vision map is the weakest of the set (89 nodes, 1 ambiguity) and n=1, and the cdp vision
-explore failed outright, twice.
-
-**Runs are not independent samples.** Host assignment follows queue order, so arms land on
-whichever Mac is free — and the Macs are not interchangeable (mac1's flagless-Chrome wedge, mac3's
-leftover tabs, per-host sign-in state). Host is an uncontrolled variable with nothing preventing
-it from correlating with arm.
-
-**Some of the data predates its own fixes.** Nine runs began from an arbitrary app state because
-the perception-reduced maps declared no home — non-comparability perfectly correlated with the
-variable being measured (LIMITATIONS §23). The wrong-scope metric would have come out with the
-wrong *sign* (§22). The judge's answer key came from a file nothing writes (§21). All fixed, all
-after data in the current report was collected.
-
-**HEAD moved during the pass.** Six commits landed between 20:38 and 21:31 local while runs were
-draining, and the fleet rsyncs the checkout per phase. Runs in one manifest ran different code.
+**Still n=3.** Two of three is not distinguishable from three of three at this sample size.
 
 ---
 
 ## 4. How to improve the experiment
 
-Ranked by leverage per unit of effort.
-
-1. **Fix the stall/step-ceiling label** (§0) before more runs land.
-2. **Stop spending samples on ceilings.** Eleven arms at 3/3 are re-confirming a known pass. Cut
-   them to n=1 smoke tests; spend the freed budget on n=10 for the three or four cells that
-   actually vary. A sequential rule does this automatically: stop a cell after three consecutive
-   passes, keep sampling a cell that mixes.
-3. **Give the matrix dynamic range back.** The settings task cannot discriminate — that is the
-   single biggest threat to the whole exercise. Phase 7 is the right instinct. A task requiring
-   multi-surface navigation and a non-string outcome would do more for the matrix's value than
-   any additional arm.
-4. **Block host assignment by arm** — round-robin so each arm gets one run per Mac. Free, and it
-   removes an uncontrolled variable that is currently free to align with the treatment.
-5. **Write a real human-notes recipe, blind.** Someone who has not seen the benchmark tasks
-   spends ten minutes with the app and writes notes; timestamp it. That restores a tier the
-   matrix claims to have and currently does not.
-6. **Judge across families.** A two-of-three panel spanning providers, or at minimum a judge from
-   a different family than the agent. Judging is cents against dollars per run.
-7. **Report spread, not just means.** Every `x̄` at n=3 should carry min–max. "8.7 steps" is a
-   different finding if it is 8/9/9 than if it is 5/7/14.
-8. **Settle or delete `seen`.** The report already says do not quote it. That 6609 is list rows
-   is a strong hypothesis, not a measurement — one CDP observation of Yarn's Library counting
-   distinct triples settles it in two minutes.
-9. **Pre-register the decision thresholds.** Each arm names the decision it informs, but not what
-   result would move it. Without "grounding ships if it buys ≥ X", any outcome reads as support.
-10. **Freeze HEAD for the duration of a pass.** The autopilot warns on movement; it should refuse,
-    and the manifest should record the commit each run executed.
-11. **Split harness failures out of the top-line.** With 29% sign-in deaths and 1-in-3 AX flakes,
-    the `done/n` column mixes two populations that call for different responses.
-12. **Re-run phase 1 at n=3 per backend, clean.** The maps are the input to everything downstream
-    and they are the least-sampled, most-variable artifact in the experiment.
+1. ~~Fix the stall/step-ceiling label~~ — **done** (`ab31ba2`), data repaired.
+2. **Stop sampling the settings task.** It is at ceiling in eleven of twelve arms. Move those
+   samples to the creation task, which demonstrably discriminates.
+3. **Judge the remaining 95 runs** before anyone reads the creation results. Verification is the
+   weakest link on exactly that task.
+4. **Diagnose Fable's 2-step abort** before running any model comparison.
+5. **Check declared grounding files exist at dispatch, not at collect.** Six runs were paid for
+   before `groundingChecked` reported they had measured the wrong tier.
+6. **Block host assignment by arm** — round-robin so each arm gets one run per Mac. Free, and it
+   removes an uncontrolled variable currently free to align with the treatment.
+7. **Write a blind human-notes recipe.** The curated tier names the benchmark's own answer and
+   was assembled from an explore pass, so it is an upper bound on grounding, not human notes.
+8. **Judge across families** — the judge shares a model family with the agent in 156 of 165 runs.
+9. **Report spread, not just means.** At n=3, "8.7 steps" is a different finding if it is 8/9/9
+   than if it is 5/7/14.
+10. **Freeze HEAD for a pass.** Six commits landed while this one drained.
+11. **Re-run Discovery at n=3 per backend.** The maps are the input to everything downstream and
+    are the least-sampled, most-variable artifact in the experiment.
 
 ---
 
 ## 5. How to improve a production build
 
-Based on what the data supports today.
+**Withdraw the "skip grounding on cdp" recommendation.** The settings data supported it; the
+product flow refutes it (0/3 ungrounded vs 3/3 grounded). Ship grounding.
 
-**Ship.**
+**Ship CDP-direct as the primary backend** for Electron and web — cheaper, leaner, no AX
+blackouts, no discovery penalty. Keep AX as fallback.
 
-- **CDP-direct as the primary backend** for Electron and web targets, AX as fallback. Cheaper,
-  leaner, no AX blackouts, no discovery penalty.
-- **Lean perception by default.** Screenshots and DOM attributes off; escalate to vision on a
-  stall. The stall detector is the natural trigger and it already exists.
-- **Grounding as a cached artifact with a lifecycle**, never a runtime step — a 20–60 minute,
-  $5–18 explore pass cannot sit in a request path. Explore once, harvest procedures from
-  judge-passed runs, promote. That loop is the 12/12 result. Production still needs the two
-  pieces the benchmark doesn't have: staleness detection tied to app version, and a defined
-  behavior on cache miss.
-- **Scope disambiguation as a required part of every grounding artifact.** It is the one failure
-  class that produces confident wrong answers, `findScopeAmbiguities` + prompt injection
-  demonstrably flips behavior in both directions, and the chosen scope should be recorded as
-  structured data, not prose.
+**Ship grounding as a cached artifact with a lifecycle**, never a runtime step: a 20–60 minute,
+$5–18 explore pass cannot sit in a request path. Explore once, harvest from judge-passed runs,
+promote — that loop is the 12/12 result. Production still needs staleness detection tied to app
+version, and defined behaviour on a cache miss.
 
-**Don't ship.**
+**Cost the vision-only grounding pass.** It was deferred as "a 2–3 day build, not a flag" on the
+assumption that vision-only consumption answered the shippable question. It did — and the answer
+is that vision-only works *only* with a pixel-written map. That is the AX-hostile-app deploy
+story, and it now has evidence behind it rather than a guess.
 
-- **The axdom Swift sidecar.** High naming yield, zero measured outcome effect, a native build
-  dependency that degrades silently when the binary is missing.
-- **Replay/recipes.** 1/3 with rescue, 0/3 without. Revisit if the compile step gets a real
-  re-resolution strategy; today it is a feature that looks finished and isn't.
+**Don't ship the axdom sidecar** — high naming yield, no measured outcome effect, a native build
+dependency that degrades silently.
 
-**Build, because the benchmark shows it is the actual risk.**
+**Don't ship replay** — 1/3 with rescue, 0/3 without.
 
-- **Verification for non-string outcomes.** Navigation is at ceiling; verification is not. The
-  creation runs carry 8–14 unverifiable steps out of 15, and one *passed* with nine. "Can we
-  grade creative work" is the real open question and nothing in the matrix answers it.
-- **Three-state checks everywhere.** The recurring defect across this whole project is absence
-  rendering as a value: a missing rubric passed, an unset scope read as zero, a dropped flag
-  produced plausible data under the wrong label three separate times. Production rule: "could not
-  check" must never serialize to the same value as "checked and fine."
-- **Structural config forwarding.** The hand-written `dispatchOptionsFor` list caused three
-  wrong-label incidents. Anything crossing a process boundary should be serialized wholesale and
-  asserted on arrival.
-- **Operating limits must never be recorded as verdicts.** The step-cap bug is the general case,
-  and §0 is it recurring inside its own fix. Stop conditions need an explicit reason code that
-  reaches the caller.
+**Build verification for non-string outcomes.** Navigation is solved; grading creative work is
+not, and the creation task is where the product lives.
+
+**Three-state checks everywhere.** The recurring defect across this project is absence rendering
+as a value: a missing rubric passed, an unset scope read as zero, a dropped flag produced
+plausible wrong-labelled data three separate times, and this pass added a sixth — a stall verdict
+overwritten by a backstop label. "Could not check" must never serialize to the success value.
 
 ---
 
-## 6. Status of the current pass
+## 6. Status
 
-At 21:33 local: 203 planned, 161 submitted, 81 collected, 78 queued, 1 running, three Macs busy
-with 33–36 jobs each. Phase 7 (video creation, 23 arms × 3) plus 11 vision-only re-runs.
-Estimated 2–3 hours to drain.
-
-A probe is armed and will report when the queue empties, when an hour passes with nothing
-collected, or when a Mac drops off. Sections 2 and 3 get revised against phase-7 data once it
-lands — in particular the vision-only verdict, which is void until the re-runs report.
+Pass complete: 165 submitted, 165 collected, 107 successes, three Macs idle. Outstanding before
+these conclusions are final: judge the remaining 95 runs, re-run the six void visionmap runs, and
+diagnose the Fable 2-step abort.
