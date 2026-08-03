@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { appSlug, archiveDir, dataRoot as dataRootDir, liveDir, outDir, recipesDir as recipesDirDefault, RUN_FILES, relToData, runFile } from "../paths.js";
+import { archiveDir, dataRoot as dataRootDir, liveDir, outDir, recipesDir as recipesDirDefault, RUN_FILES, relToData, runFile } from "../paths.js";
+import { appmapSlug } from "../core/target.js";
 import { execSync } from "node:child_process";
 import { poisonedHosts as poisonedHostsFn } from "./collect.js";
 import { manifestCost, usd } from "./cost.js";
@@ -334,7 +335,19 @@ export async function promoteForReuse(opts: {
 	 */
 	const slots = new Map<string, Arm>();
 	for (const arm of recipeArms()) {
-		const key = recipeFileFor(opts.recipesDir, appSlug(arm.app), arm.task ?? "", arm.dispatch.backend, arm.dispatch.recipeLineage ?? "grounded");
+		/**
+		 * `appmapSlug`, never `appSlug` — this slot key must be the filename the RUN will read, or
+		 * promote fills a slot no run ever opens.
+		 *
+		 * The reader derives its slug with `targetSlug` (src/core/target.ts): `web-<host>` for a web
+		 * target, `appSlug(name)` for a Mac app. `appSlug` (src/paths.ts) folds only
+		 * whitespace/slashes/colons, so a web arm's URL becomes `https-app.notion.com` — a name the
+		 * gate and promote agreed on and the run never looked for, leaving the arm on the appmap
+		 * tier under a recipe label. `appmapSlug` routes a URL to the first and a name to the second,
+		 * and `promoteRecipe` (core/recipe-cli.ts) derives its destination the same way, so the two
+		 * halves of this stage cannot drift from each other or from the run.
+		 */
+		const key = recipeFileFor(opts.recipesDir, appmapSlug(arm.app), arm.task ?? "", arm.dispatch.backend, arm.dispatch.recipeLineage ?? "grounded");
 		const held = slots.get(key);
 		if (!held || (!held.sourceArm && arm.sourceArm)) slots.set(key, arm);
 	}

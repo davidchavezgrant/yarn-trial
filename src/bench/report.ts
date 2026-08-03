@@ -18,6 +18,17 @@ export const reportFileName = (date: string): string => `${date}-backend-groundi
 
 const pct = (num: number, den: number): string => (den === 0 ? "—" : `${num}/${den}`);
 
+/**
+ * The two failureKinds where the HARNESS ended the run rather than the agent reaching a verdict.
+ *
+ * They are carved out of the success DENOMINATOR because a truncated run is not evidence about the
+ * agent. Folding them in cost 33 points of an arm's rate per run and was indistinguishable, in the
+ * headline number, from an agent that simply could not do the task — which is exactly the confusion
+ * that made a 15-step budget read as "the agent cannot make a video" for seven runs whose task
+ * needs 19.
+ */
+const HARNESS_ENDED = new Set(["step-ceiling", "stalled"]);
+
 const fmt = (v: number | string | boolean | undefined): string =>
 	v === undefined ? "—" : typeof v === "number" && !Number.isInteger(v) ? v.toFixed(1) : String(v);
 
@@ -26,6 +37,16 @@ export interface ArmRollup {
 	entries: ManifestEntry[];
 	collected: ManifestEntry[];
 	successes: number;
+	/**
+	 * Collected runs the HARNESS ended (step-ceiling | stalled) — out of the rate's denominator.
+	 *
+	 * `successes` is deliberately left alone rather than redefined: the dashboard copies it straight
+	 * into the board payload, so changing its meaning would silently move a number on a surface
+	 * nobody edited. The carve-out lives in `verdictRuns` instead.
+	 */
+	harnessEnded: number;
+	/** The rate's honest denominator: collected runs that reached an agent verdict. */
+	verdictRuns: number;
 	meanSteps?: number;
 	meanElapsedSec?: number;
 	meanModelCalls?: number;
@@ -56,12 +77,15 @@ const nums = (entries: ManifestEntry[], pick: (m: RunMetrics) => number | undefi
 export function rollup(arm: Arm, entries: ManifestEntry[]): ArmRollup {
 	const collected = entries.filter((e) => e.collected);
 	const withScopes = collected.filter((e) => (e.metrics?.mutationScopes?.length ?? 0) > 0);
+	const harnessEnded = collected.filter((e) => HARNESS_ENDED.has(e.metrics?.failureKind ?? ""));
 
 	return {
 		arm,
 		entries,
 		collected,
 		successes: collected.filter((e) => e.metrics?.success === true).length,
+		harnessEnded: harnessEnded.length,
+		verdictRuns: collected.length - harnessEnded.length,
 		meanSteps: mean(nums(collected, (m) => m.steps)),
 		meanElapsedSec: mean(nums(collected, (m) => m.elapsedSec ?? m.runSec)),
 		meanModelCalls: mean(nums(collected, (m) => m.modelCalls)),
@@ -138,8 +162,18 @@ const mapCell = (r: ArmRollup): string => {
 	return ns.length === 0 ? "—" : ns.length === 1 ? String(ns[0]) : `${ns[0]}–${ns[ns.length - 1]}`;
 };
 
+/**
+ * `2/3` over runs that reached a verdict, plus `+1⏹` for runs the harness ended.
+ *
+ * `pct` returns `—` at a zero denominator, so an arm whose every run was truncated renders `— +3⏹`
+ * rather than `0/3`. That is the correct reading: no verdict yet, not a failure. `done` and
+ * `failures` still count those runs, so nothing disappears from the row — the carve-out is only in
+ * the rate, which is the one number a reader quotes.
+ */
+const successCell = (r: ArmRollup): string => `${pct(r.successes, r.verdictRuns)}${r.harnessEnded ? ` +${r.harnessEnded}⏹` : ""}`;
+
 const taskRow = (r: ArmRollup, model: string): string =>
-	`| ${r.arm.id} | ${model} | ${tierCell(r)} | ${mapCell(r)} | ${flagsLine(r.arm)} | ${r.collected.length}/${r.arm.n} | ${pct(r.successes, r.collected.length)} | ${r.failureBreakdown || "—"} | ${fmt(r.meanSteps)} | ${fmt(r.meanElapsedSec)} | ${fmt(r.meanModelCalls)} | ${fmt(r.meanOutputTokens)} | ${costCell(r.cost)} | ${r.rejections} | ${r.documentScopeMutations} | ${fmt(r.meanObsNodes)} | ${fmt(r.meanShownLines)} | ${r.meanChosenDepth === undefined ? "—" : `${Math.round(r.meanChosenDepth * 100)}%`} | ${fmt(r.maxChosenIndex)} | ${r.unnormalisedRuns ? `⚠ ${r.unnormalisedRuns}` : "0"} |`;
+	`| ${r.arm.id} | ${model} | ${tierCell(r)} | ${mapCell(r)} | ${flagsLine(r.arm)} | ${r.collected.length}/${r.arm.n} | ${successCell(r)} | ${r.failureBreakdown || "—"} | ${fmt(r.meanSteps)} | ${fmt(r.meanElapsedSec)} | ${fmt(r.meanModelCalls)} | ${fmt(r.meanOutputTokens)} | ${costCell(r.cost)} | ${r.rejections} | ${r.documentScopeMutations} | ${fmt(r.meanObsNodes)} | ${fmt(r.meanShownLines)} | ${r.meanChosenDepth === undefined ? "—" : `${Math.round(r.meanChosenDepth * 100)}%`} | ${fmt(r.maxChosenIndex)} | ${r.unnormalisedRuns ? `⚠ ${r.unnormalisedRuns}` : "0"} |`;
 
 /**
  * `$4.12` — or `$4.12 +2?` when some of the arm's runs ran on a model with no rate card.
@@ -264,7 +298,7 @@ function replayTable(arms: Arm[], m: Manifest): string[] {
 		modelPasses(m, a.id).map((model) => {
 			const r = rollup(a, m.entries.filter((e) => e.armId === a.id && e.model === model));
 
-			return `| ${a.id} | ${passLabel(model)} | ${flagsLine(a)} | ${r.collected.length}/${a.n} | ${pct(r.successes, r.collected.length)} | ${fmt(mean(nums(r.collected, (mm) => mm.procedureSteps)))} | ${fmt(mean(nums(r.collected, (mm) => mm.rescuedSteps)))} | ${fmt(r.meanModelCalls)} | ${fmt(r.meanElapsedSec)} |`;
+			return `| ${a.id} | ${passLabel(model)} | ${flagsLine(a)} | ${r.collected.length}/${a.n} | ${successCell(r)} | ${fmt(mean(nums(r.collected, (mm) => mm.procedureSteps)))} | ${fmt(mean(nums(r.collected, (mm) => mm.rescuedSteps)))} | ${fmt(r.meanModelCalls)} | ${fmt(r.meanElapsedSec)} |`;
 		}),
 	);
 
@@ -370,8 +404,9 @@ export function renderReport(m: Manifest): string {
 		`# Backend × grounding × reuse benchmarks — ${m.date}`,
 		"",
 		`> Generated by \`./run bench collect\` — hand-edits outside the "For Aman" section are overwritten on the next collect.`,
-		`> Plan: docs/plans/2026-07-31-benchmark-matrix.md (as amended: dom cut, Notion cut entirely, vision-only-grounded cut; recipes added 2026-08-01).`,
+		`> Plan: docs/plans/2026-07-31-benchmark-matrix.md (as amended: dom cut; Notion Calendar cut, Notion WEB restored 2026-08-03 as the second app on a full cdp mirror; recipes added 2026-08-01; recipe/procedure names swapped 2026-08-03).`,
 		`> Progress: ${collected}/${submitted} submitted runs collected.`,
+		"> `success` is over runs that reached an AGENT verdict. `+n⏹` counts runs the HARNESS ended (step-ceiling or stalled) — excluded from the rate because a truncated run is not a verdict about the agent, and still counted in `done` and `failures`.",
 		"",
 		"## Stage 1 — Discovery: what each perception condition finds",
 		"",
@@ -468,7 +503,8 @@ export function renderReport(m: Manifest): string {
 		"- TODO: is the axdom sidecar worth shipping.",
 		"- TODO: what vision costs/buys per backend; the vision-only deploy story.",
 		"- TODO: whether replay is fleet-ready (rescue rate, no-rescue happy path).",
-		"- Generalization (stage 4) now varies the TASK (motion blur — dual-scope, so it reaches the correctness half too — plus the creation flow) and the MODEL. Nothing here speaks to a second APP yet: every Notion arm was cut, so cross-app transfer is unmeasured.",
+		"- Generalization (stage 4) varies the TASK (motion blur — dual-scope, so it reaches the correctness half too — plus the creation flow), the MODEL, and since 2026-08-03 the APP: Notion web runs a full mirror of every cdp cell across a simple and a complex task, so cross-app transfer is measured rather than assumed.",
+		"- TODO: does anything above survive a second APP? Read the Notion rows against their Yarn twins cell by cell — same flags, same tier, different target. Two caveats to carry into any conclusion: the ax half of the matrix has no Notion counterpart (a web target refuses that backend), so this tests the SHIPPING actuator only and says nothing about the fallback; and neither Notion task is known to be dual-scope, so the actions/tokens half of each comparison transfers and the wrong-scope half does not until someone hand-validates a scope pair. Wrong-scope is grounding's strongest measured win on Yarn, which makes that gap the most important thing this stage cannot yet tell you.",
 		"",
 	].join("\n");
 }

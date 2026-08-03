@@ -50,6 +50,15 @@ const mean = (steps: Array<Record<string, any>>, field: string): number | undefi
 export function parseRunMetrics(runLog: Record<string, any>): RunMetrics {
 	const usage = runLog.usage ?? {};
 	const steps: Array<Record<string, any>> = Array.isArray(runLog.steps) ? runLog.steps : [];
+	// The pixel-snap population: steps whose click point had a nearest control at all. Derived off
+	// the SAME `steps` array the attention means walk, deliberately — a second mechanism for
+	// finding snap steps is a second thing to keep in agreement with mean(), and the failure mode
+	// is silent (a step counted in the denominator but skipped by the mean, or the reverse).
+	// `snapDistancePx` is the candidate test because it is also mean()'s field below, so this count
+	// IS that mean's denominator rather than a population that merely looks like it. The other
+	// snap fields cannot stand in: snapMatchesDeclared is absent when the model declared no
+	// target, and snapApplied is absent on every arm that never snaps.
+	const snapSteps = steps.filter((s) => typeof s.snapDistancePx === "number");
 
 	return {
 		...(typeof runLog.success === "boolean" ? { success: runLog.success } : {}),
@@ -107,6 +116,35 @@ export function parseRunMetrics(runLog: Record<string, any>): RunMetrics {
 		// would have broken THIS run — it is the empirical floor for the observation budget.
 		...(steps.some((st) => typeof st.chosenIndex === "number")
 			? { maxChosenIndex: Math.max(...steps.filter((st) => typeof st.chosenIndex === "number").map((st) => st.chosenIndex as number)) }
+			: {}),
+		// PIXEL SNAP — the eight snap arms' whole question, aggregated per run. Six fields have been
+		// landing on every coordinate-addressed step since the diagnostic was built and NOTHING read
+		// them, so "was this action retargeted?" was a question only a hand-read of the raw run log
+		// could answer. See RunMetrics for what these license and what they do not.
+		//
+		// Gated on a candidate existing, so all five are ABSENT rather than 0 on an arm that never
+		// names a pixel: zero candidate steps and zero-distance candidates are different facts, and
+		// the report reads them differently. The gate is also why snapMeanDistancePx can never be
+		// NaN here — mean() over an empty list returns undefined, and this block never runs on one.
+		...(snapSteps.length
+			? {
+					snapCandidateSteps: snapSteps.length,
+					// APPLIED, not "within tolerance". The rewrite in step.ts also has to re-find the
+					// candidate in the observation by (name, role), and a step where that lookup missed
+					// acted on the raw coordinate after all — counting intent would credit the arm with
+					// refinements it never made.
+					snapAppliedSteps: snapSteps.filter((s) => s.snapApplied === true).length,
+					// Applied mismatches ONLY. An unapplied mismatch is the diagnostic doing its job on
+					// an arm with SNAP_PX off — the point was nearest something the model did not name,
+					// and the action went to the raw pixel anyway — so folding those in would charge
+					// every vision-only arm with a confound that only the snap arms carry.
+					snapDeclaredMismatches: snapSteps.filter((s) => s.snapApplied === true && s.snapMatchesDeclared === false).length,
+					// The spatial half: how far off the model's pixels were, and how often they were
+					// not off at all. A high inside count with a low success rate is the SEMANTIC
+					// verdict — refinement has nothing left to fix.
+					snapInsideSteps: snapSteps.filter((s) => s.snapInside === true).length,
+					...(mean(snapSteps, "snapDistancePx") !== undefined ? { snapMeanDistancePx: mean(snapSteps, "snapDistancePx") } : {}),
+				}
 			: {}),
 		...(typeof runLog.finalCheck?.verified === "boolean" ? { finalCheckVerified: runLog.finalCheck.verified } : {}),
 		...(runLog.visualCheck?.verdict ? { visualVerdict: String(runLog.visualCheck.verdict) } : {}),
@@ -422,6 +460,19 @@ const POISON_REMEDY: Record<string, string> = {
 	crashed: "runs are dying before writing a log — check the Mac (runner log, disk, TCC grants): ./run provision --doctor",
 	"hinted-refused": "the prompt audit is refusing on that host — its checkout may be stale: ./run provision",
 	"gave-up": "the agent runs but keeps failing there — compare its runs against the same arm on other hosts before trusting arm numbers",
+	// The two HARNESS-ended kinds. Without entries here they fell through to the generic
+	// "investigate before queuing more arms there", which points the operator at the Mac — and for
+	// step-ceiling that is the wrong tree entirely, while for stalled it is right only half the
+	// time. Both remedies therefore name what to rule out first rather than what to fix.
+	// The step counts are the AGENT_STEPS / AGENT_STALL_STEPS defaults (100 and 8, src/core/agent/
+	// run.ts) spelled as prose rather than imported: those constants are read from the env on the
+	// RUNNER, so a value read here would be the orchestrator laptop's, which is not the number the
+	// run was held to. Prose that may be one env override stale beats a number that is confidently
+	// about the wrong machine.
+	"step-ceiling":
+		"runs are hitting the 100-step runaway backstop. Under the current contract a run must never fail for running out of steps, so three in a row is a MATRIX or HARNESS problem rather than a host one: read one trajectory for a genuine loop (the same two steps alternating forever), and check whether the arm pins AGENT_STEPS far below the backstop. Expect it to reproduce on every host — moving the arm will not help",
+	stalled:
+		"8 consecutive steps verified nothing (AGENT_STALL_STEPS). Two causes look identical from here and call for opposite responses: (1) the app went dark or unresponsive on THAT host — a host problem; read the run console and the last steps' screenshots, then ./run provision --doctor; (2) the task's real progress is invisible to the text-verification channel — long navigation stretches where nothing verifiable changes — which is NOT a host problem and will recur everywhere. The screenshots separate them: a dark app looks nothing like a working one",
 };
 
 /**

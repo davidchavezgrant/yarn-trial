@@ -7,7 +7,7 @@ import { auditTaskPrompt } from "../src/core/harness.js";
 import type { JobRecord } from "../src/remote/runner/jobs.js";
 import { collect, collectEntry, expectedProvenance, failureKind, jobTiming, journalScopes, parseAppmapStamp, parseGraphCounts, parseRunMetrics, poisonedHosts, technicalFailure } from "../src/bench/collect.js";
 import { archiveDirFor, entriesForArm, manifestPath, readManifest, recordSubmissions, submittedCount, type Manifest, type ManifestEntry, updateEntry, writeManifest } from "../src/bench/manifest.js";
-import { BACKENDS, BENCH_ALT_MODEL, BENCH_APP, BENCH_PRIMARY_MODEL, CREATION_EXCLUDED, EXPLORE_SAMPLES, armModel, MATRIX, armAppmapSlug, armById, armTitle, discoveryArmsFor, orderStages, perceptionLine, phaseArms, phaseRunCount, recipeArms, RENAMED_ARMS, STAGES, stageNeedsMaps, stageOf, type Arm } from "../src/bench/matrix.js";
+import { BACKENDS, BENCH_ALT_MODEL, BENCH_APP, BENCH_PRIMARY_MODEL, CREATION_EXCLUDED, EXPLORE_SAMPLES, TASK_SAMPLES, armModel, MATRIX, armAppmapSlug, armById, armTitle, discoveryArmsFor, orderStages, perceptionLine, phaseArms, phaseRunCount, recipeArms, RENAMED_ARMS, STAGES, stageNeedsMaps, stageOf, type Arm } from "../src/bench/matrix.js";
 import type { DispatchOptions } from "../src/remote/control/dispatch.js";
 import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, auditPhase, dateArg, dispatchOptionsFor, findCompileSource, plannedRuns, runPhase } from "../src/bench/orchestrate.js";
 import { renderReport, reportFileName, writeReport } from "../src/bench/report.js";
@@ -57,7 +57,11 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// EVERY explore arm at EXPLORE_SAMPLES since 2026-08-03 (the sampling policy): 10 arms
 	// x 2. It was 3 arms at n=2 and 7 at n=1, which left the widest-spread arm in the matrix
 	// (explore-vision, 9 vs 21 surfaces) as the one with no error bar.
-	assert.equal(phaseRunCount(1), 10 * EXPLORE_SAMPLES);
+	// ELEVEN since the second app went to a full cdp mirror (2026-08-03): explore-notion-cdp-vision
+	// joined, and it is a prerequisite rather than an extra — five of the eleven mirrored Notion
+	// cells resolve to the `.vision` map, and grounding an arm on a map no arm writes is how a run
+	// goes out ungrounded under a grounded label.
+	assert.equal(phaseRunCount(1), 11 * EXPLORE_SAMPLES);
 	// Phase 2: core 2 backends × 2 grounding × 3, plus 6 slices × 3. Two blocks were cut
 	// 2026-07-31 after their prerequisites were CHECKED rather than assumed (matrix.ts holds
 	// the full reasoning at each site): the Notion Calendar slice (4 arms × 2 = 8 runs — the
@@ -97,7 +101,16 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// the alternative is remembering to add them.
 	// +3 since 2026-08-03: the three blur cells took TASK_SAMPLES like every other measured
 	// cell instead of the n=2 the old ~5-8 run budget bought.
-	assert.equal(phaseRunCount(4), 7 + 51 + 9 + 18 + 3);
+	// The second app went from a 3-cell spot check to a FULL cdp mirror on 2026-08-03, which is why
+	// its term is now three terms and the biggest block in the stage. Kept split so each stays
+	// checkable against the Yarn slice it mirrors: configuration is every stage-2 cdp cell (11)
+	// crossed with the simple and complex tasks at n=3; reuse mirrors REUSE_PROCEDURES +
+	// REUSE_RECIPES on the one backend a web target has (compile 1 + replay 3 + norescue 3 +
+	// recipe 3 + recipe-from-ungrounded 3 = 13, per task); the model axis mirrors the three Claude
+	// cells, per task. Notion's reuse arms sit HERE and not in stage 3 for the same reason
+	// blur-compile/blur-replay do — stage 3 is the canonical task's reuse slice, and a second
+	// subject's reuse arms belong with the generalization question they answer.
+	assert.equal(phaseRunCount(4), 7 + 51 + 9 + 3 + (11 * 2 * TASK_SAMPLES) + (13 * 2) + (3 * 2 * TASK_SAMPLES));
 	// Stage 9 Diagnostics: the AX-offset pair at n=2. Off the ladder — it measures the rig.
 	assert.equal(phaseRunCount(9), 4);
 	// The collapse REGROUPED; it did not add or drop a run. This is the guard on that claim, and
@@ -110,7 +123,12 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 		STAGES.reduce((t, st) => t + phaseRunCount(st.n), 0),
 		// +10 since 2026-08-03: 7 explore repeats and 3 blur samples, from making the counts
 		// uniform per family rather than per arm.
-		207 + 20 + 16 + 10,
+		// +130 for the second app's full cdp mirror (2026-08-03): 2 explore + 110 in stage 4 + 36
+		// filmed takes, the last of which arrived by DERIVATION rather than declaration — dropping
+		// `app === BENCH_APP` from FILMABLE films Notion automatically. Notion now stands at 152 runs
+		// against Yarn's 231. It cannot reach 231: 115 of Yarn's runs are ax or axdom arms, and both
+		// are hard refusals on a web target, so 152-against-116-cdp-runs is the parity that exists.
+		207 + 20 + 16 + 10 + 130,
 	);
 	// Phase 5 (filmed): one take per phase-2 task config (14, including the minimum-context
 	// pair — derived from the phase-2 arms, so adding a config there adds a filmed take here)
@@ -122,8 +140,13 @@ test("MATRIX__MatchesPlanPhaseTotals__When__Counted", () => {
 	// Phase 8 is excluded: it is a diagnostics PAIR (one plain arm, one filmed) and the filmed
 	// half is the measurement, not a take of the other. Deriving a twin for it would film the
 	// same config twice and compare a run against itself.
-	// BENCH_APP-scoped, matching production: the second app is measured and deliberately unfilmed.
-	const filmable = MATRIX.filter((a) => a.app === BENCH_APP && stageOf(a.phase)?.kind === "measurement" && (a.kind === "task" || a.kind === "replay"));
+	// EVERY app since 2026-08-03. This was BENCH_APP-scoped on the reasoning that the deliverable is
+	// footage of the product — true of the reel, wrong as the rule, because stage 5 is also the
+	// matrix's validity check on its own ranking: `--record` changes the action space, so a ranking
+	// that REORDERS under film was measured in a mode the product does not ship. Asking that of Yarn
+	// alone answered it for Yarn, and a reorder that appears on one app and not the other is the
+	// more interesting result. Mirrors FILMABLE exactly, so the two cannot drift.
+	const filmable = MATRIX.filter((a) => stageOf(a.phase)?.kind === "measurement" && (a.kind === "task" || a.kind === "replay"));
 	assert.equal(phaseRunCount(5), filmable.length);
 });
 
@@ -224,23 +247,55 @@ test("GroundedArms__ReadAMapSomeExploreWrites__When__EveryArmIsResolved", () => 
 	const written = new Set(MATRIX.filter((a) => a.kind === "explore").map(armAppmapSlug));
 	for (const a of MATRIX) {
 		if (a.kind !== "task" || a.dispatch.noGrounding || a.dispatch.useCurated || a.dispatch.useRecipes) continue;
-		const wanted = a.env?.APPMAP_VARIANT ? undefined : armAppmapSlug(a);
-		// Arms pinned to an explicit variant resolve through APPMAP_VARIANT, not the slug.
-		if (!wanted) continue;
+		// APPMAP_VARIANT arms are no longer skipped (2026-08-03). They used to be, on the grounds
+		// that they "resolve through APPMAP_VARIANT, not the slug" — but that was a hole exactly
+		// where the guard was needed: armAppmapSlug derived the tier from the arm's own perception
+		// while the runtime reads the variant, so a variant arm could name a map nothing writes and
+		// pass. armAppmapSlug now reads the variant too, so one derivation covers every arm and the
+		// skip has nothing left to protect.
+		const wanted = armAppmapSlug(a);
 		assert.ok(written.has(wanted), `${a.id} grounds on ${wanted}, which no explore arm writes`);
 	}
 });
 
-test("SecondAppArms__AreCdpOnlyAndUnfilmed__When__TheTargetIsAUrl", () => {
+test("SecondAppArms__AreCdpOnly__When__TheTargetIsAUrl", () => {
 	const web = MATRIX.filter((a) => a.dispatch.url);
 	assert.ok(web.length > 0, "guard assumes a web target exists");
 	for (const a of web) {
 		// run.ts throws "web targets run on the cdp backend" — an ax web arm is not a worse
-		// measurement, it is a guaranteed crash.
+		// measurement, it is a guaranteed crash. This half of the guard is permanent.
 		assert.equal(a.dispatch.backend, "cdp", `${a.id} targets a URL on the ${a.dispatch.backend} backend`);
-		assert.notEqual(a.dispatch.record, true, `${a.id} films a second app; the deliverable is footage of the product`);
+		// axdom goes with ax: the sidecar reads a native window's pid, which a CDP page has none of.
+		assert.notEqual(a.dispatch.axdomOff, true, `${a.id} sets AXDOM=0 on a web target, where there is no AX tree to strip`);
 	}
-	assert.equal(MATRIX.filter((x) => x.app !== BENCH_APP && x.id.endsWith("-filmed")).length, 0);
+	// The unfilmed assertion is GONE (2026-08-03) and its inverse is asserted instead: the second app
+	// is now filmed, because stage 5 is the validity check on the ranking and not only a reel. See
+	// FILMABLE and MATRIX__FilmsEveryMeasuredConfig.
+	const webFilmed = web.filter((a) => a.dispatch.record === true);
+	assert.equal(webFilmed.length, 36, "the second app's filmed takes arrive by derivation from FILMABLE, not by declaration");
+	for (const a of webFilmed) assert.ok(a.id.endsWith("-filmed"), `${a.id} sets record without the -filmed id the derivation gives it`);
+});
+
+test("SecondAppArms__MirrorEveryCdpCell__When__TheMatrixIsCounted", () => {
+	// The mirror is DERIVED (every stage-2 cdp task cell), so this guards the derivation's result
+	// rather than a hand-list: if a cdp cell is added to stage 2 and the Notion twin does not
+	// appear, the two numbers stop matching. It also pins what cannot be mirrored — the ax half —
+	// so a future reader does not read the gap as an oversight.
+	const s2 = MATRIX.filter((a) => a.phase === 2 && a.kind === "task");
+	const cdpCells = s2.filter((a) => a.dispatch.backend === "cdp");
+	assert.equal(cdpCells.length, 11, "the mirrored set is every stage-2 cdp cell");
+	assert.equal(s2.length - cdpCells.length, 11, "the other half is ax and cannot exist on a web target");
+
+	const notion = MATRIX.filter((a) => a.app !== BENCH_APP);
+	assert.equal(notion.reduce((t, a) => t + a.n, 0), 152, "second-app runs");
+	assert.equal(MATRIX.filter((a) => a.app === BENCH_APP).reduce((t, a) => t + a.n, 0), 231, "Yarn runs, unchanged by the mirror");
+
+	// Every mirrored config cell exists for BOTH tasks. A cell present for one task only is the
+	// silent-asymmetry bug this whole expansion was auditing.
+	for (const cell of cdpCells) {
+		assert.ok(notion.some((a) => a.id === `notion-${cell.id}`), `no simple-task Notion twin for ${cell.id}`);
+		assert.ok(notion.some((a) => a.id === `notion-complex-${cell.id}`), `no complex-task Notion twin for ${cell.id}`);
+	}
 });
 
 test("MATRIX__UsesOnlyAxAndCdp__When__DomIsDeleted", () => {
@@ -495,11 +550,12 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		// takes x/y — "pointer actions at viewport CSS-pixel coordinates read off the
 		// screenshot" — so pixel addressing was available on that backend all along. Running it
 		// on both is what separates vision-only's 0/3 into a perception result or an aiming one.
-		// CALLS, not arms: six single-channel arms — vision-only on both backends, ax-no-vision,
-		// ax-noaxdom-no-vision, cdp-no-vision, and the second app's no-vision — each at
-		// EXPLORE_SAMPLES.
-		assert.equal(single.length, 6 * EXPLORE_SAMPLES, "five single-channel cells on Yarn, plus the second app's no-vision discovery");
-		assert.equal(single.filter((c) => c.noAx).length, 2 * EXPLORE_SAMPLES, "a screenshots-only pass per backend, both repeated for an error bar");
+		// CALLS, not arms: seven single-channel arms — vision-only on both backends, ax-no-vision,
+		// ax-noaxdom-no-vision, cdp-no-vision, and the second app's no-vision AND vision-only —
+		// each at EXPLORE_SAMPLES. The second app's vision-only pass joined on 2026-08-03 as a
+		// prerequisite of its full cdp mirror: five mirrored cells read the `.vision` map.
+		assert.equal(single.length, 7 * EXPLORE_SAMPLES, "five single-channel cells on Yarn, plus the second app's no-vision and vision-only discovery");
+		assert.equal(single.filter((c) => c.noAx).length, 3 * EXPLORE_SAMPLES, "a screenshots-only pass per backend on Yarn, plus the second app's");
 		// Backends PRESENT, not call counts — cdp repeats for an error bar and that is not a
 		// second condition.
 		assert.deepEqual(
@@ -532,7 +588,7 @@ test("runPhase__SubmitsEveryArmSample__When__GoIsSet", async () => {
 		// the SAME target as the app it declares, so a web arm can never silently ground one
 		// site's map onto another's runs.
 		const web = fake.calls.filter((c) => c.url);
-		assert.equal(web.length, 2 * EXPLORE_SAMPLES, "the second app's full-perception and no-vision passes, each at EXPLORE_SAMPLES");
+		assert.equal(web.length, 3 * EXPLORE_SAMPLES, "the second app's full-perception, no-vision and vision-only passes, each at EXPLORE_SAMPLES");
 		for (const c of web) assert.equal(c.app, c.url, `${c.url} dispatched under app ${c.app}`);
 		assert.ok(
 			fake.calls.every((c) => c.app === "Yarn" || c.url),
@@ -1133,16 +1189,22 @@ test("renderReport__ListsStampsAndSections__When__ManifestHasEntries", () => {
 	const md = renderReport(m);
 	assert.match(md, /## Stage 1 — Discovery/);
 	assert.match(md, /## Stage 2 — Configuration: backend × grounding \(core\)/);
-	// Notion was killed as an approach (David, 2026-08-01), so the SECTION it rendered — empty
-	// ever since the slice was cut — goes with it. An empty table reads as "we measured this and
-	// found nothing", which is the opposite of what happened.
+	// This assertion INVERTED on 2026-08-03, and the inversion is the point.
 	//
-	// Narrowly a check on HEADINGS, not on the word: the report should still say in prose that
-	// every Notion arm was cut and cross-app transfer is therefore unmeasured. Dropping that
-	// sentence with the table would turn an admitted gap into an unmentioned one.
-	const headings = md.split("\n").filter((l) => l.startsWith("## "));
-	assert.deepEqual(headings.filter((h) => /notion/i.test(h)), [], "no section may exist for arms that do not");
-	assert.match(md, /Notion arm was cut|Notion cut entirely/, "the cut should stay visible as a stated limit");
+	// It used to forbid any Notion heading and REQUIRE the prose "every Notion arm was cut", because
+	// the arms were gone and an empty table reads as "we measured this and found nothing". Both
+	// halves were right then and are wrong now: Notion web is 77 arms / 152 runs, so the rate the
+	// report must not misstate is the opposite one. A test that pins a limitation sentence keeps
+	// asserting it after the limitation is lifted, which is how this one came to guard a falsehood.
+	//
+	// What is checked now is that the report cannot claim the gap still exists. Stage 4's own
+	// heading covers the arms, so no separate section is required — but the false sentence is
+	// forbidden outright.
+	assert.doesNotMatch(md, /Notion arm was cut|Notion cut entirely|second APP yet/, "the report must not claim a gap the matrix has closed");
+	assert.match(md, /cross-app transfer is measured/, "the report should state that the second app is wired");
+	// Notion Calendar — the DESKTOP app — genuinely is still cut, and conflating it with the web
+	// target is the mistake a reader makes here. The header keeps that distinction visible.
+	assert.match(md, /Notion Calendar cut/, "the one cut that stuck should stay stated");
 	assert.match(md, /## Stage 3 — Reuse: procedures/);
 	assert.match(md, /## Timing/);
 	assert.match(md, /## For Aman/);
@@ -1449,9 +1511,12 @@ test("MATRIX__FilmsEveryMeasuredConfig__When__PhaseFiveIsDerived", () => {
 	// Phase 8 is excluded: it is a diagnostics PAIR (one plain arm, one filmed) where the filmed
 	// half IS the measurement — staging the window is the perturbation under test. Deriving a
 	// twin would film the same config twice and compare a run against itself.
-	// Scoped to BENCH_APP since 2026-08-03: the deliverable is footage of the PRODUCT, so the
-	// second-app arms are measured and deliberately unfilmed.
-	const measured = MATRIX.filter((a) => a.app === BENCH_APP && stageOf(a.phase)?.kind === "measurement" && (a.kind === "task" || a.kind === "replay"));
+	// UNSCOPED again since 2026-08-03. It was BENCH_APP-only for a few hours on the reasoning that
+	// the deliverable is footage of the PRODUCT. That is true of the reel and false of this test:
+	// what stage 5 guards is that no measured config was ranked in a mode the product does not ship,
+	// and the second app's configs are measured, so they need the same check. The reel is a
+	// selection made from the corpus later, not the corpus itself.
+	const measured = MATRIX.filter((a) => stageOf(a.phase)?.kind === "measurement" && (a.kind === "task" || a.kind === "replay"));
 	const filmed = MATRIX.filter((a) => a.phase === 5);
 	const shape = (a: Arm) => JSON.stringify({ ...a.dispatch, record: undefined, env: a.env ?? null });
 
@@ -1891,6 +1956,33 @@ test("creationArms__CarryAStepBudgetThatFitsTheTask__When__TheDefaultWouldCutThe
 	assert.ok(create.length >= 15, "the creation task covers the phase-2 grid");
 	for (const a of create)
 		assert.ok(a.dispatch.steps === undefined || a.dispatch.steps > 19, `${a.id} caps below a known-good run's 19 steps`);
+});
+
+test("MATRIX__PinsNoBudgetBelowTheBackstop__When__EveryArmIsChecked", () => {
+	// The universal form of the guard above, and the one the history actually called for. The
+	// create-only version let the mistake move: the Notion arms were pinned to 30 and 60 while the
+	// default was already a 100-step runaway backstop, and nothing failed. That is the same bug in
+	// its third location — 15, then 30, then 60 — each time a ceiling reporting itself as the
+	// agent's verdict, and each time in a file whose comments already explained why not to.
+	//
+	// The owner's rule is that a run must NEVER fail for running out of steps. A pin below the
+	// backstop can only make that possible, so the assertion is not "pin something sensible", it is
+	// "do not pin". `stallSteps` is the knob for a task that needs more room.
+	const BACKSTOP = 100;
+	for (const a of MATRIX) {
+		assert.ok(
+			a.dispatch.steps === undefined || a.dispatch.steps >= BACKSTOP,
+			`${a.id} pins steps=${a.dispatch.steps}, below the ${BACKSTOP}-step backstop — use stallSteps instead`,
+		);
+	}
+	// And the replacement knob is actually in use, so the deletion of the Notion pins did not
+	// silently leave the complex task exposed to a stall window sized for a dropdown.
+	const widened = MATRIX.filter((a) => a.dispatch.stallSteps !== undefined);
+	assert.ok(widened.length > 0, "no arm widens its stall window; the complex second-app task needs one");
+	for (const a of widened) {
+		assert.ok(a.dispatch.stallSteps! > 8, `${a.id} sets stallSteps=${a.dispatch.stallSteps}, at or below the default 8`);
+		assert.ok(a.dispatch.stallSteps! < BACKSTOP, `${a.id} widens the stall window past the backstop, which makes it unreachable`);
+	}
 });
 
 test("failureKind__SeparatesTheHarnessEndingARun__From__TheAgentsOwnVerdict", () => {

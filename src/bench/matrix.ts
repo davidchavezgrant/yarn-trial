@@ -141,11 +141,19 @@ export function orderStages(phases: Phase[]): Phase[] {
 /**
  * The dispatch knobs an arm turns, in `DispatchOptions`' exact spellings.
  *
- * Every one of them now EXISTS on that type — `backend`, `noAx`, `axdomOff`, `noGrounding`,
- * `useCurated`, `procedure`, `noRescue`, `url`, `appmapVariant` — and `JobKind` carries "replay".
- * This used to describe a contract being built concurrently, with orchestrate.ts casting at
- * the dispatch() call site until it merged; it merged, the cast is gone, and the compiler now
- * checks that an arm can only name a knob the wire actually has.
+ * Every knob declared here exists on that type — `backend`, `noVision`, `noAx`, `axdomOff`,
+ * `noGrounding`, `useCurated`, `useRecipes`, `recipeLineage`, `noRescue`, `record`, `url`,
+ * `snapPx`, `steps`, `stallSteps`, `model` — and `JobKind` carries "replay". This used to
+ * describe a contract being built concurrently, with orchestrate.ts casting at the dispatch()
+ * call site until it merged; it merged, the cast is gone, and the compiler now checks that an
+ * arm can only name a knob the wire actually has.
+ *
+ * TWO knobs the wire has that an ARM does not, and the asymmetry is deliberate: `procedure` (the
+ * compiled file a replay consumes) is threaded per dispatch by `dispatchOptionsFor(arm, procedure,
+ * model)` because it is resolved at submit time from the source arm's compile, not declared; and
+ * the appmap variant travels in `Arm.env` as `APPMAP_VARIANT` rather than as a dispatch field,
+ * because the runner must set it as pre-run ENV for the child to read. An earlier version of this
+ * comment listed both as ArmDispatch fields. They never were.
  */
 export interface ArmDispatch {
 	backend?: BenchBackend;
@@ -174,14 +182,42 @@ export interface ArmDispatch {
 	 */
 	snapPx?: number;
 	/**
-	 * Step budget for this arm, when the default 15 is the wrong size for its TASK.
+	 * Step budget for this arm. ALMOST ALWAYS WRONG TO SET — see below.
 	 *
-	 * The settings tasks finish in 5-13 steps, so 15 was never questioned. The creation task
-	 * cannot: the only known-successful run of that flow took 19, and every creation arm in the
-	 * first pass stopped at exactly 15 with `gave-up`. They were measuring the ceiling, not the
-	 * agent — a budget starvation dressed up as a capability result.
+	 * The default is no longer a budget at all: `AGENT_STEPS` is a runaway backstop of 100, and the
+	 * condition that actually ends a working run is the stall detector (`stallSteps`). A run must
+	 * never fail because it ran out of steps, which makes an arm-level ceiling a way to reintroduce
+	 * exactly the bug the backstop was raised to kill.
+	 *
+	 * This codebase has now made that mistake three times, each one layer further out, and the
+	 * history is the reason this comment is long. First the default was 15: the settings tasks
+	 * finish in 5-13 so nobody questioned it, then every creation arm stopped at exactly 15 with
+	 * `gave-up` against a known-good route of 19 — a ceiling reported as a capability result.
+	 * Second, the creation arms were pinned to 30, and three of them hit 30 with verified steps
+	 * inside their last eight; that pin is now deleted (see creationArms). Third, the Notion arms
+	 * were pinned to 30 and 60 while the default was already 100, and the comment justifying the 60
+	 * admitted it had "no known-good run at all" to measure against — a guess acting as a verdict.
+	 * Those are deleted too.
+	 *
+	 * A test asserts no arm pins a budget below the backstop. If you are reaching for this field,
+	 * you almost certainly want `stallSteps` instead: widen how long a run may go unverified, not
+	 * how many steps it is allowed to take.
 	 */
 	steps?: number;
+	/**
+	 * How many consecutive steps this arm may verify NOTHING before the harness ends the run.
+	 *
+	 * `AGENT_STALL_STEPS`, default 8. This is the real stopping condition, so it is the number an
+	 * arm should tune when its TASK legitimately produces long unverifiable stretches — the stall
+	 * counter resets only on a verified step, and a task that navigates for ten steps without
+	 * putting checkable text on screen is indistinguishable, to the detector, from a dead window.
+	 *
+	 * Raising it is not free: it is the only thing standing between a genuinely stuck run and the
+	 * 100-step backstop, so every step of extra window is a step of a stuck run nobody stops.
+	 * Prefer it over `steps` anyway — a stall window that is too small ends working runs, where a
+	 * budget that is too small ends them AND reports the ending as the agent's verdict.
+	 */
+	stallSteps?: number;
 	/**
 	 * Pin THIS arm to a model, overriding the pass-level one.
 	 *
@@ -224,10 +260,16 @@ export interface Arm {
 	/**
 	 * WHY this arm actuates over `ax` when the default is `cdp`.
 	 *
-	 * Required on every ax arm, and enforced by a test. CDP is the production actuator — it
-	 * backgrounds, it never steals the operator's pointer, and it has none of cua's liabilities
-	 * (no 300s session lifetime, no shared daemon, no consent gate). AX is the FALLBACK: the
-	 * actuator of last resort when there is no reachable DOM.
+	 * Every ax arm must be JUSTIFIED, and a test enforces that — but not necessarily in writing
+	 * here. The test accepts three justifications: this field, or a cdp twin of the same shape
+	 * (the pair IS the comparison, so the reason is structural), or `axdomOff` (an arm about the
+	 * DOM-attribute sidecar can only exist on ax). 39 of the 58 ax arms carry no `axRationale` and
+	 * the suite is green, which is correct — an earlier version of this comment claimed the field
+	 * was required on every ax arm, and that was never what the test checked.
+	 *
+	 * CDP is the production actuator — it backgrounds, it never steals the operator's pointer, and
+	 * it has none of cua's liabilities (no 300s session lifetime, no shared daemon, no consent
+	 * gate). AX is the FALLBACK: the actuator of last resort when there is no reachable DOM.
 	 *
 	 * The matrix drifted to 73% ax (77 runs against 28) purely because `task()` callers kept
 	 * writing `backend: "ax"` out of habit, and nothing asked them why. A default is not a
@@ -254,19 +296,27 @@ export const BENCH_APP = "Yarn";
 export const CANONICAL_TASK = "show me how to change the cursor type";
 
 /**
- * NOTION IS GONE (David, 2026-08-01) — not deferred, killed as an approach.
+ * NOTION CALENDAR is gone; NOTION WEB came back (David, 2026-08-01, reversed 2026-08-03).
  *
- * Three things used to live here and all are removed: `NC_APP`/`NC_TASK` (the Notion Calendar
- * generalization slice, cut when the app turned out to be installed on none of the three Macs),
- * and `WEB_EXPLORE_URL`/`WEB_TASK` (app.notion.com as the canonical web target, cut the same
- * day — the grounding pass was the longest in the matrix at 1h14m and the prompt and frontier
- * fixes forced a re-run of every pass).
+ * Two different cuts happened on 2026-08-01 and only one of them stuck. `NC_APP`/`NC_TASK` — the
+ * Notion Calendar generalization slice — is gone for good: the app is installed on none of the
+ * three colo Macs, so those arms were guaranteed refusals. That half is still true.
  *
- * Recorded rather than silently deleted because "add a second app" is a reasonable idea someone
- * will have again, and the reason it did not happen here is logistical, not conceptual: nothing
- * in the matrix measures cross-APP transfer, only cross-task (phase 4). Their data is kept —
- * docs/appmaps/web-app.notion.com.*, notion-calendar.* and docs/curated/notion-calendar.md are
- * the only record of what those passes produced.
+ * The other half was reversed. app.notion.com went the same day for logistical reasons (the
+ * grounding pass was the longest in the matrix at 1h14m and the frontier fixes forced a re-run of
+ * everything), and it is back as the benchmark's SECOND APP because the reason it went was cost,
+ * never design — see SECOND_APP_URL below. The matrix now measures cross-APP transfer, not only
+ * cross-task: stage 4 varies task, model AND app.
+ *
+ * What cannot be mirrored, and it is half the matrix: every `ax` arm and every `axdom` arm. A web
+ * target on the ax backend is a hard refusal in three places (`agent/run.ts`, `explore.ts`,
+ * `backends/ax.ts`), and the axdom sidecar reads a native window's pid, which a CDP page has no
+ * equivalent of. So Notion mirrors the ELEVEN cdp cells and nothing else; the ax/cdp comparison,
+ * the native-equivalent tier and the min-context floor are Yarn-only by construction. Notion still
+ * out-runs Yarn's cdp-only half, because it crosses two tasks where the config sweep crosses one.
+ *
+ * docs/appmaps/notion-calendar.* and docs/curated/notion-calendar.md stay on disk as the only
+ * record of the Calendar passes, and no arm reads them.
  */
 
 
@@ -290,7 +340,7 @@ export const PHASE4_TASK = "show me how to change the motion blur";
  * Yarn's ACTUAL product flow — write a script, get scenes, pick a voice — as opposed to the two
  * settings toggles the rest of the matrix runs on.
  *
- * Every finding through phase 6 is scoped to flipping a dropdown. That is a fair test of
+ * Every finding through stage 3 is scoped to flipping a dropdown. That is a fair test of
  * navigation and verification and a poor proxy for what Yarn sells, which is making a video.
  * Phrased GOAL-ONLY: the one previous run of this flow dictated its route ("then open the
  * Script tab…") and passed the hint gate, which is the hole NAV_HINT/SEQUENCE_HINT now close.
@@ -928,7 +978,7 @@ const GEN_SECOND_TASK: Arm[] = [
 ];
 
 /**
- * Phase 6 — recipes: can an agent's own written-up success replace the exploration pass?
+ * Stage 3 (reuse), the recipe half — can an agent's own written-up success replace the exploration pass?
  *
  * The question Yarn actually has to answer to ship this. Jasper's budget is ~24h to onboard a
  * new app, and the current answer to "how" is a 40-minute frontier sweep producing a topological
@@ -1050,11 +1100,11 @@ const filmed = (arm: Arm): Arm => ({
  * for the reason above.
  */
 /**
- * Phase 7 — the two axes the first 115 runs never varied: the TASK and the MODEL.
+ * Stage 4 — the axes the first 115 runs never varied: the TASK, the MODEL, and now the APP.
  *
  * Creation arms run the product flow on cdp, the actuator that works. Claude arms mirror three
- * phase-2/6 cells exactly, changing only the model, so the comparison is a difference of one
- * variable rather than two tables side by side.
+ * stage-2/3 cells exactly, changing only the model, so the comparison is a difference of one
+ * variable rather than two tables side by side. The second-app arms below do the same for the app.
  */
 /**
  * The creation task on EVERY phase-2 config, derived from that grid rather than hand-listed.
@@ -1117,11 +1167,11 @@ const GEN_TASK_AND_MODEL: Arm[] = [
 	task("claude-cdp-recipe-from-ungrounded", { backend: "cdp", useRecipes: true, recipeLineage: "ungrounded", model: BENCH_ALT_MODEL }, "does the replacement result survive a model change — the finding most worth a second model", { phase: 4 }),
 ];
 
-// Phase 7 joins the derivation rather than being remembered — that is the whole point of the
+// Stage 4 joins the derivation rather than being remembered — that is the whole point of the
 // rule. It also means the CREATION flow gets filmed, which is the footage closest to what Yarn
 // actually sells; every take before it was of a dropdown being changed.
 /**
- * Phase 8 — HARNESS diagnostics. These arms measure the rig, not the agent.
+ * Stage 9 — HARNESS diagnostics. These arms measure the rig, not the agent.
  *
  * They exist because the two runs that finally explained the "~43px Library-page AX offset"
  * were dispatched by hand and left no trace in the matrix: a plain ax run and a filmed one,
@@ -1171,6 +1221,21 @@ const DIAGNOSTICS: Arm[] = [
  * arms re-run it rather than grounding on code no other arm executed. Skip them with `--force`
  * and reuse the old map if the 1h14m is not affordable — but label the rows if you do.
  */
+/**
+ * Carried by EVERY Notion arm, not just the explores.
+ *
+ * It used to sit on the two explore arms only, which was a reading of `prereq` as "what this pass
+ * needs to produce its artifact" rather than "what this run needs to start". Every Notion task,
+ * replay and filmed take depends on the same session, and a fleet Mac without it does not fail
+ * loudly — it lands on a login wall and the run reads as an agent that could not do the task.
+ * Measured 2026-08-03: mac1 had no app.notion.com session while mac2 and mac3 did, so an unlucky
+ * schedule and a broken agent look identical.
+ *
+ * Kept to one line because `bench plan` prints it per arm, and 75 of the 77 Notion arms carry it —
+ * the two compiles do not, because a compile is a local file transform that never opens a browser.
+ */
+const NOTION_PREREQ = "Notion signed in to the RUNNER's Chrome profile, not the operator's Mac (`./run browser-login`)";
+
 const DISCOVERY_SECOND_APP: Arm[] = [
 	{
 		id: "explore-notion-cdp",
@@ -1179,7 +1244,7 @@ const DISCOVERY_SECOND_APP: Arm[] = [
 		app: SECOND_APP_URL,
 		n: EXPLORE_SAMPLES,
 		dispatch: { backend: "cdp", url: SECOND_APP_URL },
-		prereq: "Notion signed in to the RUNNER's Chrome profile (`./run browser-login`), not the Mac's — measured 2026-08-03, mac1 had no app.notion.com session while mac2/mac3 did",
+		prereq: NOTION_PREREQ,
 		informs: "does the discovery story hold on an app 3x Yarn's size that nobody tuned the harness against",
 	},
 	{
@@ -1189,44 +1254,100 @@ const DISCOVERY_SECOND_APP: Arm[] = [
 		app: SECOND_APP_URL,
 		n: EXPLORE_SAMPLES,
 		dispatch: { backend: "cdp", noVision: true, url: SECOND_APP_URL },
-		prereq: "Notion signed in to the runner Chrome profile — same requirement as explore-notion-cdp",
+		prereq: NOTION_PREREQ,
 		informs: "the novision map the no-vision arm reads; also a second sample of what dropping screenshots costs during GROUNDING",
+	},
+	/**
+	 * The vision-only grounding pass, added 2026-08-03 when the second app went to a full cdp
+	 * mirror. It is a PREREQUISITE, not an extra: five of the eleven mirrored cells resolve to
+	 * `web-app.notion.com.cdp.vision` — the two `-visionmap` cells, `vision-only-cdp-grounded`, and
+	 * both snap cells — and grounding an arm on a map no arm writes is how a run ends up
+	 * ungrounded under a grounded label. That is this repo's most-repeated failure and the one
+	 * `groundingChecked` caught six times in the last pass.
+	 *
+	 * An earlier note here argued the opposite — that the two vision-only Notion cells were "cut on
+	 * the evidence" because all four vision-only cdp cells on Yarn came back 0/3 and the vision-map
+	 * win happened on ax, which is impossible on web. That reasoning was about whether the cells
+	 * would SUCCEED. It is the wrong test for whether they should exist: a floor that reproduces on
+	 * a second app is a result, and snap (the whole point of which is to ask whether refining the
+	 * pixel rescues that floor) had no second-app measurement at all. The pass costs ~1h15m.
+	 */
+	{
+		id: "explore-notion-cdp-vision",
+		phase: 1,
+		kind: "explore",
+		app: SECOND_APP_URL,
+		n: EXPLORE_SAMPLES,
+		dispatch: { backend: "cdp", noAx: true, url: SECOND_APP_URL },
+		prereq: NOTION_PREREQ,
+		informs: "writes the .vision map the five pixel-reading Notion cells consume; also whether a vision-only sweep degrades worse on an app 3x Yarn's size",
 	},
 ];
 
 /**
- * The second APP crossed with a simple and a complex task.
+ * The second APP crossed with a simple and a complex task — the FULL cdp mirror (David, 2026-08-03).
  *
- * Derived from the stage-2 cells rather than hand-written, so a config added there is not
- * silently missing here — but from a NAMED subset, because every ax cell is impossible on a web
- * target and running all twenty would be twelve arms of guaranteed refusal.
+ * DERIVED, not named. `SECOND_APP_CELLS` is every stage-2 cdp task cell, computed from the grid
+ * rather than hand-listed, so a config added to stage 2 gets its Notion twin automatically. That is
+ * the same rule `creationArms` and `FILMABLE` follow, and for the same reason: the alternative is
+ * remembering. It resolves to eleven cells today.
  *
- * The five are the cdp cells that carry a finding worth re-testing: the grounding pair (does
- * cdp's task-dependence reproduce off Yarn), the no-vision cell (does lean-beats-rich transfer),
- * and the two vision-only cells (the floor, and whether a map lifts it).
+ * WHY ELEVEN AND NOT TWENTY-TWO. The other eleven stage-2 cells are `ax`, and a web target on the
+ * ax backend is not a worse measurement — it is a hard refusal in `agent/run.ts`, `explore.ts` and
+ * `backends/ax.ts`. The axdom cells go with them (the sidecar reads a native window's pid). So the
+ * ax/cdp comparison, the native-equivalent tier and the min-context floor are Yarn-only by
+ * construction, and no arrangement of Notion arms can reach Yarn's 231 runs. Crossing two tasks
+ * puts Notion at 152 against Yarn's 116 cdp runs, which is the honest form of parity: every
+ * dimension that CAN exist on a web target does, and Notion runs more of them than Yarn because
+ * Yarn's config sweep crosses one task where this crosses two.
+ *
+ * The previous version ran THREE cells and argued the vision-only ones should stay cut because all
+ * four vision-only cdp cells on Yarn came back 0/3. See the note on `explore-notion-cdp-vision` for
+ * why that was the wrong test — briefly: a floor that reproduces on a second app is a result, and
+ * snap exists precisely to ask whether refining the pixel lifts it.
+ *
+ * NO STEP BUDGET. The 30 and 60 that used to be pinned here are deleted. They sat below a default
+ * backstop of 100, which made them the third instance of a ceiling acting as a verdict in this
+ * file's history, and the comment justifying the 60 admitted it had no known-good run to measure
+ * against. See `ArmDispatch.steps`. The complex arms carry a widened `stallSteps` instead, which is
+ * the knob that matches the actual risk.
+ *
+ * TWO PREREQUISITES beyond the sign-in, both of which will silently degrade a run to the appmap
+ * tier if missing rather than failing loudly:
+ *  - `docs/curated/web-app.notion.com.md` — the two `curated` cells read it. A missing curated file
+ *    warns and falls back, and `groundingChecked` only catches it at collect, after the runs are
+ *    paid for.
+ *  - `web-app.notion.com.cdp.vision.{md,json}` — written by `explore-notion-cdp-vision`, read by
+ *    the two `-visionmap` cells, `vision-only-cdp-grounded`, and both snap cells.
  *
  * RESET NOTE: both tasks create workspace content, and teardown only restores what the mutation
  * journal recorded — page and database creation is not that. Seed the workspace to a known state
  * and clear it between passes, or run n+1 and read the first sample as contaminated.
  */
+const SECOND_APP_CELLS: readonly string[] = [...CONFIG_CORE, ...CONFIG_SLICES]
+	.filter((a) => a.kind === "task" && a.dispatch.backend === "cdp")
+	.map((a) => a.id);
+
 /**
- * THREE cells, not five. The two vision-only cells were drafted and cut on the evidence.
+ * The complex task's stall window, widened from the default 8.
  *
- * They would need a third explore pass — a vision-only cdp sweep to write the `.vision` map they
- * resolve to, ~1h15m and $10-20 — and the thing it would buy is a second sample of a floor. All
- * four vision-only cdp cells on Yarn came back 0/3 this pass, two of them void on
- * grounding-mismatch. The vision-only result that DID work (a pixel-written map lifts a
- * pixel-only reader from 0/3 to 2/3) happened on the AX backend, and ax is impossible against a
- * web target — so the transferable half of that finding cannot be tested here at all.
+ * Not a guess dressed as a number, but not a measurement either — it is a bound read off the
+ * nearest evidence. Yarn's creation task carried 8-14 CONSECUTIVE unverified steps in a run that
+ * nonetheless succeeded, so 8 demonstrably ends work that would have finished on a flow whose
+ * progress the text channel cannot see. The complex Notion task is strictly longer than that
+ * (a schema change, five records, a second view, a grouping, a filter — six surfaces) and has no
+ * known-good run at all, so it gets double the default rather than a number pretending to precision.
  *
- * Add them back with `explore-notion-cdp-vision` if the vision-only deploy story ever needs a
- * second app behind it.
+ * This is the deliberate trade for deleting the step pin: a stall window too small ends working
+ * runs, where a budget too small ends them AND reports the ending as the agent's verdict. If these
+ * arms come back `stalled` with verified steps inside their last sixteen, raise it again — that
+ * signature means the detector fired on a working run, exactly as 30 and 60 did before it.
  */
-const SECOND_APP_CELLS = ["cdp-ungrounded", "cdp-grounded", "cdp-grounded-no-vision"] as const;
+const SECOND_APP_COMPLEX_STALL = 16;
 
 const secondAppArms = (): Arm[] =>
 	[...CONFIG_CORE, ...CONFIG_SLICES]
-		.filter((a) => (SECOND_APP_CELLS as readonly string[]).includes(a.id))
+		.filter((a) => SECOND_APP_CELLS.includes(a.id))
 		.flatMap((a) => [
 			{
 				...a,
@@ -1234,10 +1355,8 @@ const secondAppArms = (): Arm[] =>
 				phase: 4 as Phase,
 				app: SECOND_APP_URL,
 				task: SECOND_APP_SIMPLE_TASK,
-				// 30 against Yarn's settings tasks at 5-13: a table with five populated rows is
-				// more typing than a dropdown, and the stall detector is what actually ends a
-				// run now — the budget only has to be too big to bind.
-				dispatch: { ...a.dispatch, url: SECOND_APP_URL, steps: 30 },
+				dispatch: { ...a.dispatch, url: SECOND_APP_URL },
+				prereq: NOTION_PREREQ,
 				informs: `does ${a.id}'s result transfer to a second app on a SIMPLE task`,
 			},
 			{
@@ -1246,15 +1365,140 @@ const secondAppArms = (): Arm[] =>
 				phase: 4 as Phase,
 				app: SECOND_APP_URL,
 				task: SECOND_APP_COMPLEX_TASK,
-				// 60: six surfaces, a schema change and five records. The creation task needed 30
-				// against a known-good 19, and this is longer than that with no known-good run at
-				// all — so the budget is set not to bind rather than to a measured number.
-				dispatch: { ...a.dispatch, url: SECOND_APP_URL, steps: 60 },
+				dispatch: { ...a.dispatch, url: SECOND_APP_URL, stallSteps: SECOND_APP_COMPLEX_STALL },
+				prereq: NOTION_PREREQ,
 				informs: `does ${a.id}'s result transfer to a second app on a COMPLEX task — and does Yarn's task-dependence reproduce`,
 			},
 		]);
 
-const GEN_SECOND_APP: Arm[] = secondAppArms();
+/**
+ * Reuse on the second app: compile, replay, and both recipe lineages, per task.
+ *
+ * Mirrors REUSE_PROCEDURES and REUSE_RECIPES on the one backend a web target has. It sits in
+ * stage 4 rather than stage 3 for the same reason `blur-compile`/`blur-replay` do — stage 3 is the
+ * canonical task's reuse slice, and a second subject's reuse arms belong with the generalization
+ * question they answer. The precedent is exact, so this needs no new gate.
+ *
+ * Procedures are already PROVEN on web: `docs/procedures/www.wikipedia.org.bdf46c21.procedure.json`
+ * is a committed web procedure and `procedure-cli.ts` replays one through `--url`. Recipes work too
+ * but relied on a slug that diverged for web targets — the promote path and the bench gate slugged
+ * `https-app.notion.com` while the run itself read `web-app.notion.com`, so every one of these arms
+ * would have found no recipe and silently run as an appmap arm. That is fixed at the three write
+ * sites; these arms are the first consumers that would have been bitten by it.
+ *
+ * Each recipe arm needs its OWN promoted harvest: `recipeFileFor` keys on the task hash, and the
+ * two Notion tasks hash differently, so a recipe harvested from the simple task cannot ground the
+ * complex one. The gate skips an arm with no promoted recipe loudly, which is the intended
+ * behaviour rather than a gap — the absence is itself a finding.
+ */
+const secondAppReuseArms = (): Arm[] =>
+	[
+		{ suffix: "", task: SECOND_APP_SIMPLE_TASK, stall: undefined as number | undefined },
+		{ suffix: "complex-", task: SECOND_APP_COMPLEX_TASK, stall: SECOND_APP_COMPLEX_STALL },
+	].flatMap(({ suffix, task: armTask, stall }): Arm[] => {
+		const id = (rest: string): string => `notion-${suffix}${rest}`;
+		const web = { backend: "cdp" as const, url: SECOND_APP_URL, ...(stall !== undefined ? { stallSteps: stall } : {}) };
+
+		return [
+			{
+				id: id("compile-cdp"),
+				phase: 4,
+				kind: "compile",
+				app: SECOND_APP_URL,
+				n: COMPILE_RUNS,
+				dispatch: { ...web },
+				sourceArm: id("cdp-grounded"),
+				informs: "does compile survive a second app — and what the gate refuses on a database-shaped one",
+			},
+			{
+				id: id("replay-cdp"),
+				phase: 4,
+				kind: "replay",
+				app: SECOND_APP_URL,
+				n: TASK_SAMPLES,
+				dispatch: { ...web },
+				sourceArm: id("compile-cdp"),
+				prereq: NOTION_PREREQ,
+				informs: "steps re-resolved vs rescued on a second app; model calls (target 0) and wall-clock vs live grounding",
+			},
+			{
+				id: id("replay-norescue"),
+				phase: 4,
+				kind: "replay",
+				app: SECOND_APP_URL,
+				n: TASK_SAMPLES,
+				dispatch: { ...web, noRescue: true },
+				sourceArm: id("compile-cdp"),
+				prereq: NOTION_PREREQ,
+				informs: "unattended-fleet posture on a second app: does the happy path hold with ZERO model calls",
+			},
+			{
+				id: id("cdp-recipe"),
+				phase: 4,
+				kind: "task",
+				app: SECOND_APP_URL,
+				task: armTask,
+				n: TASK_SAMPLES,
+				dispatch: { ...web, useRecipes: true },
+				sourceArm: id("cdp-grounded"),
+				prereq: NOTION_PREREQ,
+				informs: "does a frozen judge-passed route beat live appmap grounding on a second app, ON THE TASK IT WAS HARVESTED FROM",
+			},
+			{
+				id: id("cdp-recipe-from-ungrounded"),
+				phase: 4,
+				kind: "task",
+				app: SECOND_APP_URL,
+				task: armTask,
+				n: TASK_SAMPLES,
+				dispatch: { ...web, useRecipes: true, recipeLineage: "ungrounded" },
+				sourceArm: id("cdp-ungrounded"),
+				prereq: NOTION_PREREQ,
+				informs: "THE replacement question on a second app: can a write-up by an agent that had no map stand in for the 1h15m sweep",
+			},
+		];
+	});
+
+/**
+ * The model axis on the second app — three cells per task, mirroring GEN_TASK_AND_MODEL exactly.
+ *
+ * The Yarn model comparison varies one variable against its Sol twin. Doing the same here is what
+ * turns "Claude is better/worse at this" into a claim about the AGENT rather than about Yarn's DOM,
+ * which is the whole reason a second app was wired. The recipe cell is included because the
+ * replacement result is the finding most worth a second model AND a second app — it is the one that
+ * decides whether onboarding is a sweep or a handful of runs.
+ *
+ * The recipe file is keyed by (slug, backend, task hash, lineage) and NOT by model, so these arms
+ * read the same promoted recipe their Sol twins do. That is the point: the input is held fixed and
+ * only the reader changes.
+ */
+const secondAppModelArms = (): Arm[] =>
+	[
+		{ suffix: "", task: SECOND_APP_SIMPLE_TASK, stall: undefined as number | undefined },
+		{ suffix: "complex-", task: SECOND_APP_COMPLEX_TASK, stall: SECOND_APP_COMPLEX_STALL },
+	].flatMap(({ suffix, task: armTask, stall }): Arm[] => {
+		const web = { backend: "cdp" as const, url: SECOND_APP_URL, model: BENCH_ALT_MODEL, ...(stall !== undefined ? { stallSteps: stall } : {}) };
+		const cell = (rest: string, dispatch: ArmDispatch, informs: string, sourceArm: string): Arm => ({
+			id: `claude-notion-${suffix}${rest}`,
+			phase: 4,
+			kind: "task",
+			app: SECOND_APP_URL,
+			task: armTask,
+			n: TASK_SAMPLES,
+			dispatch,
+			sourceArm,
+			prereq: NOTION_PREREQ,
+			informs,
+		});
+
+		return [
+			cell("cdp-ungrounded", { ...web, noGrounding: true }, "is the ungrounded floor a model property, a Yarn property, or a general one — the three-way this arm alone can separate", `notion-${suffix}cdp-ungrounded`),
+			cell("cdp-grounded", { ...web }, "does grounding lift Claude the way it lifts Sol, off Yarn", `notion-${suffix}cdp-grounded`),
+			cell("cdp-recipe-from-ungrounded", { ...web, useRecipes: true, recipeLineage: "ungrounded" }, "does the replacement result survive BOTH a model change and an app change", `notion-${suffix}cdp-ungrounded`),
+		];
+	});
+
+const GEN_SECOND_APP: Arm[] = [...secondAppArms(), ...secondAppReuseArms(), ...secondAppModelArms()];
 
 const DECLARED: Arm[] = [...DISCOVERY, ...DISCOVERY_SECOND_APP, ...CONFIG_CORE, ...CONFIG_SLICES, ...REUSE_PROCEDURES, ...REUSE_RECIPES, ...GEN_SECOND_TASK, ...GEN_TASK_AND_MODEL, ...GEN_SECOND_APP, ...DIAGNOSTICS];
 
@@ -1268,12 +1512,19 @@ const DECLARED: Arm[] = [...DISCOVERY, ...DISCOVERY_SECOND_APP, ...CONFIG_CORE, 
  * remembers to exclude it.
  */
 const FILMABLE: Arm[] = DECLARED.filter(
-	// BENCH_APP only. The deliverable is footage of the PRODUCT — a filmed take of the agent
-	// driving someone else's web app demonstrates nothing Yarn wants to show, and the second-app
-	// arms would have added ten n=1 takes to a corpus nobody would cut from. Keyed on the app
-	// rather than on an exclusion list, so a third app inherits the rule; delete this clause to
-	// film everything.
-	(a) => a.app === BENCH_APP && stageOf(a.phase)?.kind === "measurement" && (a.kind === "task" || a.kind === "replay"),
+	// EVERY app, as of 2026-08-03. This used to be `a.app === BENCH_APP`, on the reasoning that the
+	// deliverable is footage of the PRODUCT and nobody would cut a reel from the agent driving
+	// someone else's web app. That is still true about the DELIVERABLE and was the wrong rule
+	// anyway, because stage 5 is not only a deliverable — it is the matrix's validity check on its
+	// own ranking. `--record` changes the action space (demo conduct, a demo act tool with no
+	// `set_value`, hover-dwell-click), so if the reliability ranking REORDERS under film then the
+	// measurement stages ranked configs in a mode the product does not ship. Asking that question of
+	// Yarn only answered it for Yarn: a reorder that appears on one app and not the other is the
+	// more interesting result, and it was unmeasurable while this clause stood.
+	//
+	// Cost is 36 further n=1 takes. Read the Notion takes as the validity check, not as reel
+	// material — nothing downstream cuts from them.
+	(a) => stageOf(a.phase)?.kind === "measurement" && (a.kind === "task" || a.kind === "replay"),
 );
 
 const DELIVERABLES: Arm[] = FILMABLE.map(filmed);
@@ -1448,11 +1699,23 @@ export const phaseRunCount = (phase: Phase): number => phaseArms(phase).reduce((
  * twice on 2026-08-01: first every Yarn explore wrote yarn.json (ax 156 nodes, cdp 196,
  * no-vision 180, last writer won), then the first fix added the backend but not the tier so
  * explore-ax and explore-no-vision still collided.
+ *
+ * WHICH TIER A CONSUMER READS IS `APPMAP_VARIANT`, NOT ITS OWN PERCEPTION (fixed 2026-08-03).
+ * This derived the tier from `dispatch.noAx`, which is the arm's own perception — but at run time
+ * `harness/appmap.ts` picks the tier from the env variant ALONE, and its comment says so
+ * deliberately ("not auto-derived from the run's own perception"). The two disagreed for five arms,
+ * and the disagreement was not cosmetic: `vision-only-grounded-axmap` and `-visionmap` exist
+ * precisely to be told apart, and both collapsed to one slug, so the dash attributed runs to a
+ * graph they never read. `cdp-grounded-visionmap` was inverted the other way. Reading the variant
+ * here makes this function agree with the code that actually opens the file.
+ *
+ * An explore arm has no variant to read — it WRITES the tier its own perception produces — so the
+ * `noAx` fallback is still correct for `kind: "explore"` and only for it.
  */
 export const armAppmapSlug = (arm: Arm): string =>
 	appmapSlug(arm.app, {
-		visionOnly: Boolean(arm.dispatch.noAx),
-		noVision: Boolean(arm.dispatch.noVision),
+		visionOnly: arm.kind === "explore" ? Boolean(arm.dispatch.noAx) : arm.env?.APPMAP_VARIANT === "vision",
+		noVision: arm.kind === "explore" ? Boolean(arm.dispatch.noVision) : arm.env?.APPMAP_VARIANT === "novision",
 		axdomOff: Boolean(arm.dispatch.axdomOff),
 		...(arm.dispatch.backend ? { backend: arm.dispatch.backend } : {}),
 	});
@@ -1499,13 +1762,23 @@ export function armTitle(arm: Arm): string {
 	if (arm.kind === "compile") return "procedure compile";
 	if (arm.kind === "replay") return `${filmed}procedure replay${arm.dispatch.noRescue ? " (no rescue)" : ""}`;
 
+	// The recipe branch is checked BEFORE the appmap variant because USE_RECIPES replaces the map
+	// rather than adding to it — an arm reading a recipe is not a vision-map arm that also has prose.
+	// Without this branch all fourteen recipe arms rendered as a plain "grounded task", which is the
+	// fall-through this function's header warns about: indistinguishable from the appmap arms they
+	// exist to be compared against. The lineage is in the label because the two lineages are
+	// different experiments — one presupposes the sweep, the other is the claim that replaces it.
 	const tier = arm.dispatch.noGrounding
 		? "ungrounded"
 		: arm.dispatch.useCurated
 			? "human-notes"
-			: arm.env?.APPMAP_VARIANT === "vision"
-				? "vision-map grounded"
-				: "grounded";
+			: arm.dispatch.useRecipes
+				? arm.dispatch.recipeLineage === "ungrounded"
+					? "recipe (from ungrounded)"
+					: "recipe"
+				: arm.env?.APPMAP_VARIANT === "vision"
+					? "vision-map grounded"
+					: "grounded";
 
 	return `${filmed}${tier} task`;
 }

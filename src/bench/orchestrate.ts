@@ -1,6 +1,7 @@
 import { pathToFileURL } from "node:url";
 import { auditTaskPrompt } from "../core/harness.js";
-import { appSlug, liveDir, outDir, relToData } from "../paths.js";
+import { liveDir, outDir, relToData } from "../paths.js";
+import { appmapSlug } from "../core/target.js";
 import { AUTO_HOST, type DispatchOptions, dispatchNotes, type DispatchResult } from "../remote/control/dispatch.js";
 import { CHALLENGER_N, challengerNeedsExplore, planChallenger } from "./challenger.js";
 import { collect } from "./collect.js";
@@ -136,6 +137,12 @@ export function dispatchOptionsFor(arm: Arm, procedure?: string, model?: string)
 		// adding only `record: true` and `n: 1`, so dropping it erases the entire difference.
 		...(d.record ? { record: true } : {}),
 		...(d.steps !== undefined ? { steps: d.steps } : {}),
+		// The stall window, not the backstop, is the number that ends a working run — so an arm
+		// that widens it is making a substantive claim about its TASK and the wire must carry it.
+		// Dropping this would silently return the arm to the global 8 and report the truncation as
+		// the agent's own verdict, which is the failure mode the step-budget history in
+		// `ArmDispatch.steps` is a monument to.
+		...(d.stallSteps !== undefined ? { stallSteps: d.stallSteps } : {}),
 		...(d.snapPx !== undefined ? { snapPx: d.snapPx } : {}),
 		...(d.noRescue ? { noRescue: true } : {}),
 		...(d.url ? { url: d.url } : {}),
@@ -436,8 +443,21 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 		const { recipeFileFor } = await import("../core/recipe.js");
 		const fs6 = await import("node:fs");
 		const dir = opts.recipesDir ?? recipesDir();
+		/**
+		 * `appmapSlug`, never `appSlug` — the gate has to name the file the RUN will look for.
+		 *
+		 * The run resolves its recipe through `targetSlug` (src/core/target.ts), which for a web
+		 * target is `web-<host>`; `appSlug` (src/paths.ts) only folds whitespace/slashes/colons and
+		 * so turns a web arm's URL into `https-app.notion.com`. `appmapSlug` is the ONE derivation
+		 * that routes a URL through `targetSlug` and a plain app name through `appSlug`, which is
+		 * why every other reader of an arm's app (collect, dash, the runner's job artifacts) already
+		 * calls it. With `appSlug` here the gate found the promoted file, the run did not, and the
+		 * arm silently ran on the appmap tier under a recipe label — caught only by
+		 * `groundingChecked` at collect, after the runs were paid for. A web arm's `app` is the FULL
+		 * URL for exactly this reason (see SECOND_APP_URL in matrix.ts).
+		 */
 		const wanted = (a: (typeof MATRIX)[number]): string =>
-			recipeFileFor(dir, appSlug(a.app), a.task ?? "", a.dispatch.backend, a.dispatch.recipeLineage ?? "grounded");
+			recipeFileFor(dir, appmapSlug(a.app), a.task ?? "", a.dispatch.backend, a.dispatch.recipeLineage ?? "grounded");
 		const missing = recipeArms(phase).filter((a) => !fs6.existsSync(wanted(a)));
 		/**
 		 * Refuse outright only when skipping the blocked arms would leave NOTHING to dispatch.
@@ -537,7 +557,7 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 /** `bench plan` — the whole resolved matrix, no side effects. */
 export function printPlan(log: (line: string) => void = console.log): void {
 	const total = MATRIX.reduce((sum, a) => sum + a.n, 0);
-	log(`benchmark matrix — ${MATRIX.length} arms, ${total} runs (dom cut; Notion cut entirely; recipes added 2026-08-01 — reasons in matrix.ts)`);
+	log(`benchmark matrix — ${MATRIX.length} arms, ${total} runs (dom cut; Notion Calendar cut, Notion web is the second app on a full cdp mirror; recipes added 2026-08-01 — reasons in matrix.ts)`);
 	for (const phase of PHASES) {
 		const st = stageOf(phase);
 		const note = [st?.inCorePass ? "" : "optional", st?.before?.length ? `needs ${st.before.join(" → ")} first` : "", st?.note]
@@ -620,13 +640,30 @@ function warnRollover(date: string, outRoot: string, log: (s: string) => void): 
 	log(`      A phase re-run now re-dispatches arms already collected yesterday. Continue that pass with: --date ${prior.date}`);
 }
 
+/**
+ * The core pass's stage numbers, DERIVED so the help text cannot outlive them.
+ *
+ * Both of the spans this feeds printed `1,2,3,6` until 2026-08-03 — an invocation `isPhase` has
+ * refused since eight phases collapsed into five stages plus diagnostics (there is no stage 6;
+ * there is a stage 9). An operator copying it got a refusal from the command its own usage line
+ * had just recommended.
+ *
+ * Read off STAGES rather than imported from autopilot's `DEFAULT_PHASES`, which is the same
+ * derivation: autopilot statically imports THIS module, so importing it back would close a cycle
+ * and USAGE is evaluated at module init, where the borrowed binding would still be in its
+ * temporal dead zone. Same source of truth either way — `StageDef.inCorePass`.
+ */
+const CORE_PHASES = STAGES.filter((s) => s.inCorePass).map((s) => s.n);
+/** Its complement: the stages an operator has to ask for by number. */
+const OPT_IN_PHASES = PHASES.filter((p) => !CORE_PHASES.includes(p));
+
 const USAGE = `usage: ./run bench plan
-       ./run bench phase <1|2|3|4|5|6> [--model <id>] [--date YYYY-MM-DD] [--host <mac>] [--go] [--force]
+       ./run bench phase <${PHASES.join("|")}> [--model <id>] [--date YYYY-MM-DD] [--host <mac>] [--go] [--force]
        ./run bench collect [--date YYYY-MM-DD]
        ./run bench judge [--cross] [--date YYYY-MM-DD]
        ./run bench harvest [--date YYYY-MM-DD]
        ./run bench watch <phase> [--interval <sec>] [--date YYYY-MM-DD]
-       ./run bench autopilot [--phases 1,2,3,6] [--model <id>] [--date YYYY-MM-DD] [--host <mac>]
+       ./run bench autopilot [--phases ${CORE_PHASES.join(",")}|all] [--model <id>] [--date YYYY-MM-DD] [--host <mac>]
                              [--interval <sec>] [--max-usd <n>] [--max-waves <n>] [--max-retries <n>] [--go]
        ./run bench truecost [--since <RFC3339>] [--bucket 1m|1h|1d]
        ./run bench challenger --model <id> [--primary <id>] [--go]
@@ -697,8 +734,8 @@ autopilot
          NEW sign-in refusal (exit 3 — 29% of archived runs; prints the signin command) and
          on a newly POISONED host; aborts a watch after 90 min of flat progress (wedged run)
          instead of holding the phase for hours; refuses to adopt an archive manifest as a
-         wiped live pass. Default phases 1,2,3,6 —
-         4 (optional) and 5 (filmed; changes the action space) are opt-in via --phases.
+         wiped live pass. Default phases ${CORE_PHASES.join(",")} — ${OPT_IN_PHASES.map((p) => `${p} ${stageOf(p)?.title ?? "?"}`).join(", ")}
+         are opt-in via --phases (5 films, which changes the action space; 9 measures the harness).
          Without --go: prints the plan and current progress, dispatches nothing. Your --go
          here is David's explicit-go gate, given once for the printed span. Holds no leash:
          Ctrl-C never touches a run, and re-running resumes from the manifest.
@@ -850,8 +887,9 @@ async function main(argv: string[]): Promise<number> {
 			 */
 			const nums = raw === "all" ? [...PHASES] : raw.split(",").map((s) => Number(s.trim()));
 			if (!nums.length || nums.some((n) => !isPhase(n))) {
-				const core = STAGES.filter((st) => st.inCorePass).map((st) => st.n);
-				console.error(`--phases wants "all" or a comma list from ${PHASES.join(", ")} — e.g. --phases ${core.join(",")} (the core pass) or --phases all`);
+				// CORE_PHASES, the same derivation USAGE prints, so the refusal's example and the
+				// usage line cannot recommend two different spans.
+				console.error(`--phases wants "all" or a comma list from ${PHASES.join(", ")} — e.g. --phases ${CORE_PHASES.join(",")} (the core pass) or --phases all`);
 
 				return EXIT_REFUSED;
 			}

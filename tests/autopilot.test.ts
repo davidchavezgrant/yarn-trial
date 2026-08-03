@@ -20,8 +20,24 @@ import { BENCH_PRIMARY_MODEL, CANONICAL_TASK, PHASES, type Phase, phaseArms, rec
 import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, interruptedPass, runPhase } from "../src/bench/orchestrate.js";
 import { watchPhase } from "../src/bench/watch.js";
 import { recipeFileFor } from "../src/core/recipe.js";
+import { appmapSlug } from "../src/core/target.js";
 import { liveDir } from "../src/paths.js";
 import { host, withTempAsync } from "./fixtures.js";
+
+/**
+ * How many recipe SLOTS exist — distinct (slug, task, backend, lineage) files, not arms.
+ *
+ * `promoteForReuse` dedupes on the path, because a filmed twin and a Claude cell want the same file
+ * their Sol original does. These tests used to assert against `recipeArms(3).length`, which was a
+ * proxy that happened to equal the slot count while every recipe arm lived on one app and one task.
+ * The second app's mirror broke the coincidence: eleven recipe arms now share eight slots, so the
+ * proxy under-counted by four and the assertion failed for a reason that was not a defect.
+ *
+ * Derived rather than hardcoded on purpose — the slot count is now a function of two tasks and two
+ * lineages, and a third task would move it again.
+ */
+const recipeSlots = (dir: string): number =>
+	new Set(recipeArms().map((a) => recipeFileFor(dir, appmapSlug(a.app), a.task ?? "", a.dispatch.backend, a.dispatch.recipeLineage ?? "grounded"))).size;
 
 /**
  * The autopilot, offline by construction — the same rule as bench.test.ts: every seam is an
@@ -464,9 +480,9 @@ test("promoteForReuse__FillsTheArm__When__AHarvestedCandidateExists", async () =
 			log: () => {},
 		});
 		assert.deepEqual(outcome.promoted, ["run-1"]);
-		// The other three arms (cdp, and both ungrounded lineages) have no candidates: blocked,
-		// reported as findings — and phase 6 skips them rather than refusing outright.
-		assert.equal(outcome.blocked.length, recipeArms(3).length - 1);
+		// Every OTHER slot has no candidate: blocked, reported as findings — and Reuse skips those
+		// arms rather than refusing the stage outright. One slot was just filled, hence -1.
+		assert.equal(outcome.blocked.length, recipeSlots(procDir) - 1);
 	});
 });
 
@@ -481,7 +497,7 @@ test("promoteForReuse__ReportsTheArmBlocked__When__NoSourceRunWasHarvested", asy
 			log: () => {},
 		});
 		assert.deepEqual(outcome.promoted, []);
-		assert.equal(outcome.blocked.length, recipeArms(3).length);
+		assert.equal(outcome.blocked.length, recipeSlots(path.join(dir, "procs")));
 	});
 });
 

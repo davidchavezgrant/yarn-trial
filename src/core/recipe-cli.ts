@@ -20,7 +20,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { archiveRun, recipesDir, RUN_FILES, runFile, runPath } from "../paths.js";
 import { makeClient, retryTransient } from "./harness.js";
 import { readJsonOr } from "../fsutil.js";
-import { slugOf } from "./procedure.js";
+import { appmapSlug } from "./target.js";
 import {
 	harvestPrompt,
 	HARVEST_SYSTEM,
@@ -146,6 +146,46 @@ async function main(): Promise<void> {
 }
 
 /**
+ * The app half of a promoted recipe's filename, derived the way the RUN THAT WILL READ IT
+ * derives it.
+ *
+ * TWO slug functions exist and exactly one is correct at this call site. `targetSlug`
+ * (src/core/target.ts) is the AUTHORITY, because it is what the reader uses: agent/run.ts calls
+ * `loadGrounding(targetSlug(target), …)`, which resolves the recipe through the same
+ * `recipeFileFor` this feeds — for a web target it yields `web-<host>`. `appSlug` (src/paths.ts)
+ * is the other one: it folds whitespace, slashes and colons and knows nothing about URLs, so
+ * given a URL it yields `https-app.notion.com`. Identical for a Mac app, divergent for the web,
+ * and `appmapSlug` is the one derivation that routes a URL to the former and a name to the latter.
+ *
+ * This site had the wrong one until 2026-08-03. The slug came from `slugOf(run, stamp)` — the
+ * stamp's `-<appSlug(app)>` tail — and a dispatched web run's stamp is minted from the ARM's
+ * URL (`mintRunKey` ← jobs.ts's `init.app`). So promote wrote
+ * `https-app.notion.com.cdp.<hash>.recipe.md`, the bench recipe gate looked for that same name
+ * and was satisfied, and the RUN looked for `web-app.notion.com.cdp.<hash>.recipe.md`, found
+ * nothing, and fell back to the appmap tier with only a console warning — an arm carrying the
+ * recipe tier's label and the appmap tier's grounding. `groundingChecked` (bench/collect.ts)
+ * catches it, but only at collect, after the runs are paid for.
+ *
+ * WEB-NESS COMES FROM THE JOB RECORD, not from a guess about the run log. The log has no url
+ * field at all, and its `app` is the target LABEL — for a web run the bare HOST (agent/cli.ts),
+ * so `app` alone cannot separate the website app.notion.com from a Mac app of that name.
+ * `job.json` sits in the same run directory and carries the exact `--url` the child was spawned
+ * with, so slugging it reproduces the reader's `targetSlug` by construction rather than by two
+ * derivations happening to agree. Read as a literal filename because core may not statically
+ * import src/remote/ (layering.test.ts).
+ *
+ * No job record — a run started by hand rather than dispatched — falls back to the log's `app`
+ * through the same function, which for an app NAME is `appSlug` unchanged. That is what keeps a
+ * Mac app's slug, and therefore every recipe already committed under docs/recipes/, byte-identical
+ * to what the stamp tail produced.
+ */
+export function promotedSlug(stamp: string, run: HarvestSource, out?: string): string {
+	const job = readJsonOr<{ url?: string } | undefined>(runFile(stamp, "job.json", out), undefined);
+
+	return appmapSlug(job?.url ?? run.app ?? "unknown");
+}
+
+/**
  * Copy a run's harvested recipe into docs/recipes/, making it an INPUT to future runs.
  * Exported (with injectable roots) for the bench autopilot's promote stage; the deliberateness
  * argument still holds there — the operator's one `autopilot --go` covers a stage whose whole
@@ -158,7 +198,7 @@ export function promoteRecipe(stamp: string, opts: { out?: string; dir?: string;
 	const run = JSON.parse(fs.readFileSync(runFile(stamp, RUN_FILES.log, opts.out), "utf8")) as HarvestSource;
 	// run.backend is what actually DROVE (the run log records the post-fallback backend), which
 	// is the right axis: a recipe written from an ax run names ax's surface labels.
-	const dest = recipeFileFor(opts.dir ?? recipesDir(), slugOf(run as Record<string, unknown>, stamp), run.task ?? "", run.backend, lineageOf(run));
+	const dest = recipeFileFor(opts.dir ?? recipesDir(), promotedSlug(stamp, run, opts.out), run.task ?? "", run.backend, lineageOf(run));
 	fs.mkdirSync(path.dirname(dest), { recursive: true });
 	fs.copyFileSync(src, dest);
 	log(`promoted: ${dest}`);

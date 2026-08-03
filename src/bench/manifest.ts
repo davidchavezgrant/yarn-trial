@@ -101,6 +101,52 @@ export interface RunMetrics {
 	meanObservationNodes?: number;
 	meanListShownToModel?: number;
 	/**
+	 * PIXEL-SNAP, aggregated per run — the question the eight snap arms (16 runs) exist to answer.
+	 *
+	 * The per-step facts have been recorded since the diagnostic landed (StepRecord.snap* in
+	 * src/types.ts, written in src/core/agent/step.ts) and were read by NOTHING: not collect, not
+	 * the report, not the dash, not the judge. Telling a snapped action from a raw one meant
+	 * opening run logs by hand, which is the same as not having measured it.
+	 *
+	 * What these license: decomposing a vision-only miss into SPATIAL (the model named the right
+	 * control and missed its pixels — `snapMeanDistancePx`, `snapInsideSteps`) and SEMANTIC (the
+	 * point landed on exactly the control the model named and the step still failed). Those two
+	 * have opposite remedies, which is why the split is worth five fields.
+	 *
+	 * What they do NOT license: any claim about whether snapping WORKED. `snapAppliedSteps` counts
+	 * actions the harness retargeted, not actions that then succeeded — a rewrite that rescued a
+	 * step and one that ruined it are the same tally mark. The success rate is `success`, and only
+	 * the arm-vs-arm comparison speaks to the rewrite's value.
+	 *
+	 * `snapDeclaredMismatches` is why a snap arm is an UPPER BOUND rather than a clean result. At a
+	 * 48px tolerance the nearest control can be one the model never asked for — a label's
+	 * neighbour, a widget across a gap — and the harness deliberately does NOT veto that rewrite: a
+	 * veto would make the arm measure the harness's veto rule instead of vision-only actuation,
+	 * which is the thing being measured. So the mismatch count is the discount a reader applies by
+	 * hand. Of the arm's applied steps, this many were retargeted to a control the model never
+	 * named, and at most (applied − mismatched) of them are refinement rather than luck.
+	 *
+	 * Present on NON-SNAP arms too, and that is the point: the diagnostic in step.ts runs on every
+	 * coordinate-addressed action unconditionally, while only the REWRITE is gated on SNAP_PX. A
+	 * vision-only arm with SNAP_PX unset therefore reports candidates, distances and inside-hits
+	 * with `snapAppliedSteps: 0` — which is what makes snap-vs-no-snap a comparison between two
+	 * measured populations rather than a measured arm against a blank one.
+	 *
+	 * ABSENT, not zero, when no step carried snap data. An element-addressed arm names no pixels,
+	 * so it has no denominator at all, and a 0 would read as "the point was never near a control"
+	 * rather than "the question does not apply to this arm".
+	 */
+	/** Steps whose click point had a nearest interactive control at all — the denominator. */
+	snapCandidateSteps?: number;
+	/** Steps the snap stage actually rewrote to address by handle (SNAP_PX > 0, within tolerance). */
+	snapAppliedSteps?: number;
+	/** Applied steps whose control did NOT match the target the model declared. The confound. */
+	snapDeclaredMismatches?: number;
+	/** Mean distance from the model's point to that control over candidate steps; 0 = inside it. */
+	snapMeanDistancePx?: number;
+	/** Candidate steps whose point landed INSIDE a control — the pixel needed no refinement. */
+	snapInsideSteps?: number;
+	/**
 	 * The offline adversarial judge (src/core/judge.ts), off the run's `.judge.json` artifact.
 	 * A second opinion, not a replacement verdict: `success` is the run grading itself, the
 	 * judge is a separate model refuting it against the appmap scope rubric — DISAGREEMENT

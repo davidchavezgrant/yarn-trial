@@ -11,7 +11,13 @@ import { archiveRun } from "../../paths.js";
  * Machine-readable stamp distinguishing autonomous exploration output from
  * hand-curated notes. loadGrounding() in agent.ts treats unstamped appmaps as
  * "curated" and the run log records the difference — hand edits to a stamped
- * file MUST remove the stamp (or move the file to docs/procedures/).
+ * file MUST remove the stamp (or move the file to docs/curated/).
+ *
+ * docs/curated/, not docs/procedures/: after the tier rename a PROCEDURE is compiled
+ * machine output (docs/procedures/<slug>.procedure.json, a frozen click sequence), so it is
+ * the one destination hand-written prose can never have. The three tiers, since the nouns
+ * are re-reversible: recipe = harvested PROSE (docs/recipes/*.recipe.md), procedure =
+ * compiled JSON, curated = hand-written prose (docs/curated/<app>.md).
  */
 export const provenanceHeader = (p: {
 	app: string;
@@ -52,7 +58,12 @@ export const provenanceHeader = (p: {
 			// itself is the only witness to what it saw, so these tallies cannot bound coverage.
 			"<!-- controls tallies are DECLARED — self-reported by the model from screenshots, not measured against an element list. A control the pass never declared is invisible to these numbers. -->\n"
 		: "<!-- controls actuated/seen is a LOWER BOUND ON BREADTH, not a coverage percentage: the denominator only grows as surfaces are opened, and operating a control is not understanding it. -->\n") +
-	"<!-- Written by src/core/explore.ts. DO NOT HAND-EDIT: edits make this a curated procedure, not exploration output — move such notes to docs/curated/<app>.md instead. -->\n\n";
+	// "curated RECIPE", not "curated procedure": a procedure is compiled JSON
+	// (docs/procedures/*.procedure.json) and cannot be hand-authored at all, so naming it here told
+	// an editor the one thing their edit could not have produced. Hand-written prose is a recipe,
+	// and a hand-authored one belongs to the curated tier — which is why the destination below is
+	// docs/curated/ and not docs/recipes/, whose filenames are hash-keyed machine output.
+	"<!-- Written by src/core/explore.ts. DO NOT HAND-EDIT: edits make this a curated recipe, not exploration output — move such notes to docs/curated/<app>.md instead. -->\n\n";
 
 export const hm = (ms: number): string => {
 	const m = Math.max(0, Math.round(ms / 60000));
