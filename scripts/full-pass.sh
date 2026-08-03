@@ -67,7 +67,19 @@ mkdir -p "$REPO/out/bench"
 if [[ "${1:-}" != "--go" ]]; then
 	echo "PLAN ONLY — nothing will be dispatched. Add --go to launch."
 	echo
+	# The preview exits 2 BY DESIGN — EXIT_NEEDS_GO, "here is the plan, nothing fired" — which
+	# `set -e` read as a failure, so this branch died before printing the launch line and handed
+	# back exit 2. Only 0 and 2 are acceptable; exit 1 is a real refusal (a hinted task prompt, an
+	# adopted archive manifest) and must not be dressed up as a plan.
+	set +e
 	./run bench autopilot "${AUTOPILOT_ARGS[@]}"
+	PREVIEW=$?
+	set -e
+	if [[ "$PREVIEW" -ne 0 && "$PREVIEW" -ne 2 ]]; then
+		echo
+		echo "the autopilot REFUSED this plan (exit $PREVIEW) — fix what it named above before launching." >&2
+		exit "$PREVIEW"
+	fi
 	echo
 	echo "launch:  ./scripts/full-pass.sh --go"
 	echo "  stages come from the matrix's own dependency graph; ${MAX_USD:+spend ceiling \$$MAX_USD; }${MAX_USD:-no spend ceiling; }log -> ${LOG#$REPO/}"
