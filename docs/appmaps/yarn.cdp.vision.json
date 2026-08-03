@@ -1,0 +1,819 @@
+{
+  "app": "Yarn",
+  "capturedAt": "2026-08-03T06:01:07.107Z",
+  "provenance": "explore-vision",
+  "proseSha256": "e2b97b7ee061",
+  "elapsed": "58m",
+  "coverage": {
+    "seen": 363,
+    "actuated": 145,
+    "dismissed": 220,
+    "surfaces": 22,
+    "chapters": 23,
+    "stopped": "frontier-empty",
+    "dismissals": [
+      "external",
+      "repetitive-value",
+      "dead-end",
+      "content",
+      "destroys-user-data"
+    ],
+    "gatedRead": 0,
+    "gatedRefused": 0
+  },
+  "nodes": [
+    {
+      "id": "library",
+      "title": "Your Library",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "library/new-draft",
+      "title": "New Draft",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "create-draft"
+    },
+    {
+      "id": "library/new-collection",
+      "title": "New Collection",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "create-collection"
+    },
+    {
+      "id": "library/search",
+      "title": "Search",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "library-search"
+    },
+    {
+      "id": "library/view-grid",
+      "title": "Grid",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "library-view",
+      "options": [
+        "Grid",
+        "List"
+      ]
+    },
+    {
+      "id": "library/view-list",
+      "title": "List",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "library-view",
+      "options": [
+        "Grid",
+        "List"
+      ],
+      "notes": "Click produced no visible change in this state."
+    },
+    {
+      "id": "library/sort",
+      "title": "Sort",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "library-sort"
+    },
+    {
+      "id": "nav/your-drafts",
+      "title": "Your Drafts",
+      "kind": "control",
+      "scope": "workspace"
+    },
+    {
+      "id": "nav/brand-kits",
+      "title": "Brand Kits",
+      "kind": "control",
+      "scope": "brand"
+    },
+    {
+      "id": "nav/settings",
+      "title": "Settings",
+      "kind": "control",
+      "scope": "app"
+    },
+    {
+      "id": "draft-editor",
+      "title": "Untitled Draft editor",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/title",
+      "title": "Draft title",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "draft-title"
+    },
+    {
+      "id": "draft-editor/agent",
+      "title": "Agent",
+      "kind": "control",
+      "scope": "document",
+      "notes": "Label click showed no visible change; use persistent composer below."
+    },
+    {
+      "id": "draft-editor/script",
+      "title": "Script",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/export",
+      "title": "Export",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "draft-export",
+      "notes": "No visible response in blank two-scene draft."
+    },
+    {
+      "id": "draft-editor/publish",
+      "title": "Publish",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/canvas-color",
+      "title": "Canvas color",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "canvas-color",
+      "notes": "Blue swatch; normal click produced no visible picker."
+    },
+    {
+      "id": "settings",
+      "title": "Settings",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "settings/auto-add-screen-zooms",
+      "title": "Auto-Add Screen Zooms",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "auto-add-screen-zooms",
+      "options": [
+        "On",
+        "Off"
+      ]
+    },
+    {
+      "id": "settings/theme",
+      "title": "Theme",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "theme",
+      "options": [
+        "Dark",
+        "Light",
+        "System"
+      ]
+    },
+    {
+      "id": "settings/agent-model",
+      "title": "Agent model",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "agent-model",
+      "options": [
+        "Opus 5",
+        "Fable 5",
+        "Opus 4.8",
+        "GPT-5.6 Sol"
+      ]
+    },
+    {
+      "id": "settings/agent-effort",
+      "title": "Agent effort",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "agent-effort",
+      "options": [
+        "Low",
+        "Medium",
+        "High",
+        "Extra High",
+        "Max"
+      ]
+    },
+    {
+      "id": "settings/upgrade",
+      "title": "Upgrade",
+      "kind": "control",
+      "scope": "app",
+      "notes": "External/purchase-like plan action; do not operate."
+    },
+    {
+      "id": "settings/sign-out",
+      "title": "Sign out",
+      "kind": "control",
+      "scope": "app",
+      "notes": "Account action; do not operate."
+    },
+    {
+      "id": "settings/agent-fast-mode-default",
+      "title": "Agent Fast Mode default",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "agent-fast-mode-default",
+      "options": [
+        "On",
+        "Off"
+      ],
+      "notes": "Conditional control revealed when Agent model is Opus 5."
+    },
+    {
+      "id": "settings/workspace-name",
+      "title": "Workspace name",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "workspace-name"
+    },
+    {
+      "id": "settings/workspace-icon",
+      "title": "Icon",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "workspace-icon"
+    },
+    {
+      "id": "settings/custom-window-sizes",
+      "title": "Custom window sizes",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/add-size",
+      "title": "Add Size",
+      "kind": "control",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/figma-sign-in",
+      "title": "Sign in with Figma",
+      "kind": "control",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/google-sign-in",
+      "title": "Sign in with Google",
+      "kind": "control",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/account-card",
+      "title": "David account card",
+      "kind": "control",
+      "scope": "app",
+      "notes": "Visible at left of Settings modal; clicking had no effect."
+    },
+    {
+      "id": "draft-editor/more",
+      "title": "Script header More",
+      "kind": "control",
+      "scope": "document",
+      "notes": "Ellipsis beside Voiceover icon; click showed no visible menu."
+    },
+    {
+      "id": "draft-editor/new-scene-shortcut",
+      "title": "Type script or # for new scene",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "draft-scenes",
+      "notes": "Focus blank script area and press #; creates Untitled Scene blocks."
+    },
+    {
+      "id": "draft-editor/scene",
+      "title": "Untitled Scene",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "scene-title",
+      "notes": "Scene title shown in the script pane; corresponding timeline segment defaults to 5 seconds."
+    },
+    {
+      "id": "workspaces-menu",
+      "title": "Workspaces menu",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "workspaces-menu/new-workspace",
+      "title": "New workspace",
+      "kind": "control",
+      "scope": "app",
+      "notes": "Appeared greyed out/inert in current workspace."
+    },
+    {
+      "id": "draft-editor/music",
+      "title": "Music",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "draft-music",
+      "notes": "Top-right toolbar music-note button; no visible result in blank draft."
+    },
+    {
+      "id": "draft-editor/add-comment",
+      "title": "Add comment",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "draft-comment",
+      "notes": "Top-right speech-bubble button; no visible response in blank draft."
+    },
+    {
+      "id": "draft-editor/screen-recording",
+      "title": "Screen recording",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "screen-recording",
+      "notes": "Header icon beside Script; no visible response in blank draft."
+    },
+    {
+      "id": "draft-editor/add-media",
+      "title": "Add media",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "timeline-media",
+      "notes": "Timeline toolbar stacked-image icon; no visible response in current state."
+    },
+    {
+      "id": "draft-editor/record",
+      "title": "Record",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "screen-recording",
+      "notes": "Timeline toolbar camera icon; same underlying recording feature as header Screen recording, but no visible response."
+    },
+    {
+      "id": "draft-editor/add-text",
+      "title": "Add text",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "timeline-text",
+      "notes": "Timeline toolbar A icon; no visible response without visual media."
+    },
+    {
+      "id": "draft-editor/add-screen-zoom",
+      "title": "Add screen zoom",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "screen-zoom",
+      "notes": "Timeline toolbar dashed-frame icon; inert with empty scenes and no visual clip."
+    },
+    {
+      "id": "draft-editor/add-canvas-item",
+      "title": "Add canvas item",
+      "kind": "control",
+      "scope": "document",
+      "notes": "Centered + above canvas; direct action that creates a New Text object, not a picker."
+    },
+    {
+      "id": "draft-editor/canvas-text-object",
+      "title": "Canvas text object",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "canvas-text",
+      "notes": "Newly added object initially displays 'New Text'."
+    },
+    {
+      "id": "draft-editor/voice",
+      "title": "Narration voice",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "narration-voice",
+      "options": [
+        "Annie",
+        "Cassidy",
+        "Jacob",
+        "James",
+        "Kendra",
+        "Robert",
+        "Brynn",
+        "Fay",
+        "Jada",
+        "Jeff",
+        "Miranda",
+        "Sarah"
+      ],
+      "notes": "Waveform/voice picker near top of editor; tabs English, World, Creative; only English list rendered in this state."
+    },
+    {
+      "id": "draft-editor/color-picker",
+      "title": "Color picker",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Opened from circular color control in selected canvas group's toolbar."
+    },
+    {
+      "id": "draft-editor/fill-mode",
+      "title": "Fill mode",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "canvas-fill-mode",
+      "options": [
+        "Solid",
+        "Linear",
+        "Radial",
+        "Multi"
+      ]
+    },
+    {
+      "id": "draft-editor/fill-hex",
+      "title": "Fill HEX",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "canvas-fill-color"
+    },
+    {
+      "id": "draft-editor/fill-opacity",
+      "title": "Fill opacity",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "canvas-fill-opacity"
+    },
+    {
+      "id": "draft-editor/globe",
+      "title": "Globe",
+      "kind": "control",
+      "scope": "document",
+      "notes": "No visible response when clicked in populated Agent/canvas view."
+    },
+    {
+      "id": "draft-editor/text-selection-toolbar",
+      "title": "Canvas text selection toolbar",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Appears when a canvas text/composition text block is selected."
+    },
+    {
+      "id": "draft-editor/font-family",
+      "title": "Font family",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "font-family",
+      "notes": "Displayed Cereal; normal click did not open picker."
+    },
+    {
+      "id": "draft-editor/font-weight",
+      "title": "Font weight",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "font-weight",
+      "notes": "Displayed Heavy; normal click did not open picker."
+    },
+    {
+      "id": "draft-editor/font-size",
+      "title": "Font size",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "font-size"
+    },
+    {
+      "id": "draft-editor/text-alignment",
+      "title": "Text alignment",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "text-alignment",
+      "options": [
+        "Left",
+        "Center",
+        "Right"
+      ]
+    },
+    {
+      "id": "draft-editor/text-color",
+      "title": "Text color",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "text-color"
+    },
+    {
+      "id": "draft-editor/ungroup",
+      "title": "Ungroup",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "canvas-grouping",
+      "notes": "Top selection-toolbar command; repeated clicks produced no visible change on the selected Brew composition."
+    },
+    {
+      "id": "draft-editor/agent-effort",
+      "title": "Low (agent composer effort)",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "agent-effort",
+      "notes": "Potential per-chat override, but normal click was inert in tested state; Settings provides app default."
+    },
+    {
+      "id": "draft-editor/font-picker",
+      "title": "Font picker",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Searchable long list of fonts; opens from Cereal font-family control."
+    },
+    {
+      "id": "draft-editor/font-weight-picker",
+      "title": "Font weight picker",
+      "kind": "surface",
+      "scope": "document",
+      "options": [
+        "Light",
+        "Regular",
+        "Medium",
+        "Semibold",
+        "Bold",
+        "Heavy",
+        "Black"
+      ],
+      "notes": "Choosing a value may clear the text selection."
+    },
+    {
+      "id": "draft-context-menu",
+      "title": "Draft context menu",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Right-click a draft card in Library. Contains Move to workspace, Add to Collection, Rename, Make a copy, Delete."
+    },
+    {
+      "id": "draft-context-menu/make-a-copy",
+      "title": "Make a copy",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "duplicate-draft",
+      "notes": "Immediate, no confirmation; menu closes and duplicate is created."
+    },
+    {
+      "id": "draft-editor/agent-composer",
+      "title": "Agent composer",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "agent-request",
+      "notes": "Type a creation/edit request, click the black up-arrow Send, then wait generously; generation can appear delayed with no immediate progress UI."
+    },
+    {
+      "id": "draft-editor/canvas-object-context-menu",
+      "title": "Canvas object context menu",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Right-click selected Brew composition; popup contains only disabled No actions."
+    },
+    {
+      "id": "sidebar-draft-context-menu",
+      "title": "Sidebar draft context menu",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "sidebar-draft-context-menu/move",
+      "title": "Move to Scratch-Yarn-",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "draft-location",
+      "notes": "Submenu/row label truncated; not operated."
+    },
+    {
+      "id": "sidebar-draft-context-menu/rename",
+      "title": "Rename",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "draft-title",
+      "notes": "Destructive-to-existing-content flow; not operated here."
+    },
+    {
+      "id": "sidebar-draft-context-menu/make-a-copy",
+      "title": "Make a copy",
+      "kind": "control",
+      "scope": "document",
+      "notes": "Equivalent to library card context action; duplicates immediately without confirmation."
+    },
+    {
+      "id": "sidebar-draft-context-menu/add-to-collection",
+      "title": "Add to Collection",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "draft-collection",
+      "notes": "Not operated because selected generic Untitled row could not be safely identified after context reset."
+    },
+    {
+      "id": "sidebar-draft-context-menu/delete",
+      "title": "Delete",
+      "kind": "control",
+      "scope": "document",
+      "notes": "Not operated; destructive."
+    },
+    {
+      "id": "nav/library",
+      "title": "Library",
+      "kind": "control",
+      "scope": "workspace",
+      "notes": "Stable control returning to landing view."
+    },
+    {
+      "id": "nav/invite-members",
+      "title": "Invite Members",
+      "kind": "control",
+      "scope": "workspace",
+      "notes": "External invitation flow; not operated."
+    },
+    {
+      "id": "library/draft-card-context-menu",
+      "title": "Draft card context menu",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "library/draft-card-context-menu/make-a-copy",
+      "title": "Make a copy",
+      "kind": "control",
+      "scope": "document",
+      "notes": "Immediate duplication without confirmation."
+    },
+    {
+      "id": "draft-editor/agent-composer-send",
+      "title": "Send",
+      "kind": "control",
+      "scope": "document",
+      "notes": "May appear inert; generation can complete asynchronously."
+    },
+    {
+      "id": "draft-editor/timeline",
+      "title": "Timeline",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/timeline-play",
+      "title": "Play",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/timeline-comment",
+      "title": "Comment",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "draft-editor/timeline-trash",
+      "title": "Trash",
+      "kind": "control",
+      "scope": "document"
+    },
+    {
+      "id": "workspaces-menu/sign-out",
+      "title": "Sign out",
+      "kind": "control",
+      "scope": "app",
+      "notes": "External/account action; not operated."
+    },
+    {
+      "id": "settings/theme-dark",
+      "title": "Dark",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "theme"
+    },
+    {
+      "id": "settings/theme-light",
+      "title": "Light",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "theme"
+    },
+    {
+      "id": "settings/theme-system",
+      "title": "System",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "theme"
+    },
+    {
+      "id": "settings/custom-window-size-row",
+      "title": "Custom size row",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "recording-window-size",
+      "notes": "Inline name, width, height, Remove."
+    }
+  ],
+  "edges": [
+    {
+      "from": "root",
+      "to": "library",
+      "action": "launch Yarn or click Library"
+    },
+    {
+      "from": "library",
+      "to": "draft-editor",
+      "action": "click New Draft"
+    },
+    {
+      "from": "library",
+      "to": "settings",
+      "action": "click Settings in the left sidebar"
+    },
+    {
+      "from": "draft-editor",
+      "to": "settings",
+      "action": "click Settings in the left sidebar"
+    },
+    {
+      "from": "settings",
+      "to": "settings/custom-window-sizes",
+      "action": "scroll down to Workspace settings"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/scene",
+      "action": "focus script area, then press #"
+    },
+    {
+      "from": "library",
+      "to": "workspaces-menu",
+      "action": "click the workspace name/logo at top of sidebar"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/canvas-text-object",
+      "action": "click centered + (Add canvas item)"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/voice",
+      "action": "click current voice/waveform control near top toolbar"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/color-picker",
+      "action": "Select a canvas group, then click the far-right circular color control in its top selection toolbar."
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/text-selection-toolbar",
+      "action": "Double-click a visible canvas text region/object."
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/ungroup",
+      "action": "Select a grouped canvas composition, then click Ungroup in the top selection toolbar."
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/agent-effort",
+      "action": "Look at the lower-right corner of the agent composer."
+    },
+    {
+      "from": "draft-editor/font-family",
+      "to": "draft-editor/font-picker",
+      "action": "click the current font family (e.g. Cereal)"
+    },
+    {
+      "from": "draft-editor/font-weight",
+      "to": "draft-editor/font-weight-picker",
+      "action": "click the current weight (e.g. Heavy)"
+    },
+    {
+      "from": "library",
+      "to": "draft-context-menu",
+      "action": "right-click a draft card"
+    },
+    {
+      "from": "draft-context-menu",
+      "to": "library",
+      "action": "click Make a copy"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/agent-composer",
+      "action": "enter a request in lower-left composer and click Send"
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/canvas-object-context-menu",
+      "action": "Right-click the selected Brew canvas composition."
+    },
+    {
+      "from": "draft-editor",
+      "to": "sidebar-draft-context-menu",
+      "action": "Right-click a recent draft row in the left sidebar."
+    },
+    {
+      "from": "root",
+      "to": "library",
+      "action": "Open Yarn or click Library in the left sidebar."
+    },
+    {
+      "from": "library",
+      "to": "library/draft-card-context-menu",
+      "action": "Right-click a draft card."
+    },
+    {
+      "from": "draft-editor",
+      "to": "draft-editor/timeline",
+      "action": "Use the bottom timeline panel."
+    }
+  ]
+}
