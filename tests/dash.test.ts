@@ -1966,6 +1966,32 @@ test("ExportSnapshot__CarriesTheCursorRender__When__TheRunWasFilmed", () => {
 	}
 });
 
+test("ExportSnapshot__FindsTheRender__When__ItOnlyExistsInTheArchiveCopy", () => {
+	const src = fs.mkdtempSync(path.join(os.tmpdir(), "snap-src-"));
+	const dest = fs.mkdtempSync(path.join(os.tmpdir(), "snap-dest-"));
+	try {
+		const m = manifest(entry({ jobId: "run-a", state: "done", collected: true }));
+		plant(src, ["out", "bench", "live", "2026-07-31", "manifest.json"], JSON.stringify(m));
+		// The live directory EXISTS and holds the run's metrics, but no render...
+		plant(src, ["out", "bench", "live", "run-a", "run.json"], JSON.stringify({ success: true }));
+		plant(src, ["out", "bench", "live", "run-a", "recording", "window.mp4"], "RAWCAPTURE");
+		// ...while the archive copy is the one that has it. This happens for real: collect
+		// composites on pull, so a run humanized AFTER it was archived lands its render there.
+		plant(src, ["out", "bench", "archive", "run-a", "recording", "humanized.mp4"], "RENDER");
+
+		const r = exportSnapshot({ date: "2026-07-31", srcRoot: path.join(src, "out"), dest });
+
+		// Resolving per DIRECTORY instead of per ARTIFACT silently dropped 15 of 46 takes on the
+		// 2026-08-01 pass: sourceRunDir picks live, the render is not in live, and the snapshot
+		// reported a smaller number with nothing wrong in the store.
+		assert.equal(r.videosCopied, 1);
+		assert.equal(fs.readFileSync(path.join(dest, "out", "bench", "live", "run-a", "recording", "humanized.mp4"), "utf8"), "RENDER");
+	} finally {
+		fs.rmSync(src, { recursive: true, force: true });
+		fs.rmSync(dest, { recursive: true, force: true });
+	}
+});
+
 test("ExportSnapshot__CountsNoVideos__When__NoRunWasFilmed", () => {
 	const src = fs.mkdtempSync(path.join(os.tmpdir(), "snap-src-"));
 	const dest = fs.mkdtempSync(path.join(os.tmpdir(), "snap-dest-"));

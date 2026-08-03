@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { ARCHIVE_DIR, CURSOR_RENDER, LIVE_DIR, OLD_ARCHIVE_DIR, OLD_LIVE_DIR, RUN_FILES, outDir, runDir } from "../paths.js";
+import { ARCHIVE_DIR, CURSOR_RENDER, LIVE_DIR, OLD_ARCHIVE_DIR, OLD_LIVE_DIR, RUN_FILES, outDir, runDir, runFile } from "../paths.js";
 import { benchDir, readManifest, utcDate, type Manifest } from "./manifest.js";
 import { storeRoot } from "./dash.js";
 
@@ -101,9 +101,18 @@ function copyTree(from: string, to: string, exclude: ReadonlySet<string>, acc: {
  * Separate from copyTree rather than a hole punched through its exclusion set: an exclusion
  * that carries exceptions needs a path-aware predicate at every level of the walk, and this is
  * one known file at one known depth. Flat beats general here.
+ *
+ * RESOLVED PER ARTIFACT, not per directory — `runFile`'s ladder rather than the run directory
+ * sourceRunDir chose. This took a bug to learn: sourceRunDir returns the first run directory that
+ * EXISTS, live before archive, and a render can sit in the archive copy while the live directory
+ * is present but render-less (a run humanized after it was archived, which is what happens when
+ * collect composites on pull). Looking only inside the chosen directory silently dropped 15 of 46
+ * takes — the snapshot reported "31 cursor renders" and nothing was wrong with the store at all.
+ * It is the same reason paths.ts resolves each artifact independently instead of picking a home
+ * once and trusting it for everything inside.
  */
-function copyCursorRender(fromRunDir: string, toRunDir: string, acc: { files: number; bytes: number }): boolean {
-	const src = path.join(fromRunDir, RUN_FILES.recording, CURSOR_RENDER);
+function copyCursorRender(jobId: string, srcRoot: string, toRunDir: string, acc: { files: number; bytes: number }): boolean {
+	const src = runFile(jobId, path.join(RUN_FILES.recording, CURSOR_RENDER), srcRoot);
 	if (!fs.existsSync(src)) return false;
 	const dst = path.join(toRunDir, RUN_FILES.recording, CURSOR_RENDER);
 	fs.mkdirSync(path.dirname(dst), { recursive: true });
@@ -166,7 +175,7 @@ export function exportSnapshot(opts: { date?: string; srcRoot?: string; dest: st
 		}
 		const dest = runDir(e.jobId, destOut);
 		copyTree(src, dest, HEAVY, acc);
-		if (copyCursorRender(src, dest, acc)) videosCopied += 1;
+		if (copyCursorRender(e.jobId, srcRoot, dest, acc)) videosCopied += 1;
 		runsCopied += 1;
 	}
 

@@ -1380,6 +1380,10 @@ export const armModel = (arm: Arm, passModel?: string): string | undefined => ar
  * They are the same ten arms under two names, not two kinds of artifact: the tier flag on every
  * one of these rows is the prose tier, and the pre-swap machine-steps arms were called
  * `compile-*`/`replay-*` — no id on either side of the swap is ambiguous between them.
+ *
+ * Anything renamed beyond a prefix belongs in this table, and is NOT to be guessed at: naming the
+ * wrong arm would attribute runs to a config that did not produce them, the exact class of error
+ * `groundingChecked` exists to catch. Every entry above cites the evidence that fixed it.
  */
 export const RENAMED_ARMS: ReadonlyMap<string, string> = new Map([
 	["p4-ungrounded", "blur-ungrounded"],
