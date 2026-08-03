@@ -622,8 +622,9 @@ test("BuildState__CountsUnmatchedEntries__When__AnArmIdResolvesToNothing", () =>
 	const s = buildState(
 		manifest(
 			entry({ armId: "ax-grounded", jobId: "job-ok", collected: true, state: "done" }),
-			// A pre-stages id nothing can place — the phase-6 recipe arms are the real instance.
-			entry({ armId: "p6-ax-recipe", jobId: "job-orphan", collected: true, state: "done" }),
+			// An id nothing can place. It has to be synthetic now: every real legacy spelling in the
+			// 2026-08-01 pass is in RENAMED_ARMS, so the pass no longer supplies an unmatched row.
+			entry({ armId: "p6-vanished-arm", jobId: "job-orphan", collected: true, state: "done" }),
 		),
 		fleet([]),
 		[],

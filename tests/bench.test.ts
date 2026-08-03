@@ -7,7 +7,7 @@ import { auditTaskPrompt } from "../src/core/harness.js";
 import type { JobRecord } from "../src/remote/runner/jobs.js";
 import { collect, collectEntry, expectedProvenance, failureKind, jobTiming, journalScopes, parseAppmapStamp, parseGraphCounts, parseRunMetrics, poisonedHosts, technicalFailure } from "../src/bench/collect.js";
 import { archiveDirFor, entriesForArm, manifestPath, readManifest, recordSubmissions, submittedCount, type Manifest, type ManifestEntry, updateEntry, writeManifest } from "../src/bench/manifest.js";
-import { BACKENDS, BENCH_ALT_MODEL, BENCH_APP, BENCH_PRIMARY_MODEL, CREATION_EXCLUDED, EXPLORE_SAMPLES, armModel, MATRIX, armAppmapSlug, armById, armTitle, discoveryArmsFor, orderStages, perceptionLine, phaseArms, phaseRunCount, recipeArms, STAGES, stageNeedsMaps, stageOf, type Arm } from "../src/bench/matrix.js";
+import { BACKENDS, BENCH_ALT_MODEL, BENCH_APP, BENCH_PRIMARY_MODEL, CREATION_EXCLUDED, EXPLORE_SAMPLES, armModel, MATRIX, armAppmapSlug, armById, armTitle, discoveryArmsFor, orderStages, perceptionLine, phaseArms, phaseRunCount, recipeArms, RENAMED_ARMS, STAGES, stageNeedsMaps, stageOf, type Arm } from "../src/bench/matrix.js";
 import type { DispatchOptions } from "../src/remote/control/dispatch.js";
 import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, auditPhase, dateArg, dispatchOptionsFor, findCompileSource, plannedRuns, runPhase } from "../src/bench/orchestrate.js";
 import { renderReport, reportFileName, writeReport } from "../src/bench/report.js";
@@ -372,9 +372,16 @@ test("ArmById__ResolvesTheRenamedArm__When__ThePrefixStripIsNotEnough", () => {
 	assert.equal(armById("p4-ungrounded")?.id, "blur-ungrounded");
 	assert.equal(armById("p4-compile")?.id, "blur-compile");
 	assert.equal(armById("p5-grounded-filmed")?.id, "blur-grounded-filmed");
-	// The recipe arms are deliberately NOT aliased — recipes and procedures are opposites, and a
-	// wrong alias would attribute runs to a config that did not produce them.
-	assert.equal(armById("p6-ax-recipe"), undefined);
+	// The prose tier, whose pre-2026-08-03 spelling was `*-procedure*` because the two words meant
+	// the reverse of what they mean now. Same ten arms, not two kinds of artifact — the pre-swap
+	// machine-steps arms were `compile-*`/`replay-*`, so no id is ambiguous between them.
+	assert.equal(armById("p6-ax-procedure")?.id, "ax-recipe");
+	assert.equal(armById("p6-cdp-procedure-from-ungrounded")?.id, "cdp-recipe-from-ungrounded");
+	assert.equal(armById("p5-claude-cdp-procedure-from-ungrounded-filmed")?.id, "claude-cdp-recipe-from-ungrounded-filmed");
+	// Every alias must land on a real arm, or the map quietly resolves an id to nothing.
+	for (const target of RENAMED_ARMS.values()) assert.ok(armById(target), `${target} is not an arm`);
+	// A genuinely unknown id still resolves to nothing rather than to a plausible neighbour.
+	assert.equal(armById("p6-vanished-arm"), undefined);
 });
 
 test("ReadManifest__CanonicalisesArmIds__When__TheFileHoldsPreStagesSpellings", () => {
@@ -385,7 +392,8 @@ test("ReadManifest__CanonicalisesArmIds__When__TheFileHoldsPreStagesSpellings", 
 			entries: [
 				{ armId: "p2-ax-grounded", jobId: "j1", host: "mac1", submittedAt: "2026-07-31T20:00:00.000Z", state: "done", collected: true },
 				{ armId: "p4-grounded", jobId: "j2", host: "mac2", submittedAt: "2026-07-31T20:01:00.000Z", state: "done", collected: true },
-				{ armId: "p6-ax-recipe", jobId: "j3", host: "mac3", submittedAt: "2026-07-31T20:02:00.000Z", state: "done", collected: true },
+				{ armId: "p6-ax-procedure", jobId: "j3", host: "mac3", submittedAt: "2026-07-31T20:02:00.000Z", state: "done", collected: true },
+				{ armId: "p6-vanished-arm", jobId: "j4", host: "mac1", submittedAt: "2026-07-31T20:03:00.000Z", state: "done", collected: true },
 			],
 		};
 		fs.mkdirSync(liveDir(dir) + "/" + DATE, { recursive: true });
@@ -398,9 +406,11 @@ test("ReadManifest__CanonicalisesArmIds__When__TheFileHoldsPreStagesSpellings", 
 		// rendered as 0 arms and 0 of 198 entries.
 		assert.equal(read.entries[0]?.armId, "ax-grounded");
 		assert.equal(read.entries[1]?.armId, "blur-grounded");
+		// The prose tier, whose id carried the pre-2026-08-03 spelling of the word.
+		assert.equal(read.entries[2]?.armId, "ax-recipe");
 		// Unrecognised ids pass through UNCHANGED and stay countable, rather than being guessed
 		// into a neighbouring arm.
-		assert.equal(read.entries[2]?.armId, "p6-ax-recipe");
+		assert.equal(read.entries[3]?.armId, "p6-vanished-arm");
 	});
 });
 

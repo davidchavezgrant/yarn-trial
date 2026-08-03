@@ -1370,19 +1370,34 @@ export const armModel = (arm: Arm, passModel?: string): string | undefined => ar
  * `blur-*` arms' task, and the grounded/ungrounded split survives in the id. That is what makes
  * this a mapping rather than a guess.
  *
- * NOT LISTED, deliberately: the phase-6/7 `*-recipe*` arms. Those became either `replay-*` or
- * `*-procedure*` and this repo's own writeup says recipes and procedures are OPPOSITES, not
- * variants — a recipe is a frozen click sequence, a procedure is prose for a future agent. Naming
- * the wrong one would attribute runs to a config that did not produce them, which is the exact
- * class of error `groundingChecked` exists to catch. They stay unresolved until someone who knows
- * writes it down here.
+ * The `*-procedure*` block is the second half, and it was left blank here with a note asking for
+ * "someone who knows the mapping" — this is that mapping, and the caution it replaces was aimed at
+ * a spelling that never existed. The words swapped on 2026-08-03: a PROCEDURE is now the frozen
+ * click sequence and a RECIPE is the prose, which is the reverse of what they meant when this pass
+ * ran. So the prose arms were spelled `*-procedure*` THEN and are spelled `*-recipe*` NOW, and
+ * there was never a `p6-ax-recipe` in any manifest — `out/bench-backup/2026-08-03-filmed-ax-before-fixes`
+ * is an untouched pre-swap copy and holds `p5-ax-procedure-filmed`, never the recipe spelling.
+ * They are the same ten arms under two names, not two kinds of artifact: the tier flag on every
+ * one of these rows is the prose tier, and the pre-swap machine-steps arms were called
+ * `compile-*`/`replay-*` — no id on either side of the swap is ambiguous between them.
  */
-const RENAMED_ARMS: ReadonlyMap<string, string> = new Map([
+export const RENAMED_ARMS: ReadonlyMap<string, string> = new Map([
 	["p4-ungrounded", "blur-ungrounded"],
 	["p4-grounded", "blur-grounded"],
 	["p4-compile", "blur-compile"],
 	["p5-ungrounded-filmed", "blur-ungrounded-filmed"],
 	["p5-grounded-filmed", "blur-grounded-filmed"],
+	// The prose tier, pre-swap spelling -> post-swap spelling.
+	["p6-ax-procedure", "ax-recipe"],
+	["p6-cdp-procedure", "cdp-recipe"],
+	["p6-ax-procedure-from-ungrounded", "ax-recipe-from-ungrounded"],
+	["p6-cdp-procedure-from-ungrounded", "cdp-recipe-from-ungrounded"],
+	["p7-claude-cdp-procedure-from-ungrounded", "claude-cdp-recipe-from-ungrounded"],
+	["p5-ax-procedure-filmed", "ax-recipe-filmed"],
+	["p5-cdp-procedure-filmed", "cdp-recipe-filmed"],
+	["p5-ax-procedure-from-ungrounded-filmed", "ax-recipe-from-ungrounded-filmed"],
+	["p5-cdp-procedure-from-ungrounded-filmed", "cdp-recipe-from-ungrounded-filmed"],
+	["p5-claude-cdp-procedure-from-ungrounded-filmed", "claude-cdp-recipe-from-ungrounded-filmed"],
 ]);
 
 export const armById = (id: string): Arm | undefined => {
@@ -1403,13 +1418,13 @@ export const armById = (id: string): Arm | undefined => {
  * instead would be nine chances to forget, and the failure mode is silent — an entry whose arm
  * does not resolve is not flagged, it is simply absent from the board.
  *
- * UNRECOGNISED IDS PASS THROUGH UNCHANGED, deliberately. 15 arms in the 2026-08-01 pass were
- * renamed semantically rather than re-prefixed (`p6-ax-recipe`, `p4-grounded`, …), and this
- * function will not guess at those: recipes and procedures are opposites, not variants, so a
- * plausible-looking alias would attribute 28 runs to configs that did not produce them. That is
- * the failure this repo has been burned by before (a run reporting grounding its row did not
- * have). They stay unresolved and countable — see DashState.unmatchedEntries — until someone who
- * knows the mapping writes it down.
+ * UNRECOGNISED IDS PASS THROUGH UNCHANGED, deliberately — and stay countable, see
+ * DashState.unmatchedEntries. The 15 semantically-renamed arms of the 2026-08-01 pass
+ * (`p4-grounded`, `p6-ax-procedure`, …) are now in RENAMED_ARMS, each verified against a run's own
+ * log or against an untouched pre-swap manifest rather than inferred from its name. Anything still
+ * unrecognised is genuinely unknown, and guessing at it would attribute runs to a config that did
+ * not produce them — the failure this repo has been burned by before, a run reporting grounding
+ * its row did not have.
  */
 export const canonicalArmId = (id: string): string => armById(id)?.id ?? id;
 
