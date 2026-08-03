@@ -483,7 +483,10 @@ function entryView(e: ManifestEntry, fleet: FleetView, live?: Map<string, RunPro
 				? (m.failureKind
 					?? (m.success === true ? "succeeded"
 						: m.success === false ? "failed"
-						: e.technical ? "crashed"
+						// The technical KIND carries the distinction: a job that never started and a
+						// pass whose map was superseded are not deaths, and colouring them red beside
+						// a real crash is what made the board unreadable on 2026-08-03.
+						: e.technical ? (e.technical.kind === "never-ran" ? "never-ran" : e.technical.kind === "map-superseded" ? "map-superseded" : "crashed")
 						: e.state === "failed" ? "failed"
 						: "collected"))
 				: (e.state === "failed" ? "refused" : "collected"),

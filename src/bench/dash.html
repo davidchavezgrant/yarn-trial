@@ -502,6 +502,10 @@ const OUTCOME_COLORS = {
 	// finish. The stopped token (terminal-inert gray) rather than a red: nothing went wrong
 	// with this run, it simply never happened. See NEVER_RAN_TIP.
 	"never-ran": "var(--stopped)",
+	// Ran to completion; its map was simply not the published one. Amber, not red: the harness
+	// has something to say (the arm needs its map pulled or re-run) but the RUN did not fail.
+	// Sharing the crash colour is what put a 1h41m frontier-empty pass on the board as dead.
+	"map-superseded": STATUS.warning,
 };
 const NEVER_RAN_TIP =
 	"this job was cancelled while still QUEUED — it took a slot in the line and never got a process. " +
@@ -921,6 +925,9 @@ function statusChip(e, rowKey, selected, retryOf) {
 	// crashed at the end of it, so the wait is named as a wait or not at all.
 	const waited = e.queuedSec != null ? esc(" — queued " + fmtDur(e.queuedSec)) : "";
 	let label = e.status === "never-ran" ? "Never Ran" + waited
+		// Says what happened and what it costs, in that order: the pass finished, the grounding
+		// it left is not what got published. "Crashed" said neither and implied the opposite.
+		: e.status === "map-superseded" ? "Finished — map superseded"
 		: e.status === "running" ? (runBase != null ? `Running for ${elapsedSpan(runBase)}` : "Running")
 		: e.status === "queued" ? "Queued"
 		// One word for every good end (David, 2026-08-01): succeeded and collected read

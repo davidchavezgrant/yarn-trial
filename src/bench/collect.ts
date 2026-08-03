@@ -554,7 +554,21 @@ export function failureKind(
  * a re-run of the phase re-submits it once the host is signed in; the risk of re-buying failure
  * on a still-signed-out host is what the autopilot's stop-on-unready guard is for.
  */
-export function technicalFailure(state: string, metrics: RunMetrics, arm: Arm | undefined, notes: string[]): ManifestEntry["technical"] {
+export function technicalFailure(state: string, metrics: RunMetrics, arm: Arm | undefined, notes: string[], job?: { pid?: number; startedAt?: string; queuedAt?: string }): ManifestEntry["technical"] {
+	/**
+	 * NEVER STARTED is not a crash, and must not be coloured as one.
+	 *
+	 * A job cancelled while queued carries pid 0 and `startedAt === queuedAt` — the registry's own
+	 * shape for "took a slot in the line, never got a turn". It produced no map because no process
+	 * ever existed, so every downstream check ("no published map") is true of it and meaningless.
+	 * Left to fall through, 14 such rows rendered as `crashed` on the board beside a genuine AX
+	 * blackout, which is the one row on that screen that HAD crashed.
+	 *
+	 * Ahead of every other test: the reasons below all describe how a run died, and this one did
+	 * not run.
+	 */
+	if (job && job.pid === 0 && job.startedAt && job.queuedAt && job.startedAt === job.queuedAt)
+		return { kind: "never-ran", detail: "cancelled in the queue — never started a process, so nothing about it was measured" };
 	if (state === "orphaned") return { kind: "orphaned", detail: "the runner died under this run; nothing about the agent was measured" };
 	if (metrics.failureKind === "crashed") return { kind: "crashed", detail: "terminal with no run log — died before writing anything measurable" };
 	if (metrics.failureKind === "unready") return { kind: "unready", detail: "refused at the home-state gate (exit 3) — a host problem; sign the app in, then re-run the phase" };
@@ -563,8 +577,16 @@ export function technicalFailure(state: string, metrics: RunMetrics, arm: Arm | 
 	// An explore arm's product is a PUBLISHED map — that is what the next phase reads. A pass that
 	// wrote only its run-local copy (demoted) or wrote nothing at all produced no grounding, and
 	// either way the sample must be retried rather than counted.
-	if (arm?.kind === "explore" && notes.some((n) => n.startsWith("no appmap at") || n.startsWith("map not published")))
+	if (arm?.kind === "explore" && notes.some((n) => n.startsWith("no appmap at") || n.startsWith("map not published"))) {
+		// A pass that RAN TO COMPLETION and whose map was merely superseded is not a crash. Both
+		// are still technical — neither leaves grounding for a later phase, so neither counts as a
+		// sample — but the board must not tell an operator that a 1h41m pass which finished
+		// frontier-empty died. The published map can be another pass's simply because this one's
+		// was never pulled home, which is a transport fact, not a run outcome.
+		if (state === "done") return { kind: "map-superseded", detail: "ran to completion, but the published map is not this pass's — pull its map or re-run the arm" };
+
 		return { kind: "crashed", detail: "explore produced no published map — nothing for a later phase to ground on" };
+	}
 
 	return undefined;
 }
@@ -752,7 +774,7 @@ export function collectEntry(entry: ManifestEntry, job: JobRecord | undefined, d
 		if (scopes.length) metrics = { ...metrics, mutationScopes: scopes };
 	}
 
-	const technical = technicalFailure(state, metrics, arm, notes);
+	const technical = technicalFailure(state, metrics, arm, notes, job);
 	if (technical) notes.push(`TECHNICAL FAILURE (${technical.kind}) — not counted as a sample; re-run the phase to replace it`);
 
 	return {
