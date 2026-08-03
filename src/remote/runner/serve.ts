@@ -1529,6 +1529,29 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 				// Null when the child was signalled or nobody collected it — the record's own convention.
 				exitCode: r.exitCode ?? null,
 				...(r.endedAt ? { endedAt: r.endedAt } : {}),
+				/**
+				 * Did this job ever get a process? The runner has always known and never said.
+				 *
+				 * A job cancelled while QUEUED terminates with `pid: 0` and `startedAt` still
+				 * equal to `queuedAt` — the record's own convention for "took a slot in the line,
+				 * never got a turn". Without this field a poller sees only `state: "stopped"` and
+				 * an endedAt an hour later, so it reports a run that never began as a run that
+				 * failed after an hour. Measured 2026-08-03: five queued Notion grounding passes
+				 * cancelled together rendered on the board as four "Crashed after 1h55m" and one
+				 * "Finished after 1h55m" — the identical durations being the tell, since five
+				 * independent runs do not end within 39 seconds of each other.
+				 *
+				 * `startedAt` rides along so the consumer can compute a REAL duration rather than
+				 * inheriting queue time as though it were work.
+				 *
+				 * Emitted ONLY when the record carries a pid. `(r.pid ?? 0) > 0` was the first
+				 * cut and it is this document's own favourite bug: a record with no pid field
+				 * would have answered `ran: false` — "definitely never ran" — for what is in
+				 * fact "cannot say", relabelling every legacy record as a cancellation.
+				 */
+				...(typeof r.pid === "number" ? { ran: r.pid > 0 } : {}),
+				...(r.startedAt ? { startedAt: r.startedAt } : {}),
+				...(r.queuedAt ? { queuedAt: r.queuedAt } : {}),
 			}));
 		const recent = terminal.length ? { recent: terminal } : {};
 		const { holder } = inspect(runnerDir);

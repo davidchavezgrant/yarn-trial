@@ -3,8 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { aggregateRunEvents, appendNarrativeEvent, basicAuthGate, buildDetail, buildState, type DashEvent, defaultDashDate, exploreSeries, type FleetView, freezeStates, fromStore, groundingArmId, legacyNarrativeLogPath, loadEnvFallback, localRunProgress, matchPath, narrativeLogPath, type NarrativeEvent, narratorPrompt, notedRunKeys, parseDashArgs, parseEnvLine, parseLogFrames, parseRunEvents, rankExplore, readPersistedNarrative, runEventLine, type RunProgress, storeEvents, utf8Tail, watchStoreChain } from "../src/bench/dash.js";
+import { aggregateRunEvents, liveFor, appendNarrativeEvent, basicAuthGate, buildDetail, buildState, type DashEvent, defaultDashDate, exploreSeries, type FleetView, freezeStates, fromStore, groundingArmId, legacyNarrativeLogPath, loadEnvFallback, localRunProgress, matchPath, narrativeLogPath, type NarrativeEvent, narratorPrompt, notedRunKeys, parseDashArgs, parseEnvLine, parseLogFrames, parseRunEvents, rankExplore, readPersistedNarrative, runEventLine, type RunProgress, storeEvents, utf8Tail, watchStoreChain } from "../src/bench/dash.js";
 import { exportSnapshot } from "../src/bench/snapshot.js";
+import { neverRan } from "../src/remote/control/fleet.js";
 // The submodule, not the core/harness.ts barrel: the barrel loads the Anthropic SDK and the
 // cua driver, which a unit test of a 30-line appender has no business paying for.
 import { runEvent, usageEvent } from "../src/core/harness/run-events.js";
@@ -2310,4 +2311,92 @@ test("SuccessRate__ExcludesHarnessEndedRunsFromTheDenominator__When__SomeRunsWer
 	assert.equal(vocab.harnessMark(2), " +2⏹");
 	// The tile's tooltip has to say where the denominator went, or the number reads as a bug.
 	assert.match(vocab.SUCCESS_TIP, /HARNESS ended/);
+});
+
+/**
+ * A job cancelled from the QUEUE never ran, and must not be graded as though it had.
+ *
+ * Measured 2026-08-03: five Notion grounding passes queued behind long explores were cancelled
+ * together. Every one carried `pid: 0` and `startedAt === queuedAt`, and the board rendered them
+ * as four "Crashed after 1h55m" and one "Finished after 1h55m" — a completed grounding pass on
+ * the wall that had never started a process. The identical durations were the tell: five
+ * independent runs do not end within 39 seconds of each other, they share one cancellation.
+ */
+test("neverRan__IsTrue__When__TheRunnerSaysTheJobGotNoProcess", () => {
+	assert.equal(neverRan({ ran: false }), true);
+});
+
+test("neverRan__IsTrue__When__StartedAtEqualsQueuedAt", () => {
+	// The second witness, for a runner that predates the `ran` field — the record's own
+	// convention for a job that terminated straight out of the line.
+	assert.equal(neverRan({ startedAt: "2026-08-03T12:16:58.773Z", queuedAt: "2026-08-03T12:16:58.773Z" }), true);
+});
+
+test("neverRan__IsFalse__When__TheJobActuallyStarted", () => {
+	assert.equal(neverRan({ ran: true }), false);
+	assert.equal(neverRan({ startedAt: "2026-08-03T12:20:00.000Z", queuedAt: "2026-08-03T12:16:58.773Z" }), false);
+});
+
+test("neverRan__IsFalse__When__TheRunnerSaidNothing", () => {
+	// Unknown must not read as "never ran", or every terminal run on an un-synced Mac is
+	// relabelled a cancellation — the same absence-as-a-value trap pointing the other way.
+	assert.equal(neverRan({}), false);
+	assert.equal(neverRan({ endedAt: "2026-08-03T14:12:48.569Z" } as never), false);
+});
+
+test("liveFor__ReportsNeverRan__When__AQueuedJobWasCancelled", () => {
+	const view = liveFor(
+		{ armId: "explore-notion-cdp-vision", jobId: "j1", host: "mac1", submittedAt: "2026-08-03T12:16:58.773Z", state: "running", collected: false } as never,
+		{
+			polledAt: "2026-08-03T14:30:00.000Z",
+			rows: [{
+				name: "mac1", reachable: true, state: "idle",
+				recent: [{ jobId: "j1", state: "stopped", exitCode: null, ran: false, queuedAt: "2026-08-03T12:16:58.773Z", startedAt: "2026-08-03T12:16:58.773Z", endedAt: "2026-08-03T14:12:48.569Z" }],
+			}],
+		} as never,
+	);
+
+	assert.equal(view.status, "never-ran", "a cancelled-from-the-queue job is neither crashed nor finished");
+});
+
+test("liveFor__ReportsTheWaitAsQueuedSecNotElapsedSec__When__AJobNeverRan", () => {
+	// The load-bearing half. Rollups, cost and every chart key on elapsedSec as time spent
+	// WORKING; putting 1h55m of queue time there is what produced "Crashed after 1h55m".
+	const view = liveFor(
+		{ armId: "a", jobId: "j1", host: "mac1", submittedAt: "2026-08-03T12:16:58.773Z", state: "running", collected: false } as never,
+		{
+			polledAt: "2026-08-03T14:30:00.000Z",
+			rows: [{
+				name: "mac1", reachable: true, state: "idle",
+				recent: [{ jobId: "j1", state: "stopped", exitCode: null, ran: false, queuedAt: "2026-08-03T12:16:58.773Z", startedAt: "2026-08-03T12:16:58.773Z", endedAt: "2026-08-03T14:12:48.569Z" }],
+			}],
+		} as never,
+	);
+
+	assert.equal((view as { elapsedSec?: number }).elapsedSec, undefined, "queue time must never enter elapsedSec");
+	assert.equal((view as { queuedSec?: number }).queuedSec, 6950, "the wait is reported, as a wait");
+});
+
+test("liveFor__StillReportsADoneJobAsAwaitingCollect__When__ItGenuinelyRan", () => {
+	// The guard must not swallow real finishes: a job with a process keeps its old reading.
+	const view = liveFor(
+		{ armId: "a", jobId: "j1", host: "mac1", submittedAt: "2026-08-03T12:16:58.773Z", state: "running", collected: false } as never,
+		{
+			polledAt: "2026-08-03T14:30:00.000Z",
+			rows: [{
+				name: "mac1", reachable: true, state: "idle",
+				recent: [{ jobId: "j1", state: "done", exitCode: 0, ran: true, queuedAt: "2026-08-03T12:16:58.773Z", startedAt: "2026-08-03T12:20:00.000Z", endedAt: "2026-08-03T14:12:48.569Z" }],
+			}],
+		} as never,
+	);
+
+	assert.equal(view.status, "awaiting-collect");
+});
+
+test("dashHtml__ColorsAndExplainsNeverRan__When__TheStatusReachesTheChip", () => {
+	// A status with no OUTCOME_COLORS entry renders as the hollow "unknown" dot — which is how
+	// `stalled` and `step-ceiling` sat unlabelled until 2026-08-03. Do not repeat it.
+	const html = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "bench", "dash.html"), "utf8");
+	assert.ok(/"never-ran":/.test(html), "never-ran needs an explicit OUTCOME_COLORS entry");
+	assert.ok(html.includes("NEVER_RAN_TIP"), "never-ran needs an explainer, like the harness-ended pair");
 });

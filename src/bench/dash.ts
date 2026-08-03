@@ -7,7 +7,7 @@ import path from "node:path";
 import type { Duplex } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readJournal } from "../core/journal.js";
-import type { FleetRow } from "../remote/control/fleet.js";
+import { type FleetRow, neverRan } from "../remote/control/fleet.js";
 import type { HostEntry, Inventory } from "../remote/control/hosts.js";
 import type { EngineHandle } from "../remote/liveview.js";
 import { readJob as readLocalJob, readLog } from "../remote/runner/jobs.js";
@@ -104,6 +104,12 @@ export interface EntryView {
 	video?: boolean;
 	/** Seconds the run has been going (running) or took per its own log (collected). */
 	elapsedSec?: number;
+	/**
+	 * Seconds a NEVER-RAN job spent waiting in a queue before being cancelled. Deliberately
+	 * not `elapsedSec`: rollups, cost and every chart key on that field as time spent working,
+	 * and inheriting queue time there is exactly the bug this pair exists to end.
+	 */
+	queuedSec?: number;
 	queuePosition?: number;
 	stalled?: boolean;
 	success?: boolean;
@@ -376,7 +382,7 @@ const median = (xs: number[]): number | undefined => {
 	return s.length % 2 ? s[mid] : ((s[mid - 1] as number) + (s[mid] as number)) / 2;
 };
 
-function liveFor(e: ManifestEntry, fleet: FleetView): Pick<EntryView, "status" | "elapsedSec" | "queuePosition" | "stalled"> {
+export function liveFor(e: ManifestEntry, fleet: FleetView): Pick<EntryView, "status" | "elapsedSec" | "queuedSec" | "queuePosition" | "stalled"> {
 	const host = fleet.rows.find((r) => r.name === e.host);
 	if (host?.jobId === e.jobId)
 		return { status: "running", ...(host.elapsedSec !== undefined ? { elapsedSec: host.elapsedSec } : {}), ...(host.stalled ? { stalled: true } : {}) };
@@ -389,6 +395,27 @@ function liveFor(e: ManifestEntry, fleet: FleetView): Pick<EntryView, "status" |
 	// an orphan, or a kill signal); a `done` record genuinely is just waiting for collection.
 	if (host?.reachable && host.state !== "unknown") {
 		const rec = host.recent?.find((r) => r.jobId === e.jobId);
+		/**
+		 * A job cancelled while QUEUED never ran, and must not be graded as though it had.
+		 *
+		 * It gets its own status ahead of every other reading, including `done`: the registry
+		 * marks a cancelled-from-the-queue job `stopped`, but one cancelled the moment its
+		 * predecessor finished can land as `done` with no work behind it — so five queued
+		 * Notion grounding passes cancelled together on 2026-08-03 rendered as four "Crashed
+		 * after 1h55m" and one "Finished after 1h55m", the last being a completed grounding
+		 * pass on the board that had never started a process.
+		 *
+		 * `elapsedSec` is deliberately NOT set here. Everything downstream reads it as time
+		 * spent working, and this job's only elapsed time is time spent waiting.
+		 */
+		if (rec && neverRan(rec)) {
+			// The wait, reported AS a wait. Named `queuedSec` rather than `elapsedSec` so no
+			// existing reader can mistake it for work: rollups, cost and the charts all key on
+			// elapsedSec, and this number must never enter any of them.
+			const waited = rec.endedAt && rec.queuedAt ? Math.max(0, Math.round((Date.parse(rec.endedAt) - Date.parse(rec.queuedAt)) / 1000)) : undefined;
+
+			return { status: "never-ran", ...(Number.isFinite(waited) ? { queuedSec: waited } : {}) };
+		}
 		if (rec?.state === "failed" || rec?.state === "stopped") return { status: rec.state };
 		if (rec?.state === "orphaned") return { status: "crashed" };
 		// Absence from the snapshot is evidence of termination ONLY when the snapshot postdates

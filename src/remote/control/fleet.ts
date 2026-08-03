@@ -31,6 +31,34 @@ export interface FleetRecentEntry {
 	/** Null when the child was signalled or nobody collected it — the job record's convention. */
 	exitCode?: number | null;
 	endedAt?: string;
+	/**
+	 * Whether the job ever got a process. `false` means it was cancelled while QUEUED — it took
+	 * a slot in the line and never got a turn, so it is neither a crash nor a finish.
+	 *
+	 * Absent from a runner that predates the field, and `undefined` must therefore mean UNKNOWN
+	 * rather than `false`: reading a missing field as "never ran" would relabel every terminal
+	 * run on an un-synced Mac as a cancellation, which is the same absence-as-a-value trap in
+	 * the opposite direction.
+	 */
+	ran?: boolean;
+	/** When the child actually started. Equal to `queuedAt` when the job never ran. */
+	startedAt?: string;
+	queuedAt?: string;
+}
+
+/**
+ * Did this job never get a process? `true` only on positive evidence.
+ *
+ * Two independent witnesses, because the first is absent on an un-synced runner: the explicit
+ * `ran: false`, or `startedAt === queuedAt` (the record's convention for a job that terminated
+ * from the queue). Unknown answers `false` — a run whose provenance we cannot establish keeps
+ * whatever state it reported.
+ */
+export function neverRan(r: Pick<FleetRecentEntry, "ran" | "startedAt" | "queuedAt">): boolean {
+	if (r.ran === false) return true;
+	if (r.ran === true) return false;
+
+	return Boolean(r.startedAt && r.queuedAt && r.startedAt === r.queuedAt);
 }
 
 /** The states a `recent` entry may carry; anything else off the wire is dropped, not trusted. */
@@ -162,6 +190,11 @@ async function hostStatus(host: HostEntry, run: SshRunner, timeoutMs: number): P
 					state: r.state as FleetRecentEntry["state"],
 					...(typeof r.exitCode === "number" || r.exitCode === null ? { exitCode: r.exitCode as number | null } : {}),
 					...(typeof r.endedAt === "string" ? { endedAt: r.endedAt } : {}),
+					// Absent on an un-synced runner; carried through as undefined so `neverRan`
+					// can tell "did not run" from "cannot say".
+					...(typeof r.ran === "boolean" ? { ran: r.ran } : {}),
+					...(typeof r.startedAt === "string" ? { startedAt: r.startedAt } : {}),
+					...(typeof r.queuedAt === "string" ? { queuedAt: r.queuedAt } : {}),
 				}))
 		: [];
 

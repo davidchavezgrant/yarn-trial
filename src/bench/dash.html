@@ -498,7 +498,17 @@ const OUTCOME_COLORS = {
 	stalled: STATUS.warning, "step-ceiling": STATUS.warning,
 	failed: STATUS.critical, pending: "var(--muted)",
 	collected: STATUS.good,
+	// Cancelled from the QUEUE — it never got a process, so it is neither a failure nor a
+	// finish. The stopped token (terminal-inert gray) rather than a red: nothing went wrong
+	// with this run, it simply never happened. See NEVER_RAN_TIP.
+	"never-ran": "var(--stopped)",
 };
+const NEVER_RAN_TIP =
+	"this job was cancelled while still QUEUED — it took a slot in the line and never got a process. " +
+	"Its elapsed time is time spent WAITING, not working, so no run duration is shown. " +
+	"Before 2026-08-03 the board inherited that queue time as a run time and graded these as " +
+	"'Crashed after 1h55m' (and one as 'Finished after 1h55m'), which is how five cancelled " +
+	"grounding passes read as four crashes and a completed pass.";
 // One resolver for chart segments AND their legend swatches, so a segment can never render
 // a color its legend doesn't show. Unknown kinds get ink — visible, claimed by no state.
 const outcomeColor = (k) => OUTCOME_COLORS[k] || "var(--ink)";
@@ -906,7 +916,12 @@ function statusChip(e, rowKey, selected, retryOf) {
 	const runBase = e.elapsedSec != null ? e.elapsedSec
 		: (liveMem[e.jobId] || {}).start != null ? (receivedAt - liveMem[e.jobId].start) / 1000 : null;
 	const after = took != null ? esc(" after " + fmtDur(took)) : "";
-	let label = e.status === "running" ? (runBase != null ? `Running for ${elapsedSpan(runBase)}` : "Running")
+	// A job that never got a process has no run duration to report — only a wait. Saying
+	// "after 1h55m" of queue time is what made a cancelled pass read as an hour of work that
+	// crashed at the end of it, so the wait is named as a wait or not at all.
+	const waited = e.queuedSec != null ? esc(" — queued " + fmtDur(e.queuedSec)) : "";
+	let label = e.status === "never-ran" ? "Never Ran" + waited
+		: e.status === "running" ? (runBase != null ? `Running for ${elapsedSpan(runBase)}` : "Running")
 		: e.status === "queued" ? "Queued"
 		// One word for every good end (David, 2026-08-01): succeeded and collected read
 		// "Finished" exactly like awaiting-collect, so collect banking a run never flips its
@@ -969,6 +984,10 @@ function statusChip(e, rowKey, selected, retryOf) {
 	const cutoff = e.failureKind && HARNESS_ENDED_TIPS[e.failureKind] ? `\n${HARNESS_ENDED_TIPS[e.failureKind]}` : "";
 	// The LIVE silence flag's own explainer, when the label carries the ⚠ (see LIVE_SILENT_TIP).
 	const silent = e.stalled ? `\n${LIVE_SILENT_TIP}` : "";
+	// "Never Ran" needs its meaning spelled out for the same reason the harness-ended pair do:
+	// two words cannot say "this took a queue slot and never got a process, so its elapsed
+	// time is a wait and not a result".
+	const nran = e.status === "never-ran" ? `\n${NEVER_RAN_TIP}` : "";
 	// The event-log tail, one tooltip line: last step, claim, cleanup. Named as provisional
 	// so a hover never reads live counters as collected numbers — and named "live" only
 	// while the run actually runs; an ended run's tail says so.
@@ -982,7 +1001,7 @@ function statusChip(e, rowKey, selected, retryOf) {
 		lp.verdict ? `claimed ${lp.verdict.success ? "success" : "failure"} — not yet judged` : "",
 		lp.cleanup ? `cleanup: ${lp.cleanup}` : "",
 	].filter(Boolean).join(" · ") : "";
-	return `<span class="chip${selected ? " sel" : ""}"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${esc(when)}${esc(retry)}${e.note ? "\n" + esc(e.note) : ""}${esc(preCollect)}${esc(registry)}${esc(cutoff)}${esc(silent)}${esc(liveTip)}${clickTip}${esc(econ)}">` +
+	return `<span class="chip${selected ? " sel" : ""}"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${esc(when)}${esc(retry)}${e.note ? "\n" + esc(e.note) : ""}${esc(preCollect)}${esc(registry)}${esc(cutoff)}${esc(nran)}${esc(silent)}${esc(liveTip)}${clickTip}${esc(econ)}">` +
 		`<span class="dot${known ? "" : " unknown"}"${known ? ` style="background:${color}"` : ""}></span>${label}${esc(judge)}</span>`;
 }
 

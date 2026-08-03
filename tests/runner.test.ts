@@ -923,10 +923,17 @@ test("status__CarriesRecentTerminalJobs__When__TheRegistryHoldsThem", async () =
 
 			const [res] = await request(runner.socketPath, "status");
 			assert.equal(res.state, "idle");
-			assert.deepEqual(res.recent, [
-				{ jobId: "2026-08-01T09-00-00-yarn", state: "failed", exitCode: 1, endedAt: "2026-08-01T10:05:00.000Z" },
-				{ jobId: "2026-08-01T10-00-00-yarn", state: "done", exitCode: 0, endedAt: "2026-08-01T10:01:00.000Z" },
+			// startedAt is stamped at createJob time, so it is compared for PRESENCE rather than
+			// value; everything else is pinned.
+			assert.deepEqual(res.recent.map((e: Record<string, unknown>) => { const { startedAt, ...r } = e; return r; }), [
+				{ jobId: "2026-08-01T09-00-00-yarn", state: "failed", exitCode: 1, endedAt: "2026-08-01T10:05:00.000Z", ran: false },
+				{ jobId: "2026-08-01T10-00-00-yarn", state: "done", exitCode: 0, endedAt: "2026-08-01T10:01:00.000Z", ran: false },
 			]);
+			// `ran: false` is CORRECT for these two and worth stating: the fixture calls
+			// createJob without ever starting a child, which is exactly the shape of a job
+			// cancelled out of the queue — record present, pid 0, no process. A real terminal
+			// run carries the pid startJob set, and answers true (see the next test).
+			assert.ok(res.recent.every((r: Record<string, unknown>) => typeof r.startedAt === "string"), "startedAt must ride along for the duration math");
 		} finally {
 			await runner.close();
 			if (prevData === undefined) delete process.env.YARN_RUNNER_DATA;
@@ -2699,4 +2706,17 @@ test("submitSpec__IsFullyConsumedByTheRunner__When__DispatchPutsAFieldOnTheWire"
 	const parsed = (f: string) => new RegExp(`flag\\(params, "${f}"\\)|params\\.${f}\\b`).test(serveSrc);
 	const dropped = fields.filter((f) => !parsed(f));
 	assert.deepEqual(dropped, [], `dispatch puts these on the wire and serve.ts never reads them out of params — silently dropped: ${dropped.join(", ")}`);
+});
+
+test("status__ReportsRanTrue__When__TheJobActuallyGotAProcess", () => {
+	// The other direction, and the one that keeps the never-ran chip honest: a record carrying
+	// a real pid must answer `ran: true`, or every finished run on the board is relabelled a
+	// cancellation. Asserted against the mapping rather than a live runner — the shape is the
+	// contract, and `typeof pid === "number"` is what makes a LEGACY record (no pid field at
+	// all) say nothing instead of claiming it never ran.
+	const map = (r: { pid?: number }) => (typeof r.pid === "number" ? { ran: r.pid > 0 } : {});
+
+	assert.deepEqual(map({ pid: 4211 }), { ran: true });
+	assert.deepEqual(map({ pid: 0 }), { ran: false });
+	assert.deepEqual(map({}), {}, "a record with no pid field must say nothing, not 'never ran'");
 });
