@@ -460,12 +460,20 @@ export async function autopilot(opts: AutopilotOptions = {}): Promise<number> {
 	const keyCheck =
 		opts.keyCheckFn ??
 		(async () => {
-			// A real one-token call, not a presence check: the 2026-07-31 near-miss was a key
-			// that EXISTED and was dead (401). Costs a fraction of a cent; catches the failure
-			// that would otherwise surface after the whole matrix is spent unjudgeable.
+			// A real call, not a presence check: the 2026-07-31 near-miss was a key that EXISTED
+			// and was dead (401). Costs a fraction of a cent; catches the failure that would
+			// otherwise surface after the whole matrix is spent unjudgeable.
+			//
+			// 16, not 1. `max_tokens: 1` refused every pass on the Azure judge model from the day
+			// this check was written: the Responses API enforces `max_output_tokens >= 16` and
+			// answers 400 `integer_below_min_value`, which this function reports as "the judge model
+			// is unreachable — fix the key first". The key was fine. A preflight that cannot pass is
+			// worse than no preflight, because its failure names the wrong cause and the operator
+			// goes looking at credentials. Caught 2026-08-03 by the refusal it produced on a real
+			// launch; the distinction that unmasked it is that a dead key answers 401, not 400.
 			const [{ makeClient }, { BENCH_JUDGE_MODEL }] = await Promise.all([import("../core/harness.js"), import("./judge.js")]);
 			const { client, model: judgeModel } = makeClient(process.env.JUDGE_MODEL ?? BENCH_JUDGE_MODEL);
-			await client.messages.create({ model: judgeModel, max_tokens: 1, messages: [{ role: "user", content: "ping" }] });
+			await client.messages.create({ model: judgeModel, max_tokens: 16, messages: [{ role: "user", content: "ping" }] });
 		});
 	try {
 		await keyCheck();
