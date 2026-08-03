@@ -2079,6 +2079,26 @@ export interface DashOptions {
 	 * misconfigured deploy rather than a decision. See main()'s isPublic.
 	 */
 	public?: boolean;
+	/**
+	 * The store behind this dash is NOT being written — retire its non-terminal states for
+	 * display (freezeStates). `--frozen`, or DASH_FROZEN=1.
+	 *
+	 * SPLIT OUT OF `share` (David, 2026-08-03), because share was answering two unrelated
+	 * questions with one flag: "may this audience reach the fleet" and "is this data still
+	 * moving". They came apart the moment the orchestrator moved to a droplet: collect pulls
+	 * artifacts to whatever machine drives the pass, so a dash beside THAT store is public and
+	 * live at once — the fleet must stay withheld, and the manifest must not be frozen.
+	 *
+	 * Freezing a live store is not a cosmetic error. It retires every in-flight run to
+	 * `abandoned` and every queued one to `never-ran`, so a board watching an active drain would
+	 * report that nothing is running and nothing is waiting — the exact opposite of what the
+	 * viewer needs, stated with total confidence.
+	 *
+	 * Frozen is the right answer for the container image, which COPYs a snapshot at build time
+	 * and can therefore never be live; Dockerfile.dash sets it for that reason. A dash run from
+	 * a checkout defaults to live, because a checkout's store is the one the runner writes.
+	 */
+	frozen?: boolean;
 }
 
 /**
@@ -2155,6 +2175,9 @@ export function parseDashArgs(args: string[]): DashOptions {
 		// Env as well as flag, like --share: on a PaaS the posture travels as an env var, and it
 		// must be as easy to declare "public on purpose" as it is to declare share mode.
 		...(args.includes("--public") || process.env.DASH_PUBLIC === "1" ? { public: true } : {}),
+		// Frozen is about the DATA, not the audience — see DashOptions.frozen for why it is no
+		// longer inferred from --share.
+		...(args.includes("--frozen") || process.env.DASH_FROZEN === "1" ? { frozen: true } : {}),
 	};
 }
 
@@ -2263,7 +2286,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	// Before ANYTHING that calls makeClient — the defaultModel resolution just below and
 	// every narrate tick read the key env vars this seeds.
 	loadEnvFallback();
-	const { port, autoCollect, share = false } = opts;
+	const { port, autoCollect, share = false, frozen = false } = opts;
 	/**
 	 * PUBLIC — serve the board with no gate at all (David, 2026-08-03: "the data isn't sensitive
 	 * and I'd rather the team not have to authenticate to view it").
@@ -2293,7 +2316,9 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 
 	// The ONE manifest read for this process — share mode retires the non-terminal states as the
 	// bytes come in, so no downstream reader has to know whether it is looking at a snapshot.
-	const readCurrentManifest = (d: string): Manifest => (share ? freezeStates(readStoredManifest(d)) : readStoredManifest(d));
+	// `frozen`, never `share`: a public board over a LIVE store (the orchestrator's own machine)
+	// must report its running and queued runs as what they are.
+	const readCurrentManifest = (d: string): Manifest => (frozen ? freezeStates(readStoredManifest(d)) : readStoredManifest(d));
 	let manifest = readCurrentManifest(date);
 	let fleet: FleetView = { rows: [] };
 	const events: DashEvent[] = [];
@@ -3906,7 +3931,7 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			// Share mode says what it withheld, not just what it is: "no fleet" is the difference
 			// between a dash that cannot reach the Macs and one that was told not to try.
 			console.log(share
-				? `DASH (share): http://localhost:${port}  (date ${date}, snapshot — no fleet, no peek, no narrator, ${authGate ? "auth ON" : "PUBLIC — no auth, anyone with the URL can read this board"})`
+				? `DASH (share): http://localhost:${port}  (date ${date}, ${frozen ? "frozen store — non-terminal states retired for display" : "LIVE store — states as the manifest reports them"}, no fleet, no peek, no narrator, ${authGate ? "auth ON" : "PUBLIC — no auth, anyone with the URL can read this board"})`
 				: `DASH (David's Agent Supervision Hub): http://localhost:${port}  (date ${date}, fleet poll ${FLEET_POLL_SEC}s, ${autoCollect ? `auto-collect ${COLLECT_SEC}s` : "collect OFF — pure reader"}${authGate ? ", auth ON" : ""})`);
 			resolve();
 		});

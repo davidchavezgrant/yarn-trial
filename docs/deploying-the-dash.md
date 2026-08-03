@@ -34,6 +34,7 @@ the local one or with the report over the same manifest.
 | narrator | mints notes | **off** (snapshot's notes still render) |
 | `DASH_AUTH` | optional | **required, unless `DASH_PUBLIC=1` declares open access** |
 | `--collect` | opt-in | **refused** |
+| non-terminal states retired | no | **only with `--frozen`** (see below) |
 
 The ssh-shelling branches all gate on the host inventory, so share mode simply withholds it —
 one cause, not five separate switches. See `DashOptions.share` in `src/bench/dash.ts`.
@@ -81,6 +82,19 @@ someone with dashboard access first deleting a secret. `--public` is the CLI equ
 `ARG DASH_PUBLIC=` in Dockerfile.dash defaults to OFF: an image is public only when built with
 `--build-arg DASH_PUBLIC=1`, so the choice lives in the build command that produced a tag rather
 than being inherited by every future build.
+
+**Frozen is its own flag, not a consequence of `--share`** (2026-08-03). Share answers *may this
+audience reach the fleet*; `--frozen` / `DASH_FROZEN=1` answers *is this data still moving*. They
+came apart when the orchestrator moved to a droplet: `collect` pulls artifacts to whatever machine
+drives the pass, so a dash beside THAT store is public and live at once. Freezing a live store
+retires every in-flight run to `abandoned` and every queued one to `never-ran`, so the board would
+report an active drain as finished. `Dockerfile.dash` defaults `ARG DASH_FROZEN=1` because the
+usual image ships a snapshot of a FINISHED pass; build with `--build-arg DASH_FROZEN=` for a board
+tracking a pass in progress, whose running entries are real.
+
+**The CLI can create services** — `render services create --from <SERVICE_ID>` clones an existing
+one (plan, region, health check, registry credential) and overrides what you pass. Earlier notes
+here said creation needed a REST API key; that was true of an older CLI and is no longer.
 
 **Frozen states.** The shipped 2026-08-01 manifest holds 173 done, 22 failed and **3 still
 mid-run** (nothing queued — the pass drained). A live dash resolves those against the fleet; a

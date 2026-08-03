@@ -75,6 +75,21 @@ ENV DASH_SHARE=1
 # it deliberately overrides any DASH_AUTH still present in the environment.
 ARG DASH_PUBLIC=
 ENV DASH_PUBLIC=${DASH_PUBLIC}
+
+# FROZEN by default, because the usual image is an ARCHIVE: it COPYs a snapshot of a FINISHED pass,
+# whose three mid-run entries will never move. Published live, that board claims they are executing
+# right now, forever, and the Pipeline total climbs 1s/s over data that cannot change.
+#
+# `--build-arg DASH_FROZEN=` inverts it, and that is the case worth explaining: a board tracking a
+# pass IN PROGRESS is built from a snapshot taken mid-drain, refreshed as the pass advances. Its
+# running and queued entries are real — they were running when the photograph was taken — so
+# retiring them to `abandoned` and `never-ran` would be the lie, not the fix. Frozen is a claim
+# about whether the pass is over, which only the person building the image knows.
+#
+# Deliberately NOT inherited from DASH_SHARE, which is what it used to be: share answers "may this
+# audience reach the fleet". See DashOptions.frozen.
+ARG DASH_FROZEN=1
+ENV DASH_FROZEN=${DASH_FROZEN}
 # Unprivileged: nothing here writes, so nothing needs to own the filesystem.
 USER node
 EXPOSE 10000

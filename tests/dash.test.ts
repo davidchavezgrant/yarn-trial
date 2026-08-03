@@ -600,6 +600,46 @@ const plantRecording = (dir: string, jobId: string, file: string): void => {
 	fs.writeFileSync(path.join(rec, file), "BYTES");
 };
 
+test("ParseDashArgs__DeclaresFrozen__When__TheFlagOrEnvSaysSo", () => {
+	const saved = process.env.DASH_FROZEN;
+	try {
+		delete process.env.DASH_FROZEN;
+		// NOT implied by --share any more: share answers "may this audience reach the fleet",
+		// frozen answers "is this data still moving". The droplet-hosted board is both public and
+		// live, which is the combination the old coupling could not express.
+		assert.equal(parseDashArgs(["--share"]).frozen, undefined);
+		assert.equal(parseDashArgs(["--frozen"]).frozen, true);
+		process.env.DASH_FROZEN = "1";
+		assert.equal(parseDashArgs([]).frozen, true);
+		// Only "1" arms it, like DASH_SHARE and DASH_PUBLIC.
+		process.env.DASH_FROZEN = "false";
+		assert.equal(parseDashArgs([]).frozen, undefined);
+	} finally {
+		if (saved === undefined) delete process.env.DASH_FROZEN; else process.env.DASH_FROZEN = saved;
+	}
+});
+
+test("FreezeStates__RetiresOnlyNonTerminalUncollectedEntries__When__TheStoreIsFrozen", () => {
+	const m = manifest(
+		entry({ jobId: "j-run", state: "running", collected: false }),
+		entry({ jobId: "j-queued", state: "queued", collected: false }),
+		entry({ jobId: "j-done", state: "done", collected: true }),
+	);
+
+	const f = freezeStates(m);
+
+	// The retirement itself — what a FINISHED pass's snapshot needs, so it stops claiming three
+	// runs are executing right now, forever.
+	assert.equal(f.entries.find((e) => e.jobId === "j-run")?.state, "abandoned");
+	assert.equal(f.entries.find((e) => e.jobId === "j-queued")?.state, "never-ran");
+	// A collected entry is already terminal and must be left exactly as it is.
+	assert.equal(f.entries.find((e) => e.jobId === "j-done")?.state, "done");
+	// And it is a pure function of the manifest — the caller decides WHEN this is honest, which
+	// is why it is gated on `frozen` rather than on `share`. Applied to a live store it would
+	// report an active drain as abandoned.
+	assert.equal(m.entries.find((e) => e.jobId === "j-run")?.state, "running");
+});
+
 test("ParseDashArgs__DeclaresPublic__When__TheFlagOrEnvSaysSo", () => {
 	const saved = process.env.DASH_PUBLIC;
 	try {
