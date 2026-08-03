@@ -9,7 +9,7 @@ import { freshSnapshot } from "../src/core/harness/fresh-target.js";
 import type { Driver } from "../src/core/driver.js";
 import { ACT_TOOL, DEMO_ACT_TOOL, DEMO_DRIVER_RULES, DRIVER_RULES } from "../src/core/harness.js";
 import type { InteractiveElement, ObservationBundle } from "../src/core/harness.js";
-import { chunkText, demoTranslate, type FreshSnapshot, resolveFresh, visibleCentroid } from "../src/core/harness/fresh-target.js";
+import { chunkText, demoTranslatable, demoTranslate, type FreshSnapshot, resolveFresh, visibleCentroid } from "../src/core/harness/fresh-target.js";
 import type { StepRecord } from "../src/types.js";
 
 // --- Demo actuation (recorded runs). The forensic run 2026-07-31T05-45-03 established the
@@ -320,4 +320,28 @@ test("freshSnapshot__ReadsAgain__When__TheLayoutIsStillMoving", async () => {
 	// a sleep long enough for the worst case is paid by every step.
 	assert.equal(snap.elements.find((e) => e.name === "New Draft")?.y, 74);
 	assert.equal(n, 3, "reads until two agree");
+});
+
+test("demoTranslatable__LeavesClicksToAXPress__When__FilmingOnTheAxPath", () => {
+	/**
+	 * Demo mode used to turn element clicks into COORDINATE clicks, to avoid AXPress "whose
+	 * click moves no pointer". The premise is true and turned out not to matter: track.ts
+	 * measured that CGEvent actuation does not move the physical pointer either — 1.2% of
+	 * samples show any delta, and those are teleports. Neither actuator puts a cursor in the
+	 * frame; it is composited in post from click points the run records regardless, which is
+	 * how Yarn's pipeline works too.
+	 *
+	 * The cost of that non-benefit was measured: filmed ax 2/13 against unfilmed ax 26/39,
+	 * because a coordinate click depends on the geometry being right at that instant while
+	 * AXPress invokes the element by identity.
+	 *
+	 * None of this was covered — demoTranslatable had no test at all, which is why the collapse
+	 * showed up in a benchmark instead of in CI.
+	 */
+	for (const name of ["click", "right_click", "double_click"])
+		assert.equal(demoTranslatable({ name, element_index: 5 }), false, `${name} must actuate by identity, not coordinates`);
+	// Typing keeps its demo sequence: AXPress "may focus nothing", and typed text once leaked
+	// into Yarn's composer because of exactly that. Text entry needs a real click for focus.
+	assert.equal(demoTranslatable({ name: "type_text", element_index: 5, text: "hello" }), true);
+	assert.equal(demoTranslatable({ name: "type_text", element_index: 5, text: "" }), false);
 });

@@ -286,12 +286,30 @@ export interface DemoPlan {
 	typedLive?: boolean;
 }
 
-/** Actions the demo path translates. Everything else keeps the normal request builder. */
+/**
+ * Actions the demo path translates. Everything else keeps the normal request builder.
+ *
+ * CLICKS NO LONGER DO, and that is the point (2026-08-03). Demo mode translated element clicks
+ * into coordinate clicks to avoid AXPress, "whose click moves no pointer". True — and, it turns
+ * out, irrelevant: `src/cursor/track.ts` measured that CGEvent actuation does not move the
+ * physical pointer either (1.2% of samples show any delta, and those are teleports). Neither
+ * actuator puts a cursor in the frame; the cursor is composited in post from click points the
+ * run records either way, which is also how Yarn's own pipeline works.
+ *
+ * So the reliability was bought for nothing. Filmed ax ran 2/13 against unfilmed ax at 26/39,
+ * because a coordinate click depends on geometry being right at that instant while AXPress
+ * invokes the element by identity. Clicks go back to identity; the film loses the app's real
+ * :hover highlight on the ax path, which is the one genuine cost and is worth 4x reliability.
+ *
+ * TYPE_TEXT STILL DOES, and for the reason that never stopped being true: AXPress "may focus
+ * nothing", and typed text once leaked into Yarn's composer because of it. Text entry needs a
+ * real click to place focus, so it keeps the demo sequence.
+ *
+ * CDP is untouched — `locator.click()` resolves the element and scrolls it into view, so it
+ * gets hover AND reliability (8/10 filmed, zero coordinate failures). This split is ax-only.
+ */
 export function demoTranslatable(a: any): boolean {
-	return (
-		((a?.name === "click" || a?.name === "right_click" || a?.name === "double_click") && a?.element_index !== undefined) ||
-		(a?.name === "type_text" && typeof a?.text === "string" && a.text.length > 0)
-	);
+	return a?.name === "type_text" && typeof a?.text === "string" && a.text.length > 0;
 }
 
 /**
