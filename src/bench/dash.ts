@@ -155,6 +155,38 @@ export interface EntryView {
 
 export interface PassView {
 	model: string;
+	/**
+	 * The FILMED runs of this exact config, grafted onto its row for display (David,
+	 * 2026-08-03). A filmed take belongs with the config it films — hunting for a
+	 * `p5-…-filmed` twin to watch a run you are already looking at is the wrong shape.
+	 *
+	 * DISPLAY ONLY, and deliberately NOT merged into `entries`. A filmed run is a different
+	 * run: `--record` swaps in demo rules and a demo act tool with no `set_value`, so folding
+	 * it into this pass's samples would move meanSteps, successes and cost — the board would
+	 * then disagree with the report over the same manifest, which is the one thing it may
+	 * never do. Everything aggregated reads `entries`; only the row rendering reads this.
+	 *
+	 * Carries the filmed ARM's id and sample count, not just its runs, so the board can apply the
+	 * same retry-pairing rule to these lines as to any others — a technical failure replaced by a
+	 * re-dispatch drops its chip, and that rule reads the arm's `n` to know which entries are
+	 * replacements. No filmed run in the 2026-08-01 pass is such a replacement, so it changes
+	 * nothing today; it is here because the alternative is a rule that holds everywhere on the
+	 * board except one kind of line, which is the sort of exception nobody remembers.
+	 *
+	 * The armId also names the provenance: these lines belong to a different arm than the row
+	 * they render in, and a reader clicking one deserves to be told which.
+	 */
+	filmed?: { armId: string; n: number; entries: EntryView[] };
+	/**
+	 * Set on a FILMED arm's own pass once its runs were grafted into their config's row: the
+	 * board skips this pass rather than drawing a second row for the same footage.
+	 *
+	 * A flag rather than dropping the pass from the wire, because the page's own aggregates
+	 * (hero tiles, cost, the target-filtered recompute) walk every arm's `entries` — removing
+	 * the pass would quietly subtract 48 real runs from the published totals. It stays counted
+	 * and stops being drawn.
+	 */
+	graftedInto?: string;
 	/** Distinct model ids the collected runs actually recorded — divergence from `model` is a finding. */
 	ranModels?: string[];
 	submitted: number;
@@ -1412,6 +1444,59 @@ function explorePrompt(arm: Arm): string | undefined {
 	}
 }
 
+/**
+ * Which config each filmed arm films — `p5-ax-grounded-filmed` → `p2-ax-grounded`.
+ *
+ * Derived from MATRIX by stripping the phase prefix off both sides, because that is exactly how
+ * `filmed()` mints the id (`p5-${arm.id.replace(/^p[0-9]-/, "")}-filmed`) and it also catches the
+ * arms declared filmed by hand rather than derived — `p8-geometry-ax-filmed` keeps its own phase
+ * prefix, so any rule anchored on "p5-" would miss it. Verified against the 109-arm matrix on
+ * 2026-08-03: all 49 filmed arms resolve, and NO two plain arms strip to the same base, so the
+ * mapping is one-to-one rather than merely plausible.
+ *
+ * Built once at module load: MATRIX is static, and rebuilding this per state push would be work
+ * on the hot path for an answer that cannot change.
+ */
+const FILMED_TO_CONFIG: ReadonlyMap<string, string> = (() => {
+	const stripPhase = (id: string): string => id.replace(/^p[0-9]+-/, "");
+	const configByBase = new Map(MATRIX.filter((a) => !a.id.endsWith("-filmed")).map((a) => [stripPhase(a.id), a.id]));
+	const out = new Map<string, string>();
+	for (const a of MATRIX) {
+		if (!a.id.endsWith("-filmed")) continue;
+		const config = configByBase.get(stripPhase(a.id).replace(/-filmed$/, ""));
+		if (config) out.set(a.id, config);
+	}
+
+	return out;
+})();
+
+/**
+ * Move each filmed pass's runs onto the row of the config they film.
+ *
+ * The fallback is the point: a filmed pass whose config has no pass at the same model has no row
+ * to move to, so it KEEPS ITS OWN — `graftedInto` stays unset and the board draws it as before.
+ * One entry in the 2026-08-01 pass is exactly this case
+ * (`p5-vision-only-grounded-visionmap-filmed` at sol, whose config never ran at that model), and
+ * a graft that silently dropped it would be a run vanishing off the board — the worst outcome
+ * available here, and invisible precisely because nothing would look wrong.
+ */
+function graftFilmedRuns(arms: ArmView[]): void {
+	const byId = new Map(arms.map((a) => [a.id, a]));
+	for (const [filmedId, configId] of FILMED_TO_CONFIG) {
+		const filmed = byId.get(filmedId);
+		const config = byId.get(configId);
+		if (!filmed || !config) continue;
+		for (const fp of filmed.passes) {
+			// Matched on the DISPLAY label both sides already carry (passLabel), so the graft
+			// lands on the pass a reader would call "that model" rather than on a raw id.
+			const home = config.passes.find((p) => p.model === fp.model);
+			if (!home) continue;
+			home.filmed = { armId: filmedId, n: filmed.n, entries: [...(home.filmed?.entries ?? []), ...fp.entries] };
+			fp.graftedInto = configId;
+		}
+	}
+}
+
 export function buildState(manifest: Manifest, fleet: FleetView, events: DashEvent[], autoCollect: boolean, defaultModel?: string, live?: Map<string, RunProgress>): DashState {
 	const arms: ArmView[] = MATRIX.map((arm) => ({
 		id: arm.id,
@@ -1442,6 +1527,8 @@ export function buildState(manifest: Manifest, fleet: FleetView, events: DashEve
 			.map((model) => passView(arm, model, manifest.entries.filter((e) => e.armId === arm.id && e.model === model), fleet, defaultModel, live))
 			.filter((p) => p.submitted > 0),
 	}));
+
+	graftFilmedRuns(arms);
 
 	// Rank each target's collected explore passes by map comprehensiveness (rankExplore).
 	// Per targetKey, never globally: comparing a web map's node count against the Yarn app's

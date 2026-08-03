@@ -600,6 +600,53 @@ const plantRecording = (dir: string, jobId: string, file: string): void => {
 	fs.writeFileSync(path.join(rec, file), "BYTES");
 };
 
+/* ---- filmed runs grafted onto their config's row ------------------------------------------- */
+
+test("BuildState__GraftsTheFilmedRunOntoItsConfig__When__BothRanAtTheSameModel", () => {
+	const s = buildState(
+		manifest(
+			entry({ armId: "p2-ax-grounded", jobId: "job-measured", model: "m1", collected: true, state: "done" }),
+			entry({ armId: "p5-ax-grounded-filmed", jobId: "job-filmed", model: "m1", collected: true, state: "done" }),
+		),
+		fleet([]),
+		[],
+		true,
+	);
+	const config = armView(s, "p2-ax-grounded")?.passes[0];
+	const filmed = armView(s, "p5-ax-grounded-filmed")?.passes[0];
+
+	// The take rides the config's row...
+	assert.deepEqual(config?.filmed?.entries.map((e) => e.jobId), ["job-filmed"]);
+	// The filmed ARM rides along, so the board can apply the retry rule and name the provenance.
+	assert.equal(config?.filmed?.armId, "p5-ax-grounded-filmed");
+	// ...and the filmed pass is marked so the board stops drawing a row of its own for it.
+	assert.equal(filmed?.graftedInto, "p2-ax-grounded");
+	// THE INVARIANT: grafting is display-only. A filmed run is a different run (demo conduct),
+	// so folding it into the config's samples would move this pass's numbers and the board would
+	// disagree with the report over one manifest.
+	assert.equal(config?.submitted, 1);
+	assert.equal(config?.collected, 1);
+	// And the filmed pass keeps its own numbers, so nothing is double-counted or lost.
+	assert.equal(filmed?.submitted, 1);
+});
+
+test("BuildState__LeavesTheFilmedPassStanding__When__ItsConfigNeverRanAtThatModel", () => {
+	const s = buildState(
+		manifest(
+			entry({ armId: "p2-ax-grounded", jobId: "job-measured", model: "m1", collected: true, state: "done" }),
+			entry({ armId: "p5-ax-grounded-filmed", jobId: "job-filmed", model: "m2", collected: true, state: "done" }),
+		),
+		fleet([]),
+		[],
+		true,
+	);
+
+	// No home at that model, so the filmed pass keeps its row — the alternative is a run that
+	// silently vanishes from the board, which is the one outcome nothing on screen would reveal.
+	assert.equal(armView(s, "p5-ax-grounded-filmed")?.passes[0]?.graftedInto, undefined);
+	assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.filmed, undefined);
+});
+
 test("BuildState__MarksTheEntry__When__ItsCursorRenderIsOnThisMachine", () => {
 	withDataRoot((dir) => {
 		// Only the render planted: the flag must not depend on metrics, a graph or a run log — a

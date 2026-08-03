@@ -1146,6 +1146,11 @@ const MAP_TIP = "the appmap as a full node-link tree — edge thickness = traver
 // arms record, and explores never do (a filmed explore would run under demo rules and produce a
 // different map from the one every downstream arm is grounded on).
 const TAKE_TIP = "the run's own recording, with the cursor composited from its real trajectory — ▶ opens the player; – means this run was never filmed, or its render has not been pulled yet";
+// Marks the grafted line as what it is. The distinction is not pedantry: a filmed run executes
+// under DEMO conduct (mouse-first, no set_value), so its actions and elapsed are not comparable
+// with the measured samples above it, and it is not one of the arm's `n`. The tooltip says so
+// rather than relying on the reader knowing what phase 5 was for.
+const FILMED_BADGE = `<span class="pbadge" data-tip="the filmed take of this config — a separate run under demo conduct (mouse-first, no set_value), not one of this arm's measured samples. Its numbers are not comparable with the rows above.">🎬 filmed</span>`;
 // No target column: the app scope picker above the board carries the target, and inside a
 // lineage group every row shares the group's target anyway.
 // Ordering: Task leads with Variant right beside it (David, 2026-08-01), then the Runs
@@ -1230,7 +1235,11 @@ function modelCell(p, span = "") {
 // one the user cannot see or re-open.
 function selJob(p, key, hidden) {
 	if (typeof openRows[key] === "string") return openRows[key];
-	const vis = hidden && hidden.size ? p.entries.filter((e) => !hidden.has(e.jobId)) : p.entries;
+	// Grafted filmed runs are selectable — their chip is on this row, so clicking it must open
+	// its dropdown like any other. They sort AFTER the measured runs here for the same reason
+	// they render last: the default selection should be a sample of the config, not its take.
+	const all = [...p.entries, ...filmedRuns(p)];
+	const vis = hidden && hidden.size ? all.filter((e) => !hidden.has(e.jobId)) : all;
 	const c = vis.find((e) => e.collected) || vis[0];
 	return c && c.jobId;
 }
@@ -1517,6 +1526,19 @@ function convergenceCellFor(e) {
 // out of the Runs column — its replacement's tooltip names it, so the history isn't
 // silently erased. With multiple failures in one arm the FIFO pairing is convention, not
 // a recorded fact — the manifest simply holds nothing stronger.
+// A pass's grafted filmed runs, with the SAME retry pairing every other line goes through: a
+// filmed arm can be re-dispatched after a technical failure too, and the board's convention is
+// that the replaced run's chip drops out (its replacement's tooltip names it). retryPairs reads
+// `a.n` and `p.entries`, so the filmed arm's own n and entries are handed to it as a pseudo-pair —
+// which is why the wire carries `filmed.n` at all. No filmed run in this pass is a replacement,
+// so it hides nothing today: it is here so the rule has no exception to remember.
+const filmedRuns = (p) => {
+	const f = p.filmed;
+	if (!f || !f.entries.length) return [];
+	const { hidden } = retryPairs({ n: f.n }, { entries: f.entries });
+	return f.entries.filter((e) => !hidden.has(e.jobId));
+};
+
 function retryPairs(a, p) {
 	const order = p.entries.slice().sort((x, y) => (Date.parse(x.submittedAt) || 0) - (Date.parse(y.submittedAt) || 0));
 	const freed = order.filter((e) => e.collected && (e.status === "crashed" || e.status === "unready" || (e.note || "").includes("TECHNICAL FAILURE")));
@@ -1535,14 +1557,22 @@ function passRows(a, p, first, metricCells, lead = "") {
 	const key = rowId(a, p);
 	const { hidden, retryOf } = retryPairs(a, p);
 	const sel = openRows[key] ? selJob(p, key, hidden) : undefined;
-	const runs = p.entries.filter((e) => !hidden.has(e.jobId)).sort((x, y) => entryBand(x) - entryBand(y) || entryTime(x) - entryTime(y));
+	const measured = p.entries.filter((e) => !hidden.has(e.jobId)).sort((x, y) => entryBand(x) - entryBand(y) || entryTime(x) - entryTime(y));
+	// The filmed take of this config, on this config's row (David, 2026-08-03) — it used to sit
+	// on a p5 row of its own, which meant leaving the row you were reading to watch it.
+	//
+	// LAST, and marked: it is a different run of the same config (demo rules, mouse-first, no
+	// set_value), and it is not one of the arm's `n` samples. Sorting it in with the measured
+	// runs would read as another sample and quietly invite comparison of its numbers with theirs.
+	const filmed = filmedRuns(p).sort((x, y) => entryBand(x) - entryBand(y) || entryTime(x) - entryTime(y));
+	const runs = [...measured, ...filmed];
 	const span = runs.length > 1 ? ` rowspan="${runs.length}"` : "";
 	// An explore pass HEADS its lineage group (.exp-row, the wash); everything else is a child
 	// OF one (.chrow, the indent). Derived from kind, so no caller has to remember to pass it.
 	const rowCls = a.kind === "explore" ? " exp-row" : " chrow";
 	const rows = runs.map((e, i) =>
 		`<tr class="mrow${rowCls}${i === 0 && first ? " gsep" : ""}${i < runs.length - 1 ? " splitrow" : ""}">${i === 0 ? variantCell(a, p, span, lead) : ""}
-		<td class="runs">${statusChip(e, key, e.jobId === sel, retryOf[e.jobId])}</td>
+		<td class="runs">${statusChip(e, key, e.jobId === sel, retryOf[e.jobId])}${i >= measured.length ? FILMED_BADGE : ""}</td>
 		${i === 0 ? identityRest(a, p, span) : ""}
 		${metricCells(e)}
 		<td class="treecell"><button class="btnv" data-viewtree="${esc(e.jobId)}" data-tip="${esc(MAP_TIP)}">⤢</button></td>
@@ -2109,9 +2139,17 @@ function rowKey(p) {
 	return [band, Math.min(...p.entries.filter((e) => entryBand(e) === band).map(entryTime))];
 }
 
+// One {arm, pass} per row, in canonical band order.
+//
+// Passes the server marked `graftedInto` are dropped: those are filmed passes whose runs now
+// render as lines on the config's own row (PassView.filmed), and drawing them here too would
+// show the same take twice. The flag comes from the server rather than being re-derived from the
+// "-filmed" suffix, so a filmed pass that found NO home to graft onto keeps its row — see
+// graftFilmedRuns' fallback. The entries stay in the state either way, which is what keeps the
+// hero tiles and cost totals counting every run the manifest holds.
 function timelineRows(arms) {
 	return arms
-		.flatMap((a) => a.passes.map((p) => ({ a, p, k: rowKey(p) })))
+		.flatMap((a) => a.passes.filter((p) => !p.graftedInto).map((p) => ({ a, p, k: rowKey(p) })))
 		.sort((x, y) => x.k[0] - y.k[0] || x.k[1] - y.k[1]);
 }
 
@@ -2146,7 +2184,10 @@ const UNGROUNDED_KEY = "#ungrounded", COMPILES_KEY = "#compiles";
 // so its four runs unfold as three lines. The count says "runs" and means it.
 const visibleRuns = (a, p) => {
 	const { hidden } = retryPairs(a, p);
-	return p.entries.filter((e) => !hidden.has(e.jobId)).length;
+	// Grafted filmed runs are counted: they ARE lines this row unfolds to, and the invariant
+	// above is that a fold count never promises a run unfolding does not show — nor hides one
+	// it does.
+	return p.entries.filter((e) => !hidden.has(e.jobId)).length + filmedRuns(p).length;
 };
 const groupRunCount = (rows) => rows.reduce((s, { a, p }) => s + visibleRuns(a, p), 0);
 
