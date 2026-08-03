@@ -4,7 +4,7 @@ An agent that takes a plain-English task ("show me how to change the cursor type
 in a real Mac app, and records the result as a demo video.
 
 ~200 benchmark runs on Yarn, one model (GPT-5.6 Sol) plus a 9-run Claude Fable comparison, two
-tasks (change a setting; write a two-scene script), 139 of them re-graded afterwards by a
+tasks (change a setting; write a two-scene script), all 187 gradable ones re-graded afterwards by a
 separate "judge" model that never saw the agent's own verdict.
 
 **Two ways the agent can drive an app**, and the distinction runs through everything below:
@@ -98,18 +98,24 @@ right the whole time. The same button reported two different positions one momen
 photographing the app before it finished laying itself out.
 
 **The agent's own report of success is trustworthy on this app** — the independent judge
-disagreed on only 4 of 139 runs.
+disagreed on only 6 of 187 runs.
 
 **Our automatic checking works on product demos and goes blank on open-ended requests.**
 
 | | "change a setting" | "write a two-scene script" |
 |---|---|---|
-| judge: pass / fail / can't tell | 31 / 2 / 0 | 13 / 17 / 12 |
-| could the judge verify from the video | 30 of 33 | 8 of 42 |
-| steps producing no checkable evidence | 32% | 71% |
+| judge: pass / fail / can't tell | 80 / 2 / 1 | 15 / 4 / 18 |
+| could the judge verify from the video | 79 of 83 | 8 of 37 |
+| steps producing no checkable evidence | 34% | 66% |
 
-Product-use demos — what Yarn ships — grade cleanly. "Write me something good" does not, because
-there's no fact to check against.
+Product-use demos — what Yarn ships — grade cleanly: the judge reached a verdict on 82 of 83.
+"Write me something good" does not — it could not tell on 18 of 37, because there's no fact to
+check against.
+
+The counts are over runs that produced a log. A further 59 judged rows are runs that never
+started — crashes, aborts, and the replay failures — and the judge auto-fails those, which would
+otherwise mix "the agent did the wrong thing" with "the run never got going." They are a
+reliability fact, not a verification one.
 
 **Only human-written notes made the agent change the *global* setting.** Yarn has settings in two
 places: a brand-wide default and a per-document override. Every automatically-generated form of

@@ -235,8 +235,10 @@ Compiles: compile-ax: 2026-08-01T19-54-18-799-yarn; compile-cdp: docs/procedures
 | vision-only-grounded-axmap | azure/gpt-5.6-sol | 3 | 0/3/0 | 0/0/0 |
 | vision-only-curated | azure/gpt-5.6-sol | 3 | 2/1/0 | 2/0/0 |
 | vision-only-cdp-curated | azure/gpt-5.6-sol | 3 | 2/1/0 | 2/0/0 |
+| cdp-grounded-visionmap | azure/gpt-5.6-sol | 3 | 3/0/0 | 3/0/0 |
 | vision-only-cdp-ungrounded | azure/gpt-5.6-sol | 3 | 0/3/0 | 0/0/0 |
 | vision-only-cdp-grounded | azure/gpt-5.6-sol | 3 | 0/3/0 | 0/0/0 |
+| vision-only-cdp-visionmap | azure/gpt-5.6-sol | 3 | 0/3/0 | 0/1/0 |
 | compile-ax | azure/gpt-5.6-sol | 1 | 1/0/0 | 1/0/0 |
 | compile-cdp | azure/gpt-5.6-sol | 1 | 1/0/0 | 1/0/0 |
 | replay-cdp | azure/gpt-5.6-sol | 3 | 0/3/0 | 0/0/0 |
@@ -250,7 +252,7 @@ Compiles: compile-ax: 2026-08-01T19-54-18-799-yarn; compile-cdp: docs/procedures
 | blur-compile | azure/gpt-5.6-sol | 2 | 1/0/1 | 2/0/0 |
 | create-ax-ungrounded | azure/gpt-5.6-sol | 3 | 3/0/0 | 0/0/3 |
 | create-ax-grounded | azure/gpt-5.6-sol | 3 | 2/1/0 | 0/0/2 |
-| create-cdp-ungrounded | azure/gpt-5.6-sol | 2 | 0/2/0 | 0/0/0 |
+| create-cdp-ungrounded | azure/gpt-5.6-sol | 3 | 0/3/0 | 0/0/0 |
 | create-cdp-grounded | azure/gpt-5.6-sol | 3 | 2/0/1 | 1/0/2 |
 | create-ax-grounded-axdom-off | azure/gpt-5.6-sol | 3 | 2/0/1 | 0/0/3 |
 | create-ax-noaxdom-ungrounded | azure/gpt-5.6-sol | 3 | 0/0/3 | 0/0/3 |
@@ -260,23 +262,60 @@ Compiles: compile-ax: 2026-08-01T19-54-18-799-yarn; compile-cdp: docs/procedures
 | create-min-context-ungrounded | azure/gpt-5.6-sol | 3 | 0/3/0 | 1/1/0 |
 | create-curated | azure/gpt-5.6-sol | 3 | 2/0/1 | 2/0/1 |
 | create-vision-only-ungrounded | azure/gpt-5.6-sol | 3 | 0/2/1 | 0/0/1 |
-| create-vision-only-grounded-axmap | azure/gpt-5.6-sol | 2 | 0/1/1 | 1/0/0 |
-| create-vision-only-curated | azure/gpt-5.6-sol | 2 | 0/1/1 | 0/0/1 |
+| create-vision-only-grounded-axmap | azure/gpt-5.6-sol | 3 | 0/2/1 | 1/0/0 |
+| create-vision-only-grounded-visionmap | azure/gpt-5.6-sol | 3 | 1/2/0 | 0/0/1 |
+| create-vision-only-curated | azure/gpt-5.6-sol | 3 | 0/2/1 | 0/0/1 |
 | claude-cdp-ungrounded | claude-fable-5 | 3 | 2/1/0 | 2/0/0 |
 | claude-cdp-grounded | claude-fable-5 | 3 | 2/1/0 | 2/0/0 |
 | claude-cdp-recipe-from-ungrounded | claude-fable-5 | 3 | 2/1/0 | 2/0/0 |
 | geometry-ax | azure/gpt-5.6-sol | 2 | 2/0/0 | 2/0/0 |
 | geometry-ax-filmed | azure/gpt-5.6-sol | 2 | 2/0/0 | 2/0/0 |
+| ax-ungrounded-filmed | azure/gpt-5.6-sol | 1 | 1/0/0 | 1/0/0 |
+| ax-grounded-filmed | azure/gpt-5.6-sol | 1 | 1/0/0 | 1/0/0 |
 | cdp-ungrounded-filmed | azure/gpt-5.6-sol | 1 | 1/0/0 | 1/0/0 |
 | cdp-grounded-filmed | azure/gpt-5.6-sol | 1 | 1/0/0 | 1/0/0 |
+| ax-grounded-axdom-off-filmed | azure/gpt-5.6-sol | 1 | 1/0/0 | 1/0/0 |
+| ax-noaxdom-ungrounded-filmed | azure/gpt-5.6-sol | 1 | 0/1/0 | 0/0/0 |
+| ax-grounded-no-vision-filmed | azure/gpt-5.6-sol | 1 | 1/0/0 | 1/0/0 |
 | cdp-grounded-no-vision-filmed | azure/gpt-5.6-sol | 1 | 1/0/0 | 1/0/0 |
+| min-context-grounded-filmed | azure/gpt-5.6-sol | 1 | 1/0/0 | 1/0/0 |
+| min-context-ungrounded-filmed | azure/gpt-5.6-sol | 1 | 0/1/0 | 0/0/0 |
 | curated-filmed | azure/gpt-5.6-sol | 1 | 1/0/0 | 1/0/0 |
+| vision-only-ungrounded-filmed | azure/gpt-5.6-sol | 1 | 0/1/0 | 0/0/0 |
+| vision-only-grounded-axmap-filmed | azure/gpt-5.6-sol | 1 | 0/1/0 | 0/0/0 |
+| vision-only-grounded-visionmap-filmed | azure/gpt-5.6-sol | 1 | 1/0/0 | 1/0/0 |
+| vision-only-curated-filmed | azure/gpt-5.6-sol | 1 | 1/0/0 | 1/0/0 |
+| vision-only-cdp-curated-filmed | azure/gpt-5.6-sol | 1 | 1/0/0 | 1/0/0 |
+| cdp-grounded-visionmap-filmed | azure/gpt-5.6-sol | 1 | 1/0/0 | 1/0/0 |
+| vision-only-cdp-ungrounded-filmed | azure/gpt-5.6-sol | 1 | 0/0/1 | 0/0/1 |
+| vision-only-cdp-grounded-filmed | azure/gpt-5.6-sol | 1 | 0/1/0 | 0/0/0 |
+| vision-only-cdp-visionmap-filmed | azure/gpt-5.6-sol | 1 | 0/1/0 | 0/0/0 |
 | replay-cdp-filmed | azure/gpt-5.6-sol | 1 | 0/1/0 | 0/0/0 |
 | replay-norescue-filmed | azure/gpt-5.6-sol | 1 | 0/1/0 | 0/0/0 |
+| ax-recipe-from-ungrounded-filmed | azure/gpt-5.6-sol | 1 | 1/0/0 | 1/0/0 |
 | cdp-recipe-from-ungrounded-filmed | azure/gpt-5.6-sol | 1 | 1/0/0 | 1/0/0 |
+| ax-recipe-filmed | azure/gpt-5.6-sol | 1 | 1/0/0 | 1/0/0 |
 | cdp-recipe-filmed | azure/gpt-5.6-sol | 1 | 1/0/0 | 1/0/0 |
 | blur-ungrounded-filmed | azure/gpt-5.6-sol | 1 | 1/0/0 | 1/0/0 |
 | blur-grounded-filmed | azure/gpt-5.6-sol | 1 | 0/0/1 | 1/0/0 |
+| create-ax-ungrounded-filmed | azure/gpt-5.6-sol | 1 | 0/0/1 | 0/0/1 |
+| create-ax-grounded-filmed | azure/gpt-5.6-sol | 1 | 0/0/1 | 0/0/1 |
+| create-cdp-ungrounded-filmed | azure/gpt-5.6-sol | 1 | 0/1/0 | 0/0/0 |
+| create-cdp-grounded-filmed | azure/gpt-5.6-sol | 1 | 0/1/0 | 0/0/0 |
+| create-ax-grounded-axdom-off-filmed | azure/gpt-5.6-sol | 1 | 0/0/1 | 0/0/1 |
+| create-ax-noaxdom-ungrounded-filmed | azure/gpt-5.6-sol | 1 | 1/0/0 | 1/0/0 |
+| create-ax-grounded-no-vision-filmed | azure/gpt-5.6-sol | 1 | 0/0/1 | 1/0/0 |
+| create-cdp-grounded-no-vision-filmed | azure/gpt-5.6-sol | 1 | 0/1/0 | 0/1/0 |
+| create-min-context-grounded-filmed | azure/gpt-5.6-sol | 1 | 0/0/1 | 0/0/1 |
+| create-min-context-ungrounded-filmed | azure/gpt-5.6-sol | 1 | 0/0/1 | 0/0/1 |
+| create-curated-filmed | azure/gpt-5.6-sol | 1 | 0/1/0 | 0/0/0 |
+| create-vision-only-ungrounded-filmed | azure/gpt-5.6-sol | 1 | 0/1/0 | 0/0/0 |
+| create-vision-only-grounded-axmap-filmed | azure/gpt-5.6-sol | 1 | 0/1/0 | 0/0/0 |
+| create-vision-only-grounded-visionmap-filmed | azure/gpt-5.6-sol | 1 | 0/1/0 | 0/0/0 |
+| create-vision-only-curated-filmed | azure/gpt-5.6-sol | 1 | 0/1/0 | 0/0/0 |
+| claude-cdp-ungrounded-filmed | claude-fable-5 | 1 | 0/1/0 | 0/0/0 |
+| claude-cdp-grounded-filmed | claude-fable-5 | 1 | 1/0/0 | 1/0/0 |
+| claude-cdp-recipe-from-ungrounded-filmed | claude-fable-5 | 1 | 0/1/0 | 0/0/0 |
 
 ### Disagreements
 
@@ -284,6 +323,8 @@ Compiles: compile-ax: 2026-08-01T19-54-18-799-yarn; compile-cdp: docs/procedures
 - **create-ax-grounded-no-vision** `2026-08-03T01-21-57-740-yarn`: self-reported success=true, judge trajectory=FAIL, scope: n/a
 - **create-min-context-ungrounded** `2026-08-03T01-22-10-008-yarn`: self-reported success=true, judge trajectory=FAIL, scope: n/a
 - **create-min-context-ungrounded** `2026-08-03T01-23-10-932-yarn`: self-reported success=true, judge trajectory=FAIL, scope: n/a
+- **vision-only-cdp-visionmap** `2026-08-03T06-16-43-186-yarn`: self-reported success=true, judge trajectory=FAIL, scope: document draft editor content generated through the Agent; no Screen Clip Settings surface was opened
+- **create-cdp-grounded-no-vision-filmed** `2026-08-03T08-21-23-412-yarn`: self-reported success=true, judge trajectory=FAIL, scope: n/a
 
 ## Timing (queue wait vs run, from job records)
 
