@@ -162,3 +162,29 @@ The technical work is sound and independently verified; it is the process that f
   colouring as crashes; the shared explore-backend default.
 
 Ten commits, `87bbd48..5d59981`, pushed. Droplet running current `src/`.
+
+## 8. Open items carried out of this session
+
+**The runner-side fix is on the Macs but not live.** `f18de7f` changes `src/remote/runner/jobs.ts`,
+which runs inside each Mac's runner daemon, so it needs a runner RESTART to take effect. The
+autopilot ships source with `provisionFleet(hosts, { syncOnly: true })` and never restarts —
+deliberately, since a restart orphans in-flight jobs. It therefore will not auto-deploy at any
+point in a pass.
+
+Blast radius is bounded and known: `artifactsFor` computes appmap paths for `kind === "explore"`
+only, and all 11 explore arms live in phase 1 (`{"1": 11}` — nothing in 2/3/4/5/9). So the 12
+phase-1 explores dispatched on 2026-08-03 carry unqualified appmap paths and may pull a stale map;
+every later stage is task and replay runs and is unaffected. A superseded pass keeps its own map
+at `out/bench/archive/<runKey>/appmap.json` and can be published by hand.
+
+Fix at the next idle moment — it skips busy hosts rather than orphaning them:
+
+```bash
+./run provision --restart --all
+```
+
+**Sample counting was fixed mid-session** (`608e254`, David's call). `map-superseded` no longer
+consumes a retry: with n=2 samples sharing one `docs/appmaps/<slug>` filename exactly one can be
+the published map, always, so counting the other as lost made every two-sample arm read 1/2 and
+re-dispatch forever. `RETRYABLE_TECHNICAL` now names only the four kinds that mean nothing was
+measured. Verified: `bench phase 1` went from proposing 1 run to proposing 0.
