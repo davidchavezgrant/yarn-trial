@@ -7,7 +7,7 @@ import { auditTaskPrompt } from "../src/core/harness.js";
 import type { JobRecord } from "../src/remote/runner/jobs.js";
 import { archiveDirFor, collect, collectEntry, expectedProvenance, failureKind, jobTiming, journalScopes, parseAppmapStamp, parseGraphCounts, parseRunMetrics, poisonedHosts, technicalFailure } from "../src/bench/collect.js";
 import { entriesForArm, manifestPath, readManifest, recordSubmissions, submittedCount, type Manifest, type ManifestEntry, updateEntry, writeManifest } from "../src/bench/manifest.js";
-import { BACKENDS, BENCH_PRIMARY_MODEL, armModel, MATRIX, armAppmapSlug, armById, armTitle, perceptionLine, phaseArms, phaseRunCount, type Arm } from "../src/bench/matrix.js";
+import { BACKENDS, BENCH_ALT_MODEL, BENCH_PRIMARY_MODEL, armModel, MATRIX, armAppmapSlug, armById, armTitle, perceptionLine, phaseArms, phaseRunCount, type Arm } from "../src/bench/matrix.js";
 import type { DispatchOptions } from "../src/remote/control/dispatch.js";
 import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, auditPhase, dateArg, dispatchOptionsFor, findCompileSource, plannedRuns, runPhase } from "../src/bench/orchestrate.js";
 import { renderReport, reportFileName, writeReport } from "../src/bench/report.js";
@@ -1547,9 +1547,9 @@ test("dispatchOptionsFor__PinsTheArmsOwnModel__When__ThePassRunsAnother", () => 
 	// only way the report's per-model rows become a comparison instead of two separate tables.
 	const claude = MATRIX.find((a) => a.id === "p7-claude-cdp-grounded");
 	assert.ok(claude, "the Claude comparison arm must exist");
-	assert.equal(dispatchOptionsFor(claude!, undefined, "azure/gpt-5.6-sol").model, "anthropic/claude-opus-5");
+	assert.equal(dispatchOptionsFor(claude!, undefined, "azure/gpt-5.6-sol").model, BENCH_ALT_MODEL);
 	// An unpinned arm still follows the pass.
-	const sol = MATRIX.find((a) => a.id === "p7-create-grounded");
+	const sol = MATRIX.find((a) => a.id === "p7-create-cdp-grounded");
 	assert.equal(dispatchOptionsFor(sol!, undefined, "azure/gpt-5.6-sol").model, "azure/gpt-5.6-sol");
 });
 
@@ -1597,10 +1597,10 @@ test("runPhase__RecordsTheArmsOwnModel__When__AnArmIsPinnedToAnother", async () 
 	await withTempAsync("bench-pin-", async (dir) => {
 		const fake = fakeDispatch();
 		await runPhase(7, { go: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
-		const claude = fake.calls.filter((c) => c.model === "anthropic/claude-opus-5");
+		const claude = fake.calls.filter((c) => c.model === BENCH_ALT_MODEL);
 		assert.ok(claude.length > 0, "the Claude arms must dispatch as Claude");
 		const m = readManifest(DATE, liveDir(dir));
 		for (const e of m.entries.filter((x) => x.armId.includes("claude")))
-			assert.equal(e.model, "anthropic/claude-opus-5", `${e.armId} recorded ${e.model}, so counting will re-dispatch it forever`);
+			assert.equal(e.model, BENCH_ALT_MODEL, `${e.armId} recorded ${e.model}, so counting will re-dispatch it forever`);
 	});
 });

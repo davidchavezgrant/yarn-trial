@@ -171,8 +171,15 @@ export const PHASE4_TASK = "show me how to change the motion blur";
  */
 export const CREATION_TASK =
 	"Make a two-scene video script for a coffee ordering app called Brew, narrated by Cassidy. Do not publish, export, or share it.";
-/** The comparison model. Every one of the first 115 runs was Sol; nothing tested a second. */
-export const BENCH_ALT_MODEL = "anthropic/claude-opus-5";
+/**
+ * The comparison model. Every one of the first 115 runs was Sol; nothing tested a second.
+ *
+ * A BARE id on purpose — makeClient routes `claude-*` direct to the Anthropic API, while
+ * `anthropic/claude-*` is OpenRouter's namespace for the same weights. The runners hold both
+ * keys, and direct removes a routing hop and an availability question from a comparison whose
+ * whole job is to isolate one variable.
+ */
+export const BENCH_ALT_MODEL = "claude-fable-5";
 
 export const BACKENDS: readonly BenchBackend[] = ["ax", "cdp"];
 
@@ -734,10 +741,34 @@ const filmed = (arm: Arm): Arm => ({
  * phase-2/6 cells exactly, changing only the model, so the comparison is a difference of one
  * variable rather than two tables side by side.
  */
+/**
+ * The creation task on EVERY phase-2 config, derived from that grid rather than hand-listed.
+ *
+ * It began as three cdp cells, which quietly narrowed the question: the settings tasks showed
+ * that grounding's value is backend-dependent (ax ungrounded 1/3 against every cdp arm at 3/3)
+ * and that only human prose picks brand scope. None of that can be checked on the product flow
+ * from a cdp-only slice.
+ *
+ * Derived so a config added to phase 2 gets a creation twin automatically — the same rule
+ * FILMABLE follows, and for the same reason: the alternative is remembering.
+ *
+ * Expect these to strain verification rather than navigation. The one prior run of this flow
+ * had 11 of 19 steps unverified, because typing a script into a rich editor produces little
+ * checkable text. Whether the harness can grade creative work AT ALL is the second finding
+ * here, and arguably the more useful one.
+ */
+const creationArms = (): Arm[] =>
+	[...PHASE2_CORE, ...PHASE2_SLICES]
+		.filter((a) => a.kind === "task")
+		.map((a) => ({
+			...a,
+			id: a.id.replace(/^p2-/, "p7-create-"),
+			phase: 7 as Phase,
+			task: CREATION_TASK,
+		}));
+
 const PHASE7: Arm[] = [
-	task("p7-create-ungrounded", { backend: "cdp", noGrounding: true }, "can the agent make a video with no map — the product flow, cold", { phase: 7, task: CREATION_TASK }),
-	task("p7-create-grounded", { backend: "cdp" }, "does a map help on CREATION as it does on settings", { phase: 7, task: CREATION_TASK }),
-	task("p7-create-curated", { backend: "cdp", useRecipe: true }, "human notes on the product flow — the tier that won on scope", { phase: 7, task: CREATION_TASK }),
+	...creationArms(),
 	// Same three cells as Sol ran, one variable changed. Canonical task on purpose: it is the
 	// only task with 45 runs of Sol baseline behind it.
 	task("p7-vision-only-cdp-curated", { backend: "cdp", noAx: true, useRecipe: true }, "vision-only against the human-written tier — completes the grid ax already has", { phase: 7 }),
