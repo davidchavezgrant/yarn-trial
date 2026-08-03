@@ -1,0 +1,2518 @@
+{
+  "app": "app.notion.com",
+  "capturedAt": "2026-08-03T16:36:12.474Z",
+  "provenance": "explore",
+  "proseSha256": "6e38127ce8ae",
+  "elapsed": "1h06m",
+  "coverage": {
+    "seen": 1713,
+    "actuated": 220,
+    "dismissed": 611,
+    "surfaces": 184,
+    "chapters": 30,
+    "stopped": "frontier-empty",
+    "dismissals": [
+      "content",
+      "external",
+      "repetitive-value",
+      "dead-end"
+    ],
+    "gatedRead": 0,
+    "gatedRefused": 10
+  },
+  "home": {
+    "surface": "home",
+    "control": "Home",
+    "description": "Ordinary left-sidebar Home overview showing Meetings, Recents, Favorites, Agents, Teamspaces, Private, Notion apps, Library, My Tasks, Marketplace and Help; an already-open page may remain visible alongside."
+  },
+  "nodes": [
+    {
+      "id": "home",
+      "title": "Home",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Stable overview/landing surface reached from Sidebar navigation."
+    },
+    {
+      "id": "chat",
+      "title": "Chat",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "meetings",
+      "title": "Meetings",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "inbox",
+      "title": "Inbox",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "inbox/filter",
+      "title": "Edit filter",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "inbox-filter",
+      "options": [
+        "Unread & read",
+        "Unread",
+        "Archived",
+        "All workspace updates"
+      ]
+    },
+    {
+      "id": "search",
+      "title": "Search Notion",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "search/settings",
+      "title": "Search settings menu",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "search/settings/persist-filters",
+      "title": "Persist filters across sessions",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "search-persist-filters",
+      "options": [
+        "on",
+        "off"
+      ]
+    },
+    {
+      "id": "search/settings/hide-ai-sources",
+      "title": "Hide “Search all sources with AI”",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "search-hide-all-sources-ai",
+      "options": [
+        "on",
+        "off"
+      ]
+    },
+    {
+      "id": "search/title-only",
+      "title": "Title only",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "search-title-only",
+      "options": [
+        "on",
+        "off"
+      ],
+      "notes": "Immediate toggle chip within Search overlay."
+    },
+    {
+      "id": "search/created-by",
+      "title": "Created by",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "search-created-by",
+      "notes": "Opens a people picker with Search people textbox."
+    },
+    {
+      "id": "search/in",
+      "title": "In",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "search-location",
+      "notes": "Opens Search pages picker for page/location scoping."
+    },
+    {
+      "id": "search/date",
+      "title": "Search Date filter",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "search-date",
+      "options": [
+        "Today",
+        "Last 7 days",
+        "Last 30 days",
+        "Custom date"
+      ]
+    },
+    {
+      "id": "search/teamspace-filter",
+      "title": "Search Teamspace filter",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "search-teamspace"
+    },
+    {
+      "id": "settings",
+      "title": "Settings & members",
+      "kind": "surface",
+      "scope": "unknown"
+    },
+    {
+      "id": "settings/preferences",
+      "title": "Preferences",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "settings/preferences/enter-new-line",
+      "title": "Use Enter to add a new line",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "enter-new-line"
+    },
+    {
+      "id": "settings/preferences/language",
+      "title": "Language & region",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "language"
+    },
+    {
+      "id": "settings/preferences/text-direction",
+      "title": "Always show text direction controls",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "text-direction-controls"
+    },
+    {
+      "id": "settings/preferences/start-week-monday",
+      "title": "Start week on Monday",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "week-start"
+    },
+    {
+      "id": "settings/preferences/date-format",
+      "title": "Date format",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "date-format",
+      "options": [
+        "Relative"
+      ]
+    },
+    {
+      "id": "settings/preferences/auto-timezone",
+      "title": "Set time zone automatically using your location",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "timezone-auto"
+    },
+    {
+      "id": "settings/preferences/desktop-links",
+      "title": "Open links in desktop app",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "desktop-links"
+    },
+    {
+      "id": "settings/preferences/startup-page",
+      "title": "Startup page",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "startup-page",
+      "options": [
+        "Last visited page"
+      ]
+    },
+    {
+      "id": "settings/preferences/view-history",
+      "title": "Show my view history",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "view-history"
+    },
+    {
+      "id": "settings/preferences/profile-discoverability",
+      "title": "Profile discoverability",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "profile-discoverability"
+    },
+    {
+      "id": "settings/account",
+      "title": "Account profile",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "settings/account/preferred-name",
+      "title": "Preferred name",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "preferred-name"
+    },
+    {
+      "id": "settings/account/support-access",
+      "title": "Support access",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "support-access"
+    },
+    {
+      "id": "settings/notifications",
+      "title": "Notifications",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "settings/notifications/join-transcribe",
+      "title": "Join video conferencing and start transcribing",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "meeting-join-transcribe"
+    },
+    {
+      "id": "settings/notifications/transcribing",
+      "title": "Meeting is being transcribed",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "meeting-transcribing-notification"
+    },
+    {
+      "id": "settings/notifications/summarized",
+      "title": "Meeting is being summarized",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "meeting-summarized-notification"
+    },
+    {
+      "id": "settings/notifications/activity",
+      "title": "Activity in my workspace",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "workspace-activity-notification"
+    },
+    {
+      "id": "settings/notifications/email",
+      "title": "Always send email notifications",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "always-email-notifications"
+    },
+    {
+      "id": "settings/notifications/page-updates",
+      "title": "Page updates",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "page-update-email"
+    },
+    {
+      "id": "settings/notifications/digest",
+      "title": "Workspace digest",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "workspace-digest"
+    },
+    {
+      "id": "settings/mail-calendar",
+      "title": "Mail & Calendar",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "settings/mail-calendar/connect-email",
+      "title": "Connect email to Notion",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "settings/mail-calendar/connect-calendar",
+      "title": "Connect your calendar",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "settings/general",
+      "title": "General",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/general/workspace-name",
+      "title": "Workspace name",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "workspace-name"
+    },
+    {
+      "id": "settings/general/show-apps",
+      "title": "Show other Notion apps in sidebar",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "show-notion-apps-sidebar"
+    },
+    {
+      "id": "settings/general/email-domain",
+      "title": "Allowed email domain",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "allowed-email-domain"
+    },
+    {
+      "id": "settings/general/analytics",
+      "title": "Save and display page view analytics",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "page-view-analytics"
+    },
+    {
+      "id": "settings/general/people-directory",
+      "title": "People directory",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "people-directory"
+    },
+    {
+      "id": "settings/general/recent-activity",
+      "title": "Show recent activity on people profiles",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "profile-recent-activity"
+    },
+    {
+      "id": "settings/general/hover-cards",
+      "title": "Hover cards",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "hover-cards"
+    },
+    {
+      "id": "settings/people",
+      "title": "People",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/import",
+      "title": "Import",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/import/discover",
+      "title": "Discover imports",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/import/completed",
+      "title": "Completed imports",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/notion-ai",
+      "title": "Notion AI",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/notion-ai/share-data",
+      "title": "Share data to improve Notion AI",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "ai-share-data"
+    },
+    {
+      "id": "settings/notion-ai/default-page",
+      "title": "AI instructions/default page",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "ai-instructions-page",
+      "notes": "Set a different page/Open page; configured page itself has banner and Configure shortcut."
+    },
+    {
+      "id": "settings/notion-ai/fable5",
+      "title": "Fable 5 optional model",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "ai-model-fable5"
+    },
+    {
+      "id": "settings/notion-ai/meeting-notes",
+      "title": "Meeting notes AI settings",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/notion-ai/meeting-notes/enabled",
+      "title": "Enable Meeting notes for workspace",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "meeting-notes-enabled"
+    },
+    {
+      "id": "settings/notion-ai/meeting-notes/store-audio",
+      "title": "Store audio locally",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "meeting-notes-store-audio"
+    },
+    {
+      "id": "settings/notion-ai/meeting-notes/enforce-consent",
+      "title": "Enforce consent for all workspace members",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "meeting-notes-enforce-consent"
+    },
+    {
+      "id": "settings/notion-ai/meeting-notes/auto-share",
+      "title": "Auto-share with internal calendar event participants",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "meeting-notes-auto-share"
+    },
+    {
+      "id": "settings/notion-ai/meeting-notes/destination",
+      "title": "Meeting notes destination database",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "meeting-notes-destination"
+    },
+    {
+      "id": "settings/notion-ai/meeting-notes/auto-play-consent",
+      "title": "Auto play consent message on start",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "meeting-notes-auto-play-consent"
+    },
+    {
+      "id": "settings/connections",
+      "title": "Connections",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/connections/installed",
+      "title": "Installed connections",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/connections/manage",
+      "title": "Manage connections",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/connections/manage/custom-mcp",
+      "title": "Enable custom MCP servers",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "custom-mcp-servers"
+    },
+    {
+      "id": "settings/notion-mcp",
+      "title": "Notion MCP",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/notion-mcp/manage",
+      "title": "Manage Notion MCP",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/public-pages",
+      "title": "Public pages",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/public-pages/forms",
+      "title": "Public forms",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/public-pages/sites",
+      "title": "Notion Sites",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/emoji",
+      "title": "Emoji",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/emoji/owners-only",
+      "title": "Limit custom emoji creation to workspace owners",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "custom-emoji-creation-policy"
+    },
+    {
+      "id": "settings/emoji/add",
+      "title": "Add custom emoji",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/teamspaces",
+      "title": "Teamspaces",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/teamspaces/owners-only",
+      "title": "Limit teamspace creation to workspace owners",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "teamspace-creation-policy"
+    },
+    {
+      "id": "settings/security",
+      "title": "Security",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/security/general",
+      "title": "Security General",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/security/members-guests",
+      "title": "Security Members & guests",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/security/members-guests/role-policy",
+      "title": "Member-role policy selector",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "security-member-role-policy",
+      "options": [
+        "Workspace owners",
+        "Workspace and Teamspace owners",
+        "Any member"
+      ]
+    },
+    {
+      "id": "settings/security/data-retention",
+      "title": "Security Data retention",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/identity",
+      "title": "Identity",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/upgrade-plan",
+      "title": "Upgrade plan",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "page-editor",
+      "title": "Page editor",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Full-page editor opened by sidebar New page → Page; scratch created: Scratch Exploration Page 2026-08-09."
+    },
+    {
+      "id": "page-editor/customize",
+      "title": "Customize page",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "page-editor/customize/discussions",
+      "title": "Page discussions",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-discussions"
+    },
+    {
+      "id": "page-editor/customize/toc",
+      "title": "Table of contents",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-table-of-contents"
+    },
+    {
+      "id": "page-editor/customize/style",
+      "title": "Page style",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-style",
+      "options": [
+        "Default",
+        "Minimal"
+      ]
+    },
+    {
+      "id": "page-editor/actions/font",
+      "title": "Page font",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-font",
+      "options": [
+        "Default",
+        "Serif",
+        "Mono"
+      ]
+    },
+    {
+      "id": "page-editor/actions/small-text",
+      "title": "Small text",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-small-text"
+    },
+    {
+      "id": "page-editor/actions/full-width",
+      "title": "Full width",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-full-width"
+    },
+    {
+      "id": "page-editor/actions/lock",
+      "title": "Lock page",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-lock"
+    },
+    {
+      "id": "database-editor",
+      "title": "Database editor",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Scratch full-page database editor with data-source chooser and default Table view."
+    },
+    {
+      "id": "database-editor/settings",
+      "title": "Database view settings",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Configure current database view: view name/icon, layout, properties, filters, sorts, grouping, color, automations, AI Autofill, data sources, and locking."
+    },
+    {
+      "id": "database-editor/settings/layout",
+      "title": "Database layout",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-layout",
+      "options": [
+        "Table",
+        "Board",
+        "Timeline",
+        "Calendar",
+        "List",
+        "Gallery",
+        "Chart",
+        "Feed",
+        "Map"
+      ],
+      "notes": "Table-specific options include vertical lines, page icon, wrapping, and page open mode."
+    },
+    {
+      "id": "database-editor/settings/property-visibility",
+      "title": "Database property visibility",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-property-visibility",
+      "notes": "Per-view property visibility and ordering; search and Hide all available."
+    },
+    {
+      "id": "database-editor/settings/filter",
+      "title": "Database view filter",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-filter",
+      "notes": "Property filters or advanced filter; text operators documented in grounding notes."
+    },
+    {
+      "id": "database-editor/settings/sort",
+      "title": "Sort",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-sort",
+      "options": [
+        "Sort A → Z",
+        "Sort Z → A"
+      ],
+      "notes": "Choose a property first; direction and remove controls then appear."
+    },
+    {
+      "id": "database-editor/settings/group",
+      "title": "Group",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-group",
+      "options": [
+        "Exact",
+        "Alphabetical"
+      ],
+      "notes": "Choose Group by property, then text grouping mode; also has sort, Hide empty groups, Show all, and Remove grouping."
+    },
+    {
+      "id": "database-editor/settings/conditional-color",
+      "title": "Conditional color",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-view-conditional-color",
+      "notes": "New color setting → property → operator/value. Supports multiple rules and delete; applies immediately."
+    },
+    {
+      "id": "database-editor/property-create",
+      "title": "Database property creation",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "New property opens searchable type list; selecting a type immediately creates the property and opens its settings."
+    },
+    {
+      "id": "database-editor/property-create/type",
+      "title": "Property type",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-property-type",
+      "options": [
+        "Text",
+        "Number",
+        "Select",
+        "Multi-select",
+        "Status",
+        "Date",
+        "Person",
+        "Files & media",
+        "Checkbox",
+        "URL",
+        "Email",
+        "Phone",
+        "Formula",
+        "Relation",
+        "Rollup",
+        "Created time",
+        "Created by",
+        "Last edited time",
+        "Last edited by",
+        "Button",
+        "Place",
+        "ID"
+      ],
+      "notes": "Also exposes installed integration-specific property types."
+    },
+    {
+      "id": "database-editor/property-settings/wrap-content",
+      "title": "Wrap content",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-property-wrap-content"
+    },
+    {
+      "id": "database-editor/automations",
+      "title": "Database automations",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Upgrade-gated on current plan; panel exposes Upgrade now."
+    },
+    {
+      "id": "database-editor/ai-autofill",
+      "title": "Database agent setup",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Opened from AI Autofill for a database property; Basic configuration and event triggers. Custom Agent is trial-gated."
+    },
+    {
+      "id": "database-editor/ai-autofill/instructions",
+      "title": "Instructions",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-property-ai-autofill-instructions"
+    },
+    {
+      "id": "database-editor/ai-autofill/on-create",
+      "title": "On page creation",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-property-ai-autofill-on-create"
+    },
+    {
+      "id": "database-editor/ai-autofill/on-update",
+      "title": "On page update",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-property-ai-autofill-on-update"
+    },
+    {
+      "id": "database-editor/ai-autofill/custom-agent",
+      "title": "Custom Agent",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-property-ai-autofill-mode",
+      "options": [
+        "Basic",
+        "Custom Agent (trial-gated)"
+      ]
+    },
+    {
+      "id": "database-editor/side-peek",
+      "title": "Side Peek",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Row-page preview with properties, comments, page Actions, Open in full page, and Switch peek mode."
+    },
+    {
+      "id": "database-editor/side-peek/switch-mode",
+      "title": "Switch peek mode",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-open-mode",
+      "options": [
+        "Side peek",
+        "Center peek",
+        "Full page"
+      ]
+    },
+    {
+      "id": "database-editor/side-peek/actions",
+      "title": "Actions",
+      "kind": "control",
+      "scope": "document",
+      "notes": "Page-level commands in row preview."
+    },
+    {
+      "id": "database-editor/layout-editor",
+      "title": "Customize layout",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Database-wide row-page layout editor; Apply to all pages commits layout to the database."
+    },
+    {
+      "id": "database-editor/layout-editor/page-discussions",
+      "title": "Page discussions",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "page-discussions"
+    },
+    {
+      "id": "database-editor/layout-editor/full-width",
+      "title": "Full width",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "full-width"
+    },
+    {
+      "id": "database-editor/layout-editor/property-icons",
+      "title": "Property icons",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-property-icons"
+    },
+    {
+      "id": "database-editor/layout-editor/database-templates",
+      "title": "Database templates",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-layout-templates"
+    },
+    {
+      "id": "database-editor/layout-editor/add-module",
+      "title": "Add page module",
+      "kind": "control",
+      "scope": "document",
+      "notes": "Opens module/property type palette."
+    },
+    {
+      "id": "marketplace",
+      "title": "Marketplace",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Route /marketplace; tabs Discover, Templates, Agents, Consultants, Connections; header Search, My profile, Purchased."
+    },
+    {
+      "id": "marketplace/templates",
+      "title": "Marketplace Templates",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Natural-language template search, Work/Life/School categories, use-case filters and template listings."
+    },
+    {
+      "id": "marketplace/agents",
+      "title": "Marketplace Agents",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Catalog of custom-agent listings; route /marketplace/custom-agents."
+    },
+    {
+      "id": "marketplace/consultants",
+      "title": "Marketplace Consultants",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Service filters, consultant directory, Get matched and Book actions."
+    },
+    {
+      "id": "marketplace/connections",
+      "title": "Marketplace Connections",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Public integration catalog; distinct from workspace Settings → Connections."
+    },
+    {
+      "id": "marketplace/search",
+      "title": "Marketplace Search",
+      "kind": "surface",
+      "scope": "app",
+      "notes": "Header search becomes combobox; suggestions/no-results list overlays catalog."
+    },
+    {
+      "id": "marketplace/connections/title-filter",
+      "title": "Filter by title",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "marketplace-connection-title-filter"
+    },
+    {
+      "id": "marketplace/connections/types-filter",
+      "title": "Types",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "marketplace-connection-types-filter"
+    },
+    {
+      "id": "marketplace/buyer-profile",
+      "title": "Buyer profile (Purchased)",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "marketplace/profile-menu",
+      "title": "My profile menu",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "marketplace/buyer-profile/services",
+      "title": "Buyer profile — Services",
+      "kind": "surface",
+      "scope": "account",
+      "notes": "Empty services/purchases view; columns Active, Consultant, Start date, End date."
+    },
+    {
+      "id": "marketplace/connections/category-filter",
+      "title": "Use-case category filter",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "marketplace-connection-category",
+      "options": [
+        "Engineering",
+        "Design",
+        "Sales",
+        "Marketing",
+        "Finance",
+        "Analytics",
+        "Automations",
+        "Productivity",
+        "Collaboration",
+        "Forms",
+        "Customer experience",
+        "File management",
+        "Communication",
+        "Security & compliance",
+        "Identity"
+      ],
+      "notes": "Click a chip to filter listings immediately; combines with title/type filters."
+    },
+    {
+      "id": "home/customize-sections",
+      "title": "Customize Home sections",
+      "kind": "surface",
+      "scope": "account",
+      "notes": "Reached from Home tab context menu. Per-section immediate visibility toggles, then Done."
+    },
+    {
+      "id": "home/customize-sections/agents",
+      "title": "Agents section visibility",
+      "kind": "control",
+      "scope": "account",
+      "settingKey": "home-section-agents",
+      "options": [
+        "Show section",
+        "Hide section"
+      ]
+    },
+    {
+      "id": "home/agents",
+      "title": "Home Agents section",
+      "kind": "surface",
+      "scope": "account"
+    },
+    {
+      "id": "home/agents/new-agent",
+      "title": "New agent",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "create-custom-agent",
+      "notes": "Plan-gated; opens Start free trial / Maybe later prompt."
+    },
+    {
+      "id": "my-tasks",
+      "title": "My Tasks",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Task aggregation reached from Home Notion apps section."
+    },
+    {
+      "id": "my-tasks/sources",
+      "title": "Select task database sources",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "my-tasks/settings",
+      "title": "My Tasks view settings",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "home/help-menu",
+      "title": "Help, contact, more…",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "home/help-menu/keyboard-shortcuts",
+      "title": "Keyboard shortcuts",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "workspace-switcher",
+      "title": "Workspace/account menu",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "workspace-onboarding",
+      "title": "New workspace onboarding",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "form-editor",
+      "title": "Database form editor",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "form-editor/builder",
+      "title": "Form builder",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "form-editor/responses",
+      "title": "Form responses",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "form-editor/question-create",
+      "title": "Form question creation",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Add page module opens question type picker; tested Text."
+    },
+    {
+      "id": "form-editor/question-settings/required",
+      "title": "Required",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "form-question-required"
+    },
+    {
+      "id": "form-editor/question-settings/description",
+      "title": "Description",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "form-question-description"
+    },
+    {
+      "id": "form-editor/question-settings/long-answer",
+      "title": "Long answer",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "form-question-long-answer"
+    },
+    {
+      "id": "form-editor/question-settings/type",
+      "title": "Question type",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "form-question-type",
+      "options": [
+        "Text",
+        "Multiple choice",
+        "Date",
+        "Person",
+        "Files & media",
+        "Number",
+        "Checkbox",
+        "Email",
+        "URL",
+        "Phone",
+        "Place"
+      ]
+    },
+    {
+      "id": "form-editor/preview",
+      "title": "Form Preview",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Opens in Side Peek; respondent-facing fields and Submit."
+    },
+    {
+      "id": "database-editor/view-switcher",
+      "title": "Database view switcher",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Search existing views; per-view settings; New view; New data source."
+    },
+    {
+      "id": "database-editor/new-view",
+      "title": "New database view",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Layout grid creates selected view immediately."
+    },
+    {
+      "id": "database-editor/dashboard-view",
+      "title": "Dashboard database view",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Created immediately; own v= view ID; shows Settings and upgrade CTA in this workspace."
+    },
+    {
+      "id": "database-editor/board-layout",
+      "title": "Board view layout",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Opened from a Board view via Settings → Layout."
+    },
+    {
+      "id": "database-editor/board-layout/card-preview",
+      "title": "Card preview",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "board-card-preview",
+      "options": [
+        "None",
+        "Page cover",
+        "Page properties",
+        "Page content"
+      ],
+      "notes": "Page content uses the first block on the page."
+    },
+    {
+      "id": "database-editor/board-layout/card-size",
+      "title": "Card size",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "board-card-size"
+    },
+    {
+      "id": "database-editor/board-layout/color-columns",
+      "title": "Color columns",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "board-color-columns"
+    },
+    {
+      "id": "database-editor/board-layout/density",
+      "title": "Board density",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "board-density",
+      "options": [
+        "Compact",
+        "List"
+      ]
+    },
+    {
+      "id": "teamspace-settings",
+      "title": "Teamspace settings",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Teamspace-scoped modal; tabs General, Members, Security."
+    },
+    {
+      "id": "teamspace-settings/access",
+      "title": "Teamspace access",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "teamspace-access",
+      "options": [
+        "Full access",
+        "Can edit",
+        "Can comment",
+        "Can view"
+      ]
+    },
+    {
+      "id": "teamspace-settings/description",
+      "title": "Teamspace description",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "teamspace-description"
+    },
+    {
+      "id": "teamspace-settings/members",
+      "title": "Teamspace settings — Members",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "teamspace-settings/security",
+      "title": "Teamspace settings — Security",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "teamspace-settings/security/sidebar-editors",
+      "title": "Who can edit teamspace sidebar",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "teamspace-sidebar-editors",
+      "options": [
+        "Only teamspace owners",
+        "Any teamspace member"
+      ]
+    },
+    {
+      "id": "teamspace-settings/security/invite-link-visibility",
+      "title": "Only users who can invite members can see the invite link",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "teamspace-invite-link-visibility"
+    },
+    {
+      "id": "database-editor/timeline-layout",
+      "title": "Timeline view layout",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "database-editor/timeline-layout/date-property",
+      "title": "Show timeline by",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "timeline-date-property"
+    },
+    {
+      "id": "database-editor/timeline-layout/separate-dates",
+      "title": "Separate start and end dates",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "timeline-separate-start-end"
+    },
+    {
+      "id": "database-editor/timeline-layout/show-table",
+      "title": "Show table",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "timeline-show-table"
+    },
+    {
+      "id": "database-editor/calendar-layout",
+      "title": "Calendar view layout",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "database-editor/calendar-layout/date-property",
+      "title": "Show calendar by",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "calendar-date-property"
+    },
+    {
+      "id": "database-editor/calendar-layout/range",
+      "title": "Show calendar as",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "calendar-display-range"
+    },
+    {
+      "id": "database-editor/calendar-layout/weekends",
+      "title": "Show weekends",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "calendar-show-weekends"
+    },
+    {
+      "id": "database-editor/list-layout",
+      "title": "List view layout",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "database-editor/gallery-layout",
+      "title": "Gallery view layout",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "database-editor/gallery-layout/card-preview",
+      "title": "Card preview",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-card-preview"
+    },
+    {
+      "id": "database-editor/gallery-layout/card-size",
+      "title": "Card size",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-card-size"
+    },
+    {
+      "id": "database-editor/gallery-layout/fit-media",
+      "title": "Fit media",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "gallery-fit-media"
+    },
+    {
+      "id": "database-editor/gallery-layout/density",
+      "title": "Gallery density",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "database-display-density",
+      "options": [
+        "Compact",
+        "List"
+      ]
+    },
+    {
+      "id": "database-editor/chart-view",
+      "title": "Chart view",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "database-editor/chart-editor",
+      "title": "Edit chart",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "database-editor/chart-editor/type",
+      "title": "Chart type",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "chart-type",
+      "options": [
+        "Vertical bar",
+        "Horizontal bar",
+        "Line",
+        "Donut",
+        "Number"
+      ]
+    },
+    {
+      "id": "database-editor/chart-editor/category",
+      "title": "Chart category / first What to show",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "chart-category"
+    },
+    {
+      "id": "database-editor/chart-editor/measure",
+      "title": "Chart measure / second What to show",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "chart-measure"
+    },
+    {
+      "id": "database-editor/chart-editor/group",
+      "title": "Group by",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "chart-group-by"
+    },
+    {
+      "id": "database-editor/chart-editor/style",
+      "title": "More style options",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "chart-style"
+    },
+    {
+      "id": "database-editor/feed-layout",
+      "title": "Feed view layout",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "database-editor/feed-layout/wrap-properties",
+      "title": "Wrap properties",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "feed-wrap-properties"
+    },
+    {
+      "id": "database-editor/feed-layout/author-byline",
+      "title": "Show author byline",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "feed-author-byline"
+    },
+    {
+      "id": "database-editor/feed-layout/load-limit",
+      "title": "Load limit",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "feed-load-limit"
+    },
+    {
+      "id": "database-editor/map-layout",
+      "title": "Map view layout",
+      "kind": "surface",
+      "scope": "document"
+    },
+    {
+      "id": "database-editor/map-layout/place-property",
+      "title": "Map by",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "map-place-property"
+    },
+    {
+      "id": "database-editor/map-layout/add-pin-mode",
+      "title": "Enable add pin mode",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "map-add-pin-mode"
+    },
+    {
+      "id": "library",
+      "title": "Library",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "library/teamspaces",
+      "title": "Library Teamspaces",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "library/meeting-notes",
+      "title": "Library AI Meeting Notes",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "library/private",
+      "title": "Library Private",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Private-page overview table; route /library/private; toolbar Filter, Sort, Search, Settings, New page."
+    },
+    {
+      "id": "library/private/filter",
+      "title": "Library Private Filter",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "library-private-filter",
+      "options": [
+        "Page name",
+        "Created by",
+        "Created time",
+        "Last edited by",
+        "Last edited time",
+        "Last visited time",
+        "Add advanced filter"
+      ],
+      "notes": "Property picker; immediate database-filter pattern."
+    },
+    {
+      "id": "library/private/sort",
+      "title": "Library Private Sort",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "library-private-sort",
+      "options": [
+        "Page name",
+        "Created by",
+        "Created time",
+        "Last edited by",
+        "Last edited time",
+        "Last visited time"
+      ]
+    },
+    {
+      "id": "library/private/settings",
+      "title": "Library Private Settings",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Menu: Property visibility, Filter, Sort, Group."
+    },
+    {
+      "id": "library/private/property-visibility",
+      "title": "Library Private Property Visibility",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "library-private-property-visibility",
+      "options": [
+        "Page name",
+        "Last edited time",
+        "Last visited time",
+        "Created time",
+        "Created by",
+        "Last edited by",
+        "Source"
+      ],
+      "notes": "Search, reorder, Hide all/Show all, per-property visibility."
+    },
+    {
+      "id": "library/recents",
+      "title": "Library Recents",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Route /library/recents; columns Page name, Created by, Source, Last edited time, Last visited time; toolbar Filter, Search, Settings."
+    },
+    {
+      "id": "library/favorites",
+      "title": "Library Favorites",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "library/shared",
+      "title": "Library Shared",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "trash-route",
+      "title": "Trash direct route dead end",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "Only Back to my content appears at /trash in this build."
+    },
+    {
+      "id": "chat/new-chat",
+      "title": "Notion AI new chat composer",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "chat/model",
+      "title": "Chat model selector",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "chat-model"
+    },
+    {
+      "id": "chat/context",
+      "title": "Give context",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "chat-context"
+    },
+    {
+      "id": "chat/settings",
+      "title": "AI chat settings",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Menu from AI composer; My sources, MCP servers, Mode, Personalize."
+    },
+    {
+      "id": "chat/settings/sources",
+      "title": "My sources",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "ai-chat-sources",
+      "options": [
+        "All sources I can access",
+        "David Grant's Notion",
+        "Notion Calendar",
+        "Notion Help Center",
+        "Web access"
+      ],
+      "notes": "Per-chat source toggles; Add sources opens trial prompt on this plan."
+    },
+    {
+      "id": "chat/settings/mcp",
+      "title": "MCP servers",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "ai-chat-mcp-servers",
+      "notes": "Lists attached MCP servers; Add MCP server routes to Settings → Connections filtered to MCP."
+    },
+    {
+      "id": "settings/connections/custom-mcp",
+      "title": "Add custom MCP server",
+      "kind": "surface",
+      "scope": "workspace",
+      "notes": "URL textbox plus Connect/Cancel; Connect is externally consequential."
+    },
+    {
+      "id": "chat/personalization",
+      "title": "Personalize your Notion AI",
+      "kind": "surface",
+      "scope": "app"
+    },
+    {
+      "id": "chat/personalization/name",
+      "title": "AI personalization name",
+      "kind": "control",
+      "scope": "app",
+      "settingKey": "ai-personalization-name"
+    },
+    {
+      "id": "settings/notion-ai/skill-picker",
+      "title": "Add a skill page picker",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/notion-ai/skill-page",
+      "title": "AI skill page editor",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "settings/notion-ai/skill-editor-menu",
+      "title": "Skill text editor menu exposure",
+      "kind": "control",
+      "scope": "workspace",
+      "settingKey": "ai-skill-editor-menu",
+      "options": [
+        "Add to text editor menu",
+        "Remove from text editor menu"
+      ]
+    },
+    {
+      "id": "settings/notion-ai/skills-index",
+      "title": "AI Skills page index",
+      "kind": "surface",
+      "scope": "workspace"
+    },
+    {
+      "id": "meeting-note-editor",
+      "title": "AI meeting note editor",
+      "kind": "surface",
+      "scope": "document",
+      "notes": "Scratch meeting note created from Home; includes Notes/transcription controls."
+    },
+    {
+      "id": "meeting-note-editor/transcription-options",
+      "title": "More transcription options",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "meeting-transcription-options"
+    },
+    {
+      "id": "meeting-note-editor/language",
+      "title": "Transcription language",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "meeting-transcription-language",
+      "options": [
+        "English (US)",
+        "Simplified Chinese",
+        "Traditional Chinese",
+        "Spanish (Spain)",
+        "French (France)",
+        "German",
+        "Japanese",
+        "Korean",
+        "Portuguese (Brazil)",
+        "Russian",
+        "Thai",
+        "Vietnamese",
+        "Indonesian",
+        "Danish",
+        "Finnish",
+        "Norwegian",
+        "Dutch",
+        "Italian",
+        "Swedish",
+        "Arabic (Beta)",
+        "Hebrew (Beta)",
+        "Polish (Beta)"
+      ]
+    },
+    {
+      "id": "meeting-note-editor/browser-limitation",
+      "title": "Browser limitation",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "meeting-browser-capture-limitations",
+      "notes": "Opens Download Notion app and Learn more; does not expose browser capture settings."
+    },
+    {
+      "id": "meeting-note-editor/consent-playback",
+      "title": "Play audio consent message",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "meeting-consent-message-playback",
+      "notes": "Locally plays the configured consent message."
+    },
+    {
+      "id": "meeting-note-editor/consent-copy",
+      "title": "Copy consent message",
+      "kind": "control",
+      "scope": "document",
+      "settingKey": "meeting-consent-message-copy",
+      "notes": "Copies consent message text to clipboard."
+    }
+  ],
+  "edges": [
+    {
+      "from": "root",
+      "to": "home",
+      "action": "click sidebar navigation tab \"Home\""
+    },
+    {
+      "from": "home",
+      "to": "chat",
+      "action": "click sidebar navigation tab \"Chat\""
+    },
+    {
+      "from": "home",
+      "to": "meetings",
+      "action": "click sidebar navigation tab \"Meetings\""
+    },
+    {
+      "from": "home",
+      "to": "inbox",
+      "action": "click sidebar navigation tab \"Inbox\""
+    },
+    {
+      "from": "inbox",
+      "to": "inbox/filter",
+      "action": "click \"Edit filter\""
+    },
+    {
+      "from": "home",
+      "to": "search",
+      "action": "click sidebar \"Search\""
+    },
+    {
+      "from": "search",
+      "to": "search/settings",
+      "action": "click \"Search settings\""
+    },
+    {
+      "from": "search",
+      "to": "search/title-only",
+      "action": "click \"Title only\""
+    },
+    {
+      "from": "search",
+      "to": "search/created-by",
+      "action": "click \"Created by\""
+    },
+    {
+      "from": "search",
+      "to": "search/in",
+      "action": "click \"In\""
+    },
+    {
+      "from": "search",
+      "to": "search/date",
+      "action": "click \"Date\""
+    },
+    {
+      "from": "search",
+      "to": "search/teamspace-filter",
+      "action": "click \"Filter\", choose \"Teamspace\""
+    },
+    {
+      "from": "home",
+      "to": "settings",
+      "action": "click workspace header \"David Grant's Notion Close sidebar\", then \"Settings\""
+    },
+    {
+      "from": "settings",
+      "to": "settings/preferences",
+      "action": "click \"Preferences\""
+    },
+    {
+      "from": "settings",
+      "to": "settings/account",
+      "action": "click \"David Grant David Grant\""
+    },
+    {
+      "from": "settings",
+      "to": "settings/notifications",
+      "action": "click tab \"Notifications\""
+    },
+    {
+      "from": "settings",
+      "to": "settings/mail-calendar",
+      "action": "click tab \"Mail & Calendar\""
+    },
+    {
+      "from": "settings/mail-calendar",
+      "to": "settings/mail-calendar/connect-email",
+      "action": "click the Notion Mail card's \"Get started\""
+    },
+    {
+      "from": "settings/mail-calendar",
+      "to": "settings/mail-calendar/connect-calendar",
+      "action": "click the Notion Calendar card's \"Get started\""
+    },
+    {
+      "from": "settings",
+      "to": "settings/general",
+      "action": "click tab \"General\""
+    },
+    {
+      "from": "settings",
+      "to": "settings/people",
+      "action": "click tab \"People\""
+    },
+    {
+      "from": "settings",
+      "to": "settings/import",
+      "action": "click \"Import\""
+    },
+    {
+      "from": "settings/import",
+      "to": "settings/import/discover",
+      "action": "click \"Discover\""
+    },
+    {
+      "from": "settings/import",
+      "to": "settings/import/completed",
+      "action": "click \"Completed\""
+    },
+    {
+      "from": "settings",
+      "to": "settings/notion-ai",
+      "action": "click \"Notion AI\""
+    },
+    {
+      "from": "settings/notion-ai",
+      "to": "settings/notion-ai/meeting-notes",
+      "action": "click \"Meeting notes\""
+    },
+    {
+      "from": "settings",
+      "to": "settings/connections",
+      "action": "click \"Connections\""
+    },
+    {
+      "from": "settings/connections",
+      "to": "settings/connections/installed",
+      "action": "click \"Installed\""
+    },
+    {
+      "from": "settings/connections",
+      "to": "settings/connections/manage",
+      "action": "click \"Manage\""
+    },
+    {
+      "from": "settings",
+      "to": "settings/notion-mcp",
+      "action": "click \"Notion MCP\""
+    },
+    {
+      "from": "settings/notion-mcp",
+      "to": "settings/connections",
+      "action": "click \"Go to Connections settings\""
+    },
+    {
+      "from": "settings/notion-mcp",
+      "to": "settings/notion-mcp/manage",
+      "action": "click \"Manage\""
+    },
+    {
+      "from": "settings",
+      "to": "settings/public-pages",
+      "action": "click “Public pages”"
+    },
+    {
+      "from": "settings/public-pages",
+      "to": "settings/public-pages/forms",
+      "action": "click “Public forms”"
+    },
+    {
+      "from": "settings/public-pages",
+      "to": "settings/public-pages/sites",
+      "action": "click “Notion Sites”"
+    },
+    {
+      "from": "settings",
+      "to": "settings/emoji",
+      "action": "click “Emoji”"
+    },
+    {
+      "from": "settings/emoji",
+      "to": "settings/emoji/add",
+      "action": "click “Add emoji”"
+    },
+    {
+      "from": "settings",
+      "to": "settings/teamspaces",
+      "action": "click “Teamspaces”"
+    },
+    {
+      "from": "settings",
+      "to": "settings/security",
+      "action": "click \"Security\""
+    },
+    {
+      "from": "settings/security",
+      "to": "settings/security/general",
+      "action": "click \"General\""
+    },
+    {
+      "from": "settings/security",
+      "to": "settings/security/members-guests",
+      "action": "click \"Members & guests\""
+    },
+    {
+      "from": "settings/security",
+      "to": "settings/security/data-retention",
+      "action": "click \"Data retention\""
+    },
+    {
+      "from": "settings",
+      "to": "settings/identity",
+      "action": "click \"Identity\""
+    },
+    {
+      "from": "settings",
+      "to": "settings/upgrade-plan",
+      "action": "click \"Upgrade plan\""
+    },
+    {
+      "from": "home",
+      "to": "page-editor",
+      "action": "click sidebar “New page”, then choose “Page”; enter a title"
+    },
+    {
+      "from": "page-editor",
+      "to": "page-editor/customize",
+      "action": "click “Actions”, then “Customize page”"
+    },
+    {
+      "from": "page-editor",
+      "to": "database-editor",
+      "action": "From sidebar New page, choose Database, then name the scratch database."
+    },
+    {
+      "from": "database-editor",
+      "to": "database-editor/settings",
+      "action": "Click Settings in the database view toolbar."
+    },
+    {
+      "from": "database-editor/settings",
+      "to": "database-editor/settings/layout",
+      "action": "Click Layout."
+    },
+    {
+      "from": "database-editor/settings",
+      "to": "database-editor/settings/property-visibility",
+      "action": "Click Property visibility."
+    },
+    {
+      "from": "database-editor/settings",
+      "to": "database-editor/settings/filter",
+      "action": "Click Filter, then choose a property or Add advanced filter."
+    },
+    {
+      "from": "database-editor/settings",
+      "to": "database-editor/settings/sort",
+      "action": "click “Sort”"
+    },
+    {
+      "from": "database-editor/settings",
+      "to": "database-editor/settings/group",
+      "action": "click Group, then choose a property"
+    },
+    {
+      "from": "database-editor/settings",
+      "to": "database-editor/settings/conditional-color",
+      "action": "click Conditional color"
+    },
+    {
+      "from": "database-editor/settings",
+      "to": "database-editor/property-create",
+      "action": "Property visibility → New property"
+    },
+    {
+      "from": "database-editor/property-create",
+      "to": "database-editor/property-settings/wrap-content",
+      "action": "choose Text (or another property type)"
+    },
+    {
+      "from": "database-editor",
+      "to": "database-editor/automations",
+      "action": "click Automations in database toolbar"
+    },
+    {
+      "from": "database-editor",
+      "to": "database-editor/ai-autofill",
+      "action": "click “AI Autofill” for the database property"
+    },
+    {
+      "from": "database-editor/ai-autofill",
+      "to": "database-editor/ai-autofill/custom-agent",
+      "action": "click “Custom Agent”; trial prompt opens"
+    },
+    {
+      "from": "database-editor",
+      "to": "database-editor/side-peek",
+      "action": "click a database row / New page entry"
+    },
+    {
+      "from": "database-editor/side-peek",
+      "to": "database-editor/side-peek/actions",
+      "action": "click Actions"
+    },
+    {
+      "from": "database-editor/side-peek/actions",
+      "to": "database-editor/layout-editor",
+      "action": "choose Customize layout"
+    },
+    {
+      "from": "home",
+      "to": "marketplace",
+      "action": "click \"Marketplace\""
+    },
+    {
+      "from": "marketplace",
+      "to": "marketplace/templates",
+      "action": "click \"Templates\""
+    },
+    {
+      "from": "marketplace",
+      "to": "marketplace/agents",
+      "action": "click \"Agents\""
+    },
+    {
+      "from": "marketplace",
+      "to": "marketplace/consultants",
+      "action": "click \"Consultants\""
+    },
+    {
+      "from": "marketplace",
+      "to": "marketplace/connections",
+      "action": "click \"Connections\""
+    },
+    {
+      "from": "marketplace",
+      "to": "marketplace/search",
+      "action": "click \"Search\" and type a query"
+    },
+    {
+      "from": "marketplace/connections",
+      "to": "marketplace/connections/title-filter",
+      "action": "click “Filter by title”, then type"
+    },
+    {
+      "from": "marketplace/connections",
+      "to": "marketplace/connections/types-filter",
+      "action": "click “Types”"
+    },
+    {
+      "from": "marketplace",
+      "to": "marketplace/buyer-profile",
+      "action": "click “Purchased”"
+    },
+    {
+      "from": "marketplace",
+      "to": "marketplace/profile-menu",
+      "action": "click “My profile”"
+    },
+    {
+      "from": "marketplace/buyer-profile",
+      "to": "marketplace/buyer-profile/services",
+      "action": "click tab \"Services 0\""
+    },
+    {
+      "from": "home",
+      "to": "home/customize-sections",
+      "action": "click Home tab to open its context menu, then click \"Customize sections\""
+    },
+    {
+      "from": "home",
+      "to": "home/agents",
+      "action": "show Agents in Home → Customize sections"
+    },
+    {
+      "from": "home/agents",
+      "to": "home/agents/new-agent",
+      "action": "click \"New agent\""
+    },
+    {
+      "from": "home",
+      "to": "my-tasks",
+      "action": "click \"My Tasks\""
+    },
+    {
+      "from": "my-tasks",
+      "to": "my-tasks/sources",
+      "action": "click \"Configure your task sources\""
+    },
+    {
+      "from": "my-tasks",
+      "to": "my-tasks/settings",
+      "action": "click \"Settings\""
+    },
+    {
+      "from": "home",
+      "to": "home/help-menu",
+      "action": "click \"Help, contact, more…\""
+    },
+    {
+      "from": "home/help-menu",
+      "to": "home/help-menu/keyboard-shortcuts",
+      "action": "click More → \"Keyboard shortcuts ⌘⌥/\""
+    },
+    {
+      "from": "home",
+      "to": "workspace-switcher",
+      "action": "click workspace header “David Grant's Notion Close sidebar”"
+    },
+    {
+      "from": "workspace-switcher",
+      "to": "workspace-onboarding",
+      "action": "click “New workspace”"
+    },
+    {
+      "from": "form-editor",
+      "to": "form-editor/builder",
+      "action": "click “Form builder”"
+    },
+    {
+      "from": "form-editor",
+      "to": "form-editor/responses",
+      "action": "click “Responses”"
+    },
+    {
+      "from": "form-editor/builder",
+      "to": "form-editor/question-create",
+      "action": "click \"Add page module\", then choose a question type"
+    },
+    {
+      "from": "form-editor/question-create",
+      "to": "form-editor/question-settings/required",
+      "action": "open \"Edit question\" menu"
+    },
+    {
+      "from": "form-editor/builder",
+      "to": "form-editor/preview",
+      "action": "click \"Preview\""
+    },
+    {
+      "from": "form-editor/preview",
+      "to": "form-editor/builder",
+      "action": "click \"Edit form\""
+    },
+    {
+      "from": "form-editor",
+      "to": "database-editor/view-switcher",
+      "action": "click \"1 more…\""
+    },
+    {
+      "from": "database-editor/view-switcher",
+      "to": "database-editor/new-view",
+      "action": "click \"New view\""
+    },
+    {
+      "from": "database-editor/new-view",
+      "to": "database-editor/dashboard-view",
+      "action": "choose \"Dashboard\""
+    },
+    {
+      "from": "database-editor/settings",
+      "to": "database-editor/board-layout",
+      "action": "In an active Board view, click Settings, then Layout Board."
+    },
+    {
+      "from": "home",
+      "to": "teamspace-settings",
+      "action": "On a teamspace row click “Teamspace settings and members...”"
+    },
+    {
+      "from": "teamspace-settings",
+      "to": "teamspace-settings/members",
+      "action": "Click Members tab"
+    },
+    {
+      "from": "teamspace-settings",
+      "to": "teamspace-settings/security",
+      "action": "Click Security tab"
+    },
+    {
+      "from": "database-editor/settings",
+      "to": "database-editor/timeline-layout",
+      "action": "click Layout, then Timeline"
+    },
+    {
+      "from": "database-editor/settings",
+      "to": "database-editor/calendar-layout",
+      "action": "click Layout, then Calendar"
+    },
+    {
+      "from": "database-editor/settings",
+      "to": "database-editor/list-layout",
+      "action": "click Layout, then List"
+    },
+    {
+      "from": "database-editor/settings",
+      "to": "database-editor/gallery-layout",
+      "action": "click Layout, then Gallery"
+    },
+    {
+      "from": "database-editor/settings",
+      "to": "database-editor/chart-view",
+      "action": "click Layout, then Chart"
+    },
+    {
+      "from": "database-editor/chart-view",
+      "to": "database-editor/chart-editor",
+      "action": "click Edit chart"
+    },
+    {
+      "from": "database-editor/settings",
+      "to": "database-editor/feed-layout",
+      "action": "click Layout, then Feed"
+    },
+    {
+      "from": "database-editor/settings",
+      "to": "database-editor/map-layout",
+      "action": "click Layout, then Map"
+    },
+    {
+      "from": "home",
+      "to": "library",
+      "action": "click Library"
+    },
+    {
+      "from": "library",
+      "to": "library/teamspaces",
+      "action": "click Teamspaces tab"
+    },
+    {
+      "from": "library",
+      "to": "library/meeting-notes",
+      "action": "click 1 more…, then AI Meeting Notes"
+    },
+    {
+      "from": "library",
+      "to": "library/private",
+      "action": "click “2 more…”, then choose “Private”"
+    },
+    {
+      "from": "library/private",
+      "to": "library/private/filter",
+      "action": "click “Filter”"
+    },
+    {
+      "from": "library/private",
+      "to": "library/private/sort",
+      "action": "click “Sort”"
+    },
+    {
+      "from": "library/private",
+      "to": "library/private/settings",
+      "action": "click “Settings”"
+    },
+    {
+      "from": "library/private/settings",
+      "to": "library/private/property-visibility",
+      "action": "click “Property visibility”"
+    },
+    {
+      "from": "library",
+      "to": "library/recents",
+      "action": "click “Recents” tab"
+    },
+    {
+      "from": "library",
+      "to": "library/favorites",
+      "action": "click Favorites tab"
+    },
+    {
+      "from": "library",
+      "to": "library/shared",
+      "action": "click Shared tab"
+    },
+    {
+      "from": "home",
+      "to": "trash-route",
+      "action": "sidebar Trash is intended entry; direct /trash produced dead end"
+    },
+    {
+      "from": "chat",
+      "to": "chat/new-chat",
+      "action": "click New chat"
+    },
+    {
+      "from": "chat/new-chat",
+      "to": "chat/settings",
+      "action": "click Settings"
+    },
+    {
+      "from": "chat/settings",
+      "to": "chat/settings/sources",
+      "action": "click My sources"
+    },
+    {
+      "from": "chat/settings",
+      "to": "chat/settings/mcp",
+      "action": "click MCP servers"
+    },
+    {
+      "from": "chat/settings/mcp",
+      "to": "settings/connections",
+      "action": "click Add MCP server"
+    },
+    {
+      "from": "settings/connections",
+      "to": "settings/connections/custom-mcp",
+      "action": "click Custom MCP Beta"
+    },
+    {
+      "from": "chat/new-chat",
+      "to": "chat/personalization",
+      "action": "click “Open personalization settings”"
+    },
+    {
+      "from": "chat/personalization",
+      "to": "page-editor",
+      "action": "click “Edit instructions”"
+    },
+    {
+      "from": "page-editor",
+      "to": "settings/notion-ai",
+      "action": "on configured instructions page, click “Configure”"
+    },
+    {
+      "from": "settings/notion-ai",
+      "to": "settings/notion-ai/skill-picker",
+      "action": "click “Add a skill”"
+    },
+    {
+      "from": "settings/notion-ai/skill-picker",
+      "to": "settings/notion-ai/skill-page",
+      "action": "choose an existing page or click “Create new skill page”"
+    },
+    {
+      "from": "settings/notion-ai/skill-page",
+      "to": "settings/notion-ai",
+      "action": "click “Configure”"
+    },
+    {
+      "from": "settings/notion-ai/skill-page",
+      "to": "settings/notion-ai/skills-index",
+      "action": "click parent breadcrumb “📚 AI Skills”"
+    },
+    {
+      "from": "home",
+      "to": "meeting-note-editor",
+      "action": "click “New AI meeting note”; creation is immediate"
+    },
+    {
+      "from": "meeting-note-editor",
+      "to": "meeting-note-editor/browser-limitation",
+      "action": "click \"Browser limitation\""
+    },
+    {
+      "from": "meeting-note-editor",
+      "to": "meeting-note-editor/consent-playback",
+      "action": "click \"Play audio consent message\""
+    },
+    {
+      "from": "meeting-note-editor",
+      "to": "meeting-note-editor/consent-copy",
+      "action": "click \"Copy consent message\""
+    }
+  ],
+  "gated": [
+    {
+      "id": "public-pages/anyone-with-the-link-0-no-public-share-links",
+      "tierReached": 0,
+      "boundary": "not opened — off-machine",
+      "stoppedBecause": "externality:label",
+      "scratchUsed": false
+    },
+    {
+      "id": "limit-teamspace-creation-to-only-workspace-owners/confirm",
+      "tierReached": 0,
+      "boundary": "not opened — off-machine",
+      "stoppedBecause": "externality:label",
+      "scratchUsed": false
+    },
+    {
+      "id": "delete-conditional-color-rule",
+      "tierReached": 0,
+      "boundary": "not opened — descent off",
+      "stoppedBecause": "descent:off",
+      "scratchUsed": false
+    },
+    {
+      "id": "home/trash",
+      "tierReached": 0,
+      "boundary": "not opened — descent off",
+      "stoppedBecause": "descent:off",
+      "scratchUsed": false
+    },
+    {
+      "id": "side-peek/submit",
+      "tierReached": 0,
+      "boundary": "not opened — off-machine",
+      "stoppedBecause": "externality:label",
+      "scratchUsed": false
+    },
+    {
+      "id": "share-form",
+      "tierReached": 0,
+      "boundary": "not opened — off-machine",
+      "stoppedBecause": "externality:label",
+      "scratchUsed": false
+    },
+    {
+      "id": "home/trash",
+      "tierReached": 0,
+      "boundary": "not opened — descent off",
+      "stoppedBecause": "descent:off",
+      "scratchUsed": false
+    },
+    {
+      "id": "teamspace-settings/only-users-who-can-invite-members-can-see-the-invite-link",
+      "tierReached": 0,
+      "boundary": "not opened — off-machine",
+      "stoppedBecause": "externality:label",
+      "scratchUsed": false
+    },
+    {
+      "id": "home/trash",
+      "tierReached": 0,
+      "boundary": "not opened — descent off",
+      "stoppedBecause": "descent:off",
+      "scratchUsed": false
+    },
+    {
+      "id": "share",
+      "tierReached": 0,
+      "boundary": "not opened — off-machine",
+      "stoppedBecause": "externality:label",
+      "scratchUsed": false
+    }
+  ]
+}
