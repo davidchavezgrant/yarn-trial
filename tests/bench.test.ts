@@ -915,7 +915,10 @@ test("renderReport__ListsStampsAndSections__When__ManifestHasEntries", () => {
 
 test("writeReport__WritesRegenerableFile__When__CalledTwice", () => {
 	withTemp("bench-", (dir) => {
-		const m: Manifest = { date: DATE, createdAt: "", entries: [] };
+		// Needs a ROW: an empty manifest deliberately writes nothing now (see
+		// writeReport__WritesNothing__When__TheManifestIsEmpty). This test is about the output
+		// being regenerable, which an empty pass cannot demonstrate either way.
+		const m: Manifest = { date: DATE, createdAt: "", entries: [entry("ax-grounded", "job-1", { collected: true, state: "done" })] };
 		const file = writeReport(m, { dir });
 		assert.equal(path.basename(file), reportFileName(DATE));
 		const first = fs.readFileSync(file, "utf8");
@@ -1673,4 +1676,22 @@ test("visionOnly__IsAllowedOnCdp__When__EitherEntryPointDispatchesIt", () => {
 		const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "core", rel), "utf8");
 		assert.match(src, /cdp && !noAx/, `${rel} must let vision-only outrank the backend`);
 	}
+});
+
+test("writeReport__WritesNothing__When__TheManifestIsEmpty", () => {
+	// A pass is keyed by UTC date, so a collect without --date opens TODAY's manifest — which,
+	// once midnight passes mid-pass, is a different and empty day. It used to write the full
+	// report anyway: every heading, all 65 arm rows, every cell an em-dash, indistinguishable
+	// from a benchmark where nothing worked. That happened five times on 2026-08-03 while the
+	// real pass ran under 2026-08-01, and each file had to be spotted and moved by hand.
+	withTemp("empty-report-", (dir) => {
+		const file = writeReport({ date: "2026-08-03", createdAt: "", entries: [] }, { dir });
+		assert.equal(fs.existsSync(file), false, "an empty pass must leave no report on disk");
+		// A pass with data still writes, or the guard has eaten the feature.
+		const withRow = writeReport(
+			{ date: "2026-08-03", createdAt: "", entries: [entry("ax-grounded", "job-1", { collected: true, state: "done" })] },
+			{ dir },
+		);
+		assert.equal(fs.existsSync(withRow), true);
+	});
 });

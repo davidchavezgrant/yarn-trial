@@ -451,8 +451,20 @@ export interface ReportOptions {
 
 export function writeReport(m: Manifest, opts: ReportOptions = {}): string {
 	const dir = opts.dir ?? path.join(dataRoot(), "docs", "research");
-	fs.mkdirSync(dir, { recursive: true });
 	const file = path.join(dir, reportFileName(m.date));
+	/**
+	 * An EMPTY manifest gets no report. A pass is keyed by UTC date, so any `collect` without
+	 * `--date` opens today's — and once the clock rolls past midnight mid-pass, that is a
+	 * different, empty day. It wrote a full report anyway: every heading, all 65 arm rows, every
+	 * cell an em-dash. Which reads exactly like a benchmark where nothing worked.
+	 *
+	 * It regenerated five separate times on 2026-08-03 while the real pass ran under 2026-08-01,
+	 * and each one had to be recognised and moved aside by hand. A file that says "we measured
+	 * this and found nothing" is worse than no file, and the empty case is trivially separable
+	 * from the real one.
+	 */
+	if (!m.entries.length) return file;
+	fs.mkdirSync(dir, { recursive: true });
 	fs.writeFileSync(file, renderReport(m));
 
 	return file;
