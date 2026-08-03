@@ -471,27 +471,41 @@ test("cdpActTool__MatchesTheTypingContract__When__DemoModeIsOn", () => {
 test("webPageChoice__AdoptsTheTargetTab__When__OneMatchesTheOrigin", () => {
 	assert.deepEqual(
 		webPageChoice(["chrome://newtab/", "https://en.wikipedia.org/wiki/Ada_Lovelace"], "https://en.wikipedia.org"),
-		{ index: 1, owned: false },
+		{ index: 1, owned: false, spares: [] },
 	);
 });
 
-test("webPageChoice__Refuses__When__TwoTabsMatchTheOrigin", () => {
-	assert.throws(
-		() => webPageChoice(["https://en.wikipedia.org/wiki/A", "https://en.wikipedia.org/wiki/B"], "https://en.wikipedia.org"),
-		/2 tabs are open/,
+/**
+ * This used to THROW, and on an unattended Mac there is nobody to act on the refusal. Six
+ * leaked tabs on mac3 failed a Notion dispatch in 1.2 seconds on 2026-08-03; the tabs were
+ * residue from runs that died before close(), not an operator's browsing.
+ */
+test("webPageChoice__KeepsTheOldestAndClosesTheRest__When__SeveralMatchTheOrigin", () => {
+	assert.deepEqual(
+		webPageChoice(["https://en.wikipedia.org/wiki/A", "https://example.com/", "https://en.wikipedia.org/wiki/B", "https://en.wikipedia.org/wiki/C"], "https://en.wikipedia.org"),
+		// Oldest kept — tab order is creation order, so the survivor is the likeliest seed —
+		// and the two later ones are handed back for the caller to close.
+		{ index: 0, owned: false, spares: [2, 3] },
 	);
+});
+
+/** An adopted tab is never OWNED, however many spares were cleared alongside it. */
+test("webPageChoice__StillDoesNotOwnTheSurvivor__When__ItClosedSpares", () => {
+	const choice = webPageChoice(["https://en.wikipedia.org/a", "https://en.wikipedia.org/b"], "https://en.wikipedia.org");
+	assert.equal(choice.owned, false, "closing residue must not make the survivor the run's to delete");
+	assert.deepEqual(choice.spares, [1]);
 });
 
 test("webPageChoice__ColonizesABlankTabAsOwned__When__NoneMatchTheOrigin", () => {
 	assert.deepEqual(
 		webPageChoice(["https://example.com/", "about:blank"], "https://en.wikipedia.org"),
-		{ index: 1, owned: true },
+		{ index: 1, owned: true, spares: [] },
 	);
 });
 
 test("webPageChoice__CreatesAPageAsOwned__When__NothingSuitableExists", () => {
 	// -1 = no usable tab: the caller newPage()s, and that page is the run's to close.
-	assert.deepEqual(webPageChoice(["https://example.com/"], "https://en.wikipedia.org"), { index: -1, owned: true });
+	assert.deepEqual(webPageChoice(["https://example.com/"], "https://en.wikipedia.org"), { index: -1, owned: true, spares: [] });
 });
 
 // ---- noEndpointMessage: the string an unattended run dies with ------------------------------

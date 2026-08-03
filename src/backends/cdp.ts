@@ -481,13 +481,30 @@ export function originMatches(pageUrl: string, origin: string): boolean {
  *
  * `index: -1` means no usable tab exists — the caller creates one, and owns it.
  */
-export function webPageChoice(urls: string[], origin: string): { index: number; owned: boolean } {
+export function webPageChoice(urls: string[], origin: string): { index: number; owned: boolean; spares: number[] } {
 	const matching = urls.map((u, i) => i).filter((i) => originMatches(urls[i], origin));
-	// Two tabs on the target site: driving the wrong one looks like it worked. Refuse.
-	if (matching.length > 1) throw new Error(`${matching.length} tabs are open on ${origin} — close the spares so the target is unambiguous`);
-	if (matching.length === 1) return { index: matching[0], owned: false };
+	/**
+	 * More than one tab on the origin used to THROW — "close the spares so the target is
+	 * unambiguous" — and on an unattended fleet Mac there is nobody to close them.
+	 *
+	 * The tabs are run residue, not an operator's browsing. A run that dies without reaching
+	 * close() leaks its tab, and today's cancellations and blackout crash leaked six onto mac3
+	 * (/marketplace x2, /profile x3, a page), which failed the next dispatch in 1.2 seconds.
+	 * The refusal was correct as a diagnosis and useless as a behaviour: it converted leaked
+	 * state into a manual step on a machine no operator is sitting at.
+	 *
+	 * Safe to resolve rather than refuse because the caller now ALWAYS navigates the chosen tab
+	 * to the target URL. The old rationale — "driving the wrong one looks like it worked" — held
+	 * only while an adopted same-origin tab was driven wherever it happened to sit; once every
+	 * run starts at the target URL, same-origin tabs are interchangeable and there is no wrong
+	 * one to pick.
+	 *
+	 * OLDEST kept, newer ones closed. Tab order is creation order, so the survivor is the one
+	 * most likely to be browser-login's seed rather than a leaked run tab.
+	 */
+	if (matching.length) return { index: matching[0]!, owned: false, spares: matching.slice(1) };
 
-	return { index: urls.indexOf("about:blank"), owned: true };
+	return { index: urls.indexOf("about:blank"), owned: true, spares: [] };
 }
 
 /**
@@ -682,9 +699,25 @@ export class CdpBackend {
 			if (target.kind === "web") {
 				const pages = context.pages();
 				const choice = webPageChoice(pages.map((p) => p.url()), target.origin);
-				page = choice.index >= 0 ? pages[choice.index] : await context.newPage();
+				// Leaked tabs from earlier runs, closed before the run starts rather than left to
+				// make the NEXT dispatch ambiguous. Indices are into the array captured above, and
+				// closing does not reorder it, so the chosen index stays valid.
+				for (const i of choice.spares) {
+					console.log(`  closing a leftover tab on ${target.origin}: ${pages[i]!.url().slice(0, 80)}`);
+					await pages[i]!.close().catch(() => {});
+				}
+				page = choice.index >= 0 ? pages[choice.index]! : await context.newPage();
 				if (choice.owned) ownedPage = page;
-				if (!originMatches(page.url(), target.origin)) await page.goto(target.url, { waitUntil: "domcontentloaded" });
+				/**
+				 * ALWAYS navigate, not just when the origin differs.
+				 *
+				 * The origin test meant an adopted same-origin tab was driven from wherever it had
+				 * been left — mac3's leftovers sat on /profile and /marketplace — so where a pass
+				 * began depended on what the previous pass happened to close on. A created tab is
+				 * about:blank, failed the test, and DID get navigated, which is why runs that made
+				 * their own tab looked reproducible and runs that adopted one did not.
+				 */
+				await page.goto(target.url, { waitUntil: "domcontentloaded" });
 			} else {
 				// Electron: the endpoint exposes every window plus devtools and background
 				// pages. Gather the facts (across ALL contexts — Electron does not promise a
