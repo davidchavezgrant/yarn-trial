@@ -62,8 +62,20 @@ const READINESS_REFUSED = 3;
  * host cannot hold up a 5s UI tick; a submit is a one-shot operator action whose ambiguous
  * failure — request delivered, reply lost — is the expensive one, because the only safe
  * response to it is to stop and let a human look. Time is the cheapest way to avoid it.
+ *
+ * 20s was that budget until 2026-08-03, when three consecutive submits to three different Macs
+ * reported "no answer within 20s" and had in fact delivered nothing — the ambiguous failure this
+ * comment names, arriving in triplicate. The condition is the one the error text already guessed
+ * at: the runner is mid-launch of the target app, which on a cold Mac routinely outlasts 20s.
+ *
+ * 60s because nothing reads this budget except the submit itself, and the asymmetry is stark. A
+ * submit that waits an extra 40s costs 40s once. A submit that gives up early costs a run the
+ * autopilot then counts as a dispatch failure and re-dispatches — against a per-arm retry budget
+ * that exists to stop a sick host, so spending it on a healthy one that was merely slow is how a
+ * pass stops for the wrong reason. Across a 378-run pass the first dispatch to each Mac meets
+ * exactly the cold-start condition above.
  */
-const SUBMIT_TIMEOUT_MS = 20_000;
+const SUBMIT_TIMEOUT_MS = 60_000;
 
 /** `job` and `doctor` are registry reads on an idle-or-busy host; neither does any work. */
 const CALL_TIMEOUT_MS = 10_000;
