@@ -7,7 +7,7 @@ import { manifestCost, usd } from "./cost.js";
 import type { BenchHarvestOutcome } from "./harvest.js";
 import type { BenchJudgeOutcome } from "./judge.js";
 import { entriesForArm, type Manifest, manifestPath, readManifest, utcDate } from "./manifest.js";
-import { BENCH_PRIMARY_MODEL, PHASES, STAGES, orderStages, type Phase, phaseArms, procedureArms, stageOf } from "./matrix.js";
+import { type Arm, BENCH_PRIMARY_MODEL, PHASES, STAGES, orderStages, type Phase, phaseArms, procedureArms, stageOf } from "./matrix.js";
 import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, auditPhase, findCompileSource, interruptedPass, plannedRuns, runPhase } from "./orchestrate.js";
 import { type PhaseProgress, phaseProgress, watchPhase } from "./watch.js";
 
@@ -319,8 +319,25 @@ export async function promoteForPhase6(opts: {
 	const { procedureFileFor } = await import("../core/procedure.js");
 	const outcome: PromoteOutcome = { promoted: [], blocked: [] };
 
-	for (const arm of procedureArms(3)) {
-		const wanted = procedureFileFor(opts.proceduresDir, appSlug(arm.app), arm.task ?? "", arm.dispatch.backend, arm.dispatch.procedureLineage ?? "grounded");
+	/**
+	 * One promotion per procedure FILE, not per arm.
+	 *
+	 * Several arms share a slot — a filmed twin wants the same (app, task, backend, lineage)
+	 * procedure as the arm it films, and the Claude cell wants the same one its Sol twin does.
+	 * Iterating arms promoted the identical file up to three times and, worse, reported one
+	 * missing procedure as three blocked arms. Deduping on the path the loop already computes
+	 * fixes both, and the representative is the arm that can actually fill it: an arm with no
+	 * `sourceArm` has no candidate run to harvest from and would report the slot unfillable
+	 * while its twin sat there able to fill it.
+	 */
+	const slots = new Map<string, Arm>();
+	for (const arm of procedureArms()) {
+		const key = procedureFileFor(opts.proceduresDir, appSlug(arm.app), arm.task ?? "", arm.dispatch.backend, arm.dispatch.procedureLineage ?? "grounded");
+		const held = slots.get(key);
+		if (!held || (!held.sourceArm && arm.sourceArm)) slots.set(key, arm);
+	}
+
+	for (const [wanted, arm] of slots) {
 		if (fs.existsSync(wanted)) {
 			opts.log(`… ${arm.id}: procedure already promoted (${relToData(wanted)})`);
 			continue;
@@ -549,7 +566,7 @@ export async function autopilot(opts: AutopilotOptions = {}): Promise<number> {
 			if (head && lastHead && head !== lastHead)
 				log(`⚠ HEAD moved since the last phase (${lastHead.slice(0, 7)} → ${head.slice(0, 7)}) — this phase's runs will execute DIFFERENT code than the previous phase's. Comparability across phases is now on you.`);
 			lastHead = head ?? lastHead;
-			if (stageOf(stage.phase)?.procedureGate && phase6Blocked.length === procedureArms(stage.phase).length) {
+			if (procedureArms(stage.phase).length > 0 && phase6Blocked.length === procedureArms(stage.phase).length) {
 				log(`phase 6 skipped entirely: no arm has a promoted procedure. That is the finding — no judged-PASS source run produced one (the likely case for the ungrounded lineage; see harvest's refusals).`);
 				continue;
 			}
@@ -591,7 +608,7 @@ export async function autopilot(opts: AutopilotOptions = {}): Promise<number> {
 			const m = readManifest(date, liveRoot);
 			log(`\nautopilot complete (+${elapsed()}). Spend: ${usd(passSpend(m))}.`);
 			for (const p of phases) log(`  ${describePhase(p)}`);
-			if (phase6Blocked.length && phase6Blocked.length < procedureArms(3).length) log(`  reuse ran without: ${phase6Blocked.join(", ")} (no promotable procedure — a finding)`);
+			if (phase6Blocked.length && phase6Blocked.length < procedureArms().length) log(`  reuse ran without: ${phase6Blocked.join(", ")} (no promotable procedure — a finding)`);
 			if (collected.reportPath) log(`report: ${collected.reportPath}`);
 			if (phases.some((p) => stageOf(p)?.kind === "deliverable")) log(`filmed stamps need manual compositing: npm run humanize -- <stamp>`);
 			if (process.env.ANTHROPIC_ADMIN_KEY) log(`reconcile against Anthropic's accounting: ./run bench truecost`);

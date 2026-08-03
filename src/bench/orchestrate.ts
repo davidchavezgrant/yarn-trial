@@ -6,7 +6,7 @@ import { CHALLENGER_N, challengerNeedsExplore, planChallenger } from "./challeng
 import { collect } from "./collect.js";
 import { manifestCost } from "./cost.js";
 import { fetchTrueCost, reconcile } from "./truecost.js";
-import { BENCH_APP, BENCH_PRIMARY_MODEL, MATRIX, PHASES, armById, flagsLine, isPhase, perceptionLine, armModel, phaseArms, phaseRunCount, procedureArms, stageOf, type Arm, type Phase } from "./matrix.js";
+import { BENCH_APP, BENCH_PRIMARY_MODEL, MATRIX, PHASES, armById, flagsLine, isPhase, perceptionLine, armModel, phaseArms, phaseRunCount, procedureArms, stageCompiles, stageNeedsMaps, stageOf, type Arm, type Phase } from "./matrix.js";
 import {
 	entriesForArm,
 	type Manifest,
@@ -406,7 +406,7 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 	// The gate refuses DISPATCH, not the preview: without --go nothing can fire anyway, and
 	// the preview is how an operator finds out what phase 2 needs before phase 1 has run.
 	const missingMaps =
-		(stageOf(phase)?.homeGuard ?? false) && !opts.force
+		stageNeedsMaps(phase) && !opts.force
 			? phase1GateArms().filter((a) => !entriesForArm(manifest, a.id, opts.model).some((e) => e.collected))
 			: [];
 	if (missingMaps.length && opts.go) {
@@ -429,7 +429,7 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 	 * Only when EVERY arm is missing does the phase refuse outright, as before.
 	 */
 	let missingProcedures = new Set<string>();
-	if ((stageOf(phase)?.procedureGate ?? false) && !opts.force) {
+	if (procedureArms(phase).length > 0 && !opts.force) {
 		const { proceduresDir } = await import("../paths.js");
 		const { procedureFileFor } = await import("../core/procedure.js");
 		const fs6 = await import("node:fs");
@@ -437,9 +437,20 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 		const wanted = (a: (typeof MATRIX)[number]): string =>
 			procedureFileFor(dir, appSlug(a.app), a.task ?? "", a.dispatch.backend, a.dispatch.procedureLineage ?? "grounded");
 		const missing = procedureArms(phase).filter((a) => !fs6.existsSync(wanted(a)));
-		if (missing.length === procedureArms(phase).length && opts.go) {
-			log(`REFUSED: the reuse stage grounds on promoted procedures, and none exists for any arm.`);
-			log(`Workflow: runs land → \`./run bench judge\` → \`./run bench harvest\` → \`./run procedures promote <stamp>\` → phase 6.`);
+		/**
+		 * Refuse outright only when skipping the blocked arms would leave NOTHING to dispatch.
+		 *
+		 * The old rule — every procedure arm missing → refuse the phase — was written when a
+		 * phase WAS the procedure tier and the two statements meant the same thing. After the
+		 * stage reorganisation they do not: Generalization holds one procedure arm among
+		 * twenty-two, so a single unharvested procedure would have refused the whole stage and
+		 * taken sixty runs of task-and-model work down with it. Skip-loudly is already the
+		 * per-arm behaviour; this just stops the all-missing shortcut from over-reaching.
+		 */
+		const dispatchable = phaseArms(phase).filter((a) => a.kind !== "compile");
+		if (missing.length && missing.length === dispatchable.length && opts.go) {
+			log(`REFUSED: every dispatchable arm in this stage grounds on a promoted procedure, and none exists.`);
+			log(`Workflow: runs land → \`./run bench judge\` → \`./run bench harvest\` → \`./run procedures promote <stamp>\`, then re-run.`);
 			log(`Expected at: ${missing.map((a) => relToData(wanted(a))).join(", ")}`);
 
 			return EXIT_REFUSED;
@@ -451,7 +462,7 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 	}
 
 	// Compiles are local and cheap, but they are still phase work — gated like everything else.
-	if (opts.go && stageOf(phase)?.compiles) manifest = await runCompiles(phase, manifest, { ...opts, log });
+	if (opts.go && stageCompiles(phase)) manifest = await runCompiles(phase, manifest, { ...opts, log });
 
 	const planned = plannedRuns(phase, manifest, opts.model).filter((p) => !missingProcedures.has(p.arm.id));
 	// Resolve replay recipes AFTER compiles so a single --go does compile-then-replay when

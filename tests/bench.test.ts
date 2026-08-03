@@ -7,7 +7,7 @@ import { auditTaskPrompt } from "../src/core/harness.js";
 import type { JobRecord } from "../src/remote/runner/jobs.js";
 import { collect, collectEntry, expectedProvenance, failureKind, jobTiming, journalScopes, parseAppmapStamp, parseGraphCounts, parseRunMetrics, poisonedHosts, technicalFailure } from "../src/bench/collect.js";
 import { archiveDirFor, entriesForArm, manifestPath, readManifest, recordSubmissions, submittedCount, type Manifest, type ManifestEntry, updateEntry, writeManifest } from "../src/bench/manifest.js";
-import { BACKENDS, BENCH_ALT_MODEL, BENCH_PRIMARY_MODEL, armModel, MATRIX, armAppmapSlug, armById, armTitle, orderStages, perceptionLine, phaseArms, phaseRunCount, STAGES, stageOf, type Arm } from "../src/bench/matrix.js";
+import { BACKENDS, BENCH_ALT_MODEL, BENCH_PRIMARY_MODEL, CREATION_EXCLUDED, armModel, MATRIX, armAppmapSlug, armById, armTitle, orderStages, perceptionLine, phaseArms, phaseRunCount, procedureArms, STAGES, stageNeedsMaps, stageOf, type Arm } from "../src/bench/matrix.js";
 import type { DispatchOptions } from "../src/remote/control/dispatch.js";
 import { EXIT_NEEDS_GO, EXIT_OK, EXIT_REFUSED, auditPhase, dateArg, dispatchOptionsFor, findCompileSource, plannedRuns, runPhase } from "../src/bench/orchestrate.js";
 import { renderReport, reportFileName, writeReport } from "../src/bench/report.js";
@@ -126,7 +126,12 @@ test("STAGES__PutDeliverablesLast__When__AllRequested", () => {
 	// test fails, which is the point.
 	const order = orderStages(STAGES.map((st) => st.n));
 	const deliverable = STAGES.find((st) => st.kind === "deliverable")!;
-	assert.equal(order.at(-1), deliverable.n);
+	for (const m of STAGES.filter((st) => st.kind === "measurement")) {
+		assert.ok(order.indexOf(m.n) < order.indexOf(deliverable.n), `${m.title} must run before filming`);
+	}
+	// And the off-ladder stage yields to all of it: Diagnostics blocks nothing, so it waits
+	// rather than putting harness runs in front of the pass the operator asked for.
+	assert.equal(order.at(-1), STAGES.find((st) => st.kind === "diagnostic")!.n);
 });
 
 test("STAGES__AreUniqueAndCoverEveryArm__When__TheMatrixIsWalked", () => {
@@ -143,6 +148,50 @@ test("STAGES__KeepFilmingOutOfMeasurementStages__When__ArmsSetRecord", () => {
 	}
 	const filmedTwins = MATRIX.filter((a) => stageOf(a.phase)?.kind === "deliverable");
 	for (const t of filmedTwins) assert.equal(t.dispatch.record, true, `${t.id} is a deliverable and must film`);
+});
+
+/**
+ * The three gates, asserted against the ARMS rather than against a stage flag.
+ *
+ * The 2026-08-03 audit found six of ten procedure arms unprotected — a Claude cell and five
+ * filmed twins sat in stages nobody had marked `procedureGate: true`, so they could dispatch
+ * with nothing promoted and bank runs labelled "procedure" that measured the appmap tier. The
+ * flag was attached to the stage; the risk belongs to the arm. Same shape for the map gate,
+ * which missed Generalization's ten grounded creation arms entirely.
+ */
+test("ProcedureGate__CoversEveryArmThatGroundsOnAProcedure__When__TheMatrixIsWalked", () => {
+	const consumers = MATRIX.filter((a) => a.dispatch.useProcedures);
+	assert.ok(consumers.length >= 10, "guard assumes the procedure tier is non-trivial");
+	for (const a of consumers) {
+		assert.ok(procedureArms(a.phase).length > 0, `${a.id} grounds on a procedure in an ungated stage ${a.phase}`);
+	}
+});
+
+test("MapGate__CoversEveryStageHoldingAGroundedArm__When__ExceptDiagnostics", () => {
+	const readsAMap = (a: (typeof MATRIX)[number]) => a.kind === "task" && !a.dispatch.noGrounding && !a.dispatch.useRecipe && !a.dispatch.useProcedures;
+	for (const st of STAGES) {
+		const grounded = phaseArms(st.n).filter(readsAMap);
+		if (!grounded.length) continue;
+		if (st.kind === "diagnostic") {
+			// Exempt on purpose: it measures the AX→screenshot transform, and whether grounding
+			// prose loaded says nothing about that. Exempt BY KIND, so a second diagnostic stage
+			// inherits the exemption without anyone remembering it.
+			assert.equal(stageNeedsMaps(st.n), false, `${st.title} should not wait on Discovery`);
+			continue;
+		}
+		assert.equal(stageNeedsMaps(st.n), true, `stage ${st.n} ${st.title} holds ${grounded.length} map-reading arms but does not wait for Discovery`);
+	}
+});
+
+test("CreationExcluded__NamesLiveStageTwoCells__When__TheTaskAxisIsNarrowed", () => {
+	// Moving the cdp perception cells into Configuration would have widened the task axis from
+	// 15 twins to 20 as a side effect of a tidy-up. The exclusion is a judgement, so it is named
+	// — and an id renamed out from under the list has to fail here rather than quietly rejoin.
+	const s2 = new Set(phaseArms(2).filter((a) => a.kind === "task").map((a) => a.id));
+	for (const id of CREATION_EXCLUDED) assert.ok(s2.has(id), `${id} is excluded from the task axis but is no longer a stage-2 cell`);
+	// Stage 4 only: the filmed twins are `create-…-filmed` and would double the count.
+	const twins = phaseArms(4).filter((a) => a.id.startsWith("create-"));
+	assert.equal(twins.length, s2.size - CREATION_EXCLUDED.length, "every stage-2 cell that is not excluded has exactly one creation twin");
 });
 
 test("MATRIX__UsesOnlyAxAndCdp__When__DomIsDeleted", () => {
@@ -1670,6 +1719,17 @@ test("runPhase__RecordsTheArmsOwnModel__When__AnArmIsPinnedToAnother", async () 
 	// under the pinned model, finds none, and re-dispatches the arm on every pass. Three Claude
 	// arms reached n=6 with "azure/gpt-5.6-sol" on all six rows before this was caught.
 	await withTempAsync("bench-pin-", async (dir) => {
+		// Generalization is map-gated now (2026-08-03): its creation arms are grounded, and
+		// dispatching them before Discovery lands would run them on provenance "none" under a
+		// grounded label. The old `phase === 2 || phase === 5` check missed this stage entirely.
+		const seeded = recordSubmissions(
+			readManifest(DATE, liveDir(dir)),
+			phaseArms(1)
+				.filter((a) => a.app === "Yarn")
+				.map((a) => entry(a.id, `explore-${a.id}`, { collected: true, state: "done" })),
+		);
+		writeManifest(seeded, liveDir(dir));
+
 		const fake = fakeDispatch();
 		await runPhase(4, { go: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
 		const claude = fake.calls.filter((c) => c.model === BENCH_ALT_MODEL);

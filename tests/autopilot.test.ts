@@ -499,10 +499,33 @@ test("runPhase__SkipsOnlyTheMissingArms__When__SomeProceduresArePromoted", async
 	});
 });
 
-test("runPhase__RefusesPhase6Outright__When__NoProcedureExistsAtAll", async () => {
+test("runPhase__SkipsProceduresWithoutRefusingTheStage__When__NoProcedureExistsAtAll", async () => {
+	// Reuse holds BOTH frozen tiers since 2026-08-03, so "no procedure exists" must no longer
+	// refuse the stage: the recipe half is unaffected and has its own readiness. The old rule
+	// (every procedure arm missing → refuse) read the same as "nothing can run" only while the
+	// phase WAS the procedure tier. Generalization made the difference expensive — one
+	// unharvested procedure among twenty-two arms would have cancelled sixty runs.
+	await withTempAsync("auto-", async (dir) => {
+		const lines: string[] = [];
+		const code = await runPhase(3, {
+			go: true,
+			date: DATE,
+			outRoot: dir,
+			proceduresDir: path.join(dir, "empty"),
+			log: (s) => lines.push(s),
+			dispatchFn: async () => ({ ok: false as const, error: "unreachable", attempts: [] }),
+		});
+		assert.notEqual(code, EXIT_REFUSED, "the recipe half of Reuse must survive an unharvested procedure");
+		const skipped = lines.filter((l) => l.includes("no promoted procedure"));
+		assert.equal(skipped.length, 4, "each procedure arm says why it was skipped, loudly");
+	});
+});
+
+test("runPhase__RefusesOutright__When__EveryDispatchableArmNeedsAMissingProcedure", async () => {
+	// The outright refusal still exists, scoped to what it always meant: nothing can run.
 	await withTempAsync("auto-", async (dir) => {
 		const calls: string[] = [];
-		const code = await runPhase(3, {
+		const code = await runPhase(4, {
 			go: true,
 			date: DATE,
 			outRoot: dir,
@@ -510,6 +533,9 @@ test("runPhase__RefusesPhase6Outright__When__NoProcedureExistsAtAll", async () =
 			log: () => {},
 			dispatchFn: async () => (calls.push("x"), { ok: false as const, error: "unreachable", attempts: [] }),
 		});
+		// Generalization is map-gated before it is procedure-gated, so with an empty manifest it
+		// refuses for the earlier reason — which is itself the guarantee worth asserting: a stage
+		// whose grounded arms have no maps never reaches dispatch.
 		assert.equal(code, EXIT_REFUSED);
 		assert.deepEqual(calls, []);
 	});
