@@ -110,6 +110,29 @@ echo "launching the full pass, detached."
 ( nohup ./run bench autopilot "${AUTOPILOT_ARGS[@]}" --go >>"$LOG" 2>&1 & echo $! >"$LOCK" )
 PID="$(cat "$LOCK")"
 
+#
+# KEEP THE MACHINE AWAKE FOR AS LONG AS THE PASS LASTS.
+#
+# The driver runs HERE, not on the fleet, and that is the honest limit of "fire and forget": it
+# outlives the terminal, the ssh session and the agent, but not this computer. Idle sleep is the
+# likely way a walk-away pass stops — the laptop naps, the driver freezes with it, and hours of
+# fleet time go unclaimed.
+#
+# `-i` prevents idle sleep, `-s` prevents system sleep while on AC power, and `-w` ties the
+# assertion to the driver's own lifetime: when the pass ends or is killed, caffeinate exits with
+# it. That ordering matters — holding the assertion by wrapping the command instead would make
+# `kill $PID` kill the guard and orphan the pass.
+#
+# WHAT IT CANNOT DO: a closed lid on battery still sleeps, and a shutdown or reboot ends the
+# driver. Neither loses work — the Macs keep draining what is already queued, and re-running this
+# script resumes from the manifest.
+if command -v caffeinate >/dev/null 2>&1; then
+	nohup caffeinate -isw "$PID" >/dev/null 2>&1 &
+	AWAKE="sleep prevented while it runs (caffeinate)"
+else
+	AWAKE="WARNING: no caffeinate — this machine may sleep and pause the pass"
+fi
+
 # Give it a moment to fail fast — a refusal (bad key, hinted prompt, adopted archive manifest)
 # happens in the first seconds, and finding out now beats finding out tomorrow.
 sleep 8
@@ -123,7 +146,7 @@ fi
 
 cat <<EOF
 
-running as pid $PID, pass date $DATE
+running as pid $PID, pass date $DATE — $AWAKE
   log:     tail -f ${LOG#$REPO/}
   board:   ./run dash            (pure reader; safe to open and close at will)
   status:  ./run bench autopilot --phases $PHASES --date $DATE      (plan mode = progress report)
@@ -131,6 +154,11 @@ running as pid $PID, pass date $DATE
   stop:    kill $PID    — safe. It holds no leash on runs: the fleet keeps draining and
            re-running this script resumes from the manifest.
 
-Safe to close this terminal and go offline. Nothing further is needed from you; collecting and
-judging happen at the end of the pass, and again whenever you run collect.
+Safe to close this terminal, end this session, or drop the ssh connection — none of those reach
+the pass. Collecting and judging happen at the end, and again whenever you run collect.
+
+The limit worth knowing: the DRIVER RUNS ON THIS MACHINE. If it sleeps the pass pauses and
+resumes on wake (the stall detector counts polls, not minutes, so nothing trips); if it shuts
+down the driver dies and the Macs finish what is already queued. Either way no work is lost —
+re-run this script and it picks up from the manifest.
 EOF
