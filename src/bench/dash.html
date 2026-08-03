@@ -2123,11 +2123,20 @@ function timelineRows(arms) {
 
    State lives here, not in the DOM: renderBoard replaces the board's innerHTML on every SSE
    push, so a DOM-only fold would spring open a few seconds after you set it (the same reason
-   openRows and prevOpenSurfs exist). It is in-memory and per-page, like openRows — a reload
-   starts fully expanded. Keys are explore arm ids plus the two "#"-prefixed pseudo-groups,
-   which arm ids cannot collide with. Keys for groups the target picker currently filters out
-   are kept, so scoping away and back preserves the fold. */
-const collapsedGroups = new Set();
+   openRows and prevOpenSurfs exist). It is in-memory and per-page, like openRows. Keys are
+   explore arm ids plus the two "#"-prefixed pseudo-groups, which arm ids cannot collide with.
+   Keys for groups the target picker currently filters out are kept, so scoping away and back
+   preserves the fold.
+
+   EXPANDED, not collapsed, is what this set tracks (David, 2026-08-03) — the board now opens
+   FOLDED. Storing the exceptions rather than the folds is what makes that default hold: an
+   empty set means "nothing has been opened", so a lineage that first appears mid-pass arrives
+   folded like every other one. The inverse (seeding a collapsed-set with today's keys) would
+   quietly let tomorrow's group render expanded, which is the bug this shape cannot have.
+
+   The board opens folded because 11 lineages of runs is not an overview — the grounding passes
+   with their discovery metrics are, and the runs are the drill-down. */
+const expandedGroups = new Set();
 const UNGROUNDED_KEY = "#ungrounded", COMPILES_KEY = "#compiles";
 
 // How many RUNS of a pass the board shows: its entries minus any a retry replaced (those
@@ -2146,7 +2155,7 @@ const groupRunCount = (rows) => rows.reduce((s, { a, p }) => s + visibleRuns(a, 
 // unfolding, which is half of what the fold is for. Groups with no children get no control.
 function groupToggle(key, n) {
 	if (!n) return "";
-	const shut = collapsedGroups.has(key);
+	const shut = !expandedGroups.has(key);
 	const runs = `${n} run${n === 1 ? "" : "s"}`;
 	const tip = shut
 		? `expand — show the ${runs} in this group`
@@ -2170,7 +2179,7 @@ function renderBoardTools(keys) {
 	lastBoardKeys = keys;
 	const foldable = keys.filter((k) => k.n);
 	if (foldable.length < 2) { $("board-tools").innerHTML = ""; return; }
-	const shut = foldable.filter((k) => collapsedGroups.has(k.key)).length;
+	const shut = foldable.filter((k) => !expandedGroups.has(k.key)).length;
 	const allShut = shut === foldable.length;
 	const tip = allShut
 		? "expand every lineage group"
@@ -2219,7 +2228,7 @@ function renderBoard(progress) {
 	// grounding pass and never a section label.
 	const kidRows = (key, kids, n, row = taskRow) => {
 		keys.push({ key, n });
-		return collapsedGroups.has(key) ? "" : kids.map(({ a, p }) => row(a, p)).join("");
+		return expandedGroups.has(key) ? kids.map(({ a, p }) => row(a, p)).join("") : "";
 	};
 	for (const { e, rows } of groups) {
 		seen.add(e.id);
@@ -2631,8 +2640,8 @@ $("board-tools").addEventListener("click", (ev) => {
 	const shut = t.dataset.foldAll === "1";
 	for (const { key, n } of lastBoardKeys) {
 		if (!n) continue;
-		if (shut) collapsedGroups.add(key);
-		else collapsedGroups.delete(key);
+		if (shut) expandedGroups.delete(key);
+		else expandedGroups.add(key);
 	}
 	render();
 });
@@ -2654,8 +2663,8 @@ $("board").addEventListener("click", (ev) => {
 	const tog = ev.target.closest(".gtog[data-group]");
 	if (tog) {
 		const g = tog.dataset.group;
-		if (collapsedGroups.has(g)) collapsedGroups.delete(g);
-		else collapsedGroups.add(g);
+		if (expandedGroups.has(g)) expandedGroups.delete(g);
+		else expandedGroups.add(g);
 		render();
 		return;
 	}
