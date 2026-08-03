@@ -7,9 +7,12 @@ import { electronTarget, parseTarget, type Target, targetLabel } from "../target
 export const noAxRefusal = (noAx: boolean, vision: boolean, backendKind: string): string | undefined => {
 	if (!noAx) return undefined;
 	if (!vision) return "--no-ax and --no-vision together leave the model with a window title and nothing else — refusing.";
-	// Same refusal as the task agent's CLI: a non-ax backend's observations ARE ref lists,
-	// so there is no element channel to drop without losing the action addressing too.
-	if (backendKind !== "ax") return `--no-ax only applies to the ax backend — the ${backendKind} backend has no AX list to drop.`;
+	// The task agent's CLI dropped this refusal on 2026-08-03 and explore did not, which is why
+	// both p1-explore-vision-cdp passes died on it and the two arms grounding on their map ran
+	// with provenance "none". The reasoning had expired identically in both places: suppression
+	// lives in the LOOP (observationBlocks hides the list from the model while the harness keeps
+	// the full bundle), and cdp.act takes a raw x/y point, so a vision-only pass on cdp
+	// addresses by pixel and never touches a ref.
 
 	return undefined;
 };

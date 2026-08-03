@@ -395,9 +395,23 @@ test("noAxRefusal__Refuses__When__NoAxIsCombinedWithNoVision", () => {
 	assert.match(noAxRefusal(true, false, "ax") ?? "", /window title and nothing else/);
 });
 
-test("noAxRefusal__Refuses__When__BackendIsNotAx", () => {
-	// A non-ax backend's observations ARE ref lists — there is no element channel to drop.
-	assert.match(noAxRefusal(true, true, "cdp") ?? "", /only applies to the ax backend/);
+test("noAxRefusal__Allows__When__VisionOnlyRunsOnCdp", () => {
+	// INVERTED 2026-08-03. The refusal read "a non-ax backend's observations ARE ref lists —
+	// there is no element channel to drop", and both halves had expired: suppression lives in
+	// the loop (observationBlocks hides the list from the model while the harness keeps the
+	// full bundle for its gates), and cdp.act takes a raw x/y point, so a vision-only pass on
+	// cdp addresses by pixel and never touches a ref.
+	//
+	// It mattered because the agent's CLI had already dropped this and explore's had not: both
+	// p1-explore-vision-cdp passes died on it, and the two arms grounding on their map ran with
+	// provenance "none".
+	assert.equal(noAxRefusal(true, true, "cdp"), undefined);
+});
+
+test("noAxRefusal__StillRefuses__When__NoChannelWouldRemain", () => {
+	// The one refusal that stands on its own terms: --no-ax with --no-vision leaves the model a
+	// window title and nothing else, on any backend.
+	assert.match(noAxRefusal(true, false, "cdp") ?? "", /nothing else/);
 });
 
 test("noAxRefusal__Allows__When__NoAxRunsOnAxWithVision", () => {

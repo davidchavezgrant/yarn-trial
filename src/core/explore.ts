@@ -84,10 +84,20 @@ async function main(): Promise<void> {
 		// feature), so the claim tool goes with it.
 		const descent = DESCENT_ON && !noAx;
 		const extra = descent ? [...EXTRA_TOOLS, CLAIM_TOOL] : EXTRA_TOOLS;
-		if (cdp) {
+		// Vision-only outranks the backend, exactly as in agent/run.ts: the model is given
+		// pixels and a pointer, and which process delivers the click is not its concern. cdp
+		// keeps its act tool (its schema already takes x/y — "pointer actions at viewport
+		// CSS-pixel coordinates read off the screenshot") but loses `find`, because searching a
+		// snapshot the model cannot see returns element identity through the side door.
+		if (cdp && !noAx) {
 			const { CDP_ACT_TOOL, CDP_FIND_TOOL, CDP_RULES } = await import("../backends/cdp.js");
 			p.tools = [CDP_ACT_TOOL, CDP_FIND_TOOL, ...extra];
 			p.basePrompt = systemPrompt(CDP_RULES, targetVocabulary(target), descent, vision);
+		} else if (cdp && noAx) {
+			const { CDP_ACT_TOOL } = await import("../backends/cdp.js");
+			const { CDP_VISION_ONLY_RULES } = await import("./harness/actions.js");
+			p.tools = [CDP_ACT_TOOL, SURVEY_TOOL, ...extra];
+			p.basePrompt = systemPrompt(CDP_VISION_ONLY_RULES, targetVocabulary(target), descent, vision, true);
 		} else if (noAx) {
 			p.tools = [VISION_ACT_TOOL, SURVEY_TOOL, ...extra];
 			p.basePrompt = systemPrompt(VISION_ONLY_RULES, targetVocabulary(target), descent, vision, true);

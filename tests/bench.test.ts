@@ -1653,3 +1653,21 @@ test("agentLoop__KeepsTheStallVerdict__When__ItStopsBeforeTheBackstop", () => {
 	assert.match(src, /stopReason: "stalled"/);
 	assert.match(src, /stopReason: "step-ceiling"/);
 });
+
+test("visionOnly__IsAllowedOnCdp__When__EitherEntryPointDispatchesIt", () => {
+	// The task agent's CLI dropped its --no-ax refusal and EXPLORE's did not, so both
+	// p1-explore-vision-cdp passes died on "--no-ax only applies to the ax backend" and the two
+	// arms grounding on their map ran with provenance "none" — flagged, correctly, as a
+	// grounding mismatch. The reasoning had expired identically in both files; only one was
+	// edited. Asserted over both, so the pair cannot drift again.
+	for (const rel of ["agent/cli.ts", "explore/cli.ts"]) {
+		const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "core", rel), "utf8");
+		assert.doesNotMatch(src, /only applies to the ax backend/, `${rel} still refuses vision-only on a non-ax backend`);
+	}
+	// And both loops must give a vision-only cdp run the pixel-addressed path, not cdp's
+	// ref-based rules — a prompt for a tool the model is not holding.
+	for (const rel of ["agent/run.ts", "explore.ts"]) {
+		const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "core", rel), "utf8");
+		assert.match(src, /cdp && !noAx/, `${rel} must let vision-only outrank the backend`);
+	}
+});
