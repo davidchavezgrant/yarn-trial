@@ -3,7 +3,7 @@ import path from "node:path";
 import { findScopeAmbiguities } from "../core/harness.js";
 import { readJournal } from "../core/journal.js";
 import { dropRun } from "../core/runs-cli.js";
-import { ARCHIVE_DIR, LIVE_DIR, RUN_FILES, appSlug, dataRoot as dataRootDir, liveDir, outDir, resourcesRoot, runDir, runFile } from "../paths.js";
+import { ARCHIVE_DIR, CURSOR_RENDER, LIVE_DIR, RUN_FILES, appSlug, dataRoot as dataRootDir, liveDir, outDir, resourcesRoot, runDir, runFile } from "../paths.js";
 import { appmapSlug } from "../core/target.js";
 import type { JobRecord } from "../remote/runner/jobs.js";
 import { type Arm, armAppmapSlug, armById } from "./matrix.js";
@@ -357,8 +357,8 @@ async function humanizePulled(entry: ManifestEntry, job: Record<string, any> | u
 	if (!armById(entry.armId)?.dispatch.record && !job?.artifacts?.recording) return;
 	const dir = runFile(entry.jobId, RUN_FILES.recording, path.join(dataDir, "out"));
 	if (!fs.existsSync(path.join(dir, "frames"))) return;
-	// humanize.ts writes humanized.mp4 beside the raw window.mp4; present means done.
-	if (fs.existsSync(path.join(dir, "humanized.mp4"))) return;
+	// humanize.ts writes its render beside the raw window.mp4; present means done.
+	if (fs.existsSync(path.join(dir, CURSOR_RENDER))) return;
 
 	try {
 		const { execFile } = await import("node:child_process");

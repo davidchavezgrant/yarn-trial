@@ -575,6 +575,40 @@ test("BuildDetail__WalksRunThroughLiveMap__When__NoArchiveExists", () => {
 	}
 });
 
+test("BuildDetail__FlagsTheTake__When__TheRunsCursorRenderIsOnThisMachine", () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dash-detail-vid-"));
+	try {
+		const m = manifest(entry({ jobId: "job-v", state: "done", collected: true }));
+		// Nothing else planted: the flag must not depend on a graph, a run log, or a walk — a
+		// filmed run whose other artifacts never landed still has a take worth watching.
+		fs.mkdirSync(path.join(dir, "out", "bench", "live", "job-v", "recording"), { recursive: true });
+		fs.writeFileSync(path.join(dir, "out", "bench", "live", "job-v", "recording", "humanized.mp4"), "RENDER");
+
+		const d = buildDetail("job-v", m, { dataDir: dir, benchRoot: path.join(dir, "bench") });
+
+		assert.equal(d.video, true);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("BuildDetail__OmitsTheTake__When__OnlyTheRawCaptureIsPresent", () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dash-detail-raw-"));
+	try {
+		const m = manifest(entry({ jobId: "job-r", state: "done", collected: true }));
+		// The cursorless capture is not the artifact: offering it as "the take" would show a
+		// recording of a UI operating itself with no pointer, which reads as a broken video.
+		fs.mkdirSync(path.join(dir, "out", "bench", "live", "job-r", "recording"), { recursive: true });
+		fs.writeFileSync(path.join(dir, "out", "bench", "live", "job-r", "recording", "window.mp4"), "RAWCAPTURE");
+
+		const d = buildDetail("job-r", m, { dataDir: dir, benchRoot: path.join(dir, "bench") });
+
+		assert.equal(d.video, undefined);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("BuildDetail__AggregatesHeatAcrossCollectedRuns__When__RunsShareTheGraph", () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dash-heat-"));
 	try {
@@ -1781,6 +1815,58 @@ test("ExportSnapshot__CopiesMetricsAndDropsEvidence__When__RunHasStepsAndRecordi
 		// ...evidence does not.
 		assert.equal(fs.existsSync(path.join(live, "run-1", "steps")), false);
 		assert.equal(fs.existsSync(path.join(live, "run-1", "recording")), false);
+	} finally {
+		fs.rmSync(src, { recursive: true, force: true });
+		fs.rmSync(dest, { recursive: true, force: true });
+	}
+});
+
+test("ExportSnapshot__CarriesTheCursorRender__When__TheRunWasFilmed", () => {
+	const src = fs.mkdtempSync(path.join(os.tmpdir(), "snap-src-"));
+	const dest = fs.mkdtempSync(path.join(os.tmpdir(), "snap-dest-"));
+	try {
+		const m = manifest(entry({ jobId: "run-f", state: "done", collected: true }));
+		plant(src, ["out", "bench", "live", "2026-07-31", "manifest.json"], JSON.stringify(m));
+		plant(src, ["out", "bench", "live", "run-f", "run.json"], JSON.stringify({ success: true }));
+		// A filmed run's recording directory, whole: the render, the raw capture it was drawn
+		// over, and the frames it was drawn FROM. Exactly one of the three is meant to travel.
+		plant(src, ["out", "bench", "live", "run-f", "recording", "humanized.mp4"], "RENDER");
+		plant(src, ["out", "bench", "live", "run-f", "recording", "window.mp4"], "RAWCAPTURE");
+		plant(src, ["out", "bench", "live", "run-f", "recording", "frames", "0001.png"], "PNGDATA");
+		plant(src, ["out", "bench", "live", "run-f", "recording", "trajectory", "clicks.json"], "[]");
+
+		const r = exportSnapshot({ date: "2026-07-31", srcRoot: path.join(src, "out"), dest });
+
+		assert.equal(r.videosCopied, 1);
+		const rec = path.join(dest, "out", "bench", "live", "run-f", "recording");
+		assert.equal(fs.readFileSync(path.join(rec, "humanized.mp4"), "utf8"), "RENDER");
+		// The raw capture is the same take with no cursor in it, and the frames are the render's
+		// input — shipping either would multiply the bytes to show nothing new.
+		assert.equal(fs.existsSync(path.join(rec, "window.mp4")), false);
+		assert.equal(fs.existsSync(path.join(rec, "frames")), false);
+		assert.equal(fs.existsSync(path.join(rec, "trajectory")), false);
+	} finally {
+		fs.rmSync(src, { recursive: true, force: true });
+		fs.rmSync(dest, { recursive: true, force: true });
+	}
+});
+
+test("ExportSnapshot__CountsNoVideos__When__NoRunWasFilmed", () => {
+	const src = fs.mkdtempSync(path.join(os.tmpdir(), "snap-src-"));
+	const dest = fs.mkdtempSync(path.join(os.tmpdir(), "snap-dest-"));
+	try {
+		const m = manifest(entry({ jobId: "run-u", state: "done", collected: true }));
+		plant(src, ["out", "bench", "live", "2026-07-31", "manifest.json"], JSON.stringify(m));
+		plant(src, ["out", "bench", "live", "run-u", "run.json"], JSON.stringify({ success: true }));
+		// An unfilmed run whose recording dir holds only a raw capture must not leave an EMPTY
+		// recording/ behind in the snapshot — the dash reads existence, so a hollow directory
+		// would be a lie in the shape of a truth.
+		plant(src, ["out", "bench", "live", "run-u", "recording", "window.mp4"], "RAWCAPTURE");
+
+		const r = exportSnapshot({ date: "2026-07-31", srcRoot: path.join(src, "out"), dest });
+
+		assert.equal(r.videosCopied, 0);
+		assert.equal(fs.existsSync(path.join(dest, "out", "bench", "live", "run-u", "recording")), false);
 	} finally {
 		fs.rmSync(src, { recursive: true, force: true });
 		fs.rmSync(dest, { recursive: true, force: true });

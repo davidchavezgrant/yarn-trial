@@ -4,7 +4,8 @@ Verified 2026-08-03 against the 2026-08-01 pass (187 entries, 151 collected, $22
 
 The dash is a reader that normally sits beside the store it reads. Hosting it means separating
 the two, and the whole trick is that the separation is cheap: what the board *renders* is
-~6 MB of JSON and text, while what the store *holds* is 1.4 GB of step frames and recordings.
+~6 MB of JSON and text (plus the filmed runs' cursor renders — see below), while what the store
+*holds* is 1.4 GB of step frames, raw captures and trajectories.
 
 Two commands. The first freezes a pass, the second serves it:
 
@@ -32,6 +33,22 @@ the local one or with the report over the same manifest.
 The ssh-shelling branches all gate on the host inventory, so share mode simply withholds it —
 one cause, not five separate switches. See `DashOptions.share` in `src/bench/dash.ts`.
 
+**`/api/video?job=<id>`** is the one binary route: a filmed run's cursor render, streamed with
+range support (206/416) so the player can seek. It needs no share-mode special case, because it
+serves whatever the snapshot carried and the snapshot carries only renders. Two properties worth
+knowing: it is **local-file only** — no ssh tier, unlike `/api/logs`, so "no video here" means
+"not collected yet" — and it sits behind the same `DASH_AUTH` gate as everything but `/healthz`.
+The board offers a **▶ Watch the take** button in a run's dropdown only when `buildDetail` found
+the file, so a row never advertises a video the server cannot serve. Verified end to end on
+2026-08-03 against a share-mode dash over a real snapshot: 200 with `accept-ranges`, correct 206
+for head/tail/suffix ranges, 416 past EOF, 400 on a traversal-shaped id, 404 for an unfilmed run,
+and the player decoding a 45.65 s 1568×960 take.
+
+**Posture note.** A frozen render is evidence, not a live capability — the same class as the run
+log text this dash already serves, and nothing like `/peek`, which reaches into a colo Mac. But it
+is video of Yarn's product UI on a public URL behind Basic auth, which is a deliberate choice
+rather than an implied one.
+
 **Frozen states.** The 2026-08-01 manifest froze with 3 entries mid-run and 33 still queued. A
 live dash resolves those against the fleet; a snapshot has no fleet to ask, so without help it
 would claim three runs are executing forever. `freezeStates` retires them to `abandoned` and
@@ -48,9 +65,26 @@ gets restarted forever.
 | | |
 |---|---|
 | output | `<dest>/out/bench/live/…` — the same layout the dash already reads, so no snapshot awareness is needed anywhere |
-| size | **6.0 MB**, 852 files, 153 of 187 run dirs (34 entries never wrote one — queued, or evicted by collect) |
-| carries | manifest, per-run `run.json` / `events.jsonl` / `journal.jsonl` / `log.txt` / `appmap.*` / `checkpoint.json`, the per-arm appmap archive, the pass report, `narrative.jsonl` |
-| drops | `steps/` and `recording/` — ~36 MB per run of frames and mp4s, the run's *evidence*; the board charts its *metrics* |
+| size | **30.7 MB**, 988 files, 184 of 198 run dirs, 20 cursor renders (14 entries never wrote a dir — queued, or evicted by collect). Measured 2026-08-03; it was 6.0 MB before the renders travelled, and the manifest has grown since the 187-entry figure |
+| carries | manifest, per-run `run.json` / `events.jsonl` / `journal.jsonl` / `log.txt` / `appmap.*` / `checkpoint.json`, the per-arm appmap archive, the pass report, `narrative.jsonl`, and each filmed run's `recording/humanized.mp4` |
+| drops | `steps/`, and the rest of `recording/` — frames, `trajectory/`, and the raw cursorless `window.mp4`. ~36 MB per run of *evidence*; the board charts its *metrics* and shows the one artifact that is itself a result |
+
+**The takes.** A filmed arm's deliverable is footage, so the cursor render travels: ~1.3 MB per
+run against the ~36 MB directory it sits in, because `frames/` and `trajectory/` are the render's
+*input* and stay behind. The raw `window.mp4` stays behind too — it is the same take with no
+cursor in it (the fleet's capture draws none; `humanize` composites one from the run's own click
+points and typing timings), so shipping both would double the bytes to show a strictly worse
+video.
+
+Coverage is the honest caveat, and it is a property of the pass rather than of the dash: of the
+2026-08-01 pass's 198 entries, **20 have a cursor render**. 46 entries are filmed arms and 33 of
+those never ran; explores are deliberately never filmed (`--record` swaps in demo rules and would
+change the map every downstream arm is grounded on — see `matrix.ts`'s `filmed`). A handful of
+runs have `frames/` but no render; `bench collect` composites those automatically now
+(`humanizePulled`, `HUMANIZE=0` disables), so **collect before snapshotting** to pick them up.
+
+If a future pass films everything, ~235 MB of video would land in the image and the renders
+should move to `assets.yarn.so` (already on CloudFront) with the board linking out instead.
 
 `snapshots/` is gitignored: it is a regenerable duplicate of manifests already tracked under
 `out/bench`, plus 800-odd run logs. Build the image locally and push it (below) and the bytes

@@ -185,6 +185,19 @@ export const RUN_FILES = {
 } as const;
 
 /**
+ * The composited cursor render, INSIDE a run's `recording/` directory — what
+ * `src/cursor/humanize.ts` writes beside the raw `window.mp4` the fleet captured (the capture
+ * has no cursor in it; Yarn reimposes one in post).
+ *
+ * Not a RUN_FILES member because those are the run directory's own top-level names and this
+ * sits a level down. Here rather than spelled at each call site because four readers now agree
+ * on it — collect's render-on-pull, the gallery's player, the snapshot's one carried artifact,
+ * and the dash's video route — and a rename that missed one would present as "this run was
+ * never filmed" rather than as an error.
+ */
+export const CURSOR_RENDER = "humanized.mp4";
+
+/**
  * Repo-relative (posix) — the form job records use, because they are read on another machine.
  * LIVE_DIR already contains a separator, so it is joined as a posix segment rather than through
  * path.join: on a non-posix host that would emit backslashes into a string the far side splits.

@@ -11,7 +11,10 @@ import type { FleetRow } from "../remote/control/fleet.js";
 import type { HostEntry, Inventory } from "../remote/control/hosts.js";
 import type { EngineHandle } from "../remote/liveview.js";
 import { readJob as readLocalJob, readLog } from "../remote/runner/jobs.js";
-import { ARCHIVE_DIR, LIVE_DIR, OLD_ARCHIVE_DIR, OLD_LIVE_DIR, RUN_FILES, appSlug, dataRoot, outDir, resolveRunDir, runFile } from "../paths.js";
+import { ARCHIVE_DIR, CURSOR_RENDER, LIVE_DIR, OLD_ARCHIVE_DIR, OLD_LIVE_DIR, RUN_FILES, appSlug, dataRoot, outDir, resolveRunDir, runFile } from "../paths.js";
+// Byte arithmetic only, from a module that imports nothing — see its header for why it is not
+// reached through src/ui/ui-core.ts, which owns the other half of this idiom.
+import { parseByteRange } from "../byterange.js";
 import { appmapSlug, type Target, targetVocabulary, webTarget } from "../core/target.js";
 // Narrow modules, per the harness barrel's own header rule — never the barrel from here.
 import { DESCENT_ON } from "../core/explore/config.js";
@@ -1558,6 +1561,20 @@ export interface DashDetail {
 	 * is not on this machine or the run predates run events.
 	 */
 	series?: ExplorePoint[];
+	/**
+	 * This run's cursor render is on THIS machine — the dropdown draws a player when it is.
+	 *
+	 * A boolean, not a URL: the page already knows the route, and the honest question here is
+	 * "does the file exist where this dash can reach it", which differs between a laptop beside
+	 * the store and a container holding a snapshot. Answered here rather than by letting the
+	 * page fire a speculative GET, because a 404 per opened row is indistinguishable from a
+	 * broken deploy in a network log — and because `<video>` failing quietly is exactly the
+	 * failure mode nobody notices.
+	 *
+	 * Absent for every unfilmed arm, which is most of them (explores are deliberately never
+	 * filmed — see matrix.ts's `filmed`).
+	 */
+	video?: boolean;
 }
 
 function heatFor(
@@ -1807,6 +1824,11 @@ export function buildDetail(jobId: string, manifest: Manifest, opts: { dataDir?:
 		}
 	}
 
+	// runFile resolves the recording directory live → archive → the pre-bench homes, so an
+	// archived pass keeps its takes; the render sits one level inside it. Same dataDir the rest
+	// of this function reads through, which is what keeps a snapshot answering for itself.
+	const video = fs.existsSync(path.join(runFile(jobId, RUN_FILES.recording, path.join(dataDir, "out")), CURSOR_RENDER));
+
 	return {
 		jobId,
 		armId: entry.armId,
@@ -1820,6 +1842,7 @@ export function buildDetail(jobId: string, manifest: Manifest, opts: { dataDir?:
 		...(notes.length ? { note: notes.join("; ") } : {}),
 		...(noteEv ? { narratorNote: { t: String(noteEv.t), text: String(noteEv.text), model: String(noteEv.model ?? "?") } } : {}),
 		...(series.length ? { series } : {}),
+		...(video ? { video: true } : {}),
 	};
 }
 
@@ -3497,6 +3520,69 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		}
 	};
 
+	/**
+	 * A filmed run's cursor render, ranged — `/api/video?job=<id>`.
+	 *
+	 * The one BINARY route, and the only one that streams rather than buffers: an mp4 read into
+	 * a string to be written once would hold a megabyte per concurrent viewer and defeat seeking
+	 * entirely. Range support is not optional for `<video>` — Chromium will not seek a resource
+	 * that does not advertise `accept-ranges`, and Safari refuses to play one at all — so this
+	 * answers 206 with a content-range or 200 with the whole file, exactly as the Electron
+	 * gallery's protocol handler does (electron/main.ts). Both call the same parser.
+	 *
+	 * LOCAL FILES ONLY, on purpose. Every other per-run route has a remote tier that shells ssh
+	 * for artifacts still on a colo Mac; this one deliberately has none. A 36 MB recording is not
+	 * something to stream over an ssh pipe on a page render, and `bench collect` already pulls
+	 * the render as part of banking the run — so "no video here" means "not collected yet",
+	 * which is a true and useful thing for the board to say.
+	 *
+	 * Share mode needs no special case: it serves whatever the snapshot carried, and the
+	 * snapshot carries exactly the renders (snapshot.ts's CURSOR_RENDER) and none of the frames.
+	 */
+	const serveVideo = (req: http.IncomingMessage, res: http.ServerResponse, job: string): void => {
+		// LOG_JOB_RE, not the looser SAFE_RUN_ID: the id becomes a path segment here, and that
+		// regex is the one that also rejects "." and ".." — see its comment.
+		if (!LOG_JOB_RE.test(job)) {
+			res.writeHead(400, { "content-type": "text/plain" });
+			res.end("bad job id");
+
+			return;
+		}
+		const file = path.join(runFile(job, RUN_FILES.recording), CURSOR_RENDER);
+		let size: number;
+		try {
+			const st = fs.statSync(file);
+			if (!st.isFile()) throw new Error("not a file");
+			size = st.size;
+		} catch {
+			// Unfilmed, not yet collected, or the render has not been composited — all the same
+			// answer to a viewer, and the dropdown only asks when buildDetail said `video`.
+			res.writeHead(404, { "content-type": "text/plain" });
+			res.end("no cursor render for this run");
+
+			return;
+		}
+		const range = parseByteRange(req.headers.range ?? null, size);
+		if (range.kind === "unsatisfiable") {
+			res.writeHead(416, { "content-range": `bytes */${size}` });
+			res.end();
+
+			return;
+		}
+		// A run's artifacts are written once and never edited (see paths.ts's archive note), so
+		// the render at a given job id is immutable — worth saying out loud to a browser that
+		// would otherwise re-fetch a megabyte every time a row is reopened.
+		const headers = { "content-type": "video/mp4", "accept-ranges": "bytes", "cache-control": "private, max-age=31536000, immutable" };
+		if (range.kind === "part") {
+			res.writeHead(206, { ...headers, "content-range": `bytes ${range.start}-${range.end}/${size}`, "content-length": String(range.end - range.start + 1) });
+			fs.createReadStream(file, { start: range.start, end: range.end }).pipe(res);
+
+			return;
+		}
+		res.writeHead(200, { ...headers, "content-length": String(size) });
+		fs.createReadStream(file).pipe(res);
+	};
+
 	const server = http.createServer((req, res) => {
 		const url = req.url ?? "/";
 		// The ONE route in front of the auth gate, and the only one that may be.
@@ -3535,6 +3621,8 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 		} else if (url.startsWith("/api/logs")) {
 			// Async by necessity (ssh); serveLogs answers every path itself, including throws.
 			void serveLogs(res, new URL(url, "http://localhost").searchParams);
+		} else if (url.startsWith("/api/video")) {
+			serveVideo(req, res, new URL(url, "http://localhost").searchParams.get("job") ?? "");
 		} else if (url === "/events") {
 			res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
 			res.write(`data: ${JSON.stringify(currentState())}\n\n`);

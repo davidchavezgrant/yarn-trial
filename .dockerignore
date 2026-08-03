@@ -20,3 +20,11 @@ hosts.json
 # Snapshots other than the one being shipped (SNAPSHOT_DIR selects it; the rest are noise).
 snapshots/*
 !snapshots/current
+# The snapshot's cursor renders MUST reach the builder — the dash's /api/video serves them, and
+# a row offering a take that 404s is worse than one that never offered it.
+#
+# Stated explicitly rather than relied upon: `*.mp4` above should not match a nested path (these
+# patterns match whole relative paths, and `*` does not cross a separator), so this ought to be a
+# no-op — but "ought to" is the wrong footing for a rule whose failure mode is silent. Last match
+# wins, so this settles it either way.
+!snapshots/current/**/*.mp4

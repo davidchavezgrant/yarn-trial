@@ -4,7 +4,7 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { auditTaskPrompt } from "../core/harness/verification.js";
 import { mintRunKey } from "../core/harness/run.js";
-import { appmapsDir, appSlug, dataRoot, outDir, resourcesRoot } from "../paths.js";
+import { appmapsDir, appSlug, CURSOR_RENDER, dataRoot, outDir, resourcesRoot } from "../paths.js";
 import { readJsonOr } from "../fsutil.js";
 // One capturedAt reader for the whole codebase — the sync's. A second parser here could
 // disagree with it about what counts as stamped. It is a pure local-file read; importing it
@@ -110,7 +110,7 @@ export function listRecordedRuns(limit = 40): PastRun[] {
 		// where a run's recording lives. Existence is checked per scan, not cached: the file
 		// appears when a render finishes and the next gallery poll must see it.
 		const recordingDir = path.posix.dirname(d.video);
-		const humanized = `${recordingDir}/humanized.mp4`;
+		const humanized = `${recordingDir}/${CURSOR_RENDER}`;
 		const renderable =
 			fs.existsSync(`${dataRoot()}/${recordingDir}/frames`) && fs.existsSync(`${dataRoot()}/${recordingDir}/trajectory`);
 		const id = f.replace(/\.json$/, "");
@@ -148,28 +148,15 @@ export function resolveVideo(rel: string): string | undefined {
 	return full;
 }
 
-export type ByteRange = { kind: "whole" } | { kind: "part"; start: number; end: number } | { kind: "unsatisfiable" };
-
 /**
- * Interpret a Range header against a file of `size` bytes.
+ * Range parsing MOVED to src/byterange.ts, re-exported here so this file's callers (the
+ * Electron video protocol handler) and its tests are unchanged.
  *
- * Here rather than inline in the protocol handler so the suffix case is testable: a suffix
- * range (`bytes=-500`) names the LAST 500 bytes, and parsing it as 0–500 serves the head of
- * the file labelled as its tail. Chromium's media stack mostly asks `bytes=N-`, which is why
- * that mistake can sit latent until some player sends the other form.
- *
- * Anything unparseable answers `whole` — a full 200 is always a correct response to a Range
- * the server did not understand — and `unsatisfiable` maps to 416.
+ * It left because the bench dash serves the same cursor renders over HTTP and needed the same
+ * arithmetic — and importing it from here would have pulled this module's harness and ssh
+ * imports into a read-only board's dependency graph. See that file's header.
  */
-export function parseByteRange(header: string | null, size: number): ByteRange {
-	const m = header ? /bytes=(\d*)-(\d*)/.exec(header) : null;
-	if (!m || (!m[1] && !m[2])) return { kind: "whole" };
-	const start = m[1] ? Number(m[1]) : Math.max(0, size - Number(m[2]));
-	const end = m[1] && m[2] ? Math.min(Number(m[2]), size - 1) : size - 1;
-	if (start >= size || start > end) return { kind: "unsatisfiable" };
-
-	return { kind: "part", start, end };
-}
+export { type ByteRange, parseByteRange } from "../byterange.js";
 
 /** What the middle column held for one app: the typed task, and the log pane's scrollback. */
 export interface AppUiState {

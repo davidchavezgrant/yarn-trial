@@ -721,10 +721,11 @@ const PHASE6: Arm[] = [
  * would produce a different map from the one every downstream arm is grounded on, corrupting the
  * input rather than documenting it. Nothing downstream consumes explore footage either.
  *
- * Remaining manual step: the composited cursor. `npm run humanize -- <stamp>` per filmed run,
- * after `bench collect` pulls it. It reads the run's own trajectory (click points, target
- * rects, real typing timings), so it needs no extra capture — but it is not wired into
- * `bench` yet, and the gallery is where the renders surface.
+ * The composited cursor is no longer a manual step: `bench collect` renders it on pull
+ * (collect.ts's humanizePulled — `HUMANIZE=0` opts out), reading the run's own trajectory
+ * (click points, target rects, real typing timings) so it needs no extra capture. Two surfaces
+ * show the result: the Electron gallery, and the benchmark board's ▶ per filmed run — which
+ * also means it is the one artifact a hosted snapshot carries (bench/snapshot.ts).
  */
 const filmed = (arm: Arm): Arm => ({
 	...arm,

@@ -316,6 +316,21 @@
 		background: var(--surface); border-bottom: 1px solid var(--border); color: var(--ink);
 	}
 	#treeModal .tm-body { flex: 1; overflow: auto; background: var(--plane); }
+	/* The take. Same modal furniture as the tree, and for the same reason the tree uses it —
+	   a run's footage wants the whole viewport, not a strip inside a table row. It is ALSO
+	   what keeps playback alive: the board's innerHTML is replaced on every state push, and a
+	   <video> removed from the document is paused by the HTML spec. Out here, nothing the
+	   render loop does can reach it. Black plane, not --plane: letterboxing a screen recording
+	   against a near-black surround is what a player is supposed to look like. */
+	#vidModal { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.88); z-index: 31; display: none; }
+	#vidModal.on { display: flex; flex-direction: column; }
+	#vidModal .tm-bar {
+		display: flex; align-items: baseline; gap: 12px; padding: 10px 16px;
+		background: var(--surface); border-bottom: 1px solid var(--border); color: var(--ink);
+	}
+	#vidModal .vm-body { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 16px; }
+	/* contain, never cover: a cropped frame would hide the very cursor this render exists to add. */
+	#vidModal video { max-width: 100%; max-height: 100%; object-fit: contain; background: #000; }
 	/* charts */
 	svg { display: block; width: 100%; height: auto; }
 	.legend { display: flex; gap: 14px; flex-wrap: wrap; margin: 2px 0 8px; font-size: 11px; color: var(--ink-2); }
@@ -400,6 +415,16 @@
 		<button class="btnv" id="tm-close" style="margin-left:auto">Close ✕</button>
 	</div>
 	<div class="tm-body" id="tm-body"></div>
+</div>
+<!-- The take. The <video> is written in the STATIC page, not by render(), so the element
+     outlives every re-render and holds its own position, volume and fullscreen state.
+     preload="metadata" so opening a row costs a few KB of moov atom, not a megabyte. -->
+<div id="vidModal">
+	<div class="tm-bar">
+		<b id="vm-title"></b><span class="meta" id="vm-sub"></span>
+		<button class="btnv" id="vm-close" style="margin-left:auto">Close ✕</button>
+	</div>
+	<div class="vm-body"><video id="vm-video" controls preload="metadata" playsinline></video></div>
 </div>
 <div id="tooltip"></div>
 
@@ -1640,9 +1665,17 @@ function detailRowHtml(a, p, key) {
 	// A failed detail fetch caches its reason in d.note — surface it, or the dropdown reads
 	// as "this run simply has nothing" when the truth is "the fetch failed".
 	const fetchNote = d && d.note && !d.graph ? `<div class="d-note">⚠ ${esc(d.note)}</div>` : "";
+	// A filmed run offers its take. Only when the detail found the render ON THIS MACHINE, so
+	// the button's existence is the same claim the server can satisfy — the alternative (always
+	// offer it, 404 on click) makes an uncollected run look like a broken deploy. Explores never
+	// have one by design (matrix.ts's `filmed`), which is most rows.
+	const watch = d && d.video
+		? `<div style="margin-top:10px"><button class="btnv" data-vidjob="${esc(sel)}" data-vidarm="${esc(a.id || "")}">▶ Watch the take</button>
+			<span class="meta" style="margin-left:8px">filmed run · cursor composited in post</span></div>`
+		: "";
 	// The convergence chart moved to the row's graphs page (the 📊 cell) — the dropdown
 	// stays the run's live console: prompt, notes, log.
-	return `<tr class="detail-row"><td colspan="${NCOLS}"><div class="d-prompt">${prompt}</div>${note}${fetchNote}
+	return `<tr class="detail-row"><td colspan="${NCOLS}"><div class="d-prompt">${prompt}</div>${note}${fetchNote}${watch}
 		<div class="logwrap" data-logjob="${esc(sel)}" data-loghost="${esc(e.host || "")}"></div></td></tr>`;
 }
 
@@ -1837,6 +1870,41 @@ function openTree(job) {
 		+ `<span>thick edge = traversed often across ${d.heat ? d.heat.runs : 0} collected run(s)</span>`
 		+ `</div>` + treeSvg(d);
 	$("treeModal").classList.add("on");
+}
+
+// The run's cursor render, in the player. Opened from the dropdown's ▶ button, which only
+// exists when the detail said this run has one (DashDetail.video).
+//
+// The src is set ONCE per job and reused: reopening the same run resumes where it was left,
+// which is what you want while comparing a take against the steps table. Switching runs is the
+// only thing that reloads, and load() is explicit so the element drops the previous run's
+// buffered data rather than holding two recordings in memory.
+function openVideo(job, armId) {
+	const v = $("vm-video");
+	const src = "/api/video?job=" + encodeURIComponent(job);
+	if (v.dataset.job !== job) {
+		v.pause();
+		v.src = src;
+		v.dataset.job = job;
+		v.load();
+	}
+	$("vm-title").textContent = "the take";
+	// Says what the viewer is looking at, and that a cursor was added — the recording has none
+	// (the fleet's capture draws no pointer), so an unlabelled cursor invites the reasonable
+	// assumption that this is raw footage of a mouse moving.
+	$("vm-sub").textContent = `${armId || ""} · ${job} · synthetic cursor composited from the run's own trajectory`;
+	$("vidModal").classList.add("on");
+	// Not autoplayed: a modal that starts making motion before the viewer has parsed the header
+	// is a worse first frame than a paused one, and browsers block it without a gesture anyway
+	// once the file has audio.
+}
+
+// Closing PAUSES, deliberately: a hidden modal whose video keeps running burns bandwidth and
+// leaves the page making noise nobody can find the source of. Position survives, so reopening
+// resumes.
+function closeVideo() {
+	$("vm-video").pause();
+	$("vidModal").classList.remove("on");
 }
 
 // The row button can be clicked before the detail was ever fetched — fetch, then open.
@@ -2563,6 +2631,10 @@ $("board-tools").addEventListener("click", (ev) => {
 $("board").addEventListener("click", (ev) => {
 	const vt = ev.target.closest("[data-viewtree]");
 	if (vt) { requestTree(vt.dataset.viewtree); return; }
+	// Before the chip handler: the ▶ lives INSIDE an open dropdown, and letting the click fall
+	// through to the row toggle would collapse the row the player was opened from.
+	const vid = ev.target.closest("[data-vidjob]");
+	if (vid) { openVideo(vid.dataset.vidjob, vid.dataset.vidarm); return; }
 	// Lineage disclosure: folds the runs under one group header. Checked before the run chips
 	// — a header row carries both, and the disclosure is the more specific target.
 	const tog = ev.target.closest(".gtog[data-group]");
@@ -2878,7 +2950,16 @@ $("fleet").addEventListener("toggle", (ev) => {
 }, true);
 
 $("tm-close").addEventListener("click", () => $("treeModal").classList.remove("on"));
-document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") $("treeModal").classList.remove("on"); });
+$("vm-close").addEventListener("click", closeVideo);
+// Clicking the surround closes, the player itself does not — the <video> fills only part of a
+// letterboxed body, and a stray click on the black beside a paused frame reading as "close" is
+// the standard lightbox contract.
+$("vidModal").addEventListener("click", (ev) => { if (ev.target === $("vidModal") || ev.target.classList.contains("vm-body")) closeVideo(); });
+document.addEventListener("keydown", (ev) => {
+	if (ev.key !== "Escape") return;
+	$("treeModal").classList.remove("on");
+	closeVideo();
+});
 
 /* ---- SSE connection + liveness ---------------------------------------------------------- */
 // The #conn dot tells three truths (green live / amber stale / red down). Green has lied twice:
