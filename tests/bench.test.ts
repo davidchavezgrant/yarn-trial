@@ -1619,11 +1619,14 @@ test("creationArms__CarryAStepBudgetThatFitsTheTask__When__TheDefaultWouldCutThe
 	// creation task cannot: the only known-successful run of that flow took 19, and every
 	// creation arm in the first pass stopped at EXACTLY 15 with `gave-up` — measuring the
 	// ceiling, not the agent.
+	// The EFFECTIVE budget is the arm's override or the runaway backstop (100). An arm-level 30
+	// was the right fix against a default of 15 and the wrong one against a default of 100 with
+	// a stall detector: it put a ceiling back in front of a run that was still making progress.
+	// Three runs hit 30 with verified steps inside their last eight.
 	const create = MATRIX.filter((a) => a.id.startsWith("p7-create-"));
 	assert.ok(create.length >= 15, "the creation task covers the phase-2 grid");
-	for (const a of create) assert.ok((a.dispatch.steps ?? 15) > 19, `${a.id} would be cut off before a known-good run finishes`);
-	// And the budget must actually cross the wire, or the arm is starved anyway.
-	assert.equal(dispatchOptionsFor(create[0], undefined, BENCH_PRIMARY_MODEL).steps, create[0].dispatch.steps);
+	for (const a of create)
+		assert.ok(a.dispatch.steps === undefined || a.dispatch.steps > 19, `${a.id} caps below a known-good run's 19 steps`);
 });
 
 test("failureKind__SeparatesTheHarnessEndingARun__From__TheAgentsOwnVerdict", () => {

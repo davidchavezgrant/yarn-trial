@@ -774,10 +774,13 @@ const creationArms = (): Arm[] =>
 			id: a.id.replace(/^p2-/, "p7-create-"),
 			phase: 7 as Phase,
 			task: CREATION_TASK,
-			// 30, against a known-good 19. The settings tasks run 5-13 and never strained the
-			// default; writing a two-scene script and setting a voice is a longer flow, and a
-			// budget that cuts it off measures the budget.
-			dispatch: { ...a.dispatch, steps: 30 },
+			// NO arm-level budget. 30 was the right fix against a default of 15 and became the
+			// wrong one the moment the default turned into a runaway backstop of 100 with a
+			// stall detector as the real stopping condition: it reintroduced a ceiling acting as
+			// a verdict, one layer down. Three runs hit 30 with verified steps inside their last
+			// eight — still working, cut off anyway. They inherit the backstop and stop when they
+			// stall, which is the whole point of having a stall detector.
+			dispatch: { ...a.dispatch },
 		}));
 
 const PHASE7: Arm[] = [
