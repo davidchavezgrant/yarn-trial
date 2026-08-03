@@ -195,12 +195,31 @@ Re-running is the clean call; if the 1h14m is not affordable, reuse it and label
 
 ### Prerequisites
 
-- **Sign in to Notion once per Mac**, in the runner's persistent Chrome profile
-  (`out/chrome-profile/yarn-runner`). Without it every run maps the login wall — which is exactly
-  what the 07-30 `www.notion.so` pass did.
-- **A workspace in a known state.** Notion mutates easily; the explore stamp already shows one
-  accidentally created blank private page. Decide what "put it back" means before running, because
-  teardown restores what the journal recorded and nothing else.
+- **Sign in to Notion in the RUNNER's Chrome profile, not the Mac's.** The cdp backend launches its
+  own persistent profile at `out/chrome-profile/yarn-runner` (`cdp.ts:57`) and `./run browser-login`
+  is the command that seeds it. Signing in to the Mac's ordinary Chrome does not reach it, and
+  without the session every run maps the login wall — which is exactly what the 07-30
+  `www.notion.so` pass did.
+
+  **Measured 2026-08-03** (directory names only, no profile contents read):
+
+  | host | profile size | `app.notion.com` IndexedDB |
+  |---|---|---|
+  | mac1 | 188M | **absent** |
+  | mac2 | 353M | present |
+  | mac3 | 422M | present |
+
+  So **mac1 needs `./run browser-login` before phase 8 fires.** Presence only proves the origin has
+  been used in that profile, not that the session is still live — but absence on mac1 is
+  conclusive. Left unfixed this is the 29%-of-runs sign-in failure with a host bias: arms landing on
+  mac1 die at the gate or, worse, map the login wall and return plausible wrong-labelled data. Host
+  assignment follows queue order, so which arms get hit is arbitrary.
+
+- **A workspace in a known state.** The account is a throwaway (David, 2026-08-03), so the risk is
+  reproducibility rather than data loss. Notion still mutates easily — the 07-31 explore stamp
+  records one accidentally created blank private page — and teardown restores what the journal
+  recorded and nothing else. Seed the workspace with fixed sample content and decide what "put it
+  back" means before running.
 - **Delete the legacy plain-slug map.** `docs/appmaps/web-app.notion.com.json` (19:13) sits beside
   `…cdp.json` (20:57) at identical size. LIMITATIONS §21 is precisely about a stale plain-slug file
   being silently picked up as an answer key.
