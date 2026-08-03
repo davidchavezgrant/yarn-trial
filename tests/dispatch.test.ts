@@ -985,3 +985,14 @@ test("parseUrlArg__MatchesTheMatrixArmsSpelling__When__TheOperatorTypesABareOrig
 	assert.equal("url" in parsed && parsed.url, "https://app.notion.com");
 	assert.equal(String("url" in parsed && parsed.url).endsWith("/"), false, "a trailing slash changes the run key");
 });
+
+test("dispatchCli__ParsesPerceptionFlagsOnExploreToo__When__AnOperatorGroundsOneArm", () => {
+	// The explore branch parsed NO perception flags, so `explore --url … --no-ax` submitted a
+	// baseline pass in silence — three grounding arms' worth of fleet time under the wrong
+	// label. Source-level like its sibling above, but scoped to the explore BRANCH rather than
+	// the file, because the task branch always had these and its presence hid the gap.
+	const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "remote", "control", "dispatch.ts"), "utf8");
+	const branch = src.slice(src.indexOf('if (argv[1] === "explore")'), src.indexOf('} else if (argv[1] === "replay")'));
+	for (const flag of ["--no-vision", "--no-ax", "--axdom-off", "--backend", "--model"])
+		assert.ok(branch.includes(`"${flag}"`), `the explore branch must let an operator set ${flag}`);
+});

@@ -878,8 +878,8 @@ function toHost(host: HostEntry | string, inv?: Inventory): HostEntry {
 
 const USAGE = `usage: dispatch <host|auto> "<task>" "<App>" [--backend ax|cdp] [--record] [--no-vision] [--no-ax] [--axdom-off] [--no-grounding] [--use-curated] [--use-recipes [--recipe-lineage grounded|ungrounded]] [--model <id>] [--no-cleanup] [--steps N] [--stall-steps N] [--snap-px N]
        dispatch <host|auto> "<task>" --url <https://site>
-       dispatch <host|auto> explore "<App>"
-       dispatch <host|auto> explore --url <https://site>
+       dispatch <host|auto> explore "<App>" [--backend ax|cdp] [--no-vision] [--no-ax] [--axdom-off] [--model <id>]
+       dispatch <host|auto> explore --url <https://site> [same perception flags]
        dispatch <host|auto> replay <procedure-file-or-stamp> [--no-rescue]
        dispatch <host> follow <jobId> [--from <byte>]
        dispatch <host> pull <jobId>
@@ -1022,7 +1022,33 @@ async function main(argv: string[]): Promise<number> {
 
 			return 2;
 		}
-		opts = { host, kind: "explore", app, ...(url ? { url } : {}) };
+		/**
+		 * The PERCEPTION flags, which this branch dropped entirely.
+		 *
+		 * Same defect as `--url` two commits ago and the same shape as `--backend` (19550e6):
+		 * `DispatchOptions` declares these, dispatch() puts them on the wire and the runner
+		 * builds them onto the explore child's argv — and the CLI's explore branch parsed none
+		 * of them, so `./run dispatch mac1 explore --url … --no-ax` submitted a BASELINE pass in
+		 * silence. Caught 2026-08-03 by reading the queued job records rather than the console:
+		 * four passes dispatched as two vision + one no-vision + one baseline all carried no
+		 * flags and an appmap path of `web-app.notion.com.md` — the plain slug — where a real
+		 * no-vision pass writes `web-app.notion.com.cdp.novision.md`.
+		 *
+		 * That is the failure this repo keeps paying for: three arms' worth of fleet time
+		 * producing correctly-shaped runs under the wrong label, detectable only by inspecting
+		 * an artifact path nobody looks at until collect.
+		 */
+		opts = {
+			host,
+			kind: "explore",
+			app,
+			...(url ? { url } : {}),
+			noVision: argv.includes("--no-vision"),
+			noAx: argv.includes("--no-ax"),
+			axdomOff: argv.includes("--axdom-off"),
+			...(argv.includes("--backend") ? { backend: argv[argv.indexOf("--backend") + 1] as "ax" | "cdp" } : {}),
+			...(argv.includes("--model") ? { model: argv[argv.indexOf("--model") + 1] } : {}),
+		};
 	} else if (argv[1] === "replay") {
 		if (!argv[2]) {
 			console.error(USAGE);
