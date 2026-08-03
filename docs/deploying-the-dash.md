@@ -181,6 +181,41 @@ export PATH="/Applications/Development/Docker.app/Contents/Resources/bin:$PATH"
 Worth fixing permanently by repointing the symlink or adding that line to the shell profile;
 diagnosed 2026-08-03, Docker 28.3.0 client and server.
 
+## THREE dashboards exist, and only one of them is live
+
+Read this before diagnosing anything the board shows. They render identical HTML from identical
+code, so a screenshot cannot tell you which one you are looking at — and on 2026-08-03 an agent
+session spent roughly two hours diagnosing chip colours against `localhost` while the operator
+was describing the droplet.
+
+| | URL | reads | live? |
+|---|---|---|---|
+| **Droplet — THE LIVE BOARD** | <https://167-172-249-246.sslip.io/> | the **orchestrator's own** `out/bench` | **yes** — real fleet, real manifest |
+| Local | `localhost:4642` via `./run dash --web` | **this laptop's** `out/bench` | only for passes this laptop drove |
+| Render | <https://yarn-bench-dash.onrender.com> | a snapshot baked into a Docker image | no — frozen at build time |
+
+**The droplet is the default answer to "what does the board say".** The orchestrator moved there,
+and `collect` pulls artifacts to whatever machine drives the pass, so the droplet's store is the
+one that fills up as a pass drains. A dash sitting beside it is public and live at once — which is
+why it needs `--share` without `--frozen` (see the flag note above).
+
+The trap is that all three are plausible. A laptop dash shows a REAL fleet poll (all three Macs,
+correct elapsed) because the fleet poll is ssh from wherever it runs — so a local board looks live
+while its manifest describes a different machine's work entirely. Symptoms of reading the wrong
+one: runs you know finished are absent, `running: 0` while `./run hosts` says busy, and the
+Pipeline timer frozen because every run in THAT store is terminal.
+
+Consequences worth stating plainly, because each cost time on 2026-08-03:
+
+- **Manifest edits are per-machine.** Backfilling entries on the laptop does nothing for the live
+  board. The Macs hold every run's artifacts, so the same backfill + `collect` has to be run on
+  the droplet to reach it.
+- **`./run bench collect` pulls to the machine it runs on.** Running it in two places races on
+  the same Macs; harmless but wasteful.
+- **The droplet is HEAD-dependent.** `ran` (c440878), the coverage rule (13aaa00) and the tab fix
+  (22a2f0a) all change what the board can report. A droplet on older code misreports exactly the
+  way an unprovisioned Mac does.
+
 ### Render — DEPLOYED 2026-08-03
 
 Live in the **Yarn** workspace (`tea-c9b5apvho1kjc8a5l9t0`), from a private image:

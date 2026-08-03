@@ -246,8 +246,10 @@ test("createJob__ListsTheAppmapGraph__When__TheJobIsAnExplorePass", async () => 
 		// Both halves, because the .json is what findScopeAmbiguities() reads: a pull that
 		// fetched only the prose would silently switch off the scope-collision warnings while
 		// every later run still looked grounded.
-		assert.equal(rec.artifacts.appmap, "docs/appmaps/notion-calendar.md");
-		assert.equal(rec.artifacts.appmapGraph, "docs/appmaps/notion-calendar.json");
+		// `.ax`, not the bare slug: an app target with no --backend RESOLVES to ax, and the
+		// record must name the file the pass will actually write. See the web case below.
+		assert.equal(rec.artifacts.appmap, "docs/appmaps/notion-calendar.ax.md");
+		assert.equal(rec.artifacts.appmapGraph, "docs/appmaps/notion-calendar.ax.json");
 
 		// A task run has neither — it consumes appmaps, it does not produce them.
 		const task = createJob({ id: "task-job", kind: "task", app: "Notion Calendar", task: "t", operator: "dave" }, dir);
@@ -2622,13 +2624,21 @@ test("createJob__NamesTheAppmapTheWayTheExploreWritesIt__When__TheTargetIsAWebUr
 	// completed 369-action Notion pass collected as "orphaned — no appmap", which would then
 	// have left phase 2's web-grounded arm ungrounded while still labelled grounded.
 	await withTempAsync("yr-jobs-", async (dir) => {
+		//
+		// THE BACKEND IS RESOLVED, NOT COPIED (2026-08-03). These assertions used to expect the
+		// bare slug, which is what jobs.ts produced when no --backend was passed — and it locked
+		// the bug in, because this test checks the RECORD against a hardcoded string rather than
+		// against what explore writes. The two disagreed in production: a 471-action Notion pass
+		// recorded `web-app.notion.com.md` and wrote `web-app.notion.com.cdp.md`, so `pull` —
+		// which fetches the paths the record names — brought home the stale 07-31 map and left
+		// the pass's own 391-node map on the Mac, reporting success either way.
 		const web = createJob({ id: "explore-web", kind: "explore", app: "https://app.notion.com", url: "https://app.notion.com", task: "", operator: "dave" }, dir);
-		assert.equal(web.artifacts.appmap, "docs/appmaps/web-app.notion.com.md");
-		assert.equal(web.artifacts.appmapGraph, "docs/appmaps/web-app.notion.com.json");
+		assert.equal(web.artifacts.appmap, "docs/appmaps/web-app.notion.com.cdp.md", "a web target with no --backend resolves to cdp");
+		assert.equal(web.artifacts.appmapGraph, "docs/appmaps/web-app.notion.com.cdp.json");
 
-		// An app target is unchanged — it never went through URL slugging.
+		// An app target resolves to ax — explore has no cdp fallback, so it never defaults to cdp.
 		const app = createJob({ id: "explore-app", kind: "explore", app: "Yarn", task: "", operator: "dave" }, dir);
-		assert.equal(app.artifacts.appmap, "docs/appmaps/yarn.md");
+		assert.equal(app.artifacts.appmap, "docs/appmaps/yarn.ax.md");
 
 		// A vision-only pass writes the `.vision` pair so it cannot overwrite the
 		// element-grounded map. Naming the plain file here made `pull` fetch the ELEMENT map
@@ -2636,8 +2646,12 @@ test("createJob__NamesTheAppmapTheWayTheExploreWritesIt__When__TheTargetIsAWebUr
 		// result, while phase 2's visionmap arm found no `.vision` map and silently ran
 		// ungrounded under a grounded label.
 		const vision = createJob({ id: "explore-vision", kind: "explore", app: "Yarn", task: "", operator: "dave", noAx: true }, dir);
-		assert.equal(vision.artifacts.appmap, "docs/appmaps/yarn.vision.md");
-		assert.equal(vision.artifacts.appmapGraph, "docs/appmaps/yarn.vision.json");
+		assert.equal(vision.artifacts.appmap, "docs/appmaps/yarn.ax.vision.md");
+		assert.equal(vision.artifacts.appmapGraph, "docs/appmaps/yarn.ax.vision.json");
+
+		// An EXPLICIT backend still wins over the resolved default.
+		const pinned = createJob({ id: "explore-pinned", kind: "explore", app: "Yarn", task: "", operator: "dave", backend: "cdp" }, dir);
+		assert.equal(pinned.artifacts.appmap, "docs/appmaps/yarn.cdp.md");
 	});
 });
 

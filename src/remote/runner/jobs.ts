@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { LIVE_DIR, RUN_FILES, appSlug, archiveRunDir, runRel } from "../../paths.js";
-import { appmapSlug } from "../../core/target.js";
+import { appmapSlug, defaultExploreBackend } from "../../core/target.js";
 import { mintRunKey } from "../../core/harness/run.js";
 import { readJsonOr } from "../../fsutil.js";
 import { outDir } from "../../paths.js";
@@ -318,7 +318,10 @@ function artifactsFor(id: string, init: JobInit): JobArtifacts {
 			visionOnly: Boolean(init.noAx),
 			noVision: Boolean(init.noVision),
 			axdomOff: Boolean(init.axdomOff),
-			...(init.backend ? { backend: init.backend } : {}),
+			// RESOLVE the backend the child will actually drive rather than recording only what
+			// the operator typed. Left absent, the slug came out unqualified while the pass wrote
+			// the qualified path, so `pull` fetched a stale map and stranded the new one.
+			backend: init.backend ?? defaultExploreBackend(Boolean(init.url)),
 		});
 
 		return {

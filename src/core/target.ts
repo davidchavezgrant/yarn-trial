@@ -162,6 +162,25 @@ export function isBrowserApp(name: string): boolean {
  * `visionOnly` selects the `.vision` pair a screenshots-only pass writes, which is a separate
  * artifact precisely so it cannot overwrite the element-grounded map.
  */
+/**
+ * The backend an EXPLORE pass drives when `--backend` was not given: web → cdp, app → ax.
+ *
+ * It lives beside `appmapSlug` because the two are read together and were drifting apart. The
+ * runner computes a job's declared appmap path from the SUBMITTED options, and left the backend
+ * out whenever the operator did — while the child resolved this default and wrote the qualified
+ * path. So `dispatch <mac> explore --url https://app.notion.com` recorded
+ * `web-app.notion.com.md` and the pass wrote `web-app.notion.com.cdp.md`, and `pull` — which
+ * fetches the paths the RECORD names — brought home a stale plain-slug map and left the map that
+ * pass had just produced on the Mac. Observed 2026-08-03 on a 471-action pass: 391 nodes stranded,
+ * the 07-31 map returned in their place, and nothing anywhere reported a failure.
+ *
+ * Deliberately NOT the task agent's default, which is cdp for both target kinds. Explore has no
+ * cdp→ax fallback and would hard-fail on an app whose debug port never opens, so the two commands
+ * genuinely differ — this names explore's rule only, and its one caller in the runner is the
+ * explore branch.
+ */
+export const defaultExploreBackend = (isWeb: boolean): "cdp" | "ax" => (isWeb ? "cdp" : "ax");
+
 export function appmapSlug(appOrUrl: string, opts: { visionOnly?: boolean; noVision?: boolean; axdomOff?: boolean; backend?: string } = {}): string {
 	// The BACKEND is part of the filename because a map is not backend-portable. The ax pass
 	// and the cdp pass name the same place differently — `editor` vs `draft-editor`, measured

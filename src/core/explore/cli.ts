@@ -1,4 +1,4 @@
-import { electronTarget, parseTarget, type Target, targetLabel } from "../target.js";
+import { defaultExploreBackend, electronTarget, parseTarget, type Target, targetLabel } from "../target.js";
 
 /**
  * Why a --no-ax combination is refused, or undefined when it is allowed. Pure, so the
@@ -56,7 +56,7 @@ export const parseCli = (
 	const guidance = target.kind === "web" ? positional[0] : positional[1];
 	// A web target defaults to cdp: it observes the page rather than the window, so the
 	// browser's own tab strip, omnibox and menu bar never reach the frontier.
-	const backendKind = backendIdx >= 0 ? (argv[backendIdx + 1] ?? "ax") : target.kind === "web" ? "cdp" : "ax";
+	const backendKind = backendIdx >= 0 ? (argv[backendIdx + 1] ?? "ax") : defaultExploreBackend(target.kind === "web");
 	// electronTarget on the cdp path, matching agent/cli.ts:73. Without cdpAttach the CDP
 	// backend never launches the app with a debug port — it only probes 9222 and fails — so an
 	// explore worked ONLY while some earlier flagged run had left the app running with one.
