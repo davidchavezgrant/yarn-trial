@@ -1639,3 +1639,17 @@ test("failureKind__SeparatesTheHarnessEndingARun__From__TheAgentsOwnVerdict", ()
 	// meaning precisely because the other two left it.
 	assert.equal(failureKind(undefined, { success: false }, true), "gave-up");
 });
+
+test("agentLoop__KeepsTheStallVerdict__When__ItStopsBeforeTheBackstop", () => {
+	// A dangling `if (!outcome)` — no braces — guarded a blank line, so the backstop assignment
+	// below it ran unconditionally and overwrote the stall verdict one line after it was set.
+	// Every stalled run reported "runaway backstop (100 steps) reached" having stopped at 8.
+	// The detection worked; its answer was destroyed, which looks exactly like a feature that
+	// was never built.
+	const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "core", "agent", "run.ts"), "utf8");
+	assert.match(src, /if \(!outcome\) \{/, "the backstop assignment must be BRACED, or it clobbers every earlier verdict");
+	// And the two exits must stay distinguishable, or the report cannot tell a stuck run from a
+	// long one — the whole reason stopReason exists.
+	assert.match(src, /stopReason: "stalled"/);
+	assert.match(src, /stopReason: "step-ceiling"/);
+});

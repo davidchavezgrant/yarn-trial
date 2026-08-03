@@ -895,10 +895,15 @@ export async function main(): Promise<void> {
 				break;
 			}
 		}
-		if (!outcome)
-
-		console.log(`\n=== runaway backstop (${MAX_STEPS} steps) reached without done ===`);
-		outcome = { success: false, summary: `runaway backstop (${MAX_STEPS} steps) reached`, stopReason: "step-ceiling" as const };
+		// Braces REQUIRED. Without them this `if` guarded nothing and the two statements below
+		// ran unconditionally, overwriting a stall verdict one line after it was set — so every
+		// stalled run reported "runaway backstop (100 steps) reached" while having stopped at 8.
+		// The detection worked; only its answer was destroyed, which is the failure mode that
+		// looks like the feature was never built.
+		if (!outcome) {
+			console.log(`\n=== runaway backstop (${MAX_STEPS} steps) reached without done ===`);
+			outcome = { success: false, summary: `runaway backstop (${MAX_STEPS} steps) reached`, stopReason: "step-ceiling" as const };
+		}
 	} catch (err) {
 		aborted = err;
 	} finally {
