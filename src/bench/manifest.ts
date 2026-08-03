@@ -200,14 +200,17 @@ export interface ManifestEntry {
 	state: string;
 	collected: boolean;
 	/**
-	 * This run produced NOTHING measurable — it died before writing its primary artifact, or the
-	 * runner was killed under it. Set by collect; see `technicalFailure`.
+	 * Something about this run is a fact about the HARNESS rather than the agent. Set by collect;
+	 * see `technicalFailure`.
 	 *
-	 * Such a run is not a data point about the agent, it is a data point about the harness, so it
-	 * must not consume one of the arm's samples. `submittedCount` skips these, which is the whole
-	 * mechanism: re-running `bench phase N --go` sees the arm short and re-submits it. The entry
-	 * STAYS in the manifest — "three runs died acquiring the app" is worth knowing, and silently
-	 * deleting the evidence would make a broken Mac look like a slow one.
+	 * Most kinds mean nothing was measured — it died before writing its primary artifact, or the
+	 * runner was killed under it — and those must not consume one of the arm's samples.
+	 * `submittedCount` skips them, which is the whole mechanism: re-running `bench phase N --go`
+	 * sees the arm short and re-submits. The entry STAYS in the manifest — "three runs died
+	 * acquiring the app" is worth knowing, and deleting the evidence would make a broken Mac look
+	 * like a slow one.
+	 *
+	 * `map-superseded` is the exception and is NOT retryable — see RETRYABLE_TECHNICAL.
 	 */
 	technical?: { kind: string; detail: string };
 	/** Pre-run env the runner must carry (e.g. APPMAP_VARIANT=vision) — see Arm.env. */
@@ -397,14 +400,29 @@ export const entriesForArm = (m: Manifest, armId: string, model?: string): Manif
 	m.entries.filter((e) => e.armId === armId && e.model === model);
 
 /**
+ * Technical kinds meaning NOTHING WAS MEASURED, so the sample slot must be refilled.
+ *
+ * `map-superseded` is deliberately absent (David, 2026-08-03). That run completed — frontier
+ * swept, a real map with real coverage written to its own run folder, which `writeArtifacts`
+ * always writes first at a path nothing can overwrite. The only thing it lacks is being the
+ * PUBLISHED map, and with n=2 samples sharing one `docs/appmaps/<slug>` filename exactly one of
+ * them can be, always. Counting it as a lost sample makes every two-sample arm permanently read
+ * 1/2, so each `bench phase --go` re-dispatches it, the replacement supersedes its sibling in
+ * turn, and the arm never converges. Observed live: explore-notion-cdp-no-vision sat at 1/2 with
+ * both of its runs finished and its 218-node map on disk.
+ */
+export const RETRYABLE_TECHNICAL: ReadonlySet<string> = new Set(["crashed", "orphaned", "unready", "never-ran"]);
+
+/**
  * How many samples an arm already has in this model's pass — the top-up arithmetic.
  *
- * Technical failures do not count. A run that crashed before producing anything says nothing
- * about the arm, so leaving it in the tally would silently shrink n: an arm declared n=3 whose
- * first attempt died on acquisition would go out with two real samples and report as complete.
+ * A run that died producing nothing says nothing about the arm, so leaving it in the tally would
+ * silently shrink n: an arm declared n=3 whose first attempt died on acquisition would go out
+ * with two real samples and report as complete. A run that finished and was merely superseded is
+ * the opposite case and counts.
  */
 export const submittedCount = (m: Manifest, armId: string, model?: string): number =>
-	entriesForArm(m, armId, model).filter((e) => !e.technical).length;
+	entriesForArm(m, armId, model).filter((e) => !e.technical || !RETRYABLE_TECHNICAL.has(e.technical.kind)).length;
 
 /**
  * Phase-2 gate: grounded arms read their own backend's phase-1 map, so a phase-1 explore

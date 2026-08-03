@@ -484,6 +484,40 @@ test("recordSubmissions__DropsDuplicates__When__SameArmAndJobRecordedTwice", () 
 	assert.equal(submittedCount(next, "ax-grounded", BENCH_PRIMARY_MODEL), 2);
 });
 
+/**
+ * The top-up must converge. n=2 samples share ONE docs/appmaps/<slug> filename, so exactly one
+ * of them is ever the published map and the other is flagged `map-superseded` — every time,
+ * structurally. Treating that as a lost sample leaves the arm reading 1/2 forever: each
+ * `bench phase --go` re-dispatches it, the replacement supersedes its sibling, and it never
+ * finishes. Seen live on explore-notion-cdp-no-vision with both runs done and its map on disk.
+ */
+test("submittedCount__CountsTheRun__When__ItsMapWasMerelySuperseded", () => {
+	const m: Manifest = {
+		date: DATE,
+		createdAt: "",
+		entries: [
+			entry("ax-grounded", "j1", { collected: true, state: "done" }),
+			entry("ax-grounded", "j2", { collected: true, state: "done", technical: { kind: "map-superseded", detail: "ran to completion; another pass holds the published map" } }),
+		],
+	};
+	assert.equal(submittedCount(m, "ax-grounded", BENCH_PRIMARY_MODEL), 2, "a finished-but-superseded run is a real sample");
+});
+
+/** The kinds that mean nothing was measured still free their slot — that is the retry mechanism. */
+test("submittedCount__FreesTheSlot__When__TheRunDiedProducingNothing", () => {
+	for (const kind of ["crashed", "orphaned", "unready", "never-ran"]) {
+		const m: Manifest = {
+			date: DATE,
+			createdAt: "",
+			entries: [
+				entry("ax-grounded", "j1", { collected: true, state: "done" }),
+				entry("ax-grounded", "j2", { collected: true, state: "failed", technical: { kind, detail: "x" } }),
+			],
+		};
+		assert.equal(submittedCount(m, "ax-grounded", BENCH_PRIMARY_MODEL), 1, `${kind} must not consume a sample`);
+	}
+});
+
 test("updateEntry__ReplacesByKey__When__ArmAndJobMatch", () => {
 	const m: Manifest = { date: DATE, createdAt: "", entries: [entry("ax-grounded", "j1"), entry("ax-grounded", "j2")] };
 	const next = updateEntry(m, entry("ax-grounded", "j2", { collected: true, state: "done" }));
