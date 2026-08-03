@@ -8,9 +8,13 @@
 # WHY A WRAPPER AND NOT JUST `bench autopilot`. The autopilot already orders the stages, gates
 # each one on its declared prerequisites, retries what technical failures freed, and collects and
 # judges at the end. What it cannot do is survive the terminal that started it: it is a foreground
-# process, so closing the laptop, dropping the VPN or ending an agent session takes the pass with
-# it — mid-dispatch, with runs on the fleet and nothing left watching to collect them. This adds
-# exactly the three things that makes it walk-away safe:
+# process, so closing the terminal, dropping the ssh connection or ending an agent session takes
+# the pass with it — mid-dispatch, with runs on the fleet and nothing left watching to collect
+# them. This adds the four things that make walking away safe:
+#
+# The one thing it CANNOT fix is that the driver runs on this machine. Sleep pauses the pass and
+# it resumes on wake; a shutdown ends it and the Macs drain what is queued. See the caffeinate
+# block near the launch, and the closing note the script prints.
 #
 #   1. DETACHED. nohup plus a subshell that exits, so no SIGHUP reaches it and it is reparented
 #      to pid 1. The pass keeps going when the terminal, the ssh session or the agent goes away.
@@ -20,6 +24,8 @@
 #   3. LOCKED. One pass at a time. A second launch would double-dispatch every arm — the
 #      manifest's top-up semantics protect against a re-run AFTER a pass, not against two
 #      passes racing the same arm counts.
+#   4. AWAKE. An idle-sleep assertion held for exactly the driver's lifetime, because a napping
+#      laptop is the likeliest way an unattended pass quietly stops making progress.
 #
 # WHAT IT DOES NOT DO, deliberately: cursor compositing (`npm run humanize -- <stamp>`) stays
 # manual, and so does anything that publishes. Collecting late is safe and idempotent — the
