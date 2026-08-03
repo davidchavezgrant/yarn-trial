@@ -164,6 +164,40 @@ Full detail: `session-roaming.md` (the post-mortem, with corrections),
 `docs/research/2026-07-31-session-roaming-deep-research.md` (what the industry does),
 `docs/research/2026-07-30-cloud-vm-authentication-brief.md` (the cloud framing).
 
+## How much of this is reusable — about a third
+
+The prototype is 49,412 lines of TypeScript plus 28,169 of tests, which is a fair amount to
+hand over, so it's worth saying plainly which parts a production build would keep. Line counts
+measured; the buckets are my judgement, and `scripts/loc-buckets.sh` re-derives the table so it
+can be argued with rather than trusted.
+
+| | lines | share | |
+|---|---|---|---|
+| **Ships** | 15,547 | 31% | The engine: agent loop, the verification layers, grounding, journal/teardown, procedures and recipes, the CDP driving mode |
+| **Design ports, code rewritten** | 7,798 | 15% | Job queue, run leasing, per-operator isolation, watching a run live — production concerns solved in a colo-Mac-specific way |
+| **Keep as regression tooling** | 5,553 | 11% | The benchmark harness. Not shipped, not waste: it produced every number above and caught five measurement errors |
+| **Scaffolding** | 20,514 | 41% | Fleet administration over SSH (7.2k), the trial's own UI (5.0k), the results dashboards (4.7k), the cursor renderer (1.9k) |
+
+Three things are worth pulling out of that:
+
+- **The checking is bigger than the agent** — 4,131 lines of verification against 2,370 lines of
+  decision loop. That ratio is why the numbers in this document are believable; a thinner agent
+  would have been faster to write and worth less.
+- **The cursor renderer was built to prove a claim, not to ship.** Yarn already composites
+  cursors in post. The 83 lines production needs are the ones that emit the motion feed; the
+  other 1,850 are the argument that the feed is sufficient, which is now settled.
+- **Dropping the AX driving mode removes a dependency.** If production targets Electron and web
+  only, `cua-driver` goes, leaving two runtime dependencies, and the accessibility-bridge
+  workaround for unnamed buttons becomes unnecessary — a first-party app can just expose stable
+  element identity.
+
+The part that ports best isn't code at all: `LIMITATIONS.md`, the revisit-if conditions on each
+architecture decision, and the rule that measurement discipline is enforced by the tool rather
+than by anyone remembering. Those encode failures a rewrite would pay for twice.
+
+Full detail, including what a production build has to *add* that this never needed:
+`docs/research/2026-08-03-what-ports-to-production.md`.
+
 ## What we didn't learn
 
 - **Whether a map built from screenshots alone is useful.** That run went out without its map and
@@ -177,6 +211,10 @@ Full detail: `session-roaming.md` (the post-mortem, with corrections),
   screenshots-only mode.** Built, not yet run.
 - **Whether the script-writing runs would finish with more steps.** Three hit a step limit while
   still making progress. Limit removed, re-runs outstanding.
+- **How much of the reusable-code estimate above survives contact with Yarn's own services.** The
+  7,798-line "rewrite" bucket is job queueing, leasing and host management — all of which Yarn
+  may already have. This was scoped without access to that repo, so the figure is the honest
+  outside view and no more.
 
 ## What to build
 
