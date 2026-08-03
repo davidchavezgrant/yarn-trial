@@ -5,8 +5,11 @@ the fleet rsyncs the checkout per phase. Moving HEAD mid-pass is the defect the 
 just wrote up.
 
 **Target**: `app.notion.com` in Chrome. David's call (2026-08-03), and the brief's own example —
-Jasper named Notion Calendar as the canonical case. GitHub Desktop was drafted first and is kept
-as an appendix, because two things it surfaced are worth keeping on record.
+Jasper named Notion Calendar as the canonical case.
+
+**Stage, not phase 8**: phase 8 was taken by the harness diagnostics arms (`b02ac5a`) while this
+was being drafted. This slice is the *generalization* stage under the reorganization in
+`docs/plans/2026-08-03-phase-reorganization.md`; the collision is why that document exists.
 
 **Why a second app at all**: the matrix is at its ceiling (11 of 15 phase-2 arms at 3/3), and
 nothing in 203 runs touches cross-app transfer. Every finding — CDP beats AX, lean beats rich, the
@@ -28,10 +31,10 @@ Three checks against the code and the existing artifacts, because each one moves
 }
 ```
 
-So on Notion web the backend axis is **gone**. Four of the six arms drafted for GitHub Desktop —
-`ax-ungrounded`, `ax-grounded`, `ax-grounded-axdom-off`, `min-context-grounded` — are impossible by
-construction, not merely worse. "Is grounding backend-dependent?" cannot be re-tested here. If that
-question matters more than the brief's app, the target has to be an installed Electron app instead.
+So on Notion web the backend axis is **gone**. Every ax-based cell — `ax-ungrounded`,
+`ax-grounded`, `ax-grounded-axdom-off`, `min-context-grounded` — is impossible by construction, not
+merely worse. "Is grounding backend-dependent?" cannot be re-tested here. If that question matters
+more than the brief's app, the target has to be an installed Electron app instead.
 
 **2. Vision-only still works.** The throw sits in the non-cdp branch, so `cdp + noAx` is reachable.
 The vision-only arms transfer intact.
@@ -204,36 +207,15 @@ Re-running is the clean call; if the 1h14m is not affordable, reuse it and label
 
 ### The honest limits of this evidence
 
-- **No backend comparison.** Stated above; it is the price of the target.
+- **No backend comparison.** Stated above; it is the price of the target. Re-testing the AX axis on
+  a second app needs an *installed Electron* target, and the fleet inventory is thin: besides Yarn,
+  only Claude is present on all three Macs (Cursor is mac1-only, Codex mac2/mac3-only). If the AX
+  axis matters more than the brief's app, that is the constraint to design against.
 - **Notion web is a browser tab, not an app with AX permissions.** This measures transfer to another
   Chromium DOM surface — the class the cdp backend was built for. It does not test the class
   boundary (native, custom-drawn), and it does not test the AX path at all.
 - **n=3 against a ceiling, still.** If Notion also comes back 3/3 across the board, the result is
   "the method survives a bigger app", which is worth knowing and is not a comparison.
-
-### Appendix — GitHub Desktop, considered and set aside
-
-Recorded rather than deleted, the way `matrix.ts:140` recorded Notion, because two findings outlive
-the decision.
-
-**Fleet inventory** (read-only ssh, 2026-08-03) — only GitHub Desktop and Claude are Electron *and*
-installed on all three Macs:
-
-| app | mac1 | mac2 | mac3 |
-|---|---|---|---|
-| Yarn, Claude, GitHub Desktop, Chrome, Safari | ✓ | ✓ | ✓ |
-| Cursor | ✓ | — | — |
-| Codex | — | ✓ | ✓ |
-| Warp | ✓ | ✓ | — |
-| After Effects, Cinema 4D | ✓ | — | — |
-
-**The idea worth keeping**: git config is global (`~/.gitconfig`) or repository-local
-(`<repo>/.git/config`) — the same dual-scope shape as Yarn's brand-vs-document override, except the
-two scopes write to **two different files**. That would have made it the only task in the matrix
-whose correctness could be settled by reading a file instead of asking a model, which is
-LIMITATIONS §8 — the standing blocker on every correctness claim here. If the wrong-scope question
-ever needs an objective answer, this is where to get one. An Electron target also keeps the AX
-backend, which Notion web cannot.
 
 ---
 
