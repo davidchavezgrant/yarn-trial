@@ -25,17 +25,34 @@ export function envNum(name: string, fallback: number): number {
  * Names retired by the 2026-08-03 recipe/procedure swap, mapped to what replaced them.
  *
  * The words changed meaning rather than disappearing: a PROCEDURE is now machine-readable steps
- * and a RECIPE is now prose, which is the reverse of what these four names assumed. So a stale
+ * and a RECIPE is now prose, which is the reverse of what every name below assumed. So a stale
  * `USE_PROCEDURES=1` — typed from memory, or copied out of a plan written before the rename — is
  * not a typo that fails; it is a variable nothing reads, and the run quietly grounds on the appmap
  * tier instead. Clean logs, plausible numbers, wrong label. That exact shape has cost this project
  * a full benchmark pass more than once, so a retired name is fatal rather than ignored.
+ *
+ * The test of membership is mechanical and worth restating, because two names were missed for
+ * days: a name belongs here when SOMETHING READS ITS REPLACEMENT AND NOTHING READS IT. Both
+ * halves matter. `RECIPE_SETTLE_MS` and `PROCEDURE_MODEL` were renamed with the swap and left out
+ * of this map, so setting either did what an unset variable does — replay took the 900ms default
+ * and a harvest ran on the default model — which is the same silence the map exists to break.
+ *
+ * The right-hand side must name something that IS READ, or the guard trades one silent no-op for
+ * another. It said `RECIPE_RESCUE -> PROCEDURE_RESCUE`, and nothing anywhere reads
+ * PROCEDURE_RESCUE (only a doc comment in src/core/replay.ts mentions it): an operator who obeyed
+ * the error set a variable with no reader and rescue stayed on, which is worse than the original
+ * mistake because the guard vouched for it. Rescue is disabled by the `--no-rescue` flag or by
+ * supplying no model client, so the flag is what this points at. A knob was NOT invented to
+ * match the old name — a per-invocation policy belongs on the command line, and inventing an env
+ * reader to satisfy a migration message would be the tail wagging the dog.
  */
 const RETIRED_ENV: Record<string, string> = {
 	USE_RECIPE: "USE_CURATED",
 	USE_PROCEDURES: "USE_RECIPES",
 	PROCEDURE_LINEAGE: "RECIPE_LINEAGE",
-	RECIPE_RESCUE: "PROCEDURE_RESCUE",
+	RECIPE_SETTLE_MS: "PROCEDURE_SETTLE_MS",
+	PROCEDURE_MODEL: "RECIPE_MODEL",
+	RECIPE_RESCUE: "the --no-rescue flag (no env var replaces it; PROCEDURE_RESCUE is read by nothing)",
 	RECIPE_RESCUE_STEPS: "PROCEDURE_RESCUE_STEPS",
 };
 

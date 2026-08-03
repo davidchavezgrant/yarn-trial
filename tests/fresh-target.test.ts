@@ -356,9 +356,11 @@ test("snapDiagnostic__SeparatesSpatialFromSemantic__When__AVisionOnlyStepMisses"
 	 *   SEMANTIC — the point landed on exactly the declared control and the step still failed.
 	 *              Wrong choice; refinement cannot help.
 	 *
-	 * Asserted over the source because the computation lives inside executeAction's closure,
-	 * where exercising it needs a driver, an overlay and a recording mutex. What matters is the
-	 * geometry: distance to the RECT (zero inside it), and a normalised name comparison.
+	 * The GEOMETRY is asserted over the source here — distance to the RECT (zero inside it) and a
+	 * normalised name comparison — because a formula is what these lines are for. What the source
+	 * cannot show is which element came out, and asserting only this is what let a wrong-element
+	 * actuation and a wrong-container tie-break both pass: the selection has since been lifted to
+	 * module scope (snapPick/applySnap) and is driven for real in tests/snap.test.ts. Keep both.
 	 */
 	const src = fs.readFileSync(path.resolve(import.meta.dirname, "..", "src", "core", "agent", "step.ts"), "utf8");
 	// Distance must be to the rect, not to its centre — a wide toolbar's centre is far from a
@@ -368,5 +370,5 @@ test("snapDiagnostic__SeparatesSpatialFromSemantic__When__AVisionOnlyStepMisses"
 	assert.match(src, /snapMatchesDeclared/, "the declared-vs-hit comparison IS the decomposition");
 	// And the diagnostic must be inert unless SNAP_PX asks for it, or every existing arm moves.
 	assert.match(src, /const snapPx = Number\(process\.env\.SNAP_PX \?\? 0\)/);
-	assert.match(src, /if \(snapPx > 0 && snap/, "snapping must be opt-in");
+	assert.match(src, /if \(snapPx > 0 && picked/, "snapping must be opt-in");
 });

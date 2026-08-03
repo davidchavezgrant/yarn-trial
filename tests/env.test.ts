@@ -51,6 +51,30 @@ test("refuseRetiredEnv__Throws__When__ARetiredTierNameIsSet", () => {
 	assert.throws(() => refuseRetiredEnv({ PROCEDURE_LINEAGE: "ungrounded" }), /RECIPE_LINEAGE/);
 });
 
+test("refuseRetiredEnv__Throws__When__ARenamedKnobWouldSilentlyNoOp", () => {
+	// Neither of these is a tier name, which is why both were missed for days — and a knob that
+	// no longer has a reader is the same silence as a tier that no longer has one: replay took
+	// its 900ms settle default under RECIPE_SETTLE_MS, and a harvest ran on the default model
+	// under PROCEDURE_MODEL. Both look like an operator's setting being honoured.
+	assert.throws(() => refuseRetiredEnv({ RECIPE_SETTLE_MS: "0" }), /RECIPE_SETTLE_MS -> PROCEDURE_SETTLE_MS/);
+	assert.throws(() => refuseRetiredEnv({ PROCEDURE_MODEL: "anthropic/claude-opus-4" }), /PROCEDURE_MODEL -> RECIPE_MODEL/);
+});
+
+test("refuseRetiredEnv__NamesAMechanismThatIsRead__When__TheReplacementIsNotAnEnvVar", () => {
+	// The right-hand side has to have a reader or the guard swaps one silent no-op for another.
+	// It said RECIPE_RESCUE -> PROCEDURE_RESCUE, and nothing reads PROCEDURE_RESCUE: an operator
+	// who obeyed the error set a variable with no reader, rescue stayed on, and the guard had
+	// vouched for it. `--no-rescue` (or supplying no model client) is the actual disable.
+	let message = "";
+	try {
+		refuseRetiredEnv({ RECIPE_RESCUE: "0" });
+	} catch (err) {
+		message = err instanceof Error ? err.message : String(err);
+	}
+	assert.match(message, /--no-rescue/);
+	assert.equal(/-> PROCEDURE_RESCUE/.test(message), false, "pointing at a variable with no reader re-creates the trap");
+});
+
 test("refuseRetiredEnv__Passes__When__OnlyCurrentNamesAreSet", () => {
 	// Blank counts as unset, matching envNum: a plist that interpolates an unset shell
 	// variable produces "", and that must not be read as an operator's intent.

@@ -92,6 +92,101 @@ export interface StepContext {
 }
 
 /**
+ * The six snap fields exactly as the run log carries them, taken FROM the record type instead of
+ * restated: producer and record must be the same six, or a field added in src/types.ts is typed
+ * on StepRecord and written by nothing — which is the failure shape `targetSurface` already had
+ * here (read for months before anything wrote it).
+ */
+type SnapDiagnostic = Required<Pick<StepRecord, "snapName" | "snapRole" | "snapDistancePx" | "snapInside">> &
+	Pick<StepRecord, "snapMatchesDeclared" | "snapApplied">;
+
+/**
+ * What a coordinate action's point resolves to in the element list: the ELEMENT the geometry
+ * chose, and the diagnostic recorded about it.
+ *
+ * Both together, because they are one decision. Keeping only the diagnostic is what produced a
+ * live mis-actuation: the caller re-found the element by (snapName, snapRole) and acted on
+ * whatever came back first — see applySnap for why that is never the same question.
+ *
+ * Module scope and exported deliberately. This lived inside executeAction's closure, where the
+ * only available assertion was a regex over this file's source (tests/fresh-target.test.ts said
+ * as much), and a source regex cannot see WHICH element got picked — so a wrong-element bug and a
+ * wrong-container bug both sat under a green suite. tests/snap.test.ts drives it directly now.
+ */
+export interface SnapPick {
+	e: InteractiveElement;
+	snap: SnapDiagnostic;
+}
+
+/**
+ * Nearest interactive control to a coordinate action's point, or undefined when the action
+ * carries no point (element-addressed actions, key presses, drags) or the list is empty.
+ */
+export function snapPick(action: unknown, interactive: InteractiveElement[]): SnapPick | undefined {
+	const a = (action ?? {}) as Record<string, unknown>;
+	const ax = Number(a.x);
+	const ay = Number(a.y);
+	if (!Number.isFinite(ax) || !Number.isFinite(ay)) return undefined;
+	let best: { e: InteractiveElement; d: number; area: number } | undefined;
+	for (const e of interactive) {
+		if (!(e.w > 0 && e.h > 0)) continue;
+		// Distance to the RECT, zero when the point is inside it.
+		const dx = Math.max(e.x - ax, 0, ax - (e.x + e.w));
+		const dy = Math.max(e.y - ay, 0, ay - (e.y + e.h));
+		const d = Math.hypot(dx, dy);
+		const area = e.w * e.h;
+		/**
+		 * Ties break on AREA, smallest first — and a tie is the COMMON case, not an edge one:
+		 * every rect containing the point scores 0.
+		 *
+		 * `interactive` arrives in tree order and a container counts as interactive whenever it
+		 * is merely styled clickable (`cursor=pointer`, src/backends/cdp.ts), so strict `<`
+		 * handed a click inside a button inside a clickable wrapper to the WRAPPER — an ancestor
+		 * whose press does something else, or nothing at all. The innermost control under the
+		 * point is what the model meant by aiming there, which is also how actionTarget resolves
+		 * containment (src/core/harness/gates.ts) — the two must not disagree about the same
+		 * point, because the step record's target comes from one and the actuation from the other.
+		 */
+		if (!best || d < best.d || (d === best.d && area < best.area)) best = { e, d, area };
+	}
+	if (!best) return undefined;
+	const declared = (a as { target?: { name?: string } }).target?.name;
+	const norm = (v: string): string => v.trim().toLowerCase();
+
+	return {
+		e: best.e,
+		snap: {
+			snapName: best.e.name,
+			snapRole: best.e.role,
+			snapDistancePx: Math.round(best.d),
+			snapInside: best.d === 0,
+			...(declared ? { snapMatchesDeclared: norm(best.e.name) === norm(declared) } : {}),
+		},
+	};
+}
+
+/**
+ * Re-address a coordinate action at the element the geometry picked, by HANDLE.
+ *
+ * Takes the ELEMENT, never its (name, role). A re-lookup by identity returns the FIRST match,
+ * which need not be the one the geometry chose, and both ways it goes wrong are already
+ * documented in this repo: same-name twins (Yarn's two "New Draft" controls, see targetOrdinal
+ * below) and — far worse — EMPTY names, which is the ordinary shape of a CDP settings control
+ * (`combobox [ref=..]` with no name at all, tests/cdp.test.ts). With `snapName === ""` the
+ * lookup matched the first nameless combobox in the whole tree, so the agent actuated an
+ * unrelated control while the run log recorded `snapApplied: true`: a wrong click that reads as
+ * a clean one, on the arm whose entire purpose is to measure whether snapping helps.
+ */
+export function applySnap(action: Record<string, unknown>, hit: InteractiveElement, cdp: boolean): void {
+	delete action.x;
+	delete action.y;
+	// One field, two dialects: `handle` is an element_index on the ax path and a ref on
+	// cdp, exactly as the observation produced it.
+	if (cdp) action.ref = hit.handle;
+	else action.element_index = hit.handle;
+}
+
+/**
  * Execute one accepted act call: dispatch it, settle, re-observe, verify, record the step,
  * and journal what it changed. The gates that can reject the call unexecuted (no action
  * object, no checkable expectation, element_index in a vision-only run) run in the caller,
@@ -124,9 +219,73 @@ export async function executeAction(
 	// before anything downstream could read them back.
 	const prevObs = ls.obs;
 	const prevFrames = ls.obs.frames;
+	/**
+	 * PIXEL-SNAP DIAGNOSTIC — recorded on every coordinate-addressed step, whether or not the
+	 * snap stage below is switched on.
+	 *
+	 * A vision-only step addresses by screenshot pixel and declares which control it MEANT
+	 * (VISION_ACT_TOOL requires `target` for coverage). Those two facts together decompose the
+	 * condition's 75% target-never-appeared rate into two failures with opposite remedies:
+	 *
+	 *   SPATIAL  — the point landed on a different control than the one declared. The model
+	 *              identified the right thing and missed its pixels. A visual snap stage (the
+	 *              analogue of the redaction pipeline's snap·prune·size, which works on image
+	 *              structure rather than an element list) would plausibly rescue the condition.
+	 *   SEMANTIC — the point landed on exactly the control the model named, and the step still
+	 *              failed. It chose wrong, and no amount of refinement helps.
+	 *
+	 * We could not tell these apart, and the answer decides whether the bigger build is worth
+	 * doing at all. So the diagnostic is computed unconditionally — the harness holds the element
+	 * list even in vision-only mode (observation.ts: "the isolation is of what the model
+	 * perceives, not of what the run can prove"), so it costs one pass over an array — and with
+	 * SNAP_PX unset it changes no behaviour whatsoever.
+	 */
+	const picked = snapPick(input.action, ls.obs.interactive);
+	const snap = picked?.snap;
+	/**
+	 * THE SNAP STAGE. Opt-in via SNAP_PX; off by default so no existing arm moves.
+	 *
+	 * The redaction pipeline reads `detect (AI) -> track -> snap·prune·size -> render`: the
+	 * vision model's box is a HYPOTHESIS and four stages refine it before anything is drawn.
+	 * Vision-only UI driving had no middle — the model's pixel went straight to a click — which
+	 * is the whole of the gap between 75% target-never-appeared with pixels alone and 11% with
+	 * element addressing.
+	 *
+	 * So: treat the model's point as a hypothesis too. If it lands on (or within SNAP_PX of) an
+	 * interactive control, act on THAT CONTROL by handle instead of on the raw coordinate. The
+	 * model still reasons entirely from pixels; only the actuation is refined.
+	 *
+	 * What this is NOT: a solution for an app with no element channel. Snapping to elements
+	 * presupposes elements, and vision-only exists to ask what happens without them. The
+	 * genuine analogue for that case snaps to IMAGE structure — edges, contrast, widget-shaped
+	 * regions — and is a much larger build. This is the tractable half, and it is the one that
+	 * matches Yarn's own deployment target, an Electron app with a DOM.
+	 *
+	 * READ THIS BEFORE "FIXING" IT: the arm is an UPPER BOUND, and its confound is known and
+	 * deliberate. A 48px miss can be confidently retargeted to a control the model never named,
+	 * so some of what this arm scores is the harness picking correctly rather than the model
+	 * aiming correctly. Gating the rewrite on `snapMatchesDeclared !== false` was considered and
+	 * REJECTED: a veto turns the measurement into one of the harness's veto rate, not of
+	 * vision-only actuation, and it would silently discard exactly the SPATIAL rescues the stage
+	 * exists to test. Instead `snapMatchesDeclared` is recorded on every snapped step, so the
+	 * confound is measurable after the fact — visible in the data rather than hidden by a gate.
+	 */
+	const snapPx = Number(process.env.SNAP_PX ?? 0);
+	if (snapPx > 0 && picked && picked.snap.snapDistancePx <= snapPx) {
+		applySnap(input.action as Record<string, unknown>, picked.e, !!cdp);
+		picked.snap.snapApplied = true;
+	}
 	// Resolved HERE, against the observation the model actually chose from: `obs` is
 	// reassigned to the post-action observation below, and element handles are only
 	// meaningful in the snapshot that produced them.
+	//
+	// And AFTER the snap, which is what makes a snapped step indistinguishable from one that
+	// addressed the element directly: the rewrite above put a handle on the action, so this
+	// resolves the element that will actually be actuated and every target field below
+	// (targetName/Role/Rect/Surface/Ordinal, the trajectory's click point, channel attribution,
+	// procedure harvest) is populated from it. Resolving before the snap left `target`
+	// undefined on precisely the steps the snap had just given a target, so a snapped step
+	// looked target-less to every downstream consumer.
 	const target = actionTarget(input.action, ls.obs);
 	/**
 	 * Which of several identical twins this action operated, 0-based — recorded ONLY when
@@ -148,84 +307,6 @@ export async function executeAction(
 
 		return at >= 0 ? at : undefined;
 	})();
-	/**
-	 * PIXEL-SNAP DIAGNOSTIC — recorded, never acted on.
-	 *
-	 * A vision-only step addresses by screenshot pixel and declares which control it MEANT
-	 * (VISION_ACT_TOOL requires `target` for coverage). Those two facts together decompose the
-	 * condition's 75% target-never-appeared rate into two failures with opposite remedies:
-	 *
-	 *   SPATIAL  — the point landed on a different control than the one declared. The model
-	 *              identified the right thing and missed its pixels. A visual snap stage (the
-	 *              analogue of the redaction pipeline's snap·prune·size, which works on image
-	 *              structure rather than an element list) would plausibly rescue the condition.
-	 *   SEMANTIC — the point landed on exactly the control the model named, and the step still
-	 *              failed. It chose wrong, and no amount of refinement helps.
-	 *
-	 * We cannot currently tell these apart, and the answer decides whether the bigger build is
-	 * worth doing at all. So: record what the point WOULD have snapped to and leave the run
-	 * untouched — the harness holds the element list even in vision-only mode (observation.ts:
-	 * "the isolation is of what the model perceives, not of what the run can prove"), so this
-	 * costs one pass over an array and changes no behaviour.
-	 */
-	const snap = ((): { snapName: string; snapRole: string; snapDistancePx: number; snapInside: boolean; snapMatchesDeclared?: boolean; snapApplied?: boolean } | undefined => {
-		const ax = Number((input.action as Record<string, unknown>).x);
-		const ay = Number((input.action as Record<string, unknown>).y);
-		if (!Number.isFinite(ax) || !Number.isFinite(ay)) return undefined;
-		let best: { e: InteractiveElement; d: number } | undefined;
-		for (const e of ls.obs.interactive) {
-			if (!(e.w > 0 && e.h > 0)) continue;
-			// Distance to the RECT, zero when the point is inside it.
-			const dx = Math.max(e.x - ax, 0, ax - (e.x + e.w));
-			const dy = Math.max(e.y - ay, 0, ay - (e.y + e.h));
-			const d = Math.hypot(dx, dy);
-			if (!best || d < best.d) best = { e, d };
-		}
-		if (!best) return undefined;
-		const declared = (input.action as { target?: { name?: string } }).target?.name;
-		const norm = (v: string): string => v.trim().toLowerCase();
-
-		return {
-			snapName: best.e.name,
-			snapRole: best.e.role,
-			snapDistancePx: Math.round(best.d),
-			snapInside: best.d === 0,
-			...(declared ? { snapMatchesDeclared: norm(best.e.name) === norm(declared) } : {}),
-		};
-	})();
-	/**
-	 * THE SNAP STAGE. Opt-in via SNAP_PX; off by default so no existing arm moves.
-	 *
-	 * The redaction pipeline reads `detect (AI) -> track -> snap·prune·size -> render`: the
-	 * vision model's box is a HYPOTHESIS and four stages refine it before anything is drawn.
-	 * Vision-only UI driving had no middle — the model's pixel went straight to a click — which
-	 * is the whole of the gap between 75% target-never-appeared with pixels alone and 11% with
-	 * element addressing.
-	 *
-	 * So: treat the model's point as a hypothesis too. If it lands on (or within SNAP_PX of) an
-	 * interactive control, act on THAT CONTROL by handle instead of on the raw coordinate. The
-	 * model still reasons entirely from pixels; only the actuation is refined.
-	 *
-	 * What this is NOT: a solution for an app with no element channel. Snapping to elements
-	 * presupposes elements, and vision-only exists to ask what happens without them. The
-	 * genuine analogue for that case snaps to IMAGE structure — edges, contrast, widget-shaped
-	 * regions — and is a much larger build. This is the tractable half, and it is the one that
-	 * matches Yarn's own deployment target, an Electron app with a DOM.
-	 */
-	const snapPx = Number(process.env.SNAP_PX ?? 0);
-	if (snapPx > 0 && snap && snap.snapDistancePx <= snapPx) {
-		const hit = ls.obs.interactive.find((e) => e.name === snap.snapName && e.role === snap.snapRole);
-		if (hit) {
-			const a = input.action as Record<string, unknown>;
-			delete a.x;
-			delete a.y;
-			// One field, two dialects: `handle` is an element_index on the ax path and a ref on
-			// cdp, exactly as the observation produced it.
-			if (cdp) a.ref = hit.handle;
-			else a.element_index = hit.handle;
-			snap.snapApplied = true;
-		}
-	}
 	const prevShot = ls.lastShot;
 	while (sync.busy) await new Promise((r) => setTimeout(r, 50));
 	sync.busy = true;
@@ -477,8 +558,14 @@ export async function executeAction(
 		 * Absent for vision-only steps and for actions that name no element (key presses,
 		 * raw coordinate clicks): those did not choose from the list at all, and scoring them
 		 * as index 0 would fake shallow attention.
+		 *
+		 * A SNAPPED step is one of those, and it now carries an element_index the model never
+		 * saw — the snap stage put it there. Attributing that index to the model's attention
+		 * would credit a vision-only arm with reaching into a list it was never shown, and the
+		 * snap arms are exactly where the reach statistics get read. The snap fields say what
+		 * happened instead.
 		 */
-		...(typeof input.action.element_index === "number" && prevObs.interactive.length > 0
+		...(!snap?.snapApplied && typeof input.action.element_index === "number" && prevObs.interactive.length > 0
 			? { chosenIndex: input.action.element_index, chosenDepth: input.action.element_index / prevObs.interactive.length }
 			: {}),
 		// Demo steps record the FRESH target — the geometry that was actually clicked and

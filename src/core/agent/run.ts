@@ -52,18 +52,26 @@ import { type DriverSync, finishRecording, newRecording, startRecording } from "
 import { executeAction, type StepLoopState } from "./step.js";
 
 /**
- * A RUNAWAY BACKSTOP, not a budget (David, 2026-08-03).
+ * THE STOPPING CONTRACT (David, 2026-08-03). A run ends exactly three ways, and the run log
+ * names which one in `stopReason` so collect can tell them apart (src/bench/collect.ts):
+ *
+ *   success           — the model called done and gradeDone accepted the evidence.
+ *   "stalled"         — STALL_STEPS (8 by default, AGENT_STALL_STEPS) consecutive steps
+ *                       verified nothing. This is the ONLY mechanical reading of "it truly
+ *                       cannot proceed", and it is the stop that ends genuinely stuck runs.
+ *   "step-ceiling"    — MAX_STEPS (100 by default, AGENT_STEPS) steps went by without either
+ *                       of the above. A RUNAWAY BACKSTOP, never a budget.
+ *
+ * A RUN MUST NEVER FAIL BECAUSE IT RAN OUT OF STEPS. That is the point of the 100: it is high
+ * enough that reaching it means the loop is not converging, so hitting it is a statement about
+ * the harness having cut the run off, recorded as its own outcome rather than folded into the
+ * agent's verdict.
  *
  * 15 was the operating limit, and it silently became a verdict: a run that hit it recorded
  * `success: false`, which collect maps to "gave-up" — the same label as an agent that ran to
  * its own conclusion. Seven creation runs stopped at exactly 15 and read as "the agent cannot
  * make a video", when the only known-good run of that flow takes 19. Every phase's gave-up
- * count is suspect for the same reason.
- *
- * A run should end when it succeeds or when it genuinely cannot proceed. STALL_STEPS below is
- * what "cannot proceed" means mechanically; this number exists only so a model looping forever
- * cannot hold a fleet Mac indefinitely, and hitting it is recorded as its own outcome rather
- * than folded into the agent's verdict.
+ * count from before the split is suspect for the same reason.
  */
 const MAX_STEPS = envNum("AGENT_STEPS", 100);
 /**
@@ -71,6 +79,11 @@ const MAX_STEPS = envNum("AGENT_STEPS", 100);
  * "it truly cannot anymore": the agent is still acting, and nothing it does changes anything
  * the harness can check. Generous, because a legitimate route can include a few unverifiable
  * steps in a row — the creation runs carry 8-14 of them and one still succeeded.
+ *
+ * The counter resets on a VERIFIED step and on nothing else — not on a successful driver call,
+ * not on moved pixels, not on the model's own account of progress. A verified `wait` is the one
+ * carve-out and does NOT reset it; see the stall bookkeeping in the step loop for why waiting
+ * cannot be allowed to count as progress.
  */
 const STALL_STEPS = envNum("AGENT_STALL_STEPS", 8);
 /**
@@ -896,12 +909,29 @@ export async function main(): Promise<void> {
 			 * Counted on VERIFIED, not on success/failure of the action: an act the harness
 			 * cannot check is exactly the case where the agent might be wandering, and a
 			 * legitimate route survives because one verified step anywhere resets the count.
+			 *
+			 * EXCEPT a verified `wait`, which resets nothing — the one gaming vector this
+			 * counter has. `wait` is deliberately exempt from the discrimination requirement
+			 * (step.ts passes `undefined` as prevHaystack for it, because the whole point of a
+			 * wait is that already-true state persists), so a wait whose expectation text is
+			 * already on screen verifies against a screen nothing changed on. Free, repeatable,
+			 * and indistinguishable from progress to this counter: a model alternating `wait`
+			 * with unproductive actions never stalls and burns all 100 steps, turning the
+			 * runaway backstop into the ordinary exit and every such run into a step-ceiling
+			 * that looks like a long task rather than a stuck one.
+			 *
+			 * So waiting is not progress, by construction. A wait that keeps verifying while
+			 * nothing else does still ends the run at STALL_STEPS, which is correct: the model
+			 * already got the state it declared it was waiting for, eight times over, and did
+			 * nothing with it. A run genuinely waiting on a slow app is served by `seconds` on
+			 * a single wait, not by eight of them in a row (see FROZEN_STEPS in step.ts, which
+			 * is advisory for exactly that case and deliberately never ends a run).
 			 */
-			if (stepRec?.index === step && stepRec.verified) stalled = 0;
+			if (stepRec?.index === step && stepRec.verified && input.action.name !== "wait") stalled = 0;
 			else stalled++;
 			if (stalled >= STALL_STEPS) {
-				console.log(`\n=== stalled: ${stalled} consecutive steps with nothing verified ===`);
-				outcome = { success: false, summary: `stalled — ${stalled} consecutive steps with nothing verified`, stopReason: "stalled" as const };
+				console.log(`\n=== stalled: ${stalled} consecutive steps with no verified progress ===`);
+				outcome = { success: false, summary: `stalled — ${stalled} consecutive steps with no verified progress`, stopReason: "stalled" as const };
 				break;
 			}
 		}
