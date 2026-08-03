@@ -178,6 +178,49 @@ test("dispatch__RelaysTheRunnersRefusal__When__CleanupValueIsInvalid", async () 
 	if (!result.ok) assert.match(result.error, /cleanup must be "off"/);
 });
 
+test("dispatch__CarriesBothStoppingConditionsInTheSpec__When__AnArmTunesThem", async () => {
+	// A run ends three ways: success, `stalled` after N consecutive steps with nothing verified,
+	// or the runaway backstop — and the backstop is not supposed to be reachable at all. Only the
+	// backstop was tunable down the wire, so an arm could adjust the guard it must never hit and
+	// not the condition it actually ends on. Both cross as named numeric spec fields now.
+	const { run, calls } = recorder(() => ok({ jobId: "j-stall", pid: 9, artifacts: { log: "out/jobs/j-stall/log.txt" } }));
+	const result = await dispatch({ host: "mac2", app: "Yarn", task: "show me how to change the cursor type", steps: 250, stallSteps: 12, inventory: FLEET, run, ...noSync });
+
+	assert.equal(result.ok, true);
+	const spec = specOf(calls[0].argv);
+	assert.equal(spec.stallSteps, 12);
+	assert.equal(spec.steps, 250, "a backstop above the old 100 clamp still crosses; the runner owns the range");
+	// Numbers, not strings: the runner type-checks both before it spends the lease.
+	for (const key of ["steps", "stallSteps"]) assert.equal(typeof spec[key], "number", key);
+	// And neither reached an argv position — same rule as every other arm field.
+	for (const arg of ["--stall-steps", "--steps", "12", "250"]) assert.equal(calls[0].argv.includes(arg), false, `${arg} rides the spec, not the argv`);
+});
+
+test("dispatch__LeavesBothStoppingConditionsOffTheWire__When__NeitherIsAsked", async () => {
+	const { run, calls } = recorder(() => ok({ jobId: "j-plain", pid: 7, artifacts: { log: "out/jobs/j-plain/log.txt" } }));
+	await dispatch({ host: "mac2", app: "Yarn", task: "t", inventory: FLEET, run, ...noSync });
+
+	// Absent entirely rather than sent as a zero: the child's own defaults (100 and 8) decide, and
+	// a zero in either field is the one value that would end every run instantly.
+	const spec = specOf(calls[0].argv);
+	assert.equal("steps" in spec, false);
+	assert.equal("stallSteps" in spec, false);
+});
+
+test("dispatch__StillSendsAZero__When__AStoppingConditionIsAskedForAsZero", async () => {
+	// `steps` was threaded with a truthy check while every neighbouring number used `!== undefined`,
+	// so a 0 vanished on the client instead of being refused on the runner. The values are equally
+	// invalid either way; the difference is whether the operator gets a typed error or an arm that
+	// quietly ran with the child's default — which is exactly how useRecipes lost 12 runs.
+	const { run, calls } = recorder(() => refused({ error: "steps must be an integer 1..1000, got 0" }));
+	const result = await dispatch({ host: "mac2", app: "Yarn", task: "t", steps: 0, stallSteps: 0, inventory: FLEET, run, ...noSync });
+
+	const spec = specOf(calls[0].argv);
+	assert.equal(spec.steps, 0, "the invalid value crossed for the runner to refuse, not silently vanished");
+	assert.equal(spec.stallSteps, 0);
+	assert.equal(result.ok, false);
+});
+
 test("dispatch__SyncsProceduresBeforeTheSubmit__When__TheKindIsReplay", async () => {
 	// The runner refuses a replay whose procedure file is absent, so the fan-out must land the
 	// file before the submit asks — order is the property under test.

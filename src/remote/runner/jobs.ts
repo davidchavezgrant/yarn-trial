@@ -121,6 +121,11 @@ export interface JobRecord {
 	/** `USE_RECIPES=1`: the child loads docs/recipes/<app>.<backend>.<task-hash>[.ungrounded].recipe.md. */
 	useRecipes?: boolean;
 	snapPx?: number;
+	/** `AGENT_STALL_STEPS` in the child's environment: consecutive unverified steps before the run
+	 *  is called stuck. Persisted for the same reason `steps` is, and it matters more — this is the
+	 *  number a run actually ends on, so a job.json without it cannot explain why a run stopped
+	 *  where it did. */
+	stallSteps?: number;
 	/** `RECIPE_LINEAGE=ungrounded`: load the write-up by an agent that had NO map. */
 	recipeLineage?: "grounded" | "ungrounded";
 	/** Replay only: the procedure file, relative to the data root — the same key on both machines. */
@@ -133,7 +138,8 @@ export interface JobRecord {
 	appmapVariant?: "vision" | "novision";
 	/** `AGENT_MODEL=<id>` in the child's environment. Absent = the child's default model. */
 	model?: string;
-	/** Step budget override for the child run (AGENT_STEPS). */
+	/** Runaway-backstop override for the child run (AGENT_STEPS) — a cutoff for a looping model,
+	 *  not a budget. `stallSteps` is the number a run is meant to end on. */
 	steps?: number;
 	/** `CLEANUP=off` in the child's environment: teardown skipped, the run ends on the changed
 	 *  state. Persisted so job.json tells the truth about HOW the run ran — a tidy-looking app
@@ -162,13 +168,15 @@ export interface JobInit {
 	useCurated?: boolean;
 	useRecipes?: boolean;
 	snapPx?: number;
+	stallSteps?: number;
 	recipeLineage?: "grounded" | "ungrounded";
 	procedure?: string;
 	noRescue?: boolean;
 	url?: string;
 	appmapVariant?: "vision" | "novision";
 	model?: string;
-	/** Step budget override for the child run (AGENT_STEPS). */
+	/** Runaway-backstop override for the child run (AGENT_STEPS) — a cutoff for a looping model,
+	 *  not a budget. `stallSteps` is the number a run is meant to end on. */
 	steps?: number;
 	/** `CLEANUP=off` on the child. Only the off literal crosses the wire — see serve.ts's submit. */
 	cleanup?: "off";
@@ -282,6 +290,7 @@ export function createJob(init: JobInit, root = jobsDir()): JobRecord {
 		...(init.useCurated ? { useCurated: true } : {}),
 		...(init.useRecipes ? { useRecipes: true } : {}),
 		...(init.snapPx !== undefined ? { snapPx: init.snapPx } : {}),
+		...(init.stallSteps !== undefined ? { stallSteps: init.stallSteps } : {}),
 		...(init.recipeLineage ? { recipeLineage: init.recipeLineage } : {}),
 		...(init.procedure ? { procedure: init.procedure } : {}),
 		...(init.noRescue ? { noRescue: true } : {}),

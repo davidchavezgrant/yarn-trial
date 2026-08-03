@@ -91,15 +91,35 @@ export interface DispatchOptions {
 	axdomOff?: boolean;
 	/** `NO_GROUNDING=1`: the ungrounded arm — the child ignores its appmap. */
 	noGrounding?: boolean;
-	/** `USE_CURATED=1`: ground from the curated docs/curated/<app>.md notes instead. */
-	/** `USE_RECIPES=1`: ground on a harvested recipe for this exact task. */
+	/** `USE_RECIPES=1`: ground on the PROSE write-up harvested from a judged-PASS run of this
+	 *  exact task. A recipe is READ, not executed — the model still chooses every action — which
+	 *  is what separates it from a procedure (machine-readable JSON, replayed step by step under
+	 *  `kind: "replay"` above). The comment that sat here belonged to `useCurated` and was left
+	 *  behind by that swap, which is why both fields carry their own now. */
 	useRecipes?: boolean;
+	/** Which harvested recipe to load: the write-up by an agent that HAD its appmap, or the one by
+	 *  an agent that did not. Two different experiments, so they never share an artifact. */
 	recipeLineage?: "grounded" | "ungrounded";
 	/** Injected in tests, like `sync`/`syncProcedures`. */
 	syncRecipes?: (opts: { inventory?: Inventory }) => Promise<string | undefined>;
+	/** `USE_CURATED=1`: ground from docs/curated/<app>.md — prose a HUMAN wrote, rather than prose
+	 *  an earlier run earned. It is the hand-authored tier the recipe tiers are measured against,
+	 *  which is why it stays a separate field instead of another recipe lineage. */
 	useCurated?: boolean;
-	/** Step budget override for the child run (AGENT_STEPS on the runner). */
+	/**
+	 * The runaway backstop for the child run (AGENT_STEPS on the runner). NOT a budget: a run is
+	 * never meant to fail because it ran out of steps, so this exists only so a model looping
+	 * forever cannot hold a fleet Mac. `stallSteps` below is what actually ends a run. Absent =
+	 * the child's own default (100).
+	 */
 	steps?: number;
+	/**
+	 * `AGENT_STALL_STEPS` on the child: consecutive steps with nothing verified before the run is
+	 * called stuck. THE stopping condition, which is exactly why it is tunable per arm — the
+	 * backstop above was threaded all the way down the wire while the number that actually ends
+	 * runs stayed a constant nobody could reach. Absent = the child's own default (8).
+	 */
+	stallSteps?: number;
 	/** SNAP_PX on the child: snap a coordinate action to a control within N px. 0 = off. */
 	snapPx?: number;
 	/** Replay only: procedure file path RELATIVE to the data root — the same key on both machines. */
@@ -262,7 +282,13 @@ export async function dispatch(opts: DispatchOptions): Promise<DispatchResult> {
 		...(opts.appmapVariant ? { appmapVariant: opts.appmapVariant } : {}),
 		...(opts.model ? { model: opts.model } : {}),
 		...(opts.cleanup ? { cleanup: opts.cleanup } : {}),
-		...(opts.steps ? { steps: opts.steps } : {}),
+		// `!== undefined`, not a truthy check, for both numbers. A truthy check silently drops 0,
+		// and while 0 is invalid for either field today, "the runner refuses it" and "the wire
+		// swallowed it" are different outcomes — the first is an error an operator can read, the
+		// second is the arm quietly running with the child's default. That is the same failure
+		// mode as useRecipes never being parsed, and it is not worth re-earning for a keystroke.
+		...(opts.steps !== undefined ? { steps: opts.steps } : {}),
+		...(opts.stallSteps !== undefined ? { stallSteps: opts.stallSteps } : {}),
 		operator: opts.operator ?? defaultOperator(),
 	};
 	const wantQueue = opts.queue !== false;
@@ -837,7 +863,7 @@ function toHost(host: HostEntry | string, inv?: Inventory): HostEntry {
 	return typeof host === "string" ? resolveHost(host, inv ?? loadHosts()) : host;
 }
 
-const USAGE = `usage: dispatch <host|auto> "<task>" "<App>" [--backend ax|cdp] [--record] [--no-vision] [--no-ax] [--axdom-off] [--no-grounding] [--use-curated] [--use-recipes [--recipe-lineage grounded|ungrounded]] [--model <id>] [--no-cleanup]
+const USAGE = `usage: dispatch <host|auto> "<task>" "<App>" [--backend ax|cdp] [--record] [--no-vision] [--no-ax] [--axdom-off] [--no-grounding] [--use-curated] [--use-recipes [--recipe-lineage grounded|ungrounded]] [--model <id>] [--no-cleanup] [--steps N] [--stall-steps N] [--snap-px N]
        dispatch <host|auto> explore "<App>"
        dispatch <host|auto> replay <procedure-file-or-stamp> [--no-rescue]
        dispatch <host> follow <jobId> [--from <byte>]
@@ -847,6 +873,10 @@ Submits the run to a Mac in the fleet, streams its log, and pulls the artifacts 
 Ctrl-C detaches; the run keeps going and \`follow\` re-attaches to it.
 \`--no-follow\` (any submit form) skips the stream entirely: submit, print the job id, exit —
 for callers whose own lifetime is capped and must not hold a 40-minute run's leash.
+
+\`--stall-steps N\` is the stopping condition: N consecutive steps with nothing verified ends the
+run (default 8). \`--steps N\` is only the runaway backstop (default 100) — raise it for a long
+honest route, but a run reaching it at all is the outcome this pair exists to prevent.
 
 \`explore\`, \`replay\`, \`follow\` and \`pull\` in the second position are subcommands, so a task
 whose text is exactly one of those four words has to be dispatched through the API instead.`;
@@ -946,10 +976,15 @@ async function main(argv: string[]): Promise<number> {
 			// --no-cleanup: CLEANUP=off on the child — the run ends on the changed state.
 			// For filmed takes and maintenance runs whose change IS the deliverable.
 			...(argv.includes("--no-cleanup") ? { cleanup: "off" as const } : {}),
-			// --steps N: budget override for runs whose recovery overhead outgrows the
-			// default 15 (validated to 1..100 on the runner).
+			// --steps N: the runaway backstop, for a flow whose honest route outgrows the default
+			// 100 (validated to an integer 1..1000 on the runner).
 			...(argv.includes("--steps") ? { steps: Number(argv[argv.indexOf("--steps") + 1]) || undefined } : {}),
 			...(argv.includes("--snap-px") ? { snapPx: Number(argv[argv.indexOf("--snap-px") + 1]) || undefined } : {}),
+			// --stall-steps N: how patient the stall detector is, and therefore when a run ends.
+			// The operator-facing knob for the ONE number that stops a run — worth reaching by
+			// hand while a task's shape is still being learned, since a route with a long
+			// unverifiable stretch is indistinguishable from a stuck one until you have watched it.
+			...(argv.includes("--stall-steps") ? { stallSteps: Number(argv[argv.indexOf("--stall-steps") + 1]) || undefined } : {}),
 		};
 
 	const result = await dispatch(opts);

@@ -673,6 +673,9 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 						...(rec.appmapVariant ? { APPMAP_VARIANT: rec.appmapVariant } : {}),
 						...(rec.model ? { AGENT_MODEL: rec.model } : {}),
 						...(rec.steps ? { AGENT_STEPS: String(rec.steps) } : {}),
+						// The number that actually ends the run, so it travels with the arm rather
+						// than living as a constant in the child. Absent leaves the child's own 8.
+						...(rec.stallSteps !== undefined ? { AGENT_STALL_STEPS: String(rec.stallSteps) } : {}),
 						...(rec.cleanup ? { CLEANUP: rec.cleanup } : {}),
 						// Fleet posture: a dispatched cdp run owns the machine (the lease says so),
 						// and the app it finds running portless was left by the previous job —
@@ -815,6 +818,17 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		if (params.snapPx !== undefined && (typeof params.snapPx !== "number" || params.snapPx < 0 || params.snapPx > 200))
 			return { ok: false, error: `snapPx must be 0..200, got ${JSON.stringify(params.snapPx)}` };
 		const snapPx = params.snapPx as number | undefined;
+		// The stall window (AGENT_STALL_STEPS), validated like the two above because it too becomes
+		// an env value on the child. The FLOOR is what matters here: this is the number that ends
+		// runs, and at 1 the first unverifiable step ends the run outright while 0 ends it before
+		// the agent has acted at all — an arm that submitted either would come back all-stalled and
+		// read as a broken agent rather than a typo'd knob. The ceiling is the default backstop: a
+		// window LARGER than AGENT_STEPS can never fire at all, which silently hands the stopping
+		// decision back to the runaway guard — the exact arrangement this field was added to end. A
+		// pass that wants more patience than 100 raises both numbers together.
+		if (params.stallSteps !== undefined && (typeof params.stallSteps !== "number" || !Number.isInteger(params.stallSteps) || params.stallSteps < 2 || params.stallSteps > 100))
+			return { ok: false, error: `stallSteps must be an integer 2..100, got ${JSON.stringify(params.stallSteps)}` };
+		const stallSteps = params.stallSteps as number | undefined;
 		const noRescue = flag(params, "noRescue");
 		const queue = flag(params, "queue");
 		if (typeof record !== "boolean") return record;
@@ -859,10 +873,19 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 		if (params.model !== undefined && (typeof params.model !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._\/:-]{0,127}$/.test(params.model)))
 			return { ok: false, error: `model must be a model id, got ${JSON.stringify(params.model)}` };
 		const model = params.model as string | undefined;
-		// A step budget crosses as a number and becomes an env VALUE (AGENT_STEPS); bounded
-		// so a typo cannot ask a fleet Mac for a thousand-step run.
-		if (params.steps !== undefined && (typeof params.steps !== "number" || !Number.isInteger(params.steps) || params.steps < 1 || params.steps > 100))
-			return { ok: false, error: `steps must be an integer 1..100, got ${JSON.stringify(params.steps)}` };
+		// The runaway backstop crosses as a number and becomes an env VALUE (AGENT_STEPS); bounded
+		// so a typo cannot ask a fleet Mac for an unbounded run.
+		//
+		// The old ceiling was 100, which is also the child's DEFAULT backstop — so no caller could
+		// ever ask for a larger one, and the guard against a runaway loop doubled as a hard cap on
+		// honest work. 1000 instead: the point of the backstop is to catch a model that has stopped
+		// making progress and will never stop trying, and nothing legitimate is near it (the longest
+		// known-good route is 19 steps). At roughly 20-30s per step a 1000-step run is most of a
+		// day, which is long enough to be visible in the log and the lease and short enough that no
+		// Mac is held indefinitely — and any run that gets there was going to be ended by the stall
+		// detector many hours earlier anyway.
+		if (params.steps !== undefined && (typeof params.steps !== "number" || !Number.isInteger(params.steps) || params.steps < 1 || params.steps > 1000))
+			return { ok: false, error: `steps must be an integer 1..1000, got ${JSON.stringify(params.steps)}` };
 		const steps = params.steps as number | undefined;
 
 		// One literal, not the child's whole off|advisory|block vocabulary: advisory is the
@@ -915,6 +938,7 @@ export async function startRunner(runnerDir = defaultRunnerDir(), opts: ServeOpt
 			useRecipes,
 			noRescue,
 			...(snapPx !== undefined ? { snapPx } : {}),
+			...(stallSteps !== undefined ? { stallSteps } : {}),
 			...(recipeLineage !== undefined ? { recipeLineage } : {}),
 			...(backend !== undefined ? { backend } : {}),
 			...(procedure !== undefined ? { procedure } : {}),

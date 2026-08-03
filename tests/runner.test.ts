@@ -1038,6 +1038,138 @@ test("submit__RefusesCleanup__When__ItIsNotTheOffLiteral", async () => {
 	});
 });
 
+test("submit__CarriesStallStepsToTheChildEnvAndTheRecord__When__AStallWindowIsAsked", async () => {
+	// AGENT_STALL_STEPS is the number a run actually ends on — the backstop above it is a runaway
+	// guard nothing healthy should ever reach. It was the only stopping-condition input with no
+	// wire field at all, so a pass could tune the guard and not the condition. Both halves are
+	// asserted: the env is how the child obeys, and the record is the only carrier for a QUEUED
+	// job, which spawns later and possibly under a restarted runner.
+	await withTempAsync("yr-serve-", async (dir) => {
+		const prevData = process.env.YARN_RUNNER_DATA;
+		process.env.YARN_RUNNER_DATA = dir;
+		const spawner = envSpawner();
+		const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
+		let pid = 0;
+		try {
+			const [res] = await request(runner.socketPath, "submit", {
+				kind: "task",
+				app: "Yarn",
+				task: "show me how to change the cursor type",
+				operator: "dave",
+				stallSteps: 20,
+			});
+			assert.equal(res.ok, true, String(res.error ?? ""));
+			pid = res.pid;
+			assert.equal(spawner.envs[0]?.AGENT_STALL_STEPS, "20");
+			assert.equal(readJob(res.jobId)?.stallSteps, 20);
+		} finally {
+			if (pid) try { process.kill(-pid, "SIGKILL"); } catch {}
+			await runner.close();
+			if (prevData === undefined) delete process.env.YARN_RUNNER_DATA;
+			else process.env.YARN_RUNNER_DATA = prevData;
+		}
+	});
+});
+
+test("submit__LeavesTheStallWindowToTheChild__When__NoneIsAsked", async () => {
+	// Absent means absent: the variable must not appear in the child's environment at all, or the
+	// runner is quietly deciding a stopping condition for every arm that never asked about one.
+	await withTempAsync("yr-serve-", async (dir) => {
+		const prevData = process.env.YARN_RUNNER_DATA;
+		process.env.YARN_RUNNER_DATA = dir;
+		const spawner = envSpawner();
+		const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
+		let pid = 0;
+		try {
+			const [res] = await request(runner.socketPath, "submit", { kind: "task", app: "Yarn", task: "show me how to change the cursor type", operator: "dave" });
+			assert.equal(res.ok, true, String(res.error ?? ""));
+			pid = res.pid;
+			assert.equal("AGENT_STALL_STEPS" in (spawner.envs[0] ?? {}), false);
+			assert.equal(readJob(res.jobId)?.stallSteps, undefined);
+		} finally {
+			if (pid) try { process.kill(-pid, "SIGKILL"); } catch {}
+			await runner.close();
+			if (prevData === undefined) delete process.env.YARN_RUNNER_DATA;
+			else process.env.YARN_RUNNER_DATA = prevData;
+		}
+	});
+});
+
+test("submit__RefusesTheStallWindow__When__ItIsOutsideTheRangeThatCanStopARun", async () => {
+	// The floor is what matters for this field. At 1 the first unverifiable step ends the run and
+	// at 0 it ends before the agent has acted at all — an arm submitted with either comes back
+	// entirely stalled and reads as a broken agent rather than as a typo'd knob. The ceiling
+	// refuses the opposite mistake: a window LARGER than the default 100-step backstop can never
+	// fire at all, which hands the stopping decision back to the runaway guard this field exists to
+	// keep out of it.
+	await withTempAsync("yr-serve-", async (dir) => {
+		const spawner = fakeSpawner();
+		const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
+		try {
+			for (const stallSteps of [0, 1, 101, 8.5, "8"]) {
+				const [res] = await request(runner.socketPath, "submit", { kind: "task", app: "Yarn", task: "t", operator: "dave", stallSteps });
+				assert.equal(res.ok, false, `stallSteps ${JSON.stringify(stallSteps)} was accepted`);
+				assert.match(String(res.error), /stallSteps must be an integer 2\.\.100/);
+			}
+			// Refused before `acquire`, so nothing spawned and the Mac is not left leased.
+			assert.equal(spawner.calls.length, 0, "a refused stall window spawns nothing");
+		} finally {
+			await runner.close();
+		}
+	});
+});
+
+test("submit__AcceptsABiggerBackstop__When__StepsExceedsTheOldHundredCeiling", async () => {
+	// The clamp was 1..100 and 100 is also the child's DEFAULT backstop, so no pass could ever ask
+	// for a LARGER one — the guard against a runaway loop doubled as a hard ceiling on honest work,
+	// in a system whose stated intent is that no run ever fails for running out of steps.
+	await withTempAsync("yr-serve-", async (dir) => {
+		const prevData = process.env.YARN_RUNNER_DATA;
+		process.env.YARN_RUNNER_DATA = dir;
+		const spawner = envSpawner();
+		const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
+		let pid = 0;
+		try {
+			const [res] = await request(runner.socketPath, "submit", {
+				kind: "task",
+				app: "Yarn",
+				task: "show me how to change the cursor type",
+				operator: "dave",
+				steps: 250,
+			});
+			assert.equal(res.ok, true, String(res.error ?? ""));
+			pid = res.pid;
+			assert.equal(spawner.envs[0]?.AGENT_STEPS, "250");
+			assert.equal(readJob(res.jobId)?.steps, 250);
+		} finally {
+			if (pid) try { process.kill(-pid, "SIGKILL"); } catch {}
+			await runner.close();
+			if (prevData === undefined) delete process.env.YARN_RUNNER_DATA;
+			else process.env.YARN_RUNNER_DATA = prevData;
+		}
+	});
+});
+
+test("submit__StillRefusesTheBackstop__When__ItIsNotAnIntegerInRange", async () => {
+	// Raising the ceiling is not removing it: an unbounded backstop is a fleet Mac held for as long
+	// as a looping model keeps paying, and the integer/lower-bound checks are what stop a typo'd
+	// flag from becoming a zero-step run.
+	await withTempAsync("yr-serve-", async (dir) => {
+		const spawner = fakeSpawner();
+		const runner = await startRunner(dir, { ...noSwap, log: () => {}, spawn: spawner.spawn });
+		try {
+			for (const steps of [0, -5, 1001, 2.5, "100"]) {
+				const [res] = await request(runner.socketPath, "submit", { kind: "task", app: "Yarn", task: "t", operator: "dave", steps });
+				assert.equal(res.ok, false, `steps ${JSON.stringify(steps)} was accepted`);
+				assert.match(String(res.error), /steps must be an integer 1\.\.1000/);
+			}
+			assert.equal(spawner.calls.length, 0, "a refused backstop spawns nothing");
+		} finally {
+			await runner.close();
+		}
+	});
+});
+
 test("submit__QueuesTheJob__When__TheHostIsBusyAndQueueIsAsked", async () => {
 	await withTempAsync("yr-serve-", async (dir) => {
 		const prevData = process.env.YARN_RUNNER_DATA;
