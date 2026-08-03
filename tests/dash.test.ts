@@ -575,38 +575,61 @@ test("BuildDetail__WalksRunThroughLiveMap__When__NoArchiveExists", () => {
 	}
 });
 
-test("BuildDetail__FlagsTheTake__When__TheRunsCursorRenderIsOnThisMachine", () => {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dash-detail-vid-"));
+/**
+ * The Take column's data. These drive `outDir()` through YARN_RUNNER_DATA rather than a
+ * dataDir argument, because that is the only lever entryView has — buildState takes no root,
+ * and the alternative (planting a file under the real out/bench/live) would write into the
+ * operator's own store from a unit test.
+ */
+const withDataRoot = (body: (dir: string) => void): void => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dash-take-"));
+	const saved = process.env.YARN_RUNNER_DATA;
 	try {
-		const m = manifest(entry({ jobId: "job-v", state: "done", collected: true }));
-		// Nothing else planted: the flag must not depend on a graph, a run log, or a walk — a
-		// filmed run whose other artifacts never landed still has a take worth watching.
-		fs.mkdirSync(path.join(dir, "out", "bench", "live", "job-v", "recording"), { recursive: true });
-		fs.writeFileSync(path.join(dir, "out", "bench", "live", "job-v", "recording", "humanized.mp4"), "RENDER");
-
-		const d = buildDetail("job-v", m, { dataDir: dir, benchRoot: path.join(dir, "bench") });
-
-		assert.equal(d.video, true);
+		process.env.YARN_RUNNER_DATA = dir;
+		body(dir);
 	} finally {
+		if (saved === undefined) delete process.env.YARN_RUNNER_DATA;
+		else process.env.YARN_RUNNER_DATA = saved;
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
+};
+
+const plantRecording = (dir: string, jobId: string, file: string): void => {
+	const rec = path.join(dir, "out", "bench", "live", jobId, "recording");
+	fs.mkdirSync(rec, { recursive: true });
+	fs.writeFileSync(path.join(rec, file), "BYTES");
+};
+
+test("BuildState__MarksTheEntry__When__ItsCursorRenderIsOnThisMachine", () => {
+	withDataRoot((dir) => {
+		// Only the render planted: the flag must not depend on metrics, a graph or a run log — a
+		// filmed run whose other artifacts never landed still has a take worth watching.
+		plantRecording(dir, "job-1", "humanized.mp4");
+		const s = buildState(manifest(entry({})), fleet([{ name: "mac1", reachable: true, state: "idle" }]), [], true);
+		assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.entries[0]?.video, true);
+	});
 });
 
-test("BuildDetail__OmitsTheTake__When__OnlyTheRawCaptureIsPresent", () => {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dash-detail-raw-"));
-	try {
-		const m = manifest(entry({ jobId: "job-r", state: "done", collected: true }));
-		// The cursorless capture is not the artifact: offering it as "the take" would show a
+test("BuildState__OmitsTheEntrysTake__When__OnlyTheRawCaptureIsPresent", () => {
+	withDataRoot((dir) => {
+		// The cursorless capture is not the artifact: offering it as "the take" would play a
 		// recording of a UI operating itself with no pointer, which reads as a broken video.
-		fs.mkdirSync(path.join(dir, "out", "bench", "live", "job-r", "recording"), { recursive: true });
-		fs.writeFileSync(path.join(dir, "out", "bench", "live", "job-r", "recording", "window.mp4"), "RAWCAPTURE");
+		plantRecording(dir, "job-1", "window.mp4");
+		const s = buildState(manifest(entry({})), fleet([{ name: "mac1", reachable: true, state: "idle" }]), [], true);
+		assert.equal(armView(s, "p2-ax-grounded")?.passes[0]?.entries[0]?.video, undefined);
+	});
+});
 
-		const d = buildDetail("job-r", m, { dataDir: dir, benchRoot: path.join(dir, "bench") });
-
-		assert.equal(d.video, undefined);
-	} finally {
-		fs.rmSync(dir, { recursive: true, force: true });
-	}
+test("BuildState__MarksAnUncollectedEntry__When__ItsRenderLandedBeforeCollect", () => {
+	withDataRoot((dir) => {
+		// The uncollected branch matters on its own: a hand-pulled or ad-hoc run has its render
+		// before any collect banks its numbers, and the column exists to reach footage.
+		plantRecording(dir, "job-1", "humanized.mp4");
+		const s = buildState(manifest(entry({ collected: false, state: "running" })), fleet([{ name: "mac1", reachable: true, state: "busy", jobId: "job-1" }]), [], true);
+		const e = armView(s, "p2-ax-grounded")?.passes[0]?.entries[0];
+		assert.equal(e?.collected, false);
+		assert.equal(e?.video, true);
+	});
 });
 
 test("BuildDetail__AggregatesHeatAcrossCollectedRuns__When__RunsShareTheGraph", () => {

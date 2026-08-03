@@ -92,6 +92,16 @@ export interface EntryView {
 	 * manifest's own state otherwise (host unreachable, or the snapshot predates the submit).
 	 */
 	status: string;
+	/**
+	 * This run's cursor render is on this machine — the board's Take column draws a ▶ when it is.
+	 *
+	 * On the ENTRY rather than only on the detail (where `DashDetail.video` also carries it),
+	 * because the Take column is first-level: it renders for every row on the first paint, and a
+	 * column that had to fetch one detail per row to decide whether to draw its own button would
+	 * either flash in late or fire ~200 requests to answer a yes/no the state frame can carry in
+	 * a byte. The detail keeps its copy for the dropdown's own use.
+	 */
+	video?: boolean;
 	/** Seconds the run has been going (running) or took per its own log (collected). */
 	elapsedSec?: number;
 	queuePosition?: number;
@@ -330,6 +340,21 @@ function liveFor(e: ManifestEntry, fleet: FleetView): Pick<EntryView, "status" |
 	return { status: e.state };
 }
 
+/**
+ * Does this run have a cursor render this dash can serve? One question, one answer, asked by
+ * BOTH the board's Take column (through entryView) and the dropdown (through buildDetail), so
+ * the column can never offer a ▶ that /api/video would 404 — it is the same resolution the
+ * route itself performs.
+ *
+ * Called per entry per state push, which is a few hundred stats on a local filesystem and
+ * nothing next to the run-log reads the same push already does. It stays a live check rather
+ * than a cached one because a render APPEARS mid-pass: collect composites on pull, so a row
+ * gains its ▶ on the next push and a memo would hold "no" for the rest of the session.
+ */
+function hasTake(jobId: string, dataDir?: string): boolean {
+	return fs.existsSync(path.join(runFile(jobId, RUN_FILES.recording, dataDir ? path.join(dataDir, "out") : undefined), CURSOR_RENDER));
+}
+
 function entryView(e: ManifestEntry, fleet: FleetView, live?: Map<string, RunProgress>, defaultModel?: string): EntryView {
 	const m = e.metrics;
 	if (e.collected) {
@@ -388,6 +413,7 @@ function entryView(e: ManifestEntry, fleet: FleetView, live?: Map<string, RunPro
 			...(m?.endedAt ? { endedAt: m.endedAt } : {}),
 			...(e.note ? { note: e.note } : {}),
 			...(Object.keys(stamp).length ? { exploreStamp: stamp } : {}),
+			...(hasTake(e.jobId) ? { video: true } : {}),
 		};
 	}
 
@@ -405,7 +431,10 @@ function entryView(e: ManifestEntry, fleet: FleetView, live?: Map<string, RunPro
 		if (usd !== undefined) progress = { ...progress, usd };
 	}
 
-	return { jobId: e.jobId, host: e.host, submittedAt: e.submittedAt, collected: false, ...liveFor(e, fleet), ...(progress ? { live: progress } : {}) };
+	// The take rides the uncollected branch too: a run pulled by hand, or an ad-hoc local run,
+	// has its render on disk before any collect pass banks its metrics — and the whole point of
+	// the column is to reach the footage, which does not wait on the numbers.
+	return { jobId: e.jobId, host: e.host, submittedAt: e.submittedAt, collected: false, ...liveFor(e, fleet), ...(progress ? { live: progress } : {}), ...(hasTake(e.jobId) ? { video: true } : {}) };
 }
 
 /**
@@ -1561,20 +1590,9 @@ export interface DashDetail {
 	 * is not on this machine or the run predates run events.
 	 */
 	series?: ExplorePoint[];
-	/**
-	 * This run's cursor render is on THIS machine — the dropdown draws a player when it is.
-	 *
-	 * A boolean, not a URL: the page already knows the route, and the honest question here is
-	 * "does the file exist where this dash can reach it", which differs between a laptop beside
-	 * the store and a container holding a snapshot. Answered here rather than by letting the
-	 * page fire a speculative GET, because a 404 per opened row is indistinguishable from a
-	 * broken deploy in a network log — and because `<video>` failing quietly is exactly the
-	 * failure mode nobody notices.
-	 *
-	 * Absent for every unfilmed arm, which is most of them (explores are deliberately never
-	 * filmed — see matrix.ts's `filmed`).
-	 */
-	video?: boolean;
+	// NO `video` here on purpose. The take is reached from the board's own Take column, which
+	// reads EntryView.video off the state frame — one source for "does this run have footage",
+	// resolved by hasTake. A second copy on the detail would be a second thing to keep true.
 }
 
 function heatFor(
@@ -1824,11 +1842,6 @@ export function buildDetail(jobId: string, manifest: Manifest, opts: { dataDir?:
 		}
 	}
 
-	// runFile resolves the recording directory live → archive → the pre-bench homes, so an
-	// archived pass keeps its takes; the render sits one level inside it. Same dataDir the rest
-	// of this function reads through, which is what keeps a snapshot answering for itself.
-	const video = fs.existsSync(path.join(runFile(jobId, RUN_FILES.recording, path.join(dataDir, "out")), CURSOR_RENDER));
-
 	return {
 		jobId,
 		armId: entry.armId,
@@ -1842,7 +1855,6 @@ export function buildDetail(jobId: string, manifest: Manifest, opts: { dataDir?:
 		...(notes.length ? { note: notes.join("; ") } : {}),
 		...(noteEv ? { narratorNote: { t: String(noteEv.t), text: String(noteEv.text), model: String(noteEv.model ?? "?") } } : {}),
 		...(series.length ? { series } : {}),
-		...(video ? { video: true } : {}),
 	};
 }
 

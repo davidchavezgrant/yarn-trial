@@ -38,8 +38,11 @@ range support (206/416) so the player can seek. It needs no share-mode special c
 serves whatever the snapshot carried and the snapshot carries only renders. Two properties worth
 knowing: it is **local-file only** — no ssh tier, unlike `/api/logs`, so "no video here" means
 "not collected yet" — and it sits behind the same `DASH_AUTH` gate as everything but `/healthz`.
-The board offers a **▶ Watch the take** button in a run's dropdown only when `buildDetail` found
-the file, so a row never advertises a video the server cannot serve. Verified end to end on
+The board carries a first-level **Take** column, beside Map and Graphs. It reads per RUN (like
+Map, unlike the per-arm Graphs page), and the ▶ appears only where the state frame said a render
+exists — `EntryView.video`, resolved by the same `hasTake` the route serves through, so a row
+never advertises a video the server cannot serve. Every other run shows an explicit `–`.
+Verified end to end on
 2026-08-03 against a share-mode dash over a real snapshot: 200 with `accept-ranges`, correct 206
 for head/tail/suffix ranges, 416 past EOF, 400 on a traversal-shaped id, 404 for an unfilmed run,
 and the player decoding a 45.65 s 1568×960 take.
@@ -76,15 +79,24 @@ cursor in it (the fleet's capture draws none; `humanize` composites one from the
 points and typing timings), so shipping both would double the bytes to show a strictly worse
 video.
 
-Coverage is the honest caveat, and it is a property of the pass rather than of the dash: of the
-2026-08-01 pass's 198 entries, **20 have a cursor render**. 46 entries are filmed arms and 33 of
-those never ran; explores are deliberately never filmed (`--record` swaps in demo rules and would
-change the map every downstream arm is grounded on — see `matrix.ts`'s `filmed`). A handful of
-runs have `frames/` but no render; `bench collect` composites those automatically now
-(`humanizePulled`, `HUMANIZE=0` disables), so **collect before snapshotting** to pick them up.
+Coverage is the honest caveat, and it is a property of the pass rather than of the dash. On
+2026-08-03 the 2026-08-01 pass held 198 entries, of which **48 are filmed arms and 30 had a
+render** — climbing while a collect was in flight, because `bench collect` composites on pull
+(`humanizePulled`, `HUMANIZE=0` disables). Two things cap it, and neither is fixable here:
 
-If a future pass films everything, ~235 MB of video would land in the image and the renders
-should move to `assets.yarn.so` (already on CloudFront) with the board linking out instead.
+- **17 of the 48 filmed entries were still queued** when the pass froze. A run that never
+  executed has no footage anywhere, on this machine or the fleet.
+- **Explores are deliberately never filmed.** `--record` swaps in demo rules and a demo act tool
+  with no `set_value`, which changes what the pass DOES — a filmed explore would produce a
+  different map from the one every downstream arm is grounded on (`matrix.ts`'s `filmed`).
+
+So **collect before snapshotting**, and expect roughly a sixth of the rows to offer a ▶ — the rest
+show `–` because they were never filmed, not because anything is missing. Renders outside the
+published manifest (a `2026-08-02T18-51-*` batch, 13 of them at last count) appear on no board:
+the dash renders manifest entries, and those runs belong to no pass's manifest.
+
+If a future pass films everything, ~250 MB of video would land in the image and the renders should
+move to `assets.yarn.so` (already on CloudFront) with the board linking out instead.
 
 `snapshots/` is gitignored: it is a regenerable duplicate of manifests already tracked under
 `out/bench`, plus 800-odd run logs. Build the image locally and push it (below) and the bytes
@@ -135,10 +147,20 @@ costs and appmaps of Yarn's app to a public repo. The image path keeps all of it
 
 `render.yaml` remains committed for the build-from-repo route, should the repo ever go private.
 
-**The CLI cannot create services** — `render services` only lists, and the CLI's own token 401s
-against `api.render.com`. Creation needs a REST API key (Dashboard → Account Settings → API
-Keys): `POST /v1/registrycredentials`, then `POST /v1/services` with `image.imagePath` +
-`registryCredentialId` and `serviceDetails.env: "image"`.
+**The CLI cannot create services, but it CAN redeploy a new image** — which is the whole
+redeploy loop, so no REST API key is needed for the routine case (corrected 2026-08-03; the note
+below used to imply otherwise). `render services` is list-only, so the *first* creation still
+needs a key (Dashboard → Account Settings → API Keys): `POST /v1/registrycredentials`, then
+`POST /v1/services` with `image.imagePath` + `registryCredentialId` and
+`serviceDetails.env: "image"`. After that, `render deploys create` takes `--image`:
+
+```bash
+render deploys create srv-d9o382u7bikc73csivm0 \
+  --image ghcr.io/davidchavezgrant/yarn-bench-dash:<tag> --wait --confirm
+```
+
+That is what makes a new dated tag preferable to overwriting an old one: the previous image stays
+reachable by tag, so a rollback is one more `deploys create` rather than a rebuild.
 
 **Build for linux/amd64 or Render rejects the image.** Every Mac here is Apple Silicon, so an
 unpinned build produces arm64 and `POST /v1/services` fails with *"points to an image with an

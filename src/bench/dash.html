@@ -1141,6 +1141,11 @@ const RUNS_TIP = "the run's status — click to open/collapse its dropdown; the 
 // arm's exact perception wording instead.)
 const ACTS_TIP = "what injects the input: AX (cua driver) or CDP";
 const MAP_TIP = "the appmap as a full node-link tree — edge thickness = traversal heat, blue = the run's path";
+// The Take column reads per RUN, like Map and unlike Graphs (a page per arm × model): each run
+// filmed its own attempt. A dash reads "no footage", which is the normal state — only filmed
+// arms record, and explores never do (a filmed explore would run under demo rules and produce a
+// different map from the one every downstream arm is grounded on).
+const TAKE_TIP = "the run's own recording, with the cursor composited from its real trajectory — ▶ opens the player; – means this run was never filmed, or its render has not been pulled yet";
 // No target column: the app scope picker above the board carries the target, and inside a
 // lineage group every row shares the group's target anyway.
 // Ordering: Task leads with Variant right beside it (David, 2026-08-01), then the Runs
@@ -1154,10 +1159,10 @@ const MAP_TIP = "the appmap as a full node-link tree — edge thickness = traver
 // constructed sentence; the exact wording (perceptionLine) survives in each cell's tooltip.
 // Sees groups the structured channels (AX, DOM); Has sits alone over Vision.
 // Every full-width spanner (detail rows, phase separators) spans NCOLS — keep it in step
-// with TASK_HEAD when adding a column. 18 = Task + Variant + Runs + the two Sees checks
+// with TASK_HEAD when adding a column. 19 = Task + Variant + Runs + the two Sees checks
 // + the Has/Vision check + Acts With + Model + Tokens + Cost + Actions + 4 explore
-// discovery + Convergence + Map + Graphs.
-const NCOLS = 18;
+// discovery + Convergence + Map + Take + Graphs.
+const NCOLS = 19;
 // The explore percentage columns share one denominator: seen (the pass's total observed
 // controls — actuated + dismissed converge on it, so both stay in [0,100]). graphNodes is
 // NOT a valid denominator: dismissed alone can be 2× the distilled node count (a mass
@@ -1178,6 +1183,7 @@ const TASK_HEAD = "<tr>" + thr("Task", "the goal-only prompt the run was given")
 	thr("Ambig", "explore rows — settings editable at two scopes under one identity (same settingKey, different scope) — the wrong-scope trap; each gets a prompt warning. Shown as a share of graph nodes; hover for the count", "num-h") +
 	thr("Convergence", "explore rows — consumed share of the discovered frontier (actuated + dismissed over everything seen); 100% = frontier empty, the pass's own stop condition", "ctr-h") +
 	thr("Map", MAP_TIP, "ctr-h") +
+	thr("Take", TAKE_TIP, "ctr-h") +
 	thr("Graphs", "this row's own page of charts — touch map, proof strips, judge agreement, attention depth, time anatomy, and more — live-updating as runs land", "ctr-h") + "</tr>" +
 	'<tr class="subhead">' +
 	th("AX", "macOS accessibility elements reach the model", "ctr-h") +
@@ -1540,9 +1546,22 @@ function passRows(a, p, first, metricCells, lead = "") {
 		${i === 0 ? identityRest(a, p, span) : ""}
 		${metricCells(e)}
 		<td class="treecell"><button class="btnv" data-viewtree="${esc(e.jobId)}" data-tip="${esc(MAP_TIP)}">⤢</button></td>
+		${takeCell(e, a)}
 		${i === 0 ? graphsCell(a, p, span) : ""}</tr>`).join("");
 	return rows + (openRows[key] ? detailRowHtml(a, p, key) : "");
 }
+
+// The Take column: one cell per RUN LINE, like Map — each run filmed its own attempt, so a
+// group-spanning cell would have to pick one run's footage to stand for the others.
+//
+// The ▶ appears only when the STATE FRAME said this run has a render (EntryView.video, resolved
+// by the same helper /api/video serves through), so the button and the route cannot disagree.
+// Everything else gets an explicit dash: a blank cell in a 19-column table reads as a rendering
+// fault, while "–" is the same "nothing here" the metric columns already use.
+const takeCell = (e, a) =>
+	e.video
+		? `<td class="treecell"><button class="btnv" data-vidjob="${esc(e.jobId)}" data-vidarm="${esc(a.id || "")}" data-tip="${esc(TAKE_TIP)}">▶</button></td>`
+		: `<td class="treecell"><span class="meta" data-tip="${esc(TAKE_TIP)}">–</span></td>`;
 
 // The Graphs column: one cell per ROW GROUP (the graphs page is per arm × model, so it spans
 // the group's run lines the way the identity cells do), opening /graphs in its own tab.
@@ -1580,11 +1599,12 @@ function compileRow(a, p) {
 	// This inert row mirrors the board's column order by HAND (no variantCell/passRows split
 	// to lean on), so it must be kept in step with TASK_HEAD: Task(=src), Variant, Runs, the
 	// three Sees/Has dashes (no model runs, so no perception channels), Acts With, Model,
-	// Tokens, Cost, Actions, the four explore dashes, Convergence, Map, Graphs — 18 cells.
+	// Tokens, Cost, Actions, the four explore dashes, Convergence, Map, Take, Graphs — 19 cells.
+	// A compile is a local file transform with nothing to see, so Take is a dash by construction.
 	return `<tr class="crow chrow">${srcCell}<td class="arm" data-tip="${esc(tip)}"><span class="dn">${esc(displayName(a))}</span>${badge}</td>
 		${runsCell(p, null)}<td class="see">–</td><td class="see">–</td><td class="see">–</td><td class="num">–</td><td class="num">–</td>
 		<td class="num">–</td><td class="num">–</td><td class="num">–</td>
-		${NO_EXPLORE_CELLS}${NO_CONV_CELL}<td class="treecell"></td><td class="treecell"></td></tr>`;
+		${NO_EXPLORE_CELLS}${NO_CONV_CELL}<td class="treecell"></td><td class="treecell"></td><td class="treecell"></td></tr>`;
 }
 
 /* ---- row detail: appmap + path ------------------------------------------------------- */
@@ -1665,17 +1685,10 @@ function detailRowHtml(a, p, key) {
 	// A failed detail fetch caches its reason in d.note — surface it, or the dropdown reads
 	// as "this run simply has nothing" when the truth is "the fetch failed".
 	const fetchNote = d && d.note && !d.graph ? `<div class="d-note">⚠ ${esc(d.note)}</div>` : "";
-	// A filmed run offers its take. Only when the detail found the render ON THIS MACHINE, so
-	// the button's existence is the same claim the server can satisfy — the alternative (always
-	// offer it, 404 on click) makes an uncollected run look like a broken deploy. Explores never
-	// have one by design (matrix.ts's `filmed`), which is most rows.
-	const watch = d && d.video
-		? `<div style="margin-top:10px"><button class="btnv" data-vidjob="${esc(sel)}" data-vidarm="${esc(a.id || "")}">▶ Watch the take</button>
-			<span class="meta" style="margin-left:8px">filmed run · cursor composited in post</span></div>`
-		: "";
-	// The convergence chart moved to the row's graphs page (the 📊 cell) — the dropdown
-	// stays the run's live console: prompt, notes, log.
-	return `<tr class="detail-row"><td colspan="${NCOLS}"><div class="d-prompt">${prompt}</div>${note}${fetchNote}${watch}
+	// The convergence chart moved to the row's graphs page (the 📊 cell) and the take to the
+	// row's ▶ cell (David, 2026-08-03) — the dropdown stays the run's live console: prompt,
+	// notes, log. One home per artifact, the same rule the map follows.
+	return `<tr class="detail-row"><td colspan="${NCOLS}"><div class="d-prompt">${prompt}</div>${note}${fetchNote}
 		<div class="logwrap" data-logjob="${esc(sel)}" data-loghost="${esc(e.host || "")}"></div></td></tr>`;
 }
 
@@ -2631,8 +2644,9 @@ $("board-tools").addEventListener("click", (ev) => {
 $("board").addEventListener("click", (ev) => {
 	const vt = ev.target.closest("[data-viewtree]");
 	if (vt) { requestTree(vt.dataset.viewtree); return; }
-	// Before the chip handler: the ▶ lives INSIDE an open dropdown, and letting the click fall
-	// through to the row toggle would collapse the row the player was opened from.
+	// Before the chip handler: the ▶ is a row cell, and a row's cells sit inside the same <tr>
+	// the chip handler reads — letting the click fall through would toggle the dropdown behind
+	// the player every time someone opens a take.
 	const vid = ev.target.closest("[data-vidjob]");
 	if (vid) { openVideo(vid.dataset.vidjob, vid.dataset.vidarm); return; }
 	// Lineage disclosure: folds the runs under one group header. Checked before the run chips
