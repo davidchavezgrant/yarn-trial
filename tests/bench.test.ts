@@ -1594,6 +1594,9 @@ test("watchPhase__DispatchesTheNextPhaseOnce__When__ThenIsGiven", async () => {
 			const fired: number[] = [];
 			const lines: string[] = [];
 			const p = await watchPhase({
+				// The live default polls the fleet and can CANCEL queued jobs; watchPhase refuses to run
+				// without an injected one under test, for the same reason collectFn does.
+				rebalanceFn: async () => [],
 				phase: 1,
 				then: 2,
 				date: DATE,

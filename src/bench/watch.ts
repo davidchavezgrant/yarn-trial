@@ -66,6 +66,14 @@ export interface WatchOptions {
 	/** Stop after this many polls regardless — a backstop against watching a wedged fleet forever. */
 	maxPolls?: number;
 	/**
+	 * Move queued jobs onto Macs that freed up (rebalance.ts). On by default — the whole point
+	 * is that nobody remembers to run it, which is how `stranded()` went unconsumed for three
+	 * days while two Macs idled behind a six-job queue.
+	 *
+	 * Injected by tests, and set to a no-op by any caller that must not touch the fleet.
+	 */
+	rebalanceFn?: () => Promise<Array<{ armId: string; from: string; to: string }>>;
+	/**
 	 * Stop early (returning not-done) when progress is unchanged for this many CONSECUTIVE
 	 * polls. Off by default. Exists because a job record can wedge in `running` forever — the
 	 * archive holds seven, the oldest days-stale — and the only other exit is maxPolls, which
@@ -88,6 +96,8 @@ export async function watchPhase(opts: WatchOptions): Promise<PhaseProgress> {
 	// that a failure instead of interference nobody would attribute to a test run.
 	if (!opts.collectFn && process.env.NODE_TEST_CONTEXT)
 		throw new Error("watchPhase: inject collectFn under test — the default pulls from the live fleet");
+	if (!opts.rebalanceFn && process.env.NODE_TEST_CONTEXT)
+		throw new Error("watchPhase: inject rebalanceFn under test — the default polls the live fleet and can cancel jobs");
 	const collectFn = opts.collectFn ?? (() => collect({ date }));
 	const maxPolls = opts.maxPolls ?? Number.POSITIVE_INFINITY;
 
@@ -105,6 +115,17 @@ export async function watchPhase(opts: WatchOptions): Promise<PhaseProgress> {
 			// the watch. The next poll tries again.
 			log(`collect failed (retrying): ${(e as Error).message}`);
 		}
+		// AFTER the collect, so the fleet read reflects the runs that just landed — a Mac that
+		// finished during this tick is idle now, and its queue is where the next job should go.
+		try {
+			const moved = await (opts.rebalanceFn ?? (async () => (await import("./rebalance.js")).rebalanceStranded({ date, model, log })))();
+			if (moved.length) log(`rebalanced ${moved.length} queued job(s) onto idle hosts: ${moved.map((v) => `${v.armId} ${v.from}\u2192${v.to}`).join(", ")}`);
+		} catch (e) {
+			// Same rule as collect: a bad moment, not a bad run. An unreachable Mac must not end
+			// the watch, and a job that failed to move is still queued where it was.
+			log(`rebalance failed (retrying next poll): ${(e as Error).message}`);
+		}
+
 		progress = phaseProgress(opts.phase, readManifest(date, liveDir(outDir())), model);
 		const line = `phase ${opts.phase}: ${progress.inFlight} in flight, ${progress.outstanding} sample(s) still owed`;
 		// Only on change: a two-hour watch at 120s is sixty identical lines otherwise.

@@ -372,6 +372,9 @@ test("watchPhase__StopsEarlyWithoutTouchingRuns__When__ProgressStallsPastTheBudg
 	// makes every poll report the same "9 samples owed" line, which is exactly a stall.
 	let polls = 0;
 	const progress = await watchPhase({
+		// The live default polls the fleet and can CANCEL queued jobs; watchPhase refuses to run
+		// without an injected one under test, for the same reason collectFn does.
+		rebalanceFn: async () => [],
 		phase: 1,
 		date: "2030-01-01",
 		intervalSec: 15,
