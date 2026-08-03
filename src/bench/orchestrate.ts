@@ -496,7 +496,12 @@ export async function runPhase(phase: Phase, opts: PhaseOptions = {}): Promise<n
 				submittedAt: new Date().toISOString(),
 				state: result.queued ? "queued" : "running",
 				collected: false,
-				...(opts.model ? { model: opts.model } : {}),
+				// The ARM's model, not the pass's — armModel() is the same resolution dispatch
+				// used, and the entry has to agree with it. Recording the pass model on a pinned
+				// arm made the manifest say Sol for a run dispatched as Claude, and then
+				// submittedCount looked for Claude entries, found none, and re-dispatched the
+				// whole arm every pass: three arms sat at n=6 with the wrong model on all six.
+				...(armModel(p.arm, opts.model) ? { model: armModel(p.arm, opts.model) } : {}),
 				...(p.arm.env ? { env: p.arm.env } : {}),
 				...(recipe ? { recipe } : {}),
 			},

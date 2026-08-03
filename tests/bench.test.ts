@@ -1588,3 +1588,19 @@ test("visionOnlyArms__RunOnCdpToo__When__TheOffsetIsTheSuspect", () => {
 	assert.ok(vo.some((a) => a.dispatch.backend === "cdp"), "vision-only must be measured on cdp");
 	assert.ok(vo.some((a) => a.dispatch.backend === "ax"), "and still on ax, or the comparison is gone");
 });
+
+test("runPhase__RecordsTheArmsOwnModel__When__AnArmIsPinnedToAnother", async () => {
+	// The manifest entry must name the model the run was DISPATCHED with. Recording the pass
+	// model on a pinned arm is not a cosmetic mismatch: submittedCount then looks for entries
+	// under the pinned model, finds none, and re-dispatches the arm on every pass. Three Claude
+	// arms reached n=6 with "azure/gpt-5.6-sol" on all six rows before this was caught.
+	await withTempAsync("bench-pin-", async (dir) => {
+		const fake = fakeDispatch();
+		await runPhase(7, { go: true, date: DATE, outRoot: dir, dispatchFn: fake.fn, log: () => {} });
+		const claude = fake.calls.filter((c) => c.model === "anthropic/claude-opus-5");
+		assert.ok(claude.length > 0, "the Claude arms must dispatch as Claude");
+		const m = readManifest(DATE, liveDir(dir));
+		for (const e of m.entries.filter((x) => x.armId.includes("claude")))
+			assert.equal(e.model, "anthropic/claude-opus-5", `${e.armId} recorded ${e.model}, so counting will re-dispatch it forever`);
+	});
+});
