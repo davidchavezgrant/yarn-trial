@@ -3,94 +3,103 @@
 **Date**: 2026-08-02
 **Trigger**: `PASS-cdp-grounded-no-vision-humanized.mp4` — at ~23s the cursor clicks the Cursor
 Style control and nothing opens. It clicks again 4s later, 2px away, and the value has changed.
-**Status**: phenomenon proven and reproducible; the mechanism is narrowed to two candidates and
-needs one live check against Yarn to close.
+**Verdict**: **a Yarn rendering bug, not a capture bug.** The menu opens in the DOM and paints
+zero pixels — for a human at the keyboard as much as for the agent. The recording is accurate.
 
-## What is proven
+## What the video shows is what was on screen
 
 Source run: `out/bench/live/2026-08-02T18-51-49-069-yarn` (cdp, grounded, no-vision, judged PASS).
 
-**The dropdown is open — the tree says so, the pixels do not.** Step 5 clicks the Cursor Style
-combobox; its expectation ("Pointer-first and Original appear") verifies against the post-action
-observation, and step 6 clicks `ref=f1e1885`, an option with rect `(1434, 248.47, 116, 24)` —
-directly below the combobox at `(1433, 223.97, 112, 25)`. The interactive-node count collapses
-102 → 15 for that one observation, which is what an open modal layer looks like.
+The dropdown is open by every measure the DOM offers, and absent from every pixel anyone can
+capture. Reproduced live against Yarn 0.0.119 over CDP on 2026-08-02:
 
-Over the same interval the capture shows nothing:
+| channel | sees the menu? |
+|---|---|
+| `page.screenshot()` (what `--record` captures every frame through) | no |
+| `screencapture` of the whole display | no |
+| element-scoped raster of the listbox's own bounding box | no — renders the page *underneath* |
+| cua driver window snapshot (the ax backend's channel, different code entirely) | no |
+| **David clicking it by hand** | **no** |
 
-- `pixelDelta` for the open-the-dropdown step is **exactly 0**.
-- The post-click observation frame (`steps/agent-step-5.png`) shows the control closed, reading
-  "Arrow-first".
-- **26 consecutive recording frames** spanning the 4.4s the dropdown is open (31.4s → 35.7s of
-  the capture, sampled ~every 350ms) are pixel-identical in the region the dropdown occupies.
-  The only motion is the text caret. This rules out undersampling: it is not that the poller
-  missed the open state, it is that no captured pixel ever contained it.
+Meanwhile the page insists it is there and visible:
 
-**It is not this run.** Every cdp run in the matrix that opens this control records
-`pixelDelta: 0` on that step (~30 runs across 2026-08-01 and 2026-08-02). It is not one bad take.
+```
+listbox [ref=e447] [box=1430,219,124,82]
+  option "Arrow-first"  [active] [selected] [box=1434,224,116,24]
+  option "Pointer-first"                    [box=1434,248,116,24]
+  option "Original"                         [box=1434,272,116,24]
+```
 
-**It is not the cdp channel either — the ax backend misses it too.** On ax the options come back
-as `AXMenuItem` and the observation screenshot is a macOS *window* snapshot from the cua driver,
-a completely different capture path. `out/bench/live/2026-08-01T19-54-15-015-yarn/steps/agent-step-4.png`
-is that window snapshot taken immediately after the click that opened the dropdown, and it shows
-the panel with Cursor Style closed on "Arrow-first". Both capture channels, both backends, no
-dropdown. So the dropdown is not painted into the Yarn **window**.
+`div.dpSelectMenu.forceDarkTheme`, `data-state="open"`, `opacity: 1`, `visibility: visible`,
+`display: flex`, `z-index: 500`, no transform, no clip, no filter, no pending animations. And
+`document.elementFromPoint()` at the menu's centre returns a `SPAN` **inside the listbox** — so
+Chromium's hit-testing puts it topmost. It is laid out, it is hit-testable, and the compositor
+draws nothing for it.
 
-## The control experiment
+Not an artifact of how it was opened. Same result for a CDP mouse click, for keyboard `Enter`,
+for keyboard `Space`, and with Yarn made genuinely key at the AppKit level first (System Events
+`set frontmost`, the same activation `AxBackend.acquire` performs) rather than merely raised by
+`bringToFront()`.
 
-`scripts`-free probe, headful Chrome, a page holding a native `<select>` and a DOM listbox with
-identical options, captured through both channels at the same instant (display capture first, so
-the page screenshot cannot be accused of dismissing anything):
+## What was ruled out along the way
 
-| control | ai snapshot | `page.screenshot()` | `screencapture` (display) |
+**Undersampling.** 26 consecutive recording frames spanning the 4.4s the dropdown is open
+(31.4s → 35.7s of the capture, ~every 350ms) are pixel-identical in the region it occupies. The
+only motion is the text caret. `pixelDelta` for that step is exactly 0, and so is every other cdp
+run in the matrix that opens this control (~30 runs across 08-01 and 08-02).
+
+**The capture channel.** The ax backend misses it through a completely different path — cua's
+macOS window snapshot — and so does a full-display `screencapture`, which is by definition what a
+human sees.
+
+**A native `<select>` popup.** Worth recording as a separate true finding, because it will bite a
+different target app one day: a real native popup **is** invisible to `Page.captureScreenshot` and
+to window-scoped capture, and visible only to a display capture. Measured in a control page,
+headful Chrome, both channels at the same instant:
+
+| control | ai snapshot | `page.screenshot()` | display capture |
 |---|---|---|---|
-| native `<select>`, popup open | options have **no ref**, `[box=0,0,0,0]` | **absent** | **present** — a real macOS popup floating outside the window |
-| DOM listbox, open | options have refs and real boxes | **present** | present |
+| native `<select>`, open | options have **no ref**, `[box=0,0,0,0]` | absent | **present** |
+| DOM listbox, open | refs and real boxes | present | present |
 
-So a native popup is an OS window: invisible to `Page.captureScreenshot`, invisible to a
-window-scoped capture, visible only to a display capture. That is a real and sufficient mechanism
-for what the video shows — and it is worth knowing on its own, because it applies to every native
-`<select>` in every target app we will ever film.
+Yarn's control is the second row on addressability — real refs, real boxes, options that mount
+only while open — so it is a DOM menu, and a DOM menu is page content that a page screenshot
+cannot miss. That is what forced the conclusion that it is not being painted at all.
 
-## What is not proven
+**A separate Electron window.** The CDP target list is unchanged while the menu is open: one page,
+plus the extension service worker and a blob worker. No new target, no new window.
 
-Yarn's control matches **neither** row cleanly: its options carry refs and real boxes (the DOM
-row) yet appear in no capture (the native row). Two candidates remain:
+## Two things follow
 
-1. **Electron's Chromium exposes an open native popup's geometry** where the Chrome I probed did
-   not, making Yarn a plain native `<select>` after all. Version skew (Electron 38 / Chromium
-   140 vs installed Chrome) is a plausible cause.
-2. **The dropdown renders in a separate Electron child window.** This would also explain the
-   102 → 15 node collapse — 15 interactive nodes is about the size of a popup window's whole
-   tree, not of a modal layer inside a large app.
+**For Yarn (the product).** `div.dpSelectMenu` mounts, lays out, and never paints. The settings
+panel it lives in renders fine, so this is specific to the select menu — worth a bug with the
+build (0.0.119), the selector, and the note that hit-testing still targets it, which means the
+control is *operable while invisible*: keyboard-navigable, clickable if you know where the items
+are, and completely unusable if you don't. That is a nastier failure than a menu that refuses to
+open, because nothing about it looks broken until you try to read it.
 
-These predict different fixes, so the difference is worth one experiment and not worth guessing.
+**For the demo.** The agent succeeded because it drives the DOM, and the DOM was fully functional.
+That is a genuinely good property to be able to state — the agent completed a task through a
+control a human cannot see — but the filmed artifact of it is four seconds of nothing. Until Yarn
+fixes the menu, a filmed take of the cursor-style task cannot show its central action, and no
+amount of capture work changes that. Options, in order of honesty:
 
-**The experiment**: quit Yarn, relaunch it under `src/backends/electron-attach.ts` so the debug
-port is up, click Cursor Style over CDP, and take `page.screenshot()`, `screencapture`, and
-`chrome://inspect`'s target list at the same moment. Two minutes. It needs the app quit, which is
-the operator's call — Yarn was running without a debug port when this was written.
+1. **Wait for the fix.** The task is the canonical one precisely because it is small; this is a
+   rendering bug in the target, and the recording is correct to show what happened.
+2. **Film a different task.** Any control whose state change is visible in the page.
+3. **Synthesize the menu at humanize time** from data the run already has (option names, rects,
+   selected index, open/close timestamps), the way the renderer already synthesizes the hover tint
+   the app never painted. This would draw a menu that *no one ever saw* — a further step than the
+   hover tint, which reconstructs a state the app genuinely entered. Available, and it should be a
+   deliberate choice, not a drift.
 
-## Why it matters beyond the video
+Application-scoped capture (SCK filtered to all of one app's windows, which `native/liveview.swift`
+already has the machinery for) remains worth doing for the native-`<select>` class above — but it
+would not have fixed this one, and should not be built on the premise that it would.
 
-The four verification layers all passed this run and the judge graded it PASS, correctly: the
-setting really did change. What no layer can see is that **the demo does not show the work**. A
-filmed run whose central action is invisible is a failed deliverable even when it is a successful
-run, and `pixelDelta` — the layer built for exactly "the pixels did not move" — recorded 0 and
-stayed advisory, as designed.
+## Where the evidence lives
 
-If the mechanism turns out to be a separate window, the capture fix is **application-scoped**
-capture rather than window-scoped: ScreenCaptureKit's filter can include every window belonging
-to one application, which catches the app's own popups while still keeping unrelated personal
-content off the recording. `native/liveview.swift` already links SCK.
-
-The other option is to synthesize the open menu at humanize time from data the run already has
-(option names, rects, selected index, open/close timestamps), the way the renderer already
-synthesizes the hover tint the app never painted. It is cheaper and it is a fabrication; the
-hover-tint precedent argues it is the same kind of fabrication, but that is a call to make
-deliberately rather than by drifting into it.
-
-Worth telling Jasper either way: Yarn's own recorder is an OS-level screen recorder, so this is
-most likely an artifact of the POC's capture channel rather than something their pipeline would
-inherit. Whether their capture is display-, application-, or window-scoped decides it, and that
-is a question we can just ask.
+Run `2026-08-02T18-51-49-069-yarn` (`steps/agent-step-5.png` is the post-click frame with the
+control closed); ax counterpart `2026-08-01T19-54-15-015-yarn/steps/agent-step-4.png`. The live
+probes were throwaway scripts against Yarn 0.0.119 over `--remote-debugging-port=9333`; the
+captures are in the session scratchpad, not committed.
