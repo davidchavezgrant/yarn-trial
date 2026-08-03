@@ -274,7 +274,12 @@ function renderHeader() {
 	const tiles = [];
 	const tile = (l, v, d) => tiles.push({ l, v, d });
 	tile("runs", `${p.collected ?? 0}/${a.n ?? "?"}`, "collected");
-	tile("success", `${p.successes ?? 0}/${p.collected ?? 0}`);
+	// Over runs that reached an AGENT verdict, matching report.ts and the board. A step-ceiling or
+	// stalled run is the HARNESS ending the run, so counting it in the denominator makes a truncated
+	// run indistinguishable from an agent that could not do the task — 33 points of an arm's rate per
+	// run. `+n⏹` reports them beside the rate; the `runs` tile above still counts them.
+	// `verdictRuns` falls back to `collected` for a pass banked before the field existed.
+	tile("success", `${p.successes ?? 0}/${p.verdictRuns ?? p.collected ?? 0}${p.harnessEnded ? ` +${p.harnessEnded}⏹` : ""}`);
 	if (p.meanSteps != null) tile("actions x̄", fmtNum(p.meanSteps));
 	if (p.meanElapsedSec != null) tile("time x̄", fmtDur(p.meanElapsedSec));
 	if (p.meanModelCalls != null) tile("calls x̄", fmtNum(p.meanModelCalls));

@@ -192,6 +192,24 @@ export interface PassView {
 	submitted: number;
 	collected: number;
 	successes: number;
+	/**
+	 * ArmRollup.harnessEnded / ArmRollup.verdictRuns, carried verbatim from the report's own
+	 * rollup — the honest success denominator and the count carved out of it.
+	 *
+	 * On the wire because the board renders a success rate over the SAME manifest the report
+	 * tabulates, and the two surfaces may never disagree about it. `successes` keeps the old
+	 * meaning (report.ts deliberately did not redefine it, precisely because this file copies
+	 * it); every rate on the page divides it by `verdictRuns` instead of `collected`.
+	 *
+	 * A run the harness ended — the AGENT_STALL_STEPS stall streak, or the AGENT_STEPS runaway
+	 * backstop (src/core/agent/run.ts's stopping contract) — is not evidence about the agent, so
+	 * it belongs in neither half of a rate. Folded in, one truncated run in a 3-run arm was a
+	 * plain zero: a 33-point swing indistinguishable from an agent that could not do the task.
+	 * It still counts everywhere else on the board (done, Finished, the failure breakdown, the
+	 * outcomes chart's own segment) — the carve-out is only in the rate.
+	 */
+	harnessEnded: number;
+	verdictRuns: number;
 	usd: number;
 	/**
 	 * Runs that actually priced (a card existed, directly or via the default-model fallback).
@@ -313,7 +331,12 @@ export interface DashState {
 	 * Absent when zero, so a healthy pass carries no field and the page renders no warning.
 	 */
 	unmatchedEntries?: number;
-	progress: { planned: number; submitted: number; collected: number; running: number; queued: number; successes: number };
+	/**
+	 * `harnessEnded`/`verdictRuns` are the pass-wide twins of PassView's (see there for why the
+	 * rate excludes them): `collected` keeps counting every banked run, and only the rate the
+	 * hero tile quotes uses `verdictRuns` as its denominator.
+	 */
+	progress: { planned: number; submitted: number; collected: number; running: number; queued: number; successes: number; harnessEnded: number; verdictRuns: number };
 	fleet: FleetView;
 	arms: ArmView[];
 	cost: {
@@ -581,6 +604,11 @@ function passView(arm: Arm, model: string | undefined, entries: ManifestEntry[],
 		submitted: entries.length,
 		collected: r.collected.length,
 		successes: r.successes,
+		// Straight off the rollup, never recomputed here: the report and the board must divide
+		// the same numerator by the same denominator, and a second implementation of "which
+		// failureKinds are the harness's, not the agent's" is how they drift apart.
+		harnessEnded: r.harnessEnded,
+		verdictRuns: r.verdictRuns,
 		usd: priced.reduce((s, p) => s + (p.usd ?? 0), 0),
 		// Tokenless entries (compiles) are neither priced nor unpriced — see priceWithFallback.
 		// `priced` rides the wire so the page's target-filtered recompute counts exactly what
@@ -840,9 +868,49 @@ export function runEventLine(kind: string, detail: unknown): string {
 }
 
 /**
+ * Run keys with an event log this machine can reach, newest first, capped at EVENT_SCAN_DIRS.
+ *
+ * Live AND the archive, deduped by key, because collect EVICTS a failed run's directory out of
+ * live the moment its metrics are banked (collect.ts's evictFailedRun) — and a live-only scan
+ * therefore lost exactly the runs whose event trail is most worth reading. For a `stalled` run
+ * the heartbeat trail through the dead steps is the primary evidence for WHY nothing verified:
+ * whether the app went dark, or the text channel simply could not see legitimate progress. That
+ * evidence used to disappear from the Events pane the instant the numbers landed.
+ *
+ * Live wins on a key present in both: the archive copy is a hard link to the same inode
+ * (paths.ts's archiveRun), so it is the same bytes either way, and resolving through the live→
+ * archive ladder every other reader uses keeps one answer to "where is this run".
+ *
+ * Only keys the live scan did NOT already produce are stat'd in the archive, so a long-lived
+ * archive (hundreds of dirs, all of them also in live) costs one readdir rather than a second
+ * full stat sweep per push.
+ */
+function eventLogKeys(outRoot: string): string[] {
+	const seen = new Map<string, number>();
+	for (const root of [path.join(outRoot, LIVE_DIR), path.join(outRoot, ARCHIVE_DIR)]) {
+		let names: fs.Dirent[];
+		try {
+			names = fs.readdirSync(root, { withFileTypes: true });
+		} catch {
+			continue; // no live store yet, or no backups taken — the other root still counts
+		}
+		for (const d of names) {
+			if (!d.isDirectory() || seen.has(d.name)) continue;
+			try {
+				seen.set(d.name, fs.statSync(path.join(root, d.name)).mtimeMs);
+			} catch {
+				// raced a delete (or an eviction) — skip the dir, keep the scan
+			}
+		}
+	}
+
+	return [...seen].sort((a, b) => b[1] - a[1]).slice(0, EVENT_SCAN_DIRS).map(([name]) => name);
+}
+
+/**
  * The merged Events feed: run-folder event logs + the dash's in-memory operational ring.
  *
- * Scans the live store's run dirs newest-mtime first (capped — see EVENT_SCAN_DIRS), tails
+ * Scans the newest run dirs first (capped — see EVENT_SCAN_DIRS and eventLogKeys), tails
  * each events.jsonl, tags those lines source:"run" with their runKey, tags the ring's lines
  * source:"dash", and returns the newest `limit` in CHRONOLOGICAL order — the wire has always
  * been oldest-first (the page reverses for display), and keeping that contract is what lets
@@ -852,22 +920,14 @@ export function runEventLine(kind: string, detail: unknown): string {
 export function storeEvents(dashRing: DashEvent[], limit = 200, outRoot = outDir(), extra: DashEvent[] = []): DashEvent[] {
 	const fromRuns: DashEvent[] = [];
 	try {
-		const liveRoot = path.join(outRoot, LIVE_DIR);
-		const dirs = fs.readdirSync(liveRoot, { withFileTypes: true })
-			.filter((d) => d.isDirectory())
-			.map((d) => {
-				try {
-					return { name: d.name, mtimeMs: fs.statSync(path.join(liveRoot, d.name)).mtimeMs };
-				} catch {
-					return undefined; // raced a delete — skip the dir, keep the scan
-				}
-			})
-			.filter((x): x is { name: string; mtimeMs: number } => x !== undefined)
-			.sort((a, b) => b.mtimeMs - a.mtimeMs)
-			.slice(0, EVENT_SCAN_DIRS);
+		const keys = eventLogKeys(outRoot);
 		if (eventTailCache.size > 10 * EVENT_SCAN_DIRS) eventTailCache.clear();
-		for (const d of dirs) {
-			const file = path.join(liveRoot, d.name, RUN_FILES.events);
+		for (const key of keys) {
+			// runFile, not a live path: the same live→archive→pre-`bench/` ladder every other
+			// per-run read uses, so an evicted run's log is found where it now lives. The cache
+			// keys on the resolved path, so a run moving homes re-reads rather than serving the
+			// tail from its old one.
+			const file = runFile(key, RUN_FILES.events, outRoot);
 			let st: fs.Stats;
 			try {
 				st = fs.statSync(file);
@@ -886,7 +946,7 @@ export function storeEvents(dashRing: DashEvent[], limit = 200, outRoot = outDir
 				// (RunProgress folds them); only the FEED skips them.
 				parsed = parseRunEvents(fs.readFileSync(file, "utf8").split("\n").slice(-(EVENT_TAIL_LINES + 1)).join("\n"))
 					.filter((ev) => ev.kind !== "usage")
-					.map((ev) => ({ t: ev.t, line: runEventLine(ev.kind, ev.detail), runKey: d.name, source: "run" as const }));
+					.map((ev) => ({ t: ev.t, line: runEventLine(ev.kind, ev.detail), runKey: key, source: "run" as const }));
 			} catch {
 				continue;
 			}
@@ -894,7 +954,7 @@ export function storeEvents(dashRing: DashEvent[], limit = 200, outRoot = outDir
 			fromRuns.push(...parsed);
 		}
 	} catch {
-		// No live store yet — the dash ring alone is the feed.
+		// No store at all yet — the dash ring alone is the feed.
 	}
 
 	// `extra` is the remote tails (startDash's ssh fetch of running fleet jobs' event logs) —
@@ -1082,11 +1142,21 @@ const progressCache = new Map<string, { mtimeMs: number; size: number; progress?
  * Results-so-far for a run whose events.jsonl is on THIS machine (local runs, and remote
  * runs once pulled). The WHOLE file, unlike storeEvents' display tail: counters must not
  * saturate at a tail cap — a 96-action explore writes more heartbeats than 50 lines hold.
- * Live-only on purpose: an uncollected run lives in out/bench/live, and a run old enough
- * to need the archive fallback has real metrics to read instead.
+ *
+ * Resolved through runFile's live→archive ladder rather than read out of live directly. The
+ * old live-only rule reasoned that "a run old enough to need the archive fallback has real
+ * metrics to read instead" — true of the metric tiles, and wrong about the runs whose artifacts
+ * leave live while the manifest still calls them uncollected: `runs drop`/`runs purge` move a
+ * live directory to the archive on an operator's word alone, with no regard for whether a
+ * collect pass has banked it. Those runs' counters simply went blank, and for a run the harness
+ * ended on a stall streak the heartbeat trail through the dead steps is the evidence that says
+ * whether the app went dark or the text channel could not see real progress.
+ *
+ * Still not read for COLLECTED entries — liveProgress skips those, and EntryView.live remains
+ * uncollected-only so no row ever carries two answers to "how many steps".
  */
 export function localRunProgress(runKey: string, outRoot = outDir()): RunProgress | undefined {
-	const file = path.join(outRoot, LIVE_DIR, runKey, RUN_FILES.events);
+	const file = runFile(runKey, RUN_FILES.events, outRoot);
 	let st: fs.Stats;
 	try {
 		st = fs.statSync(file);
@@ -1330,6 +1400,14 @@ export function narratorPrompt(
 		"surfaces, graph nodes, scope ambiguities); what vision costs/buys; whether procedure replay",
 		"is fleet-ready; judge disagreements with self-reports.",
 		"",
+		// The digest carries `collected`, `successes`, `harnessEnded` and `verdictRuns`, and a note
+		// that divided by `collected` would contradict the board and the report over the same runs
+		// — the narrative is one of the surfaces that quotes this rate out loud.
+		"Success rates are successes over verdictRuns — collected runs MINUS harnessEnded, the runs",
+		"the HARNESS ended (a stall streak, or the 100-step runaway backstop, neither of which is the",
+		"agent's verdict). Never quote a rate over `collected`: a run that was cut off was never",
+		"graded, and counting it as a miss reads as an agent that could not do the task.",
+		"",
 		"Write 2–3 sentences, Strunk & White style: plain, active, omit needless words. Every",
 		"sentence is one finding carried by its numbers (ratios beat raw counts). Newest or most",
 		"decision-relevant first. No preamble, no inventory of what hasn't run, no hedging",
@@ -1509,6 +1587,18 @@ function graftFilmedRuns(arms: ArmView[]): void {
 	}
 }
 
+/**
+ * The two failureKinds where the HARNESS ended the run rather than the agent reaching a verdict
+ * (src/core/agent/run.ts's stopping contract; classified by collect.ts's failureKind).
+ *
+ * A copy of report.ts's private HARNESS_ENDED, and deliberately the ONLY copy on this side: every
+ * per-arm number comes off `rollup()` itself, so this predicate is used once — for the pass-wide
+ * `progress` tally, which counts manifest entries that may have no arm to roll up. Anything else
+ * on this board that needs the distinction must read `harnessEnded`/`verdictRuns` off the rollup
+ * rather than re-testing failureKind strings here.
+ */
+const HARNESS_ENDED = new Set(["step-ceiling", "stalled"]);
+
 export function buildState(manifest: Manifest, fleet: FleetView, events: DashEvent[], autoCollect: boolean, defaultModel?: string, live?: Map<string, RunProgress>): DashState {
 	const arms: ArmView[] = MATRIX.map((arm) => ({
 		id: arm.id,
@@ -1599,6 +1689,11 @@ export function buildState(manifest: Manifest, fleet: FleetView, events: DashEve
 	// report its own absence, which is precisely the failure this exists to make visible.
 	const unmatchedEntries = manifest.entries.filter((e) => !armById(e.armId)).length;
 
+	// The pass-wide twin of ArmRollup.harnessEnded. Counted off `collectedEntries` rather than
+	// summed from the arms' rollups because this tally counts the MANIFEST — including runs whose
+	// armId matches no arm in MATRIX, which have no rollup to sum (see unmatchedEntries above).
+	const harnessEnded = collectedEntries.filter((e) => HARNESS_ENDED.has(e.metrics?.failureKind ?? "")).length;
+
 	return {
 		date: manifest.date,
 		generatedAt: new Date().toISOString(),
@@ -1612,6 +1707,9 @@ export function buildState(manifest: Manifest, fleet: FleetView, events: DashEve
 			running: allEntries.filter((e) => e.status === "running").length,
 			queued: allEntries.filter((e) => e.status === "queued").length,
 			successes: collectedEntries.filter((e) => e.metrics?.success === true).length,
+			// `collected` above still counts these; only the hero's rate divides by verdictRuns.
+			harnessEnded,
+			verdictRuns: collectedEntries.length - harnessEnded,
 		},
 		fleet,
 		arms,
@@ -2410,7 +2508,10 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 			if (busy.some((r) => r.jobId === jobId)) continue;
 			s.misses += 1;
 			const entry = manifest.entries.find((en) => en.jobId === jobId);
-			const localFile = path.join(outDir(), LIVE_DIR, jobId, RUN_FILES.events);
+			// runFile, matching what storeEvents now resolves: the two probes must agree on "the
+			// truth exists locally", or a run whose log landed in the archive rather than in live
+			// would be emitted by the local scan AND kept on the remote tail — every line twice.
+			const localFile = runFile(jobId, RUN_FILES.events);
 			if (s.misses > 2 || entry?.collected || fs.existsSync(localFile)) remoteRuns.delete(jobId);
 		}
 		// Parallel across hosts (≤3, one run each); per-job isolation — one dead host must
@@ -2451,7 +2552,9 @@ export async function startDash(opts: DashOptions): Promise<http.Server> {
 	 */
 	const remoteFeed = (): DashEvent[] =>
 		[...remoteRuns]
-			.filter(([jobId]) => !fs.existsSync(path.join(outDir(), LIVE_DIR, jobId, RUN_FILES.events)))
+			// Same ladder as the local scan (see the poll-time probe above) — one answer to
+			// "is this run's log already on this machine", or the merge doubles its lines.
+			.filter(([jobId]) => !fs.existsSync(runFile(jobId, RUN_FILES.events)))
 			.flatMap(([jobId, s]) =>
 				// Usage events skip the feed (counter channel, not narrative — they render in the
 				// metric columns); filtered BEFORE the tail cap so counters never eat the window.

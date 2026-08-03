@@ -454,13 +454,29 @@ const DECLARED_TIP = "DECLARED — the Vision-only pass has no element list to c
 // log's numbers take the line back.
 const LIVE_CELL_TIP = "LIVE — off the running run's own event log; provisional until collected";
 const ENDED_CELL_TIP = "run ended — value off its event log; provisional until collected";
+// ---- OUTCOME_VOCAB_START ----------------------------------------------------------------
+// Every run end state's color, its label, and the success rate built from them. Kept as ONE
+// contiguous block because tests/dash.test.ts slices it out of this file and evaluates it
+// verbatim — there is no import boundary to test browser code through here, and "the new
+// failureKind renders as a hollow unknown dot" is exactly the sort of defect that is otherwise
+// only ever found by opening the page. Self-contained by contract: nothing between the markers
+// may touch the DOM, `state`, or anything declared below the END marker. The two color tokens
+// it borrows from above (RUNNING, REFUSED) are the only exception, and the test asserts their
+// values so a rename cannot drift past it. LINE comments, not a block: the test evaluates
+// every line after this one, and a `*/` inside that slice would not parse.
 const STATUS = { good: "var(--good)", warning: "var(--warning)", serious: "var(--serious)", critical: "var(--critical)" };
+// Wire values (statuses, failure kinds, fleet states) render Title Case but are COMPARED
+// lowercase everywhere — capitalize at paint time only, never in a data-field check.
+const statusLabel = (s) => String(s).split("-").map((w) => w ? w[0].toUpperCase() + w.slice(1) : w).join(" ");
 // Every status the wire can put on an entry has an explicit entry here; statusChip renders
 // anything NOT in this map as a hollow "unknown" dot rather than dressing it as a known
 // state. Families share a hue and the chip label discriminates within the family:
 //   critical = the agent failed the task (failed, gave-up)
 //   serious  = technical/invalid, not an agent verdict (crashed, unready = host problem,
 //              grounding-mismatch = run completed but did not measure what the arm claims)
+//   warning  = the HARNESS ended the run, so there is no agent verdict either way (stalled,
+//              step-ceiling — see HARNESS_ENDED_TIPS). Amber because inconclusive is neither
+//              a failure nor a pass; it is free for this because awaiting-collect went green.
 //   refused  = a gate deliberately declined to run/compile (refused, hinted-refused) —
 //              its own token: --s5 magenta already means "mutated by this run" on the map
 //   muted    = the waiting family (queued dots and the outcomes chart's pending segments)
@@ -476,12 +492,67 @@ const OUTCOME_COLORS = {
 	// "refused": a metric-less collected entry whose manifest state is failed — a compile
 	// the gate refused. Same refusal family (and color) as hinted-refused.
 	refused: REFUSED,
+	// The harness-ended pair (src/core/agent/run.ts's stopping contract). Without them both
+	// chipped through the hollow dot.unknown fallback — a real, classified outcome rendering
+	// as "the page has never heard of this".
+	stalled: STATUS.warning, "step-ceiling": STATUS.warning,
 	failed: STATUS.critical, pending: "var(--muted)",
 	collected: STATUS.good,
 };
 // One resolver for chart segments AND their legend swatches, so a segment can never render
 // a color its legend doesn't show. Unknown kinds get ink — visible, claimed by no state.
 const outcomeColor = (k) => OUTCOME_COLORS[k] || "var(--ink)";
+/**
+ * TWO DIFFERENT THINGS ON THIS PAGE ARE CALLED STALLED, and they are not the same fact:
+ *
+ *   failureKind "stalled" — a FINISHED run the harness ended after AGENT_STALL_STEPS (8)
+ *     consecutive steps verified nothing. A final outcome, and one of the two runs the
+ *     success rate refuses to divide by.
+ *   EntryView.stalled — a RUNNING job whose log FILE has gone quiet for the fleet poll's
+ *     STALL_SEC (measured off the log mtime, nothing else). Provisional: the run may be
+ *     mid-screenshot and about to speak, and it says nothing about whether steps verify.
+ *
+ * One is a verdict, the other is a symptom of a job that is still going — so the word
+ * "Stalled" belongs to the verdict alone (it is the wire's word, and the report's), and the
+ * live flag renders as LIVE_SILENT_LABEL, which is what the fleet actually measured. Never
+ * re-unify them: a reader who meets one word twice reads one fact, and would take a running
+ * job to have already been cut off by the harness. (A third, unrelated stall lives in the
+ * autopilot — a 90-minute flat-progress abort — and it is about the OPERATOR's patience, not a
+ * run's; it does not belong in this vocabulary either. The peek watchdog used to call a quiet
+ * video stream "Stalled" too; it now says "No frames", for exactly this reason.)
+ */
+const LIVE_SILENT_LABEL = "Log Silent";
+const LIVE_SILENT_TIP = "the run's log file has gone quiet — the fleet's own reading, off the log's mtime. NOT the `stalled` outcome: this job is still running and may simply be mid-screenshot, and nothing here says whether its steps are verifying.";
+// What the harness-ended outcomes MEAN, in the tooltip, because the chip has room for one word
+// and one word cannot carry "the harness cut this off and nobody graded the agent".
+const HARNESS_ENDED_TIPS = {
+	stalled: "the HARNESS ended this run: AGENT_STALL_STEPS (8) consecutive steps verified nothing, the mechanical reading of \"it truly cannot proceed\". Not the agent's own verdict, so it is out of the success rate's denominator — read its event trail for whether the app went dark or the channel just could not see progress.",
+	"step-ceiling": "the HARNESS ended this run at the AGENT_STEPS (100) runaway backstop — a backstop, never a budget. Reaching it says the loop was not converging, not that the agent failed, so it is out of the success rate's denominator.",
+};
+/** ` +1⏹` — the harness-ended tail both readouts below carry, and nothing at all when none were. */
+const harnessMark = (n) => (n ? ` +${n}⏹` : "");
+/**
+ * The success rate, exactly as report.ts's successCell renders it: `2/2 +1⏹`.
+ *
+ * Numerator: runs that succeeded. Denominator: `verdictRuns` — collected runs that reached an
+ * AGENT verdict, which is `collected` minus the runs the harness ended. A truncated run is not
+ * evidence about the agent, and folding it in cost a 3-run arm 33 points per truncation,
+ * indistinguishable in the headline number from an agent that could not do the task.
+ *
+ * `—` at a zero denominator, matching report.ts's `pct`: an arm whose every run was cut off
+ * reads "no verdict yet", never "0%". The ⏹ count rides alongside so nothing disappears — and
+ * `done`/Finished, the failure breakdown and the outcomes chart all still count these runs.
+ * The carve-out is only in the rate, which is the one number a reader quotes.
+ */
+const successRate = (successes, verdictRuns, harnessEnded) =>
+	(verdictRuns > 0 ? `${successes}/${verdictRuns}` : "—") + harnessMark(harnessEnded);
+/** The hero tile's wording of the same numbers — "no verdict yet" spelled out, since a bare `—` beside a word reads as broken. */
+const successLine = (successes, verdictRuns, harnessEnded) =>
+	verdictRuns > 0 ? `${successes}/${verdictRuns} Succeeded${harnessMark(harnessEnded)}`
+	: harnessEnded ? `No verdict yet${harnessMark(harnessEnded)}`
+	: "0 Succeeded";
+const SUCCESS_TIP = "self-reported successes over the runs that reached an AGENT verdict — the judge's verdicts live in the Judge card.\n⏹ = runs the HARNESS ended (a stall streak, or the runaway step backstop). They are counted in Finished and in the outcomes chart, and deliberately left out of this rate: a run that was cut off is not evidence about the agent. Same denominator the report's success column uses.";
+// ---- OUTCOME_VOCAB_END ------------------------------------------------------------------
 const fmtMoney = (n) => n < 0.01 && n > 0 ? "$" + n.toFixed(4) : "$" + n.toFixed(2);
 // Seconds stay visible past the hour mark — they are what makes a live ticker read as live.
 // Floor the seconds component everywhere: rounding rolled 59.5s over to "60s" and "1m60s".
@@ -491,9 +562,6 @@ const fmtDur = (s) => s == null ? "–"
 const fmtNum = (n) => n == null ? "–" : Number.isInteger(n) ? String(n) : n >= 100 ? String(Math.round(n)) : n.toFixed(1);
 const fmtK = (n) => n == null ? "–" : n >= 10000 ? (n / 1000).toFixed(0) + "k" : n >= 1000 ? (n / 1000).toFixed(1) + "k" : fmtNum(n);
 const hhmm = (iso) => { const d = new Date(iso); return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); };
-// Wire values (statuses, failure kinds, fleet states) render Title Case but are COMPARED
-// lowercase everywhere — capitalize at paint time only, never in a data-field check.
-const statusLabel = (s) => String(s).split("-").map((w) => w ? w[0].toUpperCase() + w.slice(1) : w).join(" ");
 
 // var, not let: top-level var binds to window, so a debugger (or a test driving the page)
 // can inject a synthetic state and call render() by hand.
@@ -542,13 +610,23 @@ function visibleStats() {
 		return { progress: state.progress, cost: state.cost, costSeries: state.costSeries, judge: state.judge };
 	const arms = visibleArms();
 	const entries = arms.flatMap((a) => a.passes.flatMap((p) => p.entries));
+	const collected = entries.filter((e) => e.collected).length;
+	// SUMMED from the passes, never re-derived by testing failureKind strings here: which kinds
+	// count as harness-ended is report.ts's rule (HARNESS_ENDED), the server already applied it
+	// per arm, and a second copy of that vocabulary on this page is how the board and the report
+	// come to show different rates for the same runs — the exact defect this replaced.
+	const harnessEnded = arms.reduce((s, a) => s + a.passes.reduce((t, p) => t + (p.harnessEnded || 0), 0), 0);
 	const progress = {
 		planned: arms.reduce((s, a) => s + a.n, 0),
 		submitted: entries.length,
-		collected: entries.filter((e) => e.collected).length,
+		// Every banked run, harness-ended included: nothing disappears from the Finished tile.
+		collected,
 		running: entries.filter((e) => e.status === "running").length,
 		queued: entries.filter((e) => e.status === "queued").length,
 		successes: entries.filter((e) => e.success === true).length,
+		harnessEnded,
+		// The rate's honest denominator — runs that reached an agent verdict (see successRate).
+		verdictRuns: collected - harnessEnded,
 	};
 	// Same per-model-pass grouping as the server's cost section: only dollars are summed.
 	const byPass = {};
@@ -848,7 +926,10 @@ function statusChip(e, rowKey, selected, retryOf) {
 	if (e.status === "running" && lp && lp.fatal) label += " · ⚠ fatal";
 	if (e.status === "queued" && e.queuePosition) label += " #" + e.queuePosition;
 	if (e.status === "queued") label += esc(` @ ${startStamp(Date.parse(e.submittedAt) || null)}`);
-	if (e.stalled) label += " ⚠ Stalled";
+	// LIVE log silence, not the `stalled` OUTCOME — see LIVE_SILENT_LABEL for why these two
+	// facts may never share a word. A collected run the harness stalled out chips "Stalled"
+	// through statusLabel(e.status) above; this rides a still-running job's label.
+	if (e.stalled) label += ` ⚠ ${LIVE_SILENT_LABEL}`;
 	const judge = e.judgeTrajectory ? ` · Judge ${e.judgeTrajectory}` : "";
 	// Tooltip economics: raw token classes are provider-shaped (Anthropic's input excludes
 	// cache reads, Azure's includes them) — shown per run, never summed across runs.
@@ -882,6 +963,12 @@ function statusChip(e, rowKey, selected, retryOf) {
 		: "";
 	// logPanes-fallback note: name the registry verdict, or the red dot reads as a collected result.
 	const registry = dead ? `\nregistry: ${pane.state}${pane.exitCode != null ? ` (exit ${pane.exitCode})` : ""} — not yet collected` : "";
+	// The harness-ended pair get their meaning spelled out: "Stalled" and "Step Ceiling" are
+	// each one word for "cut off with no verdict, and therefore out of the success rate", which
+	// is not a thing one word can say. Keyed off failureKind, not the status label.
+	const cutoff = e.failureKind && HARNESS_ENDED_TIPS[e.failureKind] ? `\n${HARNESS_ENDED_TIPS[e.failureKind]}` : "";
+	// The LIVE silence flag's own explainer, when the label carries the ⚠ (see LIVE_SILENT_TIP).
+	const silent = e.stalled ? `\n${LIVE_SILENT_TIP}` : "";
 	// The event-log tail, one tooltip line: last step, claim, cleanup. Named as provisional
 	// so a hover never reads live counters as collected numbers — and named "live" only
 	// while the run actually runs; an ended run's tail says so.
@@ -895,7 +982,7 @@ function statusChip(e, rowKey, selected, retryOf) {
 		lp.verdict ? `claimed ${lp.verdict.success ? "success" : "failure"} — not yet judged` : "",
 		lp.cleanup ? `cleanup: ${lp.cleanup}` : "",
 	].filter(Boolean).join(" · ") : "";
-	return `<span class="chip${selected ? " sel" : ""}"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${esc(when)}${esc(retry)}${e.note ? "\n" + esc(e.note) : ""}${esc(preCollect)}${esc(registry)}${esc(liveTip)}${clickTip}${esc(econ)}">` +
+	return `<span class="chip${selected ? " sel" : ""}"${open} data-tip="${esc(e.jobId)}\nhost ${esc(e.host)}${esc(when)}${esc(retry)}${e.note ? "\n" + esc(e.note) : ""}${esc(preCollect)}${esc(registry)}${esc(cutoff)}${esc(silent)}${esc(liveTip)}${clickTip}${esc(econ)}">` +
 		`<span class="dot${known ? "" : " unknown"}"${known ? ` style="background:${color}"` : ""}></span>${label}${esc(judge)}</span>`;
 }
 
@@ -1022,7 +1109,9 @@ function hostInfoHtml(r) {
  *  and without the board's Task cell beside it the kind word has no other home here. */
 function busyCardBody(r) {
 	const app = `<div class="row"><span class="txt">${esc(r.app || "?")}</span><span class="meta">${elapsedSpan(r.elapsedSec)}</span></div>`;
-	const stalled = r.stalled ? ` <span class="warn">⚠ Stalled ${fmtDur(r.logSilenceSec)} silent</span>` : "";
+	// Same live-silence flag as the chip's, worded the same way and for the same reason: the
+	// fleet timed a quiet log file, which is not the harness's `stalled` verdict.
+	const stalled = r.stalled ? ` <span class="warn" data-tip="${esc(LIVE_SILENT_TIP)}">⚠ ${LIVE_SILENT_LABEL} ${fmtDur(r.logSilenceSec)}</span>` : "";
 	const run = runOf(r.jobId);
 	// A running job no arm claims (a manual run the bench never dispatched): the raw job id
 	// is its only honest name, so it stands where the variant title would.
@@ -2440,6 +2529,13 @@ function renderOutcomes() {
 			// name, so the render-time casing must be applied on both sides identically.
 			rows.push({
 				label: a.id + (p.model !== "(default)" ? " · " + friendlyModel(p.model) : ""),
+				// The bar stays a count of every run — a harness-ended run keeps its own amber
+				// segment, because "how did this arm's runs end" must show all of them. The RATE
+				// is the one number that carves them out, so it rides the tooltip in the report's
+				// exact form rather than being left for a reader to eyeball off segment widths
+				// against a total that includes runs nobody graded.
+				tip: `success ${successRate(p.successes, p.verdictRuns, p.harnessEnded)}`
+					+ (p.harnessEnded ? ` — ⏹ ${p.harnessEnded} ended by the harness, out of the rate's denominator` : ""),
 				segs: [
 					{ name: statusLabel("succeeded"), color: OUTCOME_COLORS.succeeded, value: p.successes },
 					...Object.entries(kinds).map(([k, v]) => ({ name: statusLabel(k), color: outcomeColor(k), value: v })),
@@ -2452,7 +2548,10 @@ function renderOutcomes() {
 	// Legend = the fixed vocabulary PLUS anything the rows actually contain, through the
 	// same color resolver as the segments — a segment must never render a color its legend
 	// doesn't show (grounding-mismatch used to paint fallback-red with no legend entry).
-	const names = ["succeeded", "gave-up", "unready", "hinted-refused", "stopped", "crashed", "grounding-mismatch", "failed", "pending"];
+	// stalled / step-ceiling are in the fixed vocabulary rather than left to the append below:
+	// they are first-class run endings (the harness's own two), not an unforeseen kind, and a
+	// legend that lists them always says what the amber segments are even before one appears.
+	const names = ["succeeded", "gave-up", "unready", "hinted-refused", "stopped", "crashed", "grounding-mismatch", "stalled", "step-ceiling", "failed", "pending"];
 	for (const r of rows) for (const s of r.segs) if (!names.some((n) => statusLabel(n) === s.name)) names.push(s.name.toLowerCase().replace(/ /g, "-"));
 	$("chart-outcomes").innerHTML = hStack(rows, names.map((n) => ({ name: statusLabel(n), color: outcomeColor(n) })), { padL: 170, fmt: (v) => String(Math.round(v)) });
 }
@@ -2669,9 +2768,13 @@ function render() {
 		else if (entries.some((e) => entryBand(e) > 0)) $("h-elapsed").innerHTML = elapsedSpan(active / 1000);
 		else $("h-elapsed").textContent = fmtDur(active / 1000);
 		// "Succeeded", the word every other surface uses — and marked self-reported, the
-		// distinction the judge pipeline exists to expose.
-		$("h-success").textContent = `${p.successes} Succeeded`;
-		$("h-success").dataset.tip = "self-reported successes — the judge's verdicts live in the Judge card";
+		// distinction the judge pipeline exists to expose. Over verdictRuns, the same
+		// denominator the report's success column uses: a bare count of successes beside a
+		// Finished tile that counts truncated runs invites reading the rate off the two tiles,
+		// and that rate is the wrong one. "No verdict yet" when every collected run was cut off
+		// — never 0%, which would read as an agent that failed.
+		$("h-success").textContent = successLine(p.successes, p.verdictRuns, p.harnessEnded);
+		$("h-success").dataset.tip = SUCCESS_TIP;
 		// A failing fleet poll must say so: the wall silently freezing on stale rows while
 		// tickers advance read as a healthy fleet.
 		const fleetSeg = `Fleet ${state.fleet.polledAt ? hhmm(state.fleet.polledAt) : "–"}${state.fleet.error ? " ⚠ poll failing" : ""}`;
@@ -3028,7 +3131,10 @@ setInterval(() => {
 		if (!ps.armed || !ps.ws || ps.ws.readyState !== WebSocket.OPEN) continue;
 		if (Date.now() - ps.lastMsgAt > 12000) {
 			setStreaming(host, false);
-			setPeekStatus(host, "Stalled — no data for 12s, reconnecting…");
+			// "No frames", not "Stalled": this is the peek STREAM going quiet on a host whose run
+			// may be perfectly healthy, and the word Stalled on this page belongs to the harness's
+			// run outcome alone (see LIVE_SILENT_LABEL for the same rule and why it matters).
+			setPeekStatus(host, "No frames for 12s — reconnecting…");
 			try { ps.ws.close(); } catch {}                  // triggers handlePeekClose → backoff loop
 		}
 	}

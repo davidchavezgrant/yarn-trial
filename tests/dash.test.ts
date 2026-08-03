@@ -11,6 +11,10 @@ import { runEvent, usageEvent } from "../src/core/harness/run-events.js";
 import { estimateCost } from "../src/bench/cost.js";
 import type { Manifest, ManifestEntry } from "../src/bench/manifest.js";
 import { MATRIX, armAppmapSlug, armById } from "../src/bench/matrix.js";
+// The report's own rollup, so a test can assert the board relays ITS numbers rather than
+// computing lookalikes — the two surfaces showing different rates for one manifest is the
+// specific defect the harness-ended denominator was introduced to end.
+import { rollup } from "../src/bench/report.js";
 
 /**
  * The dashboard's state assembly, pure by construction: manifest + fleet snapshot in,
@@ -18,6 +22,44 @@ import { MATRIX, armAppmapSlug, armById } from "../src/bench/matrix.js";
  * the dashboard makes its own call (running/queued/awaiting-collect) instead of relaying
  * numbers the report's rollup() already computed and bench.test.ts already covers.
  */
+
+/**
+ * dash.html's outcome vocabulary, evaluated straight out of the page.
+ *
+ * The page's script has no module boundary — there is nothing to import — so the block between
+ * its OUTCOME_VOCAB markers is declared self-contained precisely so this can slice it out and
+ * run it. That makes "does the new failureKind resolve to a real color" and "do the two
+ * different `stalled` facts render as two different words" testable at all; before, both were
+ * only ever discoverable by opening the board and looking at a chip.
+ *
+ * The slice starts after the START marker's LINE (the marker's own comment lines are valid JS
+ * and come along harmlessly) and ends before the END marker's line.
+ */
+const vocab = (() => {
+	const src = fs.readFileSync(new URL("../src/bench/dash.html", import.meta.url), "utf8");
+	const start = src.indexOf("// ---- OUTCOME_VOCAB_START");
+	const end = src.indexOf("// ---- OUTCOME_VOCAB_END");
+	assert.ok(start > 0 && end > start, "dash.html must keep its OUTCOME_VOCAB markers — see the comment at the START marker");
+	// The two tokens the block borrows from the lines above it. Asserted against the page's own
+	// declarations so a retokenized color cannot drift silently past this harness.
+	assert.match(src, /^const RUNNING = "var\(--running\)";$/m);
+	assert.match(src, /^const REFUSED = "var\(--refused\)";$/m);
+	const region = src.slice(src.indexOf("\n", start) + 1, end);
+
+	return new Function(`const RUNNING = "var(--running)";\nconst REFUSED = "var(--refused)";\n${region}\nreturn { STATUS, OUTCOME_COLORS, outcomeColor, statusLabel, LIVE_SILENT_LABEL, LIVE_SILENT_TIP, HARNESS_ENDED_TIPS, harnessMark, successRate, successLine, SUCCESS_TIP };`)() as {
+		STATUS: Record<string, string>;
+		OUTCOME_COLORS: Record<string, string>;
+		outcomeColor: (k: string) => string;
+		statusLabel: (s: string) => string;
+		LIVE_SILENT_LABEL: string;
+		LIVE_SILENT_TIP: string;
+		HARNESS_ENDED_TIPS: Record<string, string>;
+		harnessMark: (n?: number) => string;
+		successRate: (successes?: number, verdictRuns?: number, harnessEnded?: number) => string;
+		successLine: (successes?: number, verdictRuns?: number, harnessEnded?: number) => string;
+		SUCCESS_TIP: string;
+	};
+})();
 
 const entry = (over: Partial<ManifestEntry>): ManifestEntry => ({
 	armId: "ax-grounded",
@@ -171,7 +213,71 @@ test("BuildState__RollsUpSuccessAndCost__When__EntriesAreCollected", () => {
 	assert.equal(p?.failureBreakdown, "unready 1");
 	assert.equal(s.progress.collected, 2);
 	assert.equal(s.progress.successes, 1);
+	// An agent's own verdict IS a verdict: gave-up/unready runs stay in the rate's denominator.
+	// Only the two harness-ended kinds come out of it — see the two tests below.
+	assert.equal(p?.harnessEnded, 0);
+	assert.equal(p?.verdictRuns, 2);
+	assert.equal(s.progress.harnessEnded, 0);
+	assert.equal(s.progress.verdictRuns, 2);
 	assert.equal(s.cost.passes[0]?.pass, "(default)");
+});
+
+test("PassView__DividesSuccessesByVerdictRuns__When__TheHarnessEndedOneRun", () => {
+	// Three collected runs: two that reached a verdict, one the harness cut off at the runaway
+	// step backstop. The report's success column reads `2/2 +1⏹` for this arm, and the board may
+	// not read 2/3 over the same manifest — a truncated run is not evidence about the agent, and
+	// folding it in cost the arm 33 points, indistinguishable in the headline number from an
+	// agent that could not do the task.
+	const entries = [
+		entry({ jobId: "ok-1", state: "done", collected: true, metrics: { success: true } }),
+		entry({ jobId: "ok-2", state: "done", collected: true, metrics: { success: true } }),
+		entry({ jobId: "cut", state: "failed", collected: true, metrics: { success: false, stopReason: "step-ceiling", failureKind: "step-ceiling" } }),
+	];
+	const s = buildState(manifest(...entries), fleet([]), [], true);
+	const p = armView(s, "ax-grounded")?.passes[0];
+	assert.equal(p?.successes, 2);
+	assert.equal(p?.harnessEnded, 1);
+	assert.equal(p?.verdictRuns, 2);
+	assert.equal(vocab.successRate(p?.successes, p?.verdictRuns, p?.harnessEnded), "2/2 +1⏹");
+	// NOTHING disappears: the run still counts as collected, still names itself in the failure
+	// breakdown, and still gets its own segment in the outcomes chart. Only the rate carves it out.
+	assert.equal(p?.collected, 3);
+	assert.equal(p?.failureBreakdown, "step-ceiling 1");
+	assert.equal(s.progress.collected, 3);
+	assert.equal(s.progress.verdictRuns, 2);
+	assert.equal(s.progress.harnessEnded, 1);
+	// The board's numbers ARE the report's rollup over the same entries, not a second derivation
+	// of them — the guard against the two surfaces drifting apart again.
+	const r = rollup(armById("ax-grounded")!, entries);
+	assert.equal(p?.verdictRuns, r.verdictRuns);
+	assert.equal(p?.harnessEnded, r.harnessEnded);
+	assert.equal(p?.successes, r.successes);
+});
+
+test("PassView__ReportsNoVerdict__When__EveryCollectedRunWasHarnessEnded", () => {
+	// Every run truncated — one on the stall streak, two on the backstop. The rate has a ZERO
+	// denominator, which must read as "no verdict yet" and never as 0%: 0% is a claim about the
+	// agent, and nothing here graded the agent at all.
+	const s = buildState(
+		manifest(
+			entry({ jobId: "s-1", state: "failed", collected: true, metrics: { success: false, stopReason: "stalled", failureKind: "stalled" } }),
+			entry({ jobId: "c-1", state: "failed", collected: true, metrics: { success: false, stopReason: "step-ceiling", failureKind: "step-ceiling" } }),
+			entry({ jobId: "c-2", state: "failed", collected: true, metrics: { success: false, stopReason: "step-ceiling", failureKind: "step-ceiling" } }),
+		),
+		fleet([]),
+		[],
+		true,
+	);
+	const p = armView(s, "ax-grounded")?.passes[0];
+	assert.equal(p?.collected, 3);
+	assert.equal(p?.verdictRuns, 0);
+	assert.equal(p?.harnessEnded, 3);
+	// report.ts's `pct` renders `—` at a zero denominator; the hero tile says it in words.
+	assert.equal(vocab.successRate(p?.successes, p?.verdictRuns, p?.harnessEnded), "— +3⏹");
+	assert.equal(vocab.successLine(p?.successes, p?.verdictRuns, p?.harnessEnded), "No verdict yet +3⏹");
+	assert.ok(!vocab.successLine(p?.successes, p?.verdictRuns, p?.harnessEnded).includes("0"));
+	// Both kinds still name themselves in the breakdown.
+	assert.equal(p?.failureBreakdown, "stalled 1, step-ceiling 2");
 });
 
 test("BuildState__AccumulatesCostSeries__When__RunsEndInOrder", () => {
@@ -1453,6 +1559,43 @@ test("StoreEvents__ServesRingAlone__When__NoLiveStoreExists", () => {
 	}
 });
 
+test("StoreEvents__ReadsTheArchiveCopy__When__CollectEvictedTheRunFromLive", () => {
+	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-events-evicted-"));
+	try {
+		// Exactly the state collect leaves a failed run in: metrics banked, artifacts moved to
+		// out/bench/archive, nothing under out/bench/live. A live-only scan lost the heartbeat
+		// trail through the dead steps — which for a stalled run is the primary evidence for
+		// whether the app went dark or the channel simply could not see legitimate progress.
+		plant(out, ["bench", "archive", "run-evicted", "events.jsonl"], [
+			JSON.stringify({ t: "2026-08-01T10:00:01.000Z", kind: "step", detail: { step: 7, verified: false } }),
+			JSON.stringify({ t: "2026-08-01T10:00:02.000Z", kind: "verdict", detail: { success: false, stopReason: "stalled" } }),
+			"",
+		].join("\n"));
+		const merged = storeEvents([], 200, out);
+		assert.deepEqual(merged.map((e) => e.line), ["step step=7 verified=false", "verdict success=false stopReason=stalled"]);
+		// Tagged with the run it came from, exactly like a live one — the pane groups on runKey.
+		assert.deepEqual(merged.map((e) => e.runKey), ["run-evicted", "run-evicted"]);
+		assert.deepEqual(merged.map((e) => e.source), ["run", "run"]);
+	} finally {
+		fs.rmSync(out, { recursive: true, force: true });
+	}
+});
+
+test("StoreEvents__PrefersLiveAndEmitsOnce__When__ARunSitsInBothHomes", () => {
+	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-events-both-"));
+	try {
+		// The normal state of a finished run: live holds it and the archive holds a hard link.
+		// Live wins (same bytes in production; different here to prove which side was read), and
+		// the key is deduped so a run in both homes cannot double every line in the feed.
+		plant(out, ["bench", "live", "run-both", "events.jsonl"], `${JSON.stringify({ t: "2026-08-01T10:00:01.000Z", kind: "start", detail: { from: "live" } })}\n`);
+		plant(out, ["bench", "archive", "run-both", "events.jsonl"], `${JSON.stringify({ t: "2026-08-01T10:00:01.000Z", kind: "start", detail: { from: "archive" } })}\n`);
+		const merged = storeEvents([], 200, out);
+		assert.deepEqual(merged.map((e) => e.line), ["start from=live"]);
+	} finally {
+		fs.rmSync(out, { recursive: true, force: true });
+	}
+});
+
 /*
  * The manifest watcher chain, against a REAL tmp tree. fs.watch on macOS (FSEvents) needs
  * settle time and delivers with latency, so every event assertion polls a callback counter
@@ -1693,6 +1836,26 @@ test("LocalRunProgress__ReadsTheWholeFile__When__RunDirIsInLive", () => {
 		assert.equal(p?.verified, 30);
 		// No events file at all is the common case (runs predating the log) — undefined, not a throw.
 		assert.equal(localRunProgress("no-such-run", out), undefined);
+	} finally {
+		fs.rmSync(out, { recursive: true, force: true });
+	}
+});
+
+test("LocalRunProgress__ReadsTheArchiveCopy__When__TheRunDirectoryLeftLive", () => {
+	const out = fs.mkdtempSync(path.join(os.tmpdir(), "dash-progress-archive-"));
+	try {
+		// `runs drop`/`runs purge` move a live directory to the archive on an operator's word
+		// alone — with no regard for whether a collect pass has banked the run — so an
+		// UNCOLLECTED entry can legitimately have its artifacts in the archive. Its counters used
+		// to go blank, and for a run the harness stalls out the step trail is the evidence.
+		plant(out, ["bench", "archive", "run-dropped", "events.jsonl"], [
+			JSON.stringify({ t: "2026-08-01T10:00:01.000Z", kind: "step", detail: { step: 1, action: "click", verified: true } }),
+			JSON.stringify({ t: "2026-08-01T10:00:02.000Z", kind: "step", detail: { step: 2, action: "click", verified: false } }),
+			"",
+		].join("\n"));
+		const p = localRunProgress("run-dropped", out);
+		assert.equal(p?.steps, 2);
+		assert.equal(p?.verified, 1);
 	} finally {
 		fs.rmSync(out, { recursive: true, force: true });
 	}
@@ -2085,4 +2248,66 @@ test("ExportSnapshot__Throws__When__TheDatesManifestIsEmpty", () => {
 		fs.rmSync(src, { recursive: true, force: true });
 		fs.rmSync(dest, { recursive: true, force: true });
 	}
+});
+
+/*
+ * The board's OUTCOME VOCABULARY (dash.html's OUTCOME_VOCAB block, evaluated by `vocab` above).
+ *
+ * Every failureKind collect can write has to arrive here as a real color and a word a reader can
+ * tell apart from the others. The run-termination contract gained two kinds — the harness's own —
+ * and until they were added both chipped through the hollow dot.unknown fallback: a classified
+ * outcome rendering as "this page has never heard of that".
+ */
+
+test("OutcomeColor__ResolvesToTheWarningFamily__When__TheHarnessEndedTheRun", () => {
+	// Not the ink fallback (which is what an unknown kind gets), and not the critical hue a
+	// failed/gave-up run gets: the harness ending a run is not the agent failing it.
+	for (const kind of ["stalled", "step-ceiling"]) {
+		assert.equal(vocab.outcomeColor(kind), vocab.STATUS.warning, `${kind} must have its own color`);
+		assert.notEqual(vocab.outcomeColor(kind), "var(--ink)");
+		assert.notEqual(vocab.outcomeColor(kind), vocab.OUTCOME_COLORS.failed);
+		assert.notEqual(vocab.outcomeColor(kind), vocab.OUTCOME_COLORS.succeeded);
+	}
+	// The fallback still exists for a kind nobody has taught the page yet.
+	assert.equal(vocab.outcomeColor("something-new"), "var(--ink)");
+});
+
+test("StatusLabel__DistinguishesTheStalledOutcomeFromLiveLogSilence__When__BothCanShowOnOneBoard", () => {
+	// The collision that must never come back: `failureKind: "stalled"` is a FINISHED run the
+	// harness ended after 8 unverified steps, while EntryView.stalled is a RUNNING job whose log
+	// file has been quiet — one is a verdict, the other a symptom of a job that may recover.
+	assert.equal(vocab.statusLabel("stalled"), "Stalled");
+	assert.equal(vocab.statusLabel("step-ceiling"), "Step Ceiling");
+	assert.notEqual(vocab.statusLabel("stalled"), vocab.statusLabel("step-ceiling"));
+	assert.notEqual(vocab.LIVE_SILENT_LABEL.toLowerCase(), "stalled");
+	assert.ok(!vocab.LIVE_SILENT_LABEL.toLowerCase().includes("stall"), "the live flag may not borrow the outcome's word");
+	// Each of the two harness-ended kinds explains itself somewhere a reader can reach — one word
+	// cannot carry "cut off, nobody graded the agent, and therefore out of the rate".
+	for (const kind of ["stalled", "step-ceiling"]) {
+		assert.ok((vocab.HARNESS_ENDED_TIPS[kind] ?? "").length > 40, `${kind} needs an explainer`);
+		assert.match(vocab.HARNESS_ENDED_TIPS[kind] ?? "", /denominator/);
+	}
+	assert.match(vocab.LIVE_SILENT_TIP, /NOT the `stalled` outcome/);
+	// And the page itself no longer labels a running job "Stalled" anywhere.
+	const src = fs.readFileSync(new URL("../src/bench/dash.html", import.meta.url), "utf8");
+	assert.ok(!src.includes("⚠ Stalled"), "a live-silence label reading ⚠ Stalled is the collision this test exists to prevent");
+});
+
+test("SuccessRate__ExcludesHarnessEndedRunsFromTheDenominator__When__SomeRunsWereCutOff", () => {
+	// report.ts's successCell, rendered by the page: `2/2 +1⏹`, never `2/3`.
+	assert.equal(vocab.successRate(2, 2, 1), "2/2 +1⏹");
+	// No harness-ended runs: the plain fraction, no marker.
+	assert.equal(vocab.successRate(2, 3, 0), "2/3");
+	// Zero denominator = no verdict yet, matching report.ts's `pct` — never 0%, which would be a
+	// claim about an agent nothing graded.
+	assert.equal(vocab.successRate(0, 0, 3), "— +3⏹");
+	assert.equal(vocab.successLine(0, 0, 3), "No verdict yet +3⏹");
+	assert.equal(vocab.successLine(2, 2, 1), "2/2 Succeeded +1⏹");
+	// Nothing collected at all is not "no verdict" — it is a board that has not started.
+	assert.equal(vocab.successLine(0, 0, 0), "0 Succeeded");
+	// One marker, shared by both readouts, and absent entirely when no run was cut off.
+	assert.equal(vocab.harnessMark(0), "");
+	assert.equal(vocab.harnessMark(2), " +2⏹");
+	// The tile's tooltip has to say where the denominator went, or the number reads as a bug.
+	assert.match(vocab.SUCCESS_TIP, /HARNESS ended/);
 });
